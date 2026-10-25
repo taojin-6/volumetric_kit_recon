@@ -877,7 +877,8 @@ zeroes the listed blocks and frees them through the map's, the zeroing
 recorded into the map's first round (`remove`'s `first_round`) ahead of
 the delete, so it takes no submit of its own.
 One body serves it and garbage collection, so the stale-block list stays on
-the GPU through deletion; only the stale and retry counts reach the host.
+the GPU through deletion, its count sizing the removal there; only the
+removal's outcome reaches the host.
 A compaction still reads its list back, in the count's own submit while the
 set stays within a quarter past its last count (the 2026-09-28 residency
 decision), except `compact_active_blocks_on_device`'s: its
@@ -915,8 +916,12 @@ so it is not a peak-memory budget for resize (2026-10-10).
 `allocate_from_depth` also takes a list of frames (`DepthInput`), every
 frame dispatched in each round's one submit, on a set of its own; a round
 that retries dispatches them all again, and the rounds are the call's, not
-each frame's. A caller's `then` shares the first round's submit, after its
-readbacks, and makes that round the only one. Opt-in
+each frame's. `record_allocate_from_depth` records one such round into a
+caller's batch, its outcome in a result slot and an optional gate closed on
+any failure; the blocking call is that round, one submit and `settle`,
+repeated while lost races alone remain. `settle` moves the heap's host copy
+only to a recording newer than every one settled and every blocking call
+since, so recordings settle in any order. Opt-in
 `StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every
 retry round) and on both compaction entry points (an `"active set"` row,
 breakdown-prefixed when the caller already has a stage open).
@@ -930,12 +935,18 @@ writes voxels -- `TsdfIntegrator`, `MeshIntegrator`, the codec's
 inverse -- advances the clock first and stamps `changed` on what it
 changed, so the clock counts writes (one a set, for the rig) and a
 reader's recorded tick is older than every later change, however the calls
-interleave. The init kernel zeroes the records, the delete kernel zeroes a
+interleave. A fuse its gate closed on wrote nothing, so `Fuser::finish`
+takes its tick back (`rewind_tick`) before fusing the set again. The init kernel zeroes the records, the delete kernel zeroes a
 freed slot's, and `resize` copies them forward, the rehash stamping
 nothing. A consumer compares ticks and resets nothing:
 `free_stale_blocks(max_age)` frees the blocks whose newer stamp is older
 than that, through the grid's remove body over the pass's list, so the band the
-allocator still asks for stays, and the live examples run it every
+allocator still asks for stays. `record_free_stale` records it into a
+caller's batch, at the tick then: the compaction, the stamp pass sized from
+its count, and `record_remove` of the list it writes, one recording of
+K rounds, so a block a lost race keeps waits for the next pass;
+`free_stale_blocks` is that, one submit and `settle`, its result the heap's
+gain (2026-10-25). The live examples run it every
 `fusion.free_after` sets (`free_stale_blocks_every`, `fuse_frame.hpp`); the
 iOS scanner reads `changed` through `read_block_stamps`.
 
@@ -976,7 +987,11 @@ reached (2026-10-06), which the map's host copy of the heap counter
 answers. The list and its count stay on the device: a one-thread kernel
 (`tsdf_dispatch_args.comp`) turns the count into the fuse's indirect
 dispatches, so a fuse is one submit that reads nothing back; the frames
-are staged.
+are staged. `record_integrate` records it into a caller's batch after an
+allocation of the same frames (2026-10-25): the passes are bounded by the
+grid's block slots, none runs behind a closed gate word, the tick is taken
+at record, and every frame's cameras go up in one write each ahead of the
+compaction. `integrate` is that, one submit and its wait.
 `integrate` also takes a list of frames
 (`FrameInput`, a `DepthInput` and its colour, so one list feeds both
 calls): one compaction and one submit for them all, each frame a dispatch
@@ -988,24 +1003,30 @@ before the integrate kernel fuses any, so one camera's free space never
 erases what another fuses in the same set, and the grid does not depend on
 the frames' order but for the running average's arithmetic (2026-10-08). A
 frame with no pixels fuses nothing, as it allocates nothing (2026-09-30).
-`Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). It
-grows ahead past `kGrowThreshold`, allocates every frame's band in one
-`allocate_from_depth`, grows and retries on capacity failures, then integrates
-once. `max_grows_per_set` bounds successful grows including grow-ahead
-(default 4; zero fixes capacity). The default requires a complete band and
-retries pure lock contention up to four times beyond the tier's own rounds.
-An incomplete band returns an error before integration; a failed call may
-already have resized or allocated zeroed blocks. An unsuccessful grow-ahead
-can still be followed by successful allocation into the existing grid.
+`Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). A set
+records into a caller's batch (`record_fuse`, 2026-10-25): the fuse's checks
+(`check_frames`), a grow ahead past `kGrowThreshold`, blocking, then one
+allocation round of every frame's band
+(`record_allocate_from_depth`) and `record_integrate`. Where the set needs
+its whole band -- the default, or a grid holding no block -- the fuse is
+gated on a word the round closes on any failure, and `finish`, once the
+batch has resolved, fuses a refused set again, blocking
+(`FuseReport::redone`): allocation retrying pure lock contention up to four
+times beyond the tier's own rounds and growing for capacity, then the
+integrate, at the tick the set was recorded at (`rewind_tick`). `fuse` is
+the record, one submit and `finish`. `max_grows_per_set` bounds successful
+grows including grow-ahead (default 4; zero fixes capacity). An incomplete
+band returns an error before integration; a failed call may already have
+resized or allocated zeroed blocks. An unsuccessful grow-ahead can still be
+followed by successful allocation into the existing grid.
 
 `allow_partial` explicitly opts live callers into integrating what fits.
 `fuse_viewer` and `rig_viewer` enable it with a two-grow bound. That mode
 leaves pure lock contention for the next set and privately backs off a failed
-grow for 60 map ticks at the same size. Once its grid holds a block, a set is
-one submit (`TsdfIntegrator::allocate_and_integrate`): one allocation round,
-the compaction and the fuse, and a grow for a capacity limit made after it,
-so what the set could not allocate lands with the next (2026-10-10, amended
-2026-10-22). Its fuser belongs to one grid.
+grow for 60 map ticks at the same size. Once its grid holds a block, a set's
+fuse is ungated, taking what the round placed, and a grow for a capacity
+limit is made after it, so what the set could not allocate lands with the
+next (2026-10-10, amended 2026-10-22). Its fuser belongs to one grid.
 `FuseReport` carries the before/after bucket counts, grows, allocation
 failures, any failed-grow status and final occupancy; failed allocation
 requests can refer to the same block repeatedly. Host allocation exceptions
@@ -1356,11 +1377,18 @@ drains every sensor each `poll_set`, groups the frames into a `FrameSet` by
 its internal `TriggerGrouper`, around the primary's frames on the host
 clock within `tolerance_us` (by default 0.4 of the fastest member's frame
 period, 13.3 ms at 30 fps), and stamps each frame with its sensor's pose
-from the `ArrayCalibration`, which must pose every sensor. Opened with a
-device, its
-`process(set)` prepares a set through `GpuFramePrep::prepare_batch`: every
-frame checked, then every pass's uploads and every pass's kernels recorded
-into one `CommandBatch`, one submit and one wait. A `FrameSet`'s
+from the `ArrayCalibration`, which must pose every sensor. `wait_set`
+blocks for a set on one condition variable that every sensor's
+notification wakes (`IRgbdSensor::set_frame_notify`, which `open` asks of
+each; the Orbbec driver notifies from its mailbox as a pair lands, the camera
+goes or the decoder fails), and on the grouping's next deadline, when a
+trigger stops waiting for a late sensor; it never sleeps a fixed time. A
+set's `arrival_ns` is its latest frame's (`RgbdFrame::arrival_ns`, the
+system clock at the driver's frame callback). Opened with a
+device, its `record_process(batch, set)` records a set's preparation into a
+caller's batch through `GpuFramePrep::record_set`: every frame checked, then
+every pass's copies and every pass's kernels; `process(set)` is that, one
+submit and its wait. A `FrameSet`'s
 `skew_ns(i)` is sensor i's frame's time less the trigger's, signed, and its
 `spread_ns()` the latest of its frames' times less the earliest.
 **`sensor/utils`'s `GpuFramePrep`** undistorts an `RgbdFrame`
@@ -1393,17 +1421,21 @@ hands its colour over as packed R'G'B' words instead
 2026-10-07 packed-colour decision), copied into the pass's input like the
 images; the colour pass samples R, G and B as byte planes four bytes apart,
 through the same bilinear sampler and coverage test. The depth, and any
-packed colour after it, goes up through one batch into device-local inputs,
-by a staging buffer the pass keeps, and both passes run in the same submit,
-the copies timed with them. The staging is
-kept because several passes allocating a 4K frame's at once made VMA
-allocate a block for every set (46 ms a rig set on an RTX 5090, 4.8 ms
-kept). The frame *holds* its device-local
-buffers, and `prepare` reuses one only once no frame does, so a frame kept
-past the next is still itself; the whole frame is checked before anything
-is uploaded or timed, a depth range from 0 included, and `prepare` is
-`prepare_batch` over a set of one. Both return `OutOfMemory` for a host
-allocation failure while staging, preserving previously returned frames.
+packed colour after it at the binding alignment, is copied into the pass's
+one persistent slot (`core::HostRing`), which the batch binds in place where
+mapped device memory is cached and copies once into its device-only mirror
+elsewhere; nothing is allocated per frame (a batch staging per call made VMA
+allocate a block for every set: 46 ms a rig set on an RTX 5090, 4.8 ms
+kept). `record(batch, frame)` records the copy and both passes into a
+caller's batch, and `prepare` is that, one submit and its wait; a record
+before the pass's last batch resolves is refused, as it binds the slot. The
+frame *holds* its device-local
+buffers through a lease, and the pass reuses one only once no frame holds
+it, so a frame kept past the next is still itself; the whole frame is
+checked before anything is recorded or timed, a depth range from 0 and a
+plane's queue family included, and `prepare` is `prepare_batch` over a set
+of one. Both return `OutOfMemory` for a host allocation failure,
+preserving previously returned frames.
 `depth_within_color` (off by
 default; `rig_viewer` turns it on) zeroes depth outside the colour camera's
 view, by the colour pass's own coverage test, so nothing is fused that no
@@ -1448,8 +1480,8 @@ decoding.
 The codec is implemented, intra frames and P-frames (frame type 1), and it
 codes and decodes on the device alone (2026-10-13): the host does the I/O
 around it (a frame's bytes, and their hash) and the control (a frame's
-header, sections and tables, and small counts and status words read back,
-a decode's once its batch has run).
+header, sections and tables, and small counts and status words, a decode's
+and an encode's read from results slots once their batches have run).
 The CPU rANS coder is the tests' oracle, under `tests/`
 (`codec_oracle*.hpp`), which pins the format's bytes.
 Quantization is one scalar quantizer with a step per DCT basis (2026-10-02):
@@ -1463,31 +1495,40 @@ candidates, not a claim that high frequencies always deserve fewer bits.
 The public API
 is `CodecParams`, **`Encoder`** (`encoder.hpp`), **`Decoder`** with
 `read_frame_info` (`decoder.hpp`), and a player's `make_decode_grid` and
-`decode_growing` (`decode_grid.hpp`). `Encoder::encode(grid)` takes the map's
-own active list (`compact_active_blocks_on_device`, so an extract's list is
-reused and its own kept for the extract after), keeps the blocks with an
-observed voxel, or with `EncoderConfig::true_sdf` those holding surface
-(`DctTransform::observed`, compacted on the device, reading back only its
-count and reject tally; the true-SDF passes below share its batch), sorts
-them by (z, y, x) on the device
-with a stable rank-merge sort on `coord_less` itself, over all of int32
-(`detail::BlockLists`, whose header has the mechanism), transforms them into
-the reference store's spare (below), the sorted list copied beside them, and
-writes the frame; the sort, the forward, the symbol count and the step layout
-share one submit. Keys are unique, so the same content gives the same bytes
-whatever the hash table's order. An empty frame is an I-frame (below), which
-submits nothing.
+`decode_growing` (`decode_grid.hpp`). A frame is two batches, the caller's
+(the 2026-10-25 entry): `Encoder::record_front` records, after what the
+batch holds (a sender's fusion), every step whose count only the device
+knows, and `record_back` the rANS coding, sized on the host from the
+front's results; `finish` lays the frame out, its payload left in an
+encoder slot (`EncodedFrame`), and `encode(grid)` is those, a submit and a
+wait each, the head and payload joined: 2 submits. The front takes the
+map's own active list -- the one it holds (`held_device_list`), or one
+compacted into the batch, which leaves the map none, so an extract after
+compacts its own -- keeps the blocks with an observed voxel, or with
+`EncoderConfig::true_sdf` those holding surface (`DctTransform::record_observed`,
+their count left on the device; the true-SDF passes below share it), sorts
+them by (z, y, x) on the device with a stable rank-merge sort on
+`coord_less` itself, over all of int32 (`detail::BlockLists`, whose header
+has the mechanism), its last level writing the reference store's spare list,
+and transforms them into the spare's masks and coefficients (below). Every
+step is sized for the grid's block slots and runs for the device's count:
+the observed pass and the forward from indirect slices, the sort's levels
+recorded for the bound, a level the count does not need copying its entries
+through. Keys are unique, so the same content gives the same bytes whatever
+the hash table's order. A frame whose front finds no block to code is an
+I-frame of none (below), with no back batch.
 At `EncoderConfig::intra_period` N above 1 (default 1, 0 refused) the
 `Encoder` writes P-frames (the 2026-10-14 entry): an I-frame first, then
 every N coded frames, after `force_intra()`, when the grid's `voxel_size` or
 `trunc_dist` is not the reference's (`coding_difference`, the writers' and
 reader's rule), when the reference holds no block, and when the grid holds
-none (the 2026-10-16 entry); a P-frame otherwise,
-against the frame `encode` returned last. Its reference is what the decoder
+none (the 2026-10-16 entry, decided by the device's count, so a P-frame
+planned at record finishes as an I-frame of none); a P-frame otherwise,
+against the frame returned last. Its reference is what the decoder
 will hold of that frame: the forward's q and masks and the sorted list, left
-in `detail::ReferenceStore`'s spare and swapped in when `encode` returns the
-frame, so a refusal keeps the reference and the period's count. In the
-forward's submit, `inter_diff.comp` splits the frame against the reference
+in `detail::ReferenceStore`'s spare and swapped in when `finish` returns the
+frame, so a refusal or `abandon` keeps the reference and the period's count.
+In the front's batch, `inter_diff.comp` splits the frame against the reference
 and codes it, an invocation an entry: each reference entry finds its block
 by binary search (remove, skip when every word is equal, else keep or zero),
 `survivor_ranks.comp` counts the survivors, and each block the reference
@@ -1495,34 +1536,41 @@ lacks takes its place among the new blocks from those ranks. A residual of
 −32768 codes zero, and so does a block whose target payload a static price
 (`emit_payload` walked at `bit_length + 1` bits a symbol, 8 a byte symbol,
 plus raw bits) puts strictly below its residual's. Only the device knows the
-new blocks' count, so the forward's submit counts a P-frame, at
+frame's blocks and its new blocks' count, so the front counts a P-frame, at
 `EncoderConfig::update_size` entries an update segment
 (`EncoderConfig::resolved_update_size()`: the segment size unless the caller
-sets one), over M plus the frame's blocks, and the device takes the
-survivors off (`counted_entries`). `EncoderConfig::validate` holds the
-config's checks, which `create` makes first.
+sets one), over M plus the bound's blocks, and the device takes the blocks
+the frame lacks and the survivors off (`counted_entries`, from two frame
+words). `EncoderConfig::validate` holds the config's checks, which `create`
+makes first.
 The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
 built by `Encoder::create`, which fails if its kernels do not build): the
-forward output stays in VRAM, the forward's batch also counts every model's
-symbols and each block's coder steps and lays the steps out
-(`detail::StepLayout`, whose header has the formulas: one workgroup scans
-the steps into each entry's place, and the segments' slot sizes into their
-offsets), and only the symbol counts, the layout's two totals and a
-P-frame's survivor count cross to the host, which builds the tables
-(`frame_tables`) and sizes the coding's buffers. A second batch writes every
-block's steps in parallel, codes one segment per invocation into its slot,
-packs the streams, and reads back only the lengths and the payload. Bulk
-buffers are device-local and retained; the bus carries the counts and
-tables, 8 bytes of totals and a P-frame's survivor count, and the lengths
-and payload. A segment is one serial chain, so smaller segments give the
-device parallelism at a few percent of size. A frame the device cannot hold
-is refused, never coded on the host.
+forward output stays in VRAM, the front also counts every model's symbols
+and each block's coder steps and lays the steps out (`detail::StepLayout`,
+whose header has the formulas: one workgroup scans the steps into each
+entry's place, and the segments' slot sizes into their offsets), and its
+last command (`encode_results.comp`) gathers what the host needs -- the
+symbol counts, the layout's two totals, the frame words and the reject and
+refusal words -- into a results slot (`core::HostRing`), from which the
+host builds the tables (`frame_tables`) and sizes the coding's buffers. The
+back half uploads the tables inline first, writes every block's steps in
+parallel, codes one segment per invocation into its slot, scans the lengths
+into the payload's offsets and a second results slot, and packs the streams
+into a payload slot: in place on unified memory and lavapipe, the slot
+itself; copied on a discrete GPU, the payload's likely size (the last
+frame of its type's bytes per entry plus 25%), any rest gathered again into
+its own output range by `finish` (a tail, `"  ..tail"`). The frame's
+reference hash runs over the head and the payload unjoined (`frame_hash`'s
+two-run form). Bulk buffers are device-local and retained. A segment is one
+serial chain, so smaller segments give the device parallelism at a few
+percent of size. A frame the device cannot hold is refused, never coded on
+the host.
 Both device coders work on entries, a P-frame's stream positions
 (`ResidentBlocks`): its reference entries, each with a u32 mode, then its new
 blocks, which alone the block list holds; an intra frame is all new blocks.
 The count pass also flags what every writer refuses of the entries (a mode
-past the alphabet, a written −32768), which `finish` refuses in their words
-(`check_entries`).
+past the alphabet, a written −32768), which `record_back` refuses in their
+words (`check_entries`).
 The `Decoder` decodes on the device (`detail::DeviceFrameReader`): the host
 parses the frame (`parse_frame`) and uploads only its tables and payload.
 One batch expands each table into a 4096-slot lookup, decodes one segment per
@@ -1630,7 +1678,8 @@ one batch and one submit, so a paused player shows a toggle;
 `Decoder::last_deblock` reports the filter, T, the frame's blocks and those
 the fallback kept at their exact decode. Both classes report `StageMetrics`
 (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name;
-the encoder's `"  ..active set"` is the map's own. The private pieces under
+the encoder's compaction is `"  ..encode set"`, apart from a fuse's
+`"  ..active set"`. The private pieces under
 `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS tables,
 the frame's layout and checks, its device coders, the block lists and the
 reference store. The transform's forward takes a device block list to
@@ -2034,9 +2083,11 @@ The live counterpart is its own example, not a `fuse_replica` flag:
 **`fuse_orbbec`** (`VR_WITH_ORBBEC`) reads one `OrbbecSensor`, or with
 `source.sync_config` one per camera of the file on the host's clock
 (`source.apply_sync` writing the settings a camera differs in), as a
-`SensorArray` posed by `source.calibration`; it prepares each set on the GPU,
-fuses it through `fuse_and_code` (`set_codec.hpp`: `fuse_set`, then the
-`fusion.free_after` pass), and writes a PLY after `run.frames` frames.
+`SensorArray` posed by `source.calibration`; it waits on the cameras'
+notifications for each set, records its prep, fuse, `fusion.free_after` pass
+and, when it codes, the frame's front half into one batch through
+`SetSender` (`set_codec.hpp`, which codec_replica shares; the frame's rANS
+half is a second batch), and writes a PLY after `run.frames` frames.
 `operation: "stream"` only streams: each set is polled, counted and released, with no
 GPU preparation, fusion or mesh, so a run measures the cameras' stream and
 decode alone. `diagnostics.readback: true` reads each set's luma back through
@@ -2093,7 +2144,8 @@ reclaims the retained colour buffers without waiting for that frame's number.
 draws it.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `codec.encode_every` frames it
-encodes, then decodes with `decode_growing` into a player grid
+encodes, in the set's batches (`SetSender`), then decodes with
+`decode_growing` from the decoder's input slot into a player grid
 `make_decode_grid` built from the first frame. It reports the
 bitrate at the coded frame rate and, at an intra period above 1, a
 GOP's (an I-frame and the period's P-frames, each at its type's

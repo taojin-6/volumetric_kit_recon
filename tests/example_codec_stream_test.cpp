@@ -73,8 +73,11 @@ std::uint64_t pts(std::size_t frame) {
 
 int row_times() {
   // Host and device alike: the stage, its breakdowns inside it.
+  // A call's host column is its busy time: its waits on the device, which a
+  // call that waits inside its row holds, left out.
   vkc::StageMetrics encode;
-  encode.add_cpu("codec encode", 3.0);
+  encode.add_cpu("codec encode", 3.5);
+  encode.add_wait("codec encode", 0.5);
   encode.add_gpu("codec encode", 1.0);
   encode.add_cpu("  ..active set", 0.5);
   encode.add_gpu("  ..active set", 0.25);
@@ -531,9 +534,12 @@ int periodic(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   for (std::size_t i = 0; i < rows.size(); ++i) {
     CHECK(rows[i].frame == decoded[i] && rows[i].type == types[decoded[i]]);
   }
-  // A type's host spans, summed by stage, are its rows' milliseconds.
+  // A type's host busy spans, summed by stage, are its rows' milliseconds.
   const auto near = [](double a, double b) {
     return std::fabs(a - b) <= 1e-9 * std::fabs(b);
+  };
+  const auto busy = [](const vkc::StageMetrics& m) {
+    return m.total_cpu_ms() - m.total_wait_ms();
   };
   for (const codec::FrameType type : {I, P}) {
     double encode = 0.0;
@@ -544,8 +550,8 @@ int periodic(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
       decode += row.decode_ms.value_or(0.0);
     }
     CHECK(encode > 0.0 && decode > 0.0);
-    CHECK(near(coder.encode_stages(type).total_cpu_ms(), encode));
-    CHECK(near(coder.decode_stages(type).total_cpu_ms(), decode));
+    CHECK(near(busy(coder.encode_stages(type)), encode));
+    CHECK(near(busy(coder.decode_stages(type)), decode));
   }
   coder.report(kFps, 1);
 
@@ -692,6 +698,66 @@ int serves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
     CHECK(vr_test::vrst::same(served.info, record.info));
     CHECK(served.offset == record.offset && got[i].payload == payload);
   }
+  return 0;
+}
+
+// A sender's frames, each recorded into a front batch, its device rows taken
+// back, then finished: the file code() writes, byte for byte, I- and
+// P-frames, with each set's type, its "crc", "write", "publish" and
+// "wait: frame" rows, its frame's own encode row and its decode from the
+// decoder's slot. A
+// frame out of order is refused, its front dropped.
+int halves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+           vol::VoxelBlockGrid& other, const vr_test::Scratch& scratch) {
+  codec::EncoderConfig config;
+  config.intra_period = 3;
+  vr_example::CodecOutputs by_code;
+  by_code.stream = (scratch.path / "halves_code.vrst").string();
+  const vr_example::CodecOutputs by_halves =
+      served_on_loopback(scratch.path / "halves.vrst");
+  vkc::Result<vr_example::CodecStream> a = vr_example::CodecStream::create(
+      gpu.device, gpu.allocator, config, by_code, "example_codec_stream");
+  vkc::Result<vr_example::CodecStream> b = vr_example::CodecStream::create(
+      gpu.device, gpu.allocator, config, by_halves, "example_codec_stream");
+  CHECK(a.ok() && b.ok());
+  vr_example::SetLog log([&gpu] { return gpu.device.counters(); });
+  for (std::size_t frame = 0; frame < 5; ++frame) {
+    vol::VoxelBlockGrid& grid = frame == 2 ? other : source;
+    CHECK(a->code(grid, frame, pts(frame)).ok() == (frame != 2));
+    vr_example::SetLog::Set& set = log.begin();
+    vkc::CommandBatch front(gpu.device, gpu.allocator);
+    vkc::Result<codec::PendingEncode> pending = b->record(front, grid);
+    CHECK(pending.ok());
+    vkc::Result<vkc::PendingBatch> done = front.submit_async({}, {});
+    CHECK(done.ok() && done->wait().ok());
+    b->front_ran(done->device_rows(), &set.rows);
+    // The batch's encode rows are the frame's, not the set's other rows.
+    CHECK(vr_example::find_row(set.rows, "  ..forward") == nullptr);
+    CHECK(b->finish(*pending, frame, pts(frame), set).ok() == (frame != 2));
+    CHECK(set.is_published() && set.type.has_value());
+    for (const char* row : {"codec encode", "  ..forward", "crc", "write",
+                            "publish", "wait: frame"}) {
+      CHECK(vr_example::find_row(set.rows, row) != nullptr);
+    }
+  }
+  CHECK(b->rows().size() == a->rows().size());
+  for (std::size_t i = 0; i < b->rows().size(); ++i) {
+    const vr_example::CodecRow& x = a->rows()[i];
+    const vr_example::CodecRow& y = b->rows()[i];
+    CHECK(x.frame == y.frame && x.type == y.type && x.bytes == y.bytes &&
+          x.blocks == y.blocks);
+    CHECK(y.encode_ms > 0.0 && y.decode_ms && *y.decode_ms > 0.0);
+  }
+  // Out of order: refused, its front dropped, so the next records afresh.
+  vkc::CommandBatch front(gpu.device, gpu.allocator);
+  vkc::Result<codec::PendingEncode> late = b->record(front, source);
+  CHECK(late.ok() && front.submit().ok());
+  vr_example::SetLog::Set& set = log.begin();
+  CHECK(b->finish(*late, 4, pts(4), set).domain() ==
+        vkc::Status::Code::InvalidArgument);
+  CHECK(a->finish().ok() && b->finish().ok());
+  CHECK(vr_test::read_bytes(by_code.stream) ==
+        vr_test::read_bytes(by_halves.stream));
   return 0;
 }
 
@@ -951,6 +1017,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(csv_fails(gpu, *source, scratch) == 0);
   CHECK(unfinished(gpu, *source, scratch) == 0);
   CHECK(serves(gpu, *source, *other, scratch) == 0);
+  CHECK(halves(gpu, *source, *other, scratch) == 0);
   CHECK(serves_alone(gpu, *source, scratch) == 0);
   CHECK(port_in_use(gpu, scratch) == 0);
   CHECK(viewer_leaves(gpu, *source, scratch) == 0);

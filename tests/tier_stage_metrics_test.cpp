@@ -32,8 +32,13 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <dlfcn.h>
+#endif
 
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -43,6 +48,7 @@
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
+#include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
@@ -51,6 +57,28 @@
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
+
+#if defined(__unix__) || defined(__APPLE__)
+namespace {
+thread_local bool complete_during_submit = false;
+thread_local unsigned completed_submits = 0;
+}  // namespace
+
+extern "C" VKAPI_ATTR VkResult VKAPI_CALL
+vkQueueSubmit(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits,
+              VkFence fence) {
+  static const auto real =
+      reinterpret_cast<PFN_vkQueueSubmit>(dlsym(RTLD_NEXT, "vkQueueSubmit"));
+  if (real == nullptr) std::abort();
+  const VkResult submitted = real(queue, count, submits, fence);
+  if (submitted != VK_SUCCESS || !complete_during_submit) return submitted;
+  ++completed_submits;
+  // Queue submission may return after some or all device work has run. Make
+  // that legal schedule deterministic: the host row must include submission,
+  // not just the subsequent fence wait, which will now find completed work.
+  return vkQueueWaitIdle(queue);
+}
+#endif
 
 #define CHECK(cond)                                                          \
   do {                                                                       \
@@ -281,10 +309,24 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(on_device);
     const vr::tsdf::FrameInput frame{
         {vkc::StorageInput(on_device.value()), narrow}, nullptr};
+    vr::tsdf::FuserConfig partial;
+    partial.allow_partial = true;
+    vkc::Result<vr::tsdf::Fuser> fuser =
+        vr::tsdf::Fuser::create(gpu.device, gpu.allocator, partial);
+    CHECK(fuser);
     vkc::StageMetrics fused;
-    CHECK(integrator.value().allocate_and_integrate(
-        grid.value(), {frame}, 5.0f, vr::tsdf::IntegrationMode::Classic,
-        nullptr, &fused));
+#if defined(__unix__) || defined(__APPLE__)
+    completed_submits = 0;
+    complete_during_submit = true;
+#endif
+    vkc::Result<vr::tsdf::FuseReport> report =
+        fuser.value().fuse(grid.value(), {frame}, 5.0f,
+                           vr::tsdf::IntegrationMode::Classic, &fused);
+#if defined(__unix__) || defined(__APPLE__)
+    complete_during_submit = false;
+    CHECK(completed_submits == 1);
+#endif
+    CHECK(report && !report.value().redone && report.value().grows == 0);
     CHECK(row_reports_both_halves(fused, "integrate", device_can_time,
                                   "fused set"));
     CHECK(find(fused, "allocate") == nullptr);

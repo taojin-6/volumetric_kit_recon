@@ -732,6 +732,17 @@ entries relevant to your task; later amendments supersede earlier rules.
   order count and written at the range the stream declares;
   `recon_sensor_video` builds on every Apple platform, and `VR_WITH_FFMPEG`
   on Apple is a configure error.
+- [**2026-10-25**](#2026-10-25--a-sender-records-each-set-into-two-batches-every-count-on-the-device-and-its-figures-are-per-set-amends-the-2026-09-27-encoder-2026-09-28-device-memory-2026-10-10-fusion-and-2026-10-21-chunk-entries) —
+  A sender records each set into two batches: its prep, one allocation
+  round, its fuse (gated on the whole band where strict, a refused set fused
+  again at its own tick), the free pass and the frame's front half in one,
+  the frame's rANS half in the next, the payload in a slot and written and
+  served under one CRC: 2 submits and no staging buffer a warm coded set,
+  from 6 and 4. A sensor may notify. fuse_orbbec and codec_replica print
+  each row's mean, p50, p95 and max over the sets, the device's counters per
+  set and the latency to publish, P-frame, I-frame and uncoded sets apart;
+  the encoder's and the free pass's compactions are `"  ..encode set"` and
+  `"  ..stale set"`, apart from a fuse's `"  ..active set"`.
 
 ## Decision record
 
@@ -11693,6 +11704,11 @@ made after it, so what the set could not allocate lands with the next. An
 empty grid's first set keeps the rounds: whether the call ticks depends on
 whether the grid gains a block. Strict fusion is unchanged.
 
+*Amended 2026-10-25 (the sender's batch):* strict fusion and an empty
+grid's first set record one round too, the fuse gated on the whole band, and
+`Fuser::finish` fuses a refused set again, blocking, at the tick it was
+recorded at.
+
 `tsdf::Fuser` owns the per-set sequence formerly in
 `examples/common/fuse_frame.hpp`: grow ahead past `kGrowThreshold`, allocate
 all frame bands, grow and retry capacity failures, then integrate the set.
@@ -15138,6 +15154,196 @@ RTX 5090, Ubuntu, Release with FFmpeg 8.0 and CUDA 13.4: the 115 tests
 pass on NVDEC (`VR_TEST_HEVC_BACKEND=cuda`), and the host-only video tests
 under ASan and UBSan. Not run on a camera; for iOS, compiled and linked
 only.
+
+### 2026-10-25 — A sender records each set into two batches, every count on the device, and its figures are per set (amends the 2026-09-27 encoder, 2026-09-28 device-memory, 2026-10-10 fusion and 2026-10-21 chunk entries).
+
+**Per set, not per camera frame.** fuse_orbbec divided its stage totals by
+the camera frames, and codec_replica printed none, so neither showed what a
+set costs or how it varies. Both now log each set (`SetLog`,
+`examples/common/set_log.hpp`): its rows, the device's counters across it,
+and its latency from arrival and from capture to the frame's publish, on
+the system clock. At the end they print, for P-frame, I-frame and uncoded
+sets apart, each row's mean, nearest-rank p50 and p95, and max of host busy,
+wait and device time over the sets that ran it; the counters per set; and
+the latencies. Every set is timed: timing every frame cost 0.02 ms of host
+time on the 4090 (M0). A set ends at its frame's publish, so the decode a
+codec example runs after it counts in neither its rows nor its counters.
+Writing and publishing a frame are rows of their own (`"write"`,
+`"publish"`), and so is a sender's one CRC of it (`"crc"`). The `"set"`
+row's wait is what its rows waited since the set arrived, so its busy and
+wait add up to its wall time. A row first seen in a later set takes its
+place after the row before it there, so a breakdown stays inside its
+stage. A codec row's host columns are busy time on every path: `encode`
+waits inside its row, a sender outside it (`make_codec_row`).
+
+**The compactions are named apart.** The 2026-09-27 entry kept the
+encoder's compaction under the map's `"  ..active set"`, and the free
+pass's was too. One set's rows hold all three, which then summed into one
+row. The map takes a row's name from its caller since the extract's
+`"  ..compact"`, so the encoder's is `"  ..encode set"`, the free pass's
+`"  ..stale set"`, and the fuse keeps `"  ..active set"`. The encoder's
+`"  ..observed"`, `"  ..forward"` and `"  ..rans encode"` tile their own
+device time too, where they held host time alone, so the sort's cost shows
+in `"  ..forward"`.
+
+**A sensor may notify, and the array waits on it (amends the 2026-10-06
+`IRgbdSensor` and 2026-10-07 rig entries).** fuse_orbbec slept 1 ms between
+empty polls. `IRgbdSensor::set_frame_notify` lets a sensor call a consumer as
+each frame is held, or as it fails; the default refuses
+(`Status::Code::Unsupported`), so a sensor that does not notify is polled as
+before. `SensorArray::open` asks each sensor, and `wait_set` blocks on one
+condition variable until a notification or the grouping's next deadline,
+when a trigger stops waiting for a late sensor. The notification owns its
+wake state through a `shared_ptr`, so a call in flight as the array goes
+touches nothing freed. The Orbbec driver notifies from its mailbox after a
+pair lands (no lock held across the two), on a disconnect and when the
+colour decoder fails, so a fault surfaces at once rather than at the 10 s
+silence limit. Each frame's `arrival_ns` is the system clock at the SDK's
+frame callback, written into the depth frame's system timestamp, which both
+colour decoders pass on unchanged (`rebuilt_pair`), so nothing new is
+plumbed; a set's is its latest frame's.
+
+**The prep records into the caller's batch (amends the 2026-09-28 residency
+entry's kept staging).** `GpuFramePrep::record` and `record_set` record a
+frame's copy and both passes into a caller's batch, and `SensorArray::
+record_process` a set's. The depth, and packed colour at the binding
+alignment after it, goes into the pass's one `core::HostRing` slot: in place
+where mapped device memory is cached, one copy elsewhere. One slot suffices:
+the frame is copied in at record, when the pass's last batch, which binds the
+slot and the kernels' sets, must have resolved. Every frame's slot is
+claimed before any buffer grows, so a record refused while that batch is
+unresolved frees nothing it reads. `prepare` and
+`prepare_batch` are the record, one submit and its wait, and abandon the
+device planes only while `PendingBatch::in_flight` says the device may still
+read them. The outputs are leased (a held flag the frame's deleter clears
+with release order), as the core's ring slots are, where `use_count() == 1`
+and an acquire fence raced under TSan with libc++.
+
+**A set fuses in the caller's batch, strict too (amends the 2026-10-10
+fusion entry and its 2026-10-22 amendment, and the 2026-10-24 one-batch
+entry).** `Fuser::record_fuse` records one allocation round of every frame's
+band (`VoxelHashMap::record_allocate_from_depth`) and the fuse
+(`TsdfIntegrator::record_integrate`) after the prep. Where the set needs its
+whole band -- a strict fuser, or any grid's first set -- the fuse is gated on
+a word the round's gather closes on any failure (`hash_rounds.comp`, a third
+instance with the depth round between its two passes). The set is checked
+as the fuse checks it first (`TsdfIntegrator::check_frames`), so a refused
+set records no round. `finish` settles the round and fuses a refused set
+again, blocking (`FuseReport::redone`), as a set was fused before. That redo keeps the clock: a gated fuse takes its tick
+at record and writes nothing, so `finish` takes the tick back
+(`VoxelHashMap::rewind_tick`) first. Without that, each redo added a tick,
+a free pass freed blocks a set early, and `recon_example_set_codec` failed
+on the 4090, whose first and fourth sets redid. A redone set's batch recorded what came
+after the fuse (the free pass, an encode's front half) over the grid without
+the set. One round, rather than K device rounds of depth, is the owner's Q1:
+a strict room0 set already took a single round (2026-10-22), so a redo
+should be rare; the senders count them. Partial fusion is unchanged.
+
+The blocking calls are these records, a submit and the settle:
+`allocate_from_depth` repeats its round while lost races alone remain, up
+to 10, with no readback buffer, and `free_stale_blocks` is
+`VoxelBlockGrid::record_free_stale` (the compaction, the stamp pass sized
+from its count, `record_remove` of the list it writes), one recording of
+K = 3 rounds where it was up to 10 host rounds, so a contended block waits
+for the next pass. Each record takes a serial, and `settle` moves the heap's
+host copy only past every recording settled and every blocking call since,
+so a redo or a free pass is never undone by an older settle.
+`allocate_and_integrate` and `allocate_from_depth`'s `then` go;
+`dispatch_with_retry` stays for triangles and the rehash. A warm strict set
+of device frames is one submit, one wait and no staging buffer
+(`recon_tsdf_fuser`), where it took two waits.
+
+**An encode is two halves in the caller's batches (amends the 2026-09-27
+encoder, 2026-10-17 count and 2026-10-24 one-batch entries).** The front
+(`Encoder::record_front`) records, after a sender's fusion, everything whose
+count only the device knows: the active set -- the map's held list, or a
+compaction in the batch -- the observed pass, the sort, the forward, a
+P-frame's diff, the count and the layout, each sized for the grid's block
+slots and run for the device's count: the observed pass and the forward
+from indirect slices, the sort's levels and the diff's and count's passes
+over the bound, a group past the count returning. The sort's last level
+writes the store's spare list, so no copy follows it. One gather
+(`encode_results.comp`) leaves the host's figures in a results slot. The
+back (`record_back`) builds the tables on the host, uploads them inline
+first, and codes into a payload slot; `finish` lays the head out, PAYLOAD
+last (`assemble_head`), the payload left in the slot (`EncodedFrame`), and
+hashes the two unjoined. On a discrete GPU the slot is copied out to the
+last frame's size per entry plus 25%; a frame past it gathers the rest again
+into its own output range (a tail), since the core's test poison fills a
+copied output range at its batch's front (the owner's Q3). `encode` is the
+halves, 2 submits where it took 4, and no staging buffer warm where it took
+4, one a batch that read back. The quantization steps never change, so
+once a frame has finished, the front records no update for them. Two
+choices follow from the device deciding the count. Whether the grid holds a block to code is the
+front's to answer, so a P-frame planned at record over a grid of none
+finishes as an I-frame of none, with no back batch, the bytes `encode` gave
+a grid of none. And a compaction recorded into the front's batch gives the
+map no count to hold, so an extract after the encoder compacts its own list,
+where it took the encoder's back.
+
+**A record's payload is one CRC in two runs (amends the 2026-10-21 chunk
+entry).** A frame's file record and its live chunk each computed the
+payload's CRC, over a vector joined from the frame. `stream::RecordPayload`
+holds the head and the payload as two runs and their CRC, computed once by
+`of`; `ChunkEncoder::frame`, `StreamWriter::append` (one `writev` of four
+parts) and `StreamServer::publish` (its one copy, of both runs) take it and
+compute none. The data-and-size overloads are `of` and that call. Bytes
+changed after `of` go out under the CRC of what they held, which a reader
+refuses: the tests change one to show no second CRC.
+
+**The senders record a set into two batches (the 2026-10-10 fusion entry's
+2026-10-22 amendment, its next step).** `SetSender`
+(`examples/common/set_codec.hpp`), which fuse_orbbec and codec_replica share
+in place of `fuse_and_code`, records a set's prep, its fuse, the free pass
+when due and a coded set's front half (`CodecStream::record`) into one batch
+and waits on it once; `CodecStream::finish` records the back half into a
+second, waits, and writes and publishes the frame from its slot. A set fused
+again records its front half again, in a batch of its own
+(`CodecStream::redo`, `"wait: redo"`), and its frame's rows keep both
+front halves. A set begins when its frames are handed out and ends
+at the frame's publish, or its fuse's finish when it is not coded. Per set,
+on the four-frame wall `recon_codec_replica_run` codes (RTX 4090, Release):
+
+| set | submits | host waits | staging buffers | dispatches | barriers |
+|---|---|---|---|---|---|
+| P-frame, before | 6 | 6 | 4 | 18 | 31 |
+| P-frame, after | 2 | 2 | 0 | 33 | 43 |
+| I-frame (the first set), before | 7 | 7 | 5 | 16 | 30 |
+| I-frame (the first set), after | 2 | 2 | 11 | 30 | 40 |
+
+The first set places the rings' slots, which later sets reuse; a frame
+larger than any before grows its payload slot, one staging buffer, and a
+payload past the slot's copied guess adds a tail's submit. Dispatches and
+barriers rise because every pass is sized on the device: an indirect pass
+adds the dispatch that writes its arguments, and the sort, the diff and the
+count run over the grid's block slots. `recon_example_set_codec`'s warm
+coded sets have a front batch of 31 dispatches at two cameras, 41 at a
+rig's four, 45 and 55 with the free pass, and a back batch of 4; it pins
+every warm front below the Apple step near 80 at both counts. A set fused
+again costs 3 more submits (the blocking round and fuse, and the front half
+again), 2 when it is not coded.
+
+**What follows the front batch's first dispatch.** The R3 rule records
+small parameters ahead of a batch's first dispatch, since MoltenVK encodes
+an update as a blit. Each stage keeps it within itself, but a sender's
+front batch starts with the set's prep, so what the fuse and the encode
+write comes after dispatches. A probe that counted each batch's commands
+(RTX 4090 and lavapipe alike, two or four cameras) found, after the first
+dispatch of a warm coded set's front batch, 5 inline updates (the fusion's
+cameras and frustum planes), 7 fills and 2 copies -- 10 fills with the free
+pass -- or 6 compute-to-transfer switches (9). The quantization steps were
+a sixth update, which a warm encoder no longer records. Whether a fill is a
+blit on MoltenVK is V1's question, and what the switches cost on Apple is
+unmeasured: M5 and M6 run on the 4090.
+
+**Redos, Q1's input.** The test's strict sets redo on the 4090 -- its first
+set, a grid's first and so gated, and its fourth, whose new band loses
+races, at two cameras and at four -- each growing nothing; lavapipe redid
+the first in one run of two. At a rig's grid (four cameras of 640x576, 2 cm
+voxels, 16,384 buckets, Dynamic, 24 to 156 new blocks a set) a probe redid
+none after the first in 49 and 59 sets. The senders count redos
+(`fused again`); codec_replica sends one camera a set, so M6 cannot count
+four-camera redos, and the owner's rig run is what decides Q1.
 
 ## Measured lessons
 

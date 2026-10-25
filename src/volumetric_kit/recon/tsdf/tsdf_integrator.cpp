@@ -197,16 +197,23 @@ core::Result<TsdfIntegrator> TsdfIntegrator::create(
   // whole: a frame past this limit is invalid usage, not a slow path.
   integ.max_storage_buffer_range_ = props.limits.maxStorageBufferRange;
 
-  // The camera params are fixed-size, so persist the SSBOs and rewrite them
-  // inline in each integrate()'s batch -- not a per-call allocation -- and a
-  // 1-element dummy for the colour slots a call leaves unused.
-  // All of these are device-local, as every buffer the kernel reads is (the
-  // 2026-09-28 residency decision). integrate() writes every binding of every
-  // set it dispatches.
+  // The camera params are fixed-size, so persist the SSBOs, a frame's every
+  // binding-offset alignment, and rewrite them inline in each call's batch
+  // -- not a per-call allocation -- and a 1-element dummy for the colour
+  // slots a call leaves unused. All of these are device-local, as every
+  // buffer the kernel reads is (the 2026-09-28 residency decision). A call
+  // writes every binding of every set it dispatches.
+  const VkDeviceSize alignment =
+      std::max<VkDeviceSize>(props.limits.minStorageBufferOffsetAlignment, 4);
+  const auto stride = [alignment](VkDeviceSize bytes) {
+    return (bytes + alignment - 1) / alignment * alignment;
+  };
+  integ.cam_stride_ = stride(sizeof(DepthCameraParams));
+  integ.color_cam_stride_ = stride(sizeof(ColorCameraParams));
   VKC_ASSIGN(integ.cam_buf_,
-             core::device_storage_buffer(allocator, sizeof(DepthCameraParams)));
+             core::device_storage_buffer(allocator, integ.cam_stride_));
   VKC_ASSIGN(integ.color_cam_buf_,
-             core::device_storage_buffer(allocator, sizeof(ColorCameraParams)));
+             core::device_storage_buffer(allocator, integ.color_cam_stride_));
   VKC_ASSIGN(integ.color_dummy_,
              core::device_storage_buffer(allocator, sizeof(std::uint32_t)));
 
@@ -245,51 +252,106 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                    max_weight, mode, metrics);
 }
 
+// A set checked before anything is recorded: the frames that dispatch, in
+// order, and their images' bytes; the attributes the kernels bind; and the
+// frusta the frames reach, empty where one frame's is not provably a frustum.
+struct TsdfIntegrator::Checked {
+  std::vector<std::size_t> live;
+  std::vector<VkDeviceSize> depth_bytes;
+  std::vector<VkDeviceSize> color_bytes;
+  AttributeView tsdf;
+  AttributeView weight;
+  const core::Buffer* color_attr = nullptr;
+  std::vector<volume::FrustumPlanes> reach;
+};
+
 core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                                        const std::vector<FrameInput>& frames,
                                        float max_weight, IntegrationMode mode,
                                        core::StageMetrics* metrics) {
-  return fuse(grid, frames, max_weight, mode, false, nullptr, metrics).status();
-}
-
-core::Result<std::uint32_t> TsdfIntegrator::allocate_and_integrate(
-    VoxelBlockGrid& grid, const std::vector<FrameInput>& frames,
-    float max_weight, IntegrationMode mode, volume::AllocFailures* out_failures,
-    core::StageMetrics* metrics) {
-  return fuse(grid, frames, max_weight, mode, true, out_failures, metrics);
-}
-
-core::Result<std::uint32_t> TsdfIntegrator::fuse(
-    VoxelBlockGrid& grid, const std::vector<FrameInput>& frames,
-    float max_weight, IntegrationMode mode, bool allocate,
-    volume::AllocFailures* out_failures, core::StageMetrics* metrics) {
-  // Opened before the validity check so a refused call still costs its row -- a
+  // Opened before the checks so a refused call still costs its row -- a
   // stage that reports nothing when it fails reads on an overlay as a stage
   // that did not run, which is the reading a frozen pipeline most needs not to
-  // give. Inert when metrics is null, and it publishes both halves on every
-  // return below rather than only the one that reaches the dispatch.
+  // give. Inert when metrics is null; it spans the wait, and takes the batch's
+  // device halves after it.
   core::GpuStageScope stage(metrics, gpu_timer_, "integrate");
+  // Its row first, ahead of its compaction's (record_checked).
+  if (metrics != nullptr) metrics->add_cpu("integrate", 0.0);
+  VKC_ASSIGN(const Checked checked, check(grid, frames));
+  if (checked.live.empty()) return {};
+  // The heap counter says whether the grid holds a block, so no second
+  // compaction has to: an empty grid has nothing to fuse and does not tick; a
+  // grid the frames merely do not reach does, as it did when every call fused
+  // the whole set. The blocks the map holds bound what the compaction lists.
+  const std::uint32_t held = grid.map().allocated_blocks();
+  if (held == 0) return {};
+  core::CommandBatch batch(*device_, *allocator_);
+  VKC_TRY(record_checked(batch, grid, frames, checked, max_weight, mode,
+                         nullptr, held, &stage, metrics));
+  VKC_ASSIGN(core::PendingBatch pending, batch.submit_async({}, {}));
+  VKC_TRY(pending.wait());
+  if (metrics != nullptr) metrics->merge_device(pending.device_rows());
+  return {};
+}
+
+core::Status TsdfIntegrator::record_integrate(
+    core::CommandBatch& batch, VoxelBlockGrid& grid,
+    const std::vector<FrameInput>& frames, float max_weight,
+    IntegrationMode mode, const volume::DeviceCount* gate,
+    core::GpuStageScope* stage, core::StageMetrics* metrics) {
+  VKC_ASSIGN(const Checked checked, check(grid, frames));
+  if (gate != nullptr) {
+    constexpr VkDeviceSize word_bytes = sizeof(std::uint32_t);
+    constexpr const char* name = "TsdfIntegrator::record_integrate: gate";
+    if (gate->buffer == nullptr || gate->offset % word_bytes != 0 ||
+        gate->buffer->size() < word_bytes ||
+        gate->offset > gate->buffer->size() - word_bytes) {
+      return core::Status::invalid_argument(
+          "TsdfIntegrator::record_integrate: the gate's word is missing, "
+          "misaligned or past its buffer");
+    }
+    VKC_TRY(core::StorageInput(*gate->buffer)
+                .check(name, gate->offset + word_bytes));
+    // The descriptor binds the whole buffer. This also keeps its word index
+    // below the dispatch shader's no-gate sentinel.
+    VKC_TRY(core::check_storage_buffer_range(name, gate->buffer->size(),
+                                             max_storage_buffer_range_));
+  }
+  if (checked.live.empty()) return {};
+  // Every block slot: an allocation recorded before this one may fill any.
+  return record_checked(batch, grid, frames, checked, max_weight, mode, gate,
+                        static_cast<std::uint32_t>(grid.grid().num_blocks),
+                        stage, metrics);
+}
+
+core::Status TsdfIntegrator::check_frames(
+    const VoxelBlockGrid& grid, const std::vector<FrameInput>& frames) const {
+  return check(grid, frames).status();
+}
+
+core::Result<TsdfIntegrator::Checked> TsdfIntegrator::check(
+    const VoxelBlockGrid& grid, const std::vector<FrameInput>& frames) const {
   if (!valid()) {
     return core::Status::invalid_argument(
         "TsdfIntegrator::integrate: moved-from integrator");
   }
   // Every frame's O(1) checks come first, ahead of the compaction dispatch and
-  // every binding below, so a refused call does no work and leaves the
-  // persistent set as it was -- an empty grid included. A frame with no pixels
+  // every binding, so a refused call does no work and leaves the persistent
+  // set as it was -- an empty grid included. A frame with no pixels
   // dispatches nothing, as allocate_from_depth allocates nothing for it.
-  std::vector<std::size_t> live;  // the frames that dispatch, in order
-  std::vector<VkDeviceSize> depth_bytes(frames.size());
-  std::vector<VkDeviceSize> color_bytes(frames.size(), 0);
+  Checked out;
+  out.depth_bytes.assign(frames.size(), 0);
+  out.color_bytes.assign(frames.size(), 0);
   bool any_color = false;
   for (std::size_t i = 0; i < frames.size(); ++i) {
     const DepthCameraParams& cam = frames[i].camera;
     const auto pixels = static_cast<std::size_t>(cam.width) *
                         static_cast<std::size_t>(cam.height);
-    depth_bytes[i] = VkDeviceSize(pixels) * sizeof(float);
+    out.depth_bytes[i] = VkDeviceSize(pixels) * sizeof(float);
     VKC_TRY(frames[i].depth.check("TsdfIntegrator::integrate: depth",
-                                  depth_bytes[i]));
+                                  out.depth_bytes[i]));
     if (pixels == 0) continue;
-    live.push_back(i);
+    out.live.push_back(i);
     if (!finite(cam)) {
       return core::Status::invalid_argument(
           "TsdfIntegrator::integrate: frame " + std::to_string(i) +
@@ -297,7 +359,7 @@ core::Result<std::uint32_t> TsdfIntegrator::fuse(
           "entry");
     }
     VKC_TRY(core::check_storage_buffer_range(
-        "TsdfIntegrator::integrate: the depth buffer", depth_bytes[i],
+        "TsdfIntegrator::integrate: the depth buffer", out.depth_bytes[i],
         max_storage_buffer_range_));
     const ColorFrame* color = frames[i].color;
     if (color == nullptr) continue;
@@ -316,14 +378,14 @@ core::Result<std::uint32_t> TsdfIntegrator::fuse(
           "TsdfIntegrator::integrate: color frame sets both pixels and "
           "buffer");
     }
-    color_bytes[i] = VkDeviceSize(color->cam.width) * color->cam.height *
-                     sizeof(std::uint32_t);
+    out.color_bytes[i] = VkDeviceSize(color->cam.width) * color->cam.height *
+                         sizeof(std::uint32_t);
     VKC_TRY(
         color_input(*color).check("TsdfIntegrator::integrate: the colour "
                                   "image",
-                                  color_bytes[i]));
+                                  out.color_bytes[i]));
     VKC_TRY(core::check_storage_buffer_range(
-        "TsdfIntegrator::integrate: the colour buffer", color_bytes[i],
+        "TsdfIntegrator::integrate: the colour buffer", out.color_bytes[i],
         max_storage_buffer_range_));
     // The kernel decodes with exactly one curve, so a frame that is not already
     // in the canonical encoded form is refused rather than fused through the
@@ -339,15 +401,13 @@ core::Result<std::uint32_t> TsdfIntegrator::fuse(
     }
     any_color = true;
   }
-  if (live.empty()) {
-    return std::uint32_t{0};
-  }
+  if (out.live.empty()) return out;
 
   // The float tsdf + weight attributes to fuse into.
-  VKC_ASSIGN(AttributeView tsdf_view, grid.attribute("tsdf"));
-  VKC_ASSIGN(AttributeView weight_view, grid.attribute("weight"));
-  if (tsdf_view.element_size != sizeof(float) ||
-      weight_view.element_size != sizeof(float)) {
+  VKC_ASSIGN(out.tsdf, grid.attribute("tsdf"));
+  VKC_ASSIGN(out.weight, grid.attribute("weight"));
+  if (out.tsdf.element_size != sizeof(float) ||
+      out.weight.element_size != sizeof(float)) {
     return core::Status::invalid_argument(
         "TsdfIntegrator::integrate: tsdf/weight attributes must be float");
   }
@@ -357,54 +417,46 @@ core::Result<std::uint32_t> TsdfIntegrator::fuse(
   // clear a stale color even on a depth-only frame -- matching the prior
   // engine, which clears color whenever the grid holds a color block, not only
   // when a color image arrives.
-  const core::Buffer* color_attr_buf = nullptr;
   if (any_color) {
-    VKC_ASSIGN(AttributeView color_view, grid.attribute("color"));
+    VKC_ASSIGN(const AttributeView color_view, grid.attribute("color"));
     if (color_view.element_size != sizeof(std::uint32_t)) {
       return core::Status::invalid_argument(
           "TsdfIntegrator::integrate: color attribute must be uint32 (packed "
           "RGB)");
     }
-    color_attr_buf = color_view.buffer;
+    out.color_attr = color_view.buffer;
   } else if (grid.has_attribute("color")) {
-    VKC_ASSIGN(AttributeView color_view, grid.attribute("color"));
+    VKC_ASSIGN(const AttributeView color_view, grid.attribute("color"));
     if (color_view.element_size == sizeof(std::uint32_t)) {
-      color_attr_buf = color_view.buffer;
+      out.color_attr = color_view.buffer;
     }
   }
 
   // The blocks some frame can change -- the union of the frames' reach --
   // compacted once for every frame. A frame whose reach is not provably a
   // frustum fuses the whole active set, as every frame did before the cull.
-  const VoxelGridParams& grid_params = grid.grid();
-  std::vector<volume::FrustumPlanes> reach;
-  for (const std::size_t i : live) {
+  for (const std::size_t i : out.live) {
     const std::optional<volume::FrustumPlanes> planes =
-        fusion_reach(frames[i].camera, grid_params.trunc_dist);
+        fusion_reach(frames[i].camera, grid.grid().trunc_dist);
     if (!planes) {
-      reach.clear();
+      out.reach.clear();
       break;
     }
-    reach.push_back(*planes);
+    out.reach.push_back(*planes);
   }
+  return out;
+}
 
-  // The heap counter says whether the grid holds a block, so no second
-  // compaction has to: an empty grid has nothing to fuse and does not tick; a
-  // grid the frames merely do not reach does, as it did when every call fused
-  // the whole set. With an allocation in the batch, the caller's grid holds
-  // one already, so the call ticks before the allocation can be known.
-  volume::VoxelHashMap& map = grid.map();
-  if (map.allocated_blocks() == 0) {
-    if (!allocate) return std::uint32_t{0};
-    return core::Status::invalid_argument(
-        "TsdfIntegrator::allocate_and_integrate: the grid holds no block; "
-        "allocate its first set, then integrate it");
-  }
-  // The blocks the compaction can list bound the dispatches: those the map
-  // holds, or with the allocation in the batch, every block.
-  const auto max_blocks = static_cast<std::uint32_t>(
-      allocate ? grid_params.num_blocks : map.allocated_blocks());
+core::Status TsdfIntegrator::record_checked(
+    core::CommandBatch& batch, VoxelBlockGrid& grid,
+    const std::vector<FrameInput>& frames, const Checked& checked,
+    float max_weight, IntegrationMode mode, const volume::DeviceCount* gate,
+    std::uint32_t max_blocks, core::GpuStageScope* stage,
+    core::StageMetrics* metrics) {
+  const VoxelGridParams& grid_params = grid.grid();
   const auto vpb = static_cast<std::uint32_t>(grid_params.voxels_per_block);
+  const std::vector<std::size_t>& live = checked.live;
+  const auto count = static_cast<std::uint32_t>(live.size());
 
   // A Dynamic set of several frames is one instant: every frame's clear (the
   // clear kernel), then every frame's fuse, so one camera's free space never
@@ -412,188 +464,184 @@ core::Result<std::uint32_t> TsdfIntegrator::fuse(
   // (DECISIONS.md, 2026-10-08). Any other call clears and fuses in one
   // dispatch a frame: a lone frame never clears a voxel it fuses, so
   // splitting it would change nothing.
-  const bool split = mode == IntegrationMode::Dynamic && live.size() > 1;
-  // A pass over the listed blocks takes as many dispatches as the bound needs
-  // of the device's groups: the count is the device's, so each is sized by
-  // recon's count-to-slices kernel, and those past the pass's end run none.
-  const std::uint32_t dispatches = recon::detail::slice_count(
-      std::uint64_t{max_blocks} * vpb, kLocalSize,
-      recon::detail::groups_per_dispatch(max_workgroup_count_x_));
-  // A set a frame for each kernel it runs; a device span for the sizing, the
-  // compaction and each dispatch.
-  const auto count = static_cast<std::uint32_t>(live.size());
+  const bool split = mode == IntegrationMode::Dynamic && count > 1;
+  // A set a frame for each kernel it runs, every frame's cameras a stride
+  // apart in the two camera buffers, grown for the set (every batch this
+  // integrator recorded into before has resolved).
   VKC_TRY(frame_sets_.reserve(*device_, kernel_, count));
   if (split) VKC_TRY(clear_sets_.reserve(*device_, clear_kernel_, count));
-  VKC_TRY(gpu_timer_.reserve(*device_,
-                             2 + (split ? 2 * count : count) * dispatches));
+  const VkDeviceSize cam_bytes = VkDeviceSize(count) * cam_stride_;
+  const VkDeviceSize color_cam_bytes = VkDeviceSize(count) * color_cam_stride_;
+  const auto ensure = [&](core::Buffer& buffer, VkDeviceSize bytes,
+                          const char* name) -> core::Status {
+    VKC_TRY(core::check_storage_buffer_range(name, bytes,
+                                             max_storage_buffer_range_));
+    if (buffer.size() >= bytes) return {};
+    VKC_ASSIGN(buffer, core::device_storage_buffer(*allocator_, bytes));
+    device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                             core::debug_object_handle(buffer.handle()), name);
+    return {};
+  };
+  VKC_TRY(ensure(cam_buf_, cam_bytes, "tsdf.depth_cam"));
+  VKC_TRY(ensure(color_cam_buf_, color_cam_bytes, "tsdf.color_cam"));
 
-  // The compaction's own row, and an allocation's: breakdowns of "integrate",
-  // whose row holds their tiles and their host time, so only their device
-  // halves are kept. Open until the submit has resolved their tiles.
+  // The call is one tick: every block it changes is stamped with the new one,
+  // so a reader that recorded the tick before sees the change as newer.
+  // Advanced here, after an allocation in the batch has taken the old one.
+  volume::VoxelHashMap& map = grid.map();
+  map.advance_tick();
+  const std::uint32_t tick = map.tick();
+
+  // Every frame's cameras first, in one inline write each, ahead of the
+  // compaction, so MoltenVK opens no blit encoder between the passes (a
+  // sender's batch has the set's prep and round before them). The
+  // camera params ride the SSBOs verbatim; the kernel derives world ->
+  // camera from the rigid cam_to_world, so there is no host-side pose
+  // inversion. A frame without colour leaves its colour camera zero.
+  std::vector<std::uint8_t> cams(static_cast<std::size_t>(cam_bytes), 0);
+  std::vector<std::uint8_t> color_cams(
+      static_cast<std::size_t>(color_cam_bytes), 0);
+  for (std::size_t k = 0; k < live.size(); ++k) {
+    const FrameInput& frame = frames[live[k]];
+    std::memcpy(cams.data() + k * cam_stride_, &frame.camera,
+                sizeof(DepthCameraParams));
+    if (frame.color != nullptr) {
+      std::memcpy(color_cams.data() + k * color_cam_stride_, &frame.color->cam,
+                  sizeof(ColorCameraParams));
+    }
+  }
+  VKC_TRY(batch.upload(cam_buf_, 0, cams.data(), cam_bytes));
+  VKC_TRY(batch.upload(color_cam_buf_, 0, color_cams.data(), color_cam_bytes));
+
+  // The compaction, its own breakdown: its device half alone, as the stage's
+  // row holds its host time and its tiles too. Its row is placed now, after
+  // the stage's, which the caller placed, so a batch's later stages do not
+  // come between them.
   core::StageMetrics parts;
-  std::optional<core::GpuStageScope> active_stage;
-  active_stage.emplace(metrics != nullptr ? &parts : nullptr, gpu_timer_,
-                       "  ..active set");
-  std::vector<core::Buffer> depth_bufs(
-      frames.size());  // host arrays' device copies
-  std::vector<core::Buffer> color_bufs(
-      frames.size());  // alive across the batch
-  const std::uint32_t has_color_attr = (color_attr_buf != nullptr) ? 1u : 0u;
+  volume::RecordedBlockList active;
+  if (metrics != nullptr && stage != nullptr && stage->timer() != nullptr) {
+    metrics->add_cpu("  ..active set", 0.0);
+  }
+  {
+    core::GpuStageScope compaction(
+        stage != nullptr && stage->timer() != nullptr ? &parts : nullptr,
+        gpu_timer_, "  ..active set");
+    VKC_ASSIGN(active,
+               map.record_compaction(
+                   batch, checked.reach.empty() ? nullptr : &checked.reach,
+                   &compaction));
+  }
+  // A pass over the listed blocks takes as many dispatches as the bound needs
+  // of the device's groups: the count is the device's, so each is sized by
+  // recon's count-to-slices kernel, those past the pass's end and all of them
+  // behind a closed gate running none.
+  recon::detail::IndirectSlices slices;
+  VKC_TRY(recon::detail::record_dispatch_args(
+      batch, *device_, *allocator_, args_kernel_, args_, "tsdf.dispatch_args",
+      recon::detail::SlicedCount{active.count, 0, max_blocks, vpb,
+                                 gate != nullptr ? gate->buffer : nullptr,
+                                 gate != nullptr ? gate->offset : 0},
+      kLocalSize, &slices, 0, nullptr, max_workgroup_count_x_, stage));
 
-  // One batch: the compaction and the sizing, then per frame, its images
-  // staged and its sets written whole, then its first pass; a split set's
-  // fuses follow on the sets already written. Each pass has its frame's
-  // cameras inline ahead of it: the two camera buffers are shared by every
-  // frame and rewritten ahead of each pass, which the batch's barrier around
-  // every dispatch orders after the one before read them.
+  const std::uint32_t has_color_attr =
+      (checked.color_attr != nullptr) ? 1u : 0u;
+  // Live frame k's pass: its set in the kernel's own's place, since an
+  // indirect dispatch binds the kernel's set, then the pass's dispatches,
+  // each from its first thread. Colour is read only by a fuse.
+  const auto pass = [&](std::size_t k, Pass which) -> core::Status {
+    const FrameInput& frame = frames[live[k]];
+    const bool color = frame.color != nullptr && which != Pass::Clear;
+    PushConstants push{grid_params,
+                       max_weight,
+                       static_cast<std::uint32_t>(mode),
+                       color ? 1u : 0u,
+                       has_color_attr,
+                       tick,
+                       (color && frame.color->coverage_in_alpha) ? 1u : 0u,
+                       which == Pass::Fuse ? 1u : 0u};
+    core::ComputeKernel& kernel =
+        which == Pass::Clear ? clear_kernel_ : kernel_;
+    kernel.set = which == Pass::Clear ? clear_sets_[k] : frame_sets_[k];
+    return recon::detail::dispatch_slices(batch, kernel, push, slices, stage);
+  };
   // TODO(tsdf): one dispatch looping over the cameras (twice for a split set),
   // reading and writing each voxel once, if integrate's device time comes to
   // matter after PERF.md's P3 (DECISIONS.md, 2026-09-30).
-  const auto record = [&](core::CommandBatch& batch) -> core::Status {
-    // The call is one tick: every block it changes is stamped with the new
-    // one, so a reader that recorded the tick before sees the change as newer.
-    // Advanced here, after an allocation in the batch has taken the old one.
-    map.advance_tick();
-    const std::uint32_t tick = map.tick();
-    VKC_ASSIGN(const volume::RecordedBlockList active,
-               map.record_compaction(batch, reach.empty() ? nullptr : &reach,
-                                     &*active_stage));
-    recon::detail::IndirectSlices slices;
-    VKC_TRY(recon::detail::record_dispatch_args(
-        batch, *device_, *allocator_, args_kernel_, args_, "tsdf.dispatch_args",
-        recon::detail::SlicedCount{active.count, 0, max_blocks, vpb},
-        kLocalSize, &slices, 0, nullptr, max_workgroup_count_x_, &stage));
-
-    // Live frame k's pass: its set in the kernel's own's place, since an
-    // indirect dispatch binds the kernel's set, then the pass's dispatches,
-    // each from its first thread. Colour is read only by a fuse.
-    const auto pass = [&](std::size_t k, Pass which) -> core::Status {
-      const FrameInput& frame = frames[live[k]];
-      const bool color = frame.color != nullptr && which != Pass::Clear;
-      // The camera params ride the SSBO verbatim; the kernel derives world ->
-      // camera from the rigid cam_to_world, so there is no host-side pose
-      // inversion.
-      VKC_TRY(
-          batch.upload(cam_buf_, 0, &frame.camera, sizeof(DepthCameraParams)));
-      if (color) {
-        VKC_TRY(batch.upload(color_cam_buf_, 0, &frame.color->cam,
-                             sizeof(ColorCameraParams)));
-      }
-      PushConstants push{grid_params,
-                         max_weight,
-                         static_cast<std::uint32_t>(mode),
-                         color ? 1u : 0u,
-                         has_color_attr,
-                         tick,
-                         (color && frame.color->coverage_in_alpha) ? 1u : 0u,
-                         which == Pass::Fuse ? 1u : 0u};
-      core::ComputeKernel& kernel =
-          which == Pass::Clear ? clear_kernel_ : kernel_;
-      kernel.set = which == Pass::Clear ? clear_sets_[k] : frame_sets_[k];
-      return recon::detail::dispatch_slices(batch, kernel, push, slices,
-                                            &stage);
-    };
-    for (std::size_t k = 0; k < live.size(); ++k) {
-      const std::size_t i = live[k];
-      const FrameInput& frame = frames[i];
-      VKC_ASSIGN(const VkBuffer depth_handle,
-                 frame.depth.buffer(batch, *allocator_, depth_bytes[i],
-                                    depth_bufs[i]));
-      if (depth_bufs[i].valid()) {
-        // Named because it is the biggest thing this call moves -- a few
-        // megabytes a frame at a scanner's resolution -- and so the first row
-        // a capture's transfer view should be able to attribute.
+  for (std::size_t k = 0; k < live.size(); ++k) {
+    const std::size_t i = live[k];
+    const FrameInput& frame = frames[i];
+    // A host array's device copy, which the batch keeps.
+    core::Buffer depth_upload;
+    VKC_ASSIGN(const VkBuffer depth_handle,
+               frame.depth.buffer(batch, *allocator_, checked.depth_bytes[i],
+                                  depth_upload));
+    if (depth_upload.valid()) {
+      // Named because it is the biggest thing this call moves -- a few
+      // megabytes a frame at a scanner's resolution -- and so the first row
+      // a capture's transfer view should be able to attribute.
+      device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                               core::debug_object_handle(depth_upload.handle()),
+                               "tsdf.depth_frame");
+      batch.retain(std::move(depth_upload));
+    }
+    // Slot 5 is the frame's color image only when it brings one; unused
+    // color slots take the 1-element dummy so every descriptor stays bound.
+    VkBuffer color_handle = color_dummy_.handle();
+    VkDeviceSize color_range = VK_WHOLE_SIZE;
+    if (frame.color != nullptr) {
+      core::Buffer color_upload;
+      VKC_ASSIGN(color_handle,
+                 color_input(*frame.color)
+                     .buffer(batch, *allocator_, checked.color_bytes[i],
+                             color_upload));
+      if (color_upload.valid()) {
         device_->set_object_name(
             VK_OBJECT_TYPE_BUFFER,
-            core::debug_object_handle(depth_bufs[i].handle()),
-            "tsdf.depth_frame");
+            core::debug_object_handle(color_upload.handle()),
+            "tsdf.color_frame");
+        batch.retain(std::move(color_upload));
       }
-      // Slot 5 is the frame's color image only when it brings one; unused
-      // color slots take the 1-element dummy so every descriptor stays bound.
-      VkBuffer color_handle = color_dummy_.handle();
-      VkDeviceSize color_range = VK_WHOLE_SIZE;
-      if (frame.color != nullptr) {
-        VKC_ASSIGN(color_handle, color_input(*frame.color)
-                                     .buffer(batch, *allocator_, color_bytes[i],
-                                             color_bufs[i]));
-        if (color_bufs[i].valid()) {
-          device_->set_object_name(
-              VK_OBJECT_TYPE_BUFFER,
-              core::debug_object_handle(color_bufs[i].handle()),
-              "tsdf.color_frame");
-        }
-        color_range = color_bytes[i];
-      }
-      // The frame's bindings, the same in either kernel's set.
-      const auto write = [&](const core::DescriptorSet& set) {
-        set.write_storage_buffer(0, tsdf_view.buffer->handle(), 0,
-                                 VK_WHOLE_SIZE);
-        set.write_storage_buffer(1, weight_view.buffer->handle(), 0,
-                                 VK_WHOLE_SIZE);
-        set.write_storage_buffer(2, active.buffer->handle(), 0,
-                                 VkDeviceSize(max_blocks) * sizeof(BlockIndex));
-        // The images' exact ranges, never VK_WHOLE_SIZE: a caller's buffer
-        // may be past maxStorageBufferRange where the image it holds is not.
-        set.write_storage_buffer(3, depth_handle, 0, depth_bytes[i]);
-        set.write_storage_buffer(4, cam_buf_.handle(), 0, VK_WHOLE_SIZE);
-        set.write_storage_buffer(5, color_handle, 0, color_range);
-        // Slot 6 is the grid's `color` attribute whenever it carries one, so
-        // dynamic can clear a stale color even on a depth-only frame.
-        set.write_storage_buffer(6,
-                                 (color_attr_buf != nullptr)
-                                     ? color_attr_buf->handle()
-                                     : color_dummy_.handle(),
-                                 0, VK_WHOLE_SIZE);
-        set.write_storage_buffer(7, color_cam_buf_.handle(), 0, VK_WHOLE_SIZE);
-        set.write_storage_buffer(8, map.stamps_buffer().handle(), 0,
-                                 VK_WHOLE_SIZE);
-        set.write_storage_buffer(9, active.count->handle(), 0,
-                                 sizeof(std::uint32_t));
-      };
-      write(frame_sets_[k]);
-      if (split) write(clear_sets_[k]);
-      VKC_TRY(pass(k, split ? Pass::Clear : Pass::Both));
+      color_range = checked.color_bytes[i];
     }
-    if (split) {
-      for (std::size_t k = 0; k < live.size(); ++k) {
-        VKC_TRY(pass(k, Pass::Fuse));
-      }
-    }
-    return {};
-  };
-
-  std::uint32_t dropped = 0;
-  if (allocate) {
-    const std::vector<volume::DepthInput> depths(frames.begin(), frames.end());
-    VKC_ASSIGN(dropped, map.allocate_from_depth(
-                            depths, out_failures,
-                            metrics != nullptr ? &parts : nullptr, record));
-  } else {
-    core::CommandBatch batch(*device_, *allocator_);
-    VKC_TRY(record(batch));
-    VKC_TRY(batch.submit());
+    // The frame's bindings, the same in either kernel's set.
+    const auto write = [&](const core::DescriptorSet& set) {
+      set.write_storage_buffer(0, checked.tsdf.buffer->handle(), 0,
+                               VK_WHOLE_SIZE);
+      set.write_storage_buffer(1, checked.weight.buffer->handle(), 0,
+                               VK_WHOLE_SIZE);
+      set.write_storage_buffer(2, active.buffer->handle(), 0,
+                               VkDeviceSize(max_blocks) * sizeof(BlockIndex));
+      // The images' exact ranges, never VK_WHOLE_SIZE: a caller's buffer may
+      // be past maxStorageBufferRange where the image it holds is not.
+      set.write_storage_buffer(3, depth_handle, 0, checked.depth_bytes[i]);
+      set.write_storage_buffer(4, cam_buf_.handle(), k * cam_stride_,
+                               sizeof(DepthCameraParams));
+      set.write_storage_buffer(5, color_handle, 0, color_range);
+      // Slot 6 is the grid's `color` attribute whenever it carries one, so
+      // dynamic can clear a stale color even on a depth-only frame.
+      set.write_storage_buffer(6,
+                               (checked.color_attr != nullptr)
+                                   ? checked.color_attr->handle()
+                                   : color_dummy_.handle(),
+                               0, VK_WHOLE_SIZE);
+      set.write_storage_buffer(7, color_cam_buf_.handle(),
+                               k * color_cam_stride_,
+                               sizeof(ColorCameraParams));
+      set.write_storage_buffer(8, map.stamps_buffer().handle(), 0,
+                               VK_WHOLE_SIZE);
+      set.write_storage_buffer(9, active.count->handle(), 0,
+                               sizeof(std::uint32_t));
+    };
+    write(frame_sets_[k]);
+    if (split) write(clear_sets_[k]);
+    VKC_TRY(pass(k, split ? Pass::Clear : Pass::Both));
   }
-  active_stage.reset();
-  if (metrics != nullptr) {
-    // A fused round's scope opened inside the compaction's, so the
-    // compaction's tiles hold the round's too: taken off, which is exact, as
-    // the two tile one submit.
-    const core::StageRow* round = nullptr;
-    for (const core::StageRow& row : parts.rows()) {
-      if (std::strcmp(row.name, "allocate") == 0) round = &row;
-    }
-    for (const core::StageRow& row : parts.rows()) {
-      const char* name = &row == round ? "  ..allocate" : row.name;
-      metrics->seed(name);
-      if (&row == round || round == nullptr) {
-        metrics->add_device(name, row.device, row.gpu_ms);
-      } else {
-        metrics->add_device(name, std::max(row.device, round->device),
-                            row.gpu_ms - round->gpu_ms);
-      }
+  if (split) {
+    for (std::size_t k = 0; k < live.size(); ++k) {
+      VKC_TRY(pass(k, Pass::Fuse));
     }
   }
-  return dropped;
+  return {};
 }
 
 }  // namespace volumetric_kit::recon::tsdf

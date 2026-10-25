@@ -272,37 +272,53 @@ class VR_TSDF_API TsdfIntegrator {
                          IntegrationMode mode = IntegrationMode::Classic,
                          core::StageMetrics* metrics = nullptr);
 
-  /// @brief Allocate @p frames' bands and @ref integrate them in one submit,
-  ///        for a live caller that accepts a partial band
-  ///        (@ref FuserConfig::allow_partial).
+  /// @brief Record @ref integrate's work for @p frames into @p batch, after
+  ///        what it holds -- an allocation round of the same frames included
+  ///        (`VoxelHashMap::record_allocate_from_depth`): one compaction of
+  ///        the blocks the frames reach, and each pass sized on the device
+  ///        from its count, none behind a closed @p gate.
   ///
-  /// One allocation round (@ref volume::VoxelHashMap::allocate_from_depth
-  /// with its `then`), the compaction and the fuse share a batch, so the set
-  /// waits on one fence. The fuse is the one @ref integrate gives on the
-  /// blocks the round allocated: a block the round failed, to a lost lock
-  /// race or a capacity limit, is left out of this set, where
-  /// @ref volume::VoxelHashMap::allocate_from_depth alone would retry the
-  /// races first.
-  /// @param grid          As @ref integrate; it must hold a block
-  ///                      (@ref volume::VoxelHashMap::allocated_blocks), as
-  ///                      after its first set, which allocating and then
-  ///                      integrating takes, retries included.
-  /// @param frames        As @ref integrate.
-  /// @param max_weight    As @ref integrate.
-  /// @param mode          As @ref integrate.
-  /// @param out_failures  As @ref volume::VoxelHashMap::allocate_from_depth.
-  /// @param metrics       As @ref integrate, whose row is the whole set's, and
-  ///                      a `"  ..allocate"` breakdown with the round's device
-  ///                      half alone.
-  /// @return The failed allocations, as
-  ///         @ref volume::VoxelHashMap::allocate_from_depth counts them; or
-  ///         as @ref integrate refuses, and
-  ///         `Status::Code::InvalidArgument` for a grid holding no block.
-  core::Result<std::uint32_t> allocate_and_integrate(
-      volume::VoxelBlockGrid& grid, const std::vector<FrameInput>& frames,
-      float max_weight, IntegrationMode mode,
-      volume::AllocFailures* out_failures,
-      core::StageMetrics* metrics = nullptr);
+  /// Advances the map's tick now, whatever @p gate holds. The passes are
+  /// bounded by the grid's block slots, since the device decides how many
+  /// blocks the compaction lists; every camera goes in one inline write
+  /// ahead of the compaction. The blocking forms are this, one submit and its
+  /// wait.
+  /// @param batch       Records the work; the caller submits it.
+  /// @param grid        As @ref integrate; nothing but @p batch changes it
+  ///                    until the batch has resolved.
+  /// @param frames      As the set form of @ref integrate takes them; their
+  ///                    buffers, and the colour frames they point to,
+  ///                    unchanged until the batch has run.
+  /// @param max_weight  As @ref integrate.
+  /// @param mode        As @ref integrate.
+  /// @param gate        Optional word; 0 fuses nothing (a band its allocation
+  ///                    left incomplete). Must be a complete, aligned word
+  ///                    in a known device-local storage buffer whose full
+  ///                    size fits the device's storage-buffer binding limit.
+  /// @param stage       Optional: the caller's scope, whose tile every pass
+  ///                    counts to; the compaction is its `"  ..active set"`
+  ///                    breakdown, the device half alone, from
+  ///                    `PendingBatch::device_rows`.
+  /// @param metrics     Optional: @p stage's own rows, in which the
+  ///                    breakdown's row is placed now, after the stage's
+  ///                    rows before it, its host half 0.
+  /// @return OK; or, with nothing recorded, @ref integrate's refusals.
+  core::Status record_integrate(core::CommandBatch& batch,
+                                volume::VoxelBlockGrid& grid,
+                                const std::vector<FrameInput>& frames,
+                                float max_weight, IntegrationMode mode,
+                                const volume::DeviceCount* gate = nullptr,
+                                core::GpuStageScope* stage = nullptr,
+                                core::StageMetrics* metrics = nullptr);
+
+  /// @brief The checks @ref integrate makes of @p frames before any work,
+  ///        alone: for a caller that records the set's allocation round
+  ///        ahead of @ref record_integrate and refuses before either.
+  /// @param grid    As @ref integrate.
+  /// @param frames  As the set form of @ref integrate.
+  /// @return OK; or @ref integrate's refusals.
+  core::Status check_frames(const volume::VoxelBlockGrid& grid,
+                            const std::vector<FrameInput>& frames) const;
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
@@ -310,14 +326,18 @@ class VR_TSDF_API TsdfIntegrator {
  private:
   TsdfIntegrator() = default;
 
-  // integrate's body, and allocate_and_integrate's when `allocate`: the
-  // frames' allocation round then shares the batch, ahead of the fuse.
-  core::Result<std::uint32_t> fuse(volume::VoxelBlockGrid& grid,
-                                   const std::vector<FrameInput>& frames,
-                                   float max_weight, IntegrationMode mode,
-                                   bool allocate,
-                                   volume::AllocFailures* out_failures,
-                                   core::StageMetrics* metrics);
+  // A set checked before anything is recorded (tsdf_integrator.cpp).
+  struct Checked;
+  core::Result<Checked> check(const volume::VoxelBlockGrid& grid,
+                              const std::vector<FrameInput>& frames) const;
+  // record_integrate's and integrate's body, over at most `max_blocks`
+  // listed blocks.
+  core::Status record_checked(
+      core::CommandBatch& batch, volume::VoxelBlockGrid& grid,
+      const std::vector<FrameInput>& frames, const Checked& checked,
+      float max_weight, IntegrationMode mode, const volume::DeviceCount* gate,
+      std::uint32_t max_blocks, core::GpuStageScope* stage,
+      core::StageMetrics* metrics);
 
   // Borrowed (must outlive this).
   core::Device* device_ = nullptr;
@@ -353,14 +373,16 @@ class VR_TSDF_API TsdfIntegrator {
   // mutable member and a failure path on a diagnostic. Idle -- no query
   // written, no span recorded -- until a caller passes a StageMetrics.
   core::GpuTimer gpu_timer_;
-  // Fixed-size camera-params SSBO (DepthCameraParams), rewritten inline ahead
-  // of each frame's dispatch rather than reallocated per frame (mirrors the
-  // volume tier's persistent camera params).
+  // Every frame's camera, depth and colour, a stride apart in two persistent
+  // SSBOs, written inline once a call ahead of its compaction and bound at
+  // each frame's offset; grown to the most frames a call has had (mirrors
+  // the volume tier's persistent camera params). And a 1-element dummy bound
+  // to the color-image + color-attribute slots when no color frame is fused
+  // (so every declared descriptor stays bound).
   core::Buffer cam_buf_;
-  // Color path: the persistent (separate) color-camera SSBO, and a 1-element
-  // dummy bound to the color-image + color-attribute slots when no color frame
-  // is fused (so every declared descriptor stays bound).
   core::Buffer color_cam_buf_;
+  VkDeviceSize cam_stride_ = 0;
+  VkDeviceSize color_cam_stride_ = 0;
   core::Buffer color_dummy_;
 };
 

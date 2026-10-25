@@ -6,8 +6,97 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `sensor`: **a set's prep records into a caller's batch, and the array
+  waits on its sensors' notifications** (the 2026-10-25 decision):
+  `GpuFramePrep::record` and `record_set`, `SensorArray::record_process`
+  and `wait_set`, `IRgbdSensor::set_frame_notify` (the default refuses with
+  `Unsupported`; `OrbbecSensor` notifies), `RgbdFrame::arrival_ns` and
+  `FrameSet::arrival_ns`. A pass's depth and packed colour go through its
+  persistent `core::HostRing` slot, its staging buffer gone, and its outputs
+  are leased. Migration: a record before the pass's last batch resolves is
+  refused; a plane's unknown queue family is refused with the frame's checks,
+  timing no row. Tests: `recon_sensor_gpu_frame_prep`,
+  `recon_sensor_gpu_frame_prep_oom`, `recon_sensor_array`,
+  `recon_sensor_array_process`, `recon_sensor_trigger_grouper`,
+  `recon_sensor_rgbd_sensor`, `recon_example_fuse_orbbec_sets`.
+- `volume`, `tsdf`: **a set fuses in the caller's batch, strict too** (the
+  2026-10-25 decision): `Fuser::record_fuse`, `finish` and `abandon`,
+  `PendingFuse` and `FuseReport::redone`;
+  `VoxelHashMap::record_allocate_from_depth` and `rewind_tick`;
+  `VoxelBlockGrid::record_free_stale`; `TsdfIntegrator::record_integrate`
+  and `check_frames`, which `record_fuse` runs before it records anything.
+  A strict set, or any grid's first, is one round and a fuse gated on the
+  whole band, and `finish` fuses a refused set again, blocking, at its own
+  tick: a warm strict set is one submit and one wait. `allocate_from_depth`
+  and `free_stale_blocks` are their records, a submit and the settle;
+  recordings settle in any order. Migration: `free_stale_blocks` runs 3
+  removal rounds, not up to 10, so a contended block waits for the next
+  pass, and it moves the topology epoch even when it frees nothing. Tests:
+  `recon_tsdf_fuser`, `recon_tsdf_fuser_oom`, `recon_volume_recorded`,
+  `recon_volume_block_stamps`, `recon_tier_stage_metrics`.
+- `codec`: **an encode is two halves in the caller's batches** (the
+  2026-10-25 decision): `Encoder::record_front`, `record_back`, `finish` and
+  `abandon`, `PendingEncode` and `EncodedFrame`, whose payload stays in an
+  encoder slot. Every count stays on the device until the front's results
+  slot; `encode` is the halves, 2 submits (the decision has the counts),
+  its bytes, rows and refusals as they were, plus `"  ..tables"`; a warm
+  encoder records no quantization steps. Migration: a compaction the
+  encoder records leaves the map no list, so an extract after it compacts
+  its own; a P-frame planned over a grid of no block finishes as an I-frame
+  of none (as `encode` always coded it); an I-frame of none records no back
+  half and so reports no `"  ..rans encode"`. `decode_growing` also takes
+  the frame in a decoder's
+  input slot (`Decoder::claim_input`), so a sender decodes the bytes it
+  wrote with no copy of its own. Tests: `recon_codec_encoder`,
+  `recon_codec_device_frame`, `recon_codec_inter`, `recon_codec_step_layout`,
+  `recon_codec_block_lists`, `recon_codec_dct`, `recon_codec_bitstream`,
+  `recon_codec_decode_grid`, `recon_example_codec_stream`.
+- `stream`, `networking`: **a record's payload in two runs, its CRC computed
+  once** (the 2026-10-25 decision): `stream::RecordPayload` and the
+  `ChunkEncoder::frame`, `StreamWriter::append` and `StreamServer::publish`
+  overloads that take it, so an encoded frame's head and payload are written
+  and served as they lie, under one CRC. Tests: `recon_stream_chunks`,
+  `recon_stream_container`, `recon_networking_server`.
+- `sensor`: **public CUDA interop on recon's device**
+  (`sensor/video/cuda_interop.hpp`, `VR_WITH_CUDA` builds; it includes
+  cuda.h, so `recon_sensor_video` carries the toolkit's headers PUBLIC):
+  `cuda_ordinal_of`, `CudaContext` (the GPU's primary context), `CudaStream`
+  and `CudaBufferMapping::map`, which takes an `ExportedBuffer`'s descriptor
+  and refuses one already taken. `HevcDecoder` (NVDEC) and `JpegDecoder`
+  (nvJPEG) hand their pictures over through it, in place of their internal
+  copies of these types; libcuda is still loaded at run time. The host-only
+  `recon_sensor_video_cuda_slot` test goes with the picture slot's
+  hand-written moves. Test: `recon_sensor_video_cuda_interop`.
+
 ### Changed
 
+- examples: **fuse_orbbec and codec_replica print a table per set**
+  (`SetLog`, the 2026-10-25 decision), where fuse_orbbec printed means per
+  camera frame: each row's mean, p50, p95 and max over the sets, the
+  device's counters per set and the latency to publish, P-frame, I-frame
+  and uncoded sets apart. A frame's write and publish are rows of their
+  own. The encoder's compaction reports as `"  ..encode set"` and the free
+  pass's as `"  ..stale set"`, apart from a fuse's `"  ..active set"`, and
+  the encoder's breakdowns carry their own device halves. Tests:
+  `recon_example_set_log`, `recon_codec_replica_run` (new),
+  `recon_volume_block_stamps`, `recon_codec_encoder`.
+- examples: **the senders record each set into two batches** (`SetSender`
+  in `set_codec.hpp`, in place of `fuse_and_code`; the 2026-10-25
+  decision): a set's prep, fuse, free pass and frame's front half in one,
+  the frame's rANS half in the next (`CodecStream::record`, `front_ran`,
+  `finish`, and `redo` after a fusion done again, timed as
+  `"wait: redo"`), the frame written and published from its slot under one
+  CRC: 2 submits a warm coded set (the decision has the counts).
+  fuse_orbbec waits on its sensors' notifications rather than sleeping
+  between polls. Migration: a codec row's host columns (`encode_host_ms`,
+  `decode_host_ms`) are host busy time on every path, their waits on the
+  device left out (a sender's are the set's `"wait: front"` and
+  `"wait: frame"` rows); the `"set"` row's wait is its rows' since the set
+  arrived; the report's rANS line is device time. Tests:
+  `recon_example_set_codec`, `recon_example_codec_stream`,
+  `recon_codec_replica_run`.
 - `sensor/video`: **`HevcDecoder` decodes through VideoToolbox directly on
   Apple**, with no FFmpeg (the 2026-10-25 decision). It reads the parameter
   sets and slice headers itself, hands VideoToolbox each picture's slices,
@@ -425,6 +514,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `codec`: refused output-vector allocations preserve the encoder reference,
+  GOP and forced-intra request; failed back recordings retain the front
+  results and release tentative output slots so a retry encodes the same frame.
+- `volume`: a refused resize restores the settlement frontier, and blocking
+  stale-block removal counts only its own removals when earlier recordings
+  have completed without settlement.
+- `tsdf`: recorded fusion rejects overflowing gate offsets and invalid borrowed
+  storage-buffer metadata before recording commands or advancing the tick.
+- `tsdf`: blocking fusion's host timing includes queue submission, so work that
+  finishes during submission remains inside its reported host span.
+- `sensor`: frame preparation retains external device pictures when queue
+  submission reports device loss, matching the core's pending-work lifetime.
 - `examples`: **the fusion grid starts within the device's
   `maxStorageBufferRange`**, where every example started at 16,384 buckets
   or more, 256 MiB an attribute, which lavapipe's 128 MiB refused at create.
@@ -432,7 +533,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or a caller's (`fusion.buckets`, `codec_replica`'s), at the ceiling the grid
   grows to: 8,192 buckets at 128 MiB, unchanged at 4 GiB. A caller's count it
   lowers is logged as a warning. The sanitizer job now builds the examples, so
-  it runs `recon_fuse_replica_run` on lavapipe.
+  it runs `recon_fuse_replica_run` and `recon_codec_replica_run` on lavapipe.
   Test: `recon_example_fusion_buckets`.
 - `mesh`: empty device subsets produce an empty mesh without dereferencing a
   null list buffer, including when reusing a populated draw slot.
@@ -486,16 +587,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `sensor`: **public CUDA interop on recon's device**
-  (`sensor/video/cuda_interop.hpp`, `VR_WITH_CUDA` builds; it includes
-  cuda.h, so `recon_sensor_video` carries the toolkit's headers PUBLIC):
-  `cuda_ordinal_of`, `CudaContext` (the GPU's primary context), `CudaStream`
-  and `CudaBufferMapping::map`, which takes an `ExportedBuffer`'s descriptor
-  and refuses one already taken. `HevcDecoder` (NVDEC) and `JpegDecoder`
-  (nvJPEG) hand their pictures over through it, in place of their internal
-  copies of these types; libcuda is still loaded at run time. The host-only
-  `recon_sensor_video_cuda_slot` test goes with the picture slot's
-  hand-written moves. Test: `recon_sensor_video_cuda_interop`.
 - `io`: **`load_textured_mesh`** (`textured_mesh.hpp`, in
   `recon_io_assimp`): a static asset's triangles with one UV per vertex,
   positions repeated at UV seams, and its diffuse map's path, resolved
@@ -931,6 +1022,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- `tsdf`, `volume`: **`TsdfIntegrator::allocate_and_integrate` and
+  `allocate_from_depth`'s `then`** (BREAKING; the 2026-10-25 decision).
+  Migrating: `Fuser::record_fuse` records a set's round and fuse into a
+  caller's batch, and `VoxelHashMap::record_allocate_from_depth` a round
+  alone. Tests: `recon_tsdf_fuser`, `recon_tier_stage_metrics`.
 - build: **`VR_WITH_FFMPEG` on Apple** (BREAKING): the configure fails and
   names the fix, since Apple's decoders use no FFmpeg; FFmpeg's VideoToolbox
   path goes with it. Migrating: drop `-DVR_WITH_FFMPEG=ON` and the `ffmpeg`

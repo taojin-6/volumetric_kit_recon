@@ -111,6 +111,7 @@ target_link_libraries(
           volumetric_kit::recon_tsdf volumetric_kit::recon_volume
           volumetric_kit::recon_core volumetric_kit::core_test_policy)
 vr_target_warnings(recon_tier_stage_metrics_test)
+target_link_libraries(recon_tier_stage_metrics_test PRIVATE ${CMAKE_DL_LIBS})
 add_test(NAME recon_tier_stage_metrics COMMAND recon_tier_stage_metrics_test)
 
 # volume coordinate math: pure host transforms (world <-> voxel <-> block,
@@ -244,6 +245,19 @@ target_link_libraries(
 vr_target_warnings(recon_sensor_gpu_frame_prep_oom_test)
 add_test(NAME recon_sensor_gpu_frame_prep_oom
          COMMAND recon_sensor_gpu_frame_prep_oom_test)
+
+# Submission-loss lifetime fault injection needs the Unix dynamic loader.
+if(UNIX)
+  add_executable(recon_sensor_gpu_frame_prep_submit_test
+                 sensor_gpu_frame_prep_submit_test.cpp)
+  target_link_libraries(
+    recon_sensor_gpu_frame_prep_submit_test
+    PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_sensor_utils
+            ${CMAKE_DL_LIBS})
+  vr_target_warnings(recon_sensor_gpu_frame_prep_submit_test)
+  add_test(NAME recon_sensor_gpu_frame_prep_submit
+           COMMAND recon_sensor_gpu_frame_prep_submit_test)
+endif()
 
 # A set's pictures read back to the host (recon_sensor_utils' PictureReadback)
 # on synthetic NV12 images and NV12 and I420 buffers: exact bytes at odd sizes,
@@ -401,6 +415,18 @@ target_link_libraries(recon_example_stage_table_test
 vr_target_warnings(recon_example_stage_table_test)
 add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 
+# A sender's per-set log (examples/common/set_log.hpp): counters across each
+# set, P-frame, I-frame and uncoded sets apart, nearest-rank percentiles over
+# the sets that ran a row, n/t, n/a and dash cells, latencies and redo and tail
+# counts. Host only.
+add_executable(recon_example_set_log_test example_set_log_test.cpp)
+target_include_directories(recon_example_set_log_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(recon_example_set_log_test
+                      PRIVATE volumetric_kit::recon_codec)
+vr_target_warnings(recon_example_set_log_test)
+add_test(NAME recon_example_set_log COMMAND recon_example_set_log_test)
+
 # The codec examples' stream (examples/common/codec_stream.hpp): on the host, a
 # row's type and host and device milliseconds, its CSV line, a frame type's
 # sizes, a GOP's bytes and bitrate, a frame's pts, and the comparison options
@@ -426,14 +452,15 @@ vr_target_warnings(recon_example_codec_stream_test)
 add_test(NAME recon_example_codec_stream
          COMMAND recon_example_codec_stream_test)
 
-# fuse_orbbec's coded sets (examples/common/set_codec.hpp), with no camera
-# driver: fake cameras read as a sensor array and prepared on the device, each
-# set fused and coded into a .vrst whose records, keys, sets and pts are the
-# sets', every frame decoded. A wall the cameras later see past: under Dynamic
-# gone from the frames that see past it, and its blocks freed by the
-# fusion.free_after pass due; under Classic its observed blocks kept. On the
-# host, a path that is the stream's or the CSV's file refused. The device part
-# skips with no device.
+# The senders' coded sets (examples/common/set_codec.hpp), with no camera
+# driver: fake cameras read as a sensor array, each set's prep, fusion, free
+# pass and frame recorded by the sender and coded into a .vrst whose records,
+# keys, sets and pts are the sets', every frame decoded, the blocking calls'
+# frames. A wall the cameras later see past: under Dynamic gone from the frames
+# that see past it, and its blocks freed by the fusion.free_after pass due;
+# under Classic its observed blocks kept. A coded set is 2 submits and at most 2
+# waits, a fused one 1 and 1. On the host, a path that is the stream's or the
+# CSV's file refused. The device part skips with no device.
 add_executable(recon_example_set_codec_test example_set_codec_test.cpp)
 target_include_directories(recon_example_set_codec_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
@@ -513,6 +540,16 @@ target_link_libraries(
           volumetric_kit::core_test_policy)
 vr_target_warnings(recon_tsdf_device_input_test)
 add_test(NAME recon_tsdf_device_input COMMAND recon_tsdf_device_input_test)
+
+# Borrowed gates are checked before recording or advancing the fusion tick.
+add_executable(recon_tsdf_recorded_integrate_test
+               tsdf_recorded_integrate_test.cpp)
+target_link_libraries(
+  recon_tsdf_recorded_integrate_test PRIVATE volumetric_kit::recon_tsdf
+                                             volumetric_kit::core_test_policy)
+vr_target_warnings(recon_tsdf_recorded_integrate_test)
+add_test(NAME recon_tsdf_recorded_integrate
+         COMMAND recon_tsdf_recorded_integrate_test)
 
 # tsdf integrate set: several cameras allocated and fused in one call each must
 # give, under classic, the grid fusing them one at a time gives, bit for bit,
@@ -983,6 +1020,16 @@ target_link_libraries(
                                    volumetric_kit::core_test_policy)
 vr_target_warnings(recon_codec_encoder_test)
 add_test(NAME recon_codec_encoder COMMAND recon_codec_encoder_test)
+
+# Allocation refusal preserves the predictor, GOP and retryable front results.
+add_executable(recon_codec_encoder_oom_test codec_encoder_oom_test.cpp
+                                            test_allocation_failure.cpp)
+target_link_libraries(
+  recon_codec_encoder_oom_test
+  PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_codec_encoder_oom_test)
+add_test(NAME recon_codec_encoder_oom COMMAND recon_codec_encoder_oom_test)
 
 add_executable(recon_codec_decoder_test codec_decoder_test.cpp)
 target_link_libraries(

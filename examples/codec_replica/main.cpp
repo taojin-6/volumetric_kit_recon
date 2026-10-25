@@ -16,8 +16,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include "codec_config.hpp"
 #include "codec_stream.hpp"
@@ -26,7 +28,10 @@
 #include "fuse_frame.hpp"
 #include "replica_config.hpp"
 #include "replica_sensor.hpp"
+#include "set_codec.hpp"
+#include "set_log.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
@@ -80,39 +85,52 @@ vkc::Status run(const Options& opt) {
       vr_example::CodecStream::create(
           device, allocator, config, vr_example::codec_outputs(opt.output),
           "codec_replica", {vr_example::kNominalFps, 1}));
-  const vr::tsdf::IntegrationMode mode =
-      vr_example::integration_mode(opt.fusion.dynamic);
   std::printf(
       "%zu frames at %.3f m voxels, %s fusion; %s\n", capture.frame_count(),
       double(voxel), opt.fusion.dynamic ? "Dynamic" : "Classic",
       vr_example::codec_settings(config, opt.codec.quantization_table).c_str());
 
-  // Fuse, and code the grid every codec.encode_every frames and at the end.
+  // Fuse, and code the grid every codec.encode_every frames and at the end,
+  // each frame a sender's set (vr_example::SetSender, vr_example::SetLog).
+  vr_example::SetSender::Config sending =
+      vr_example::sender_config(opt, "codec_replica", opt.codec.encode_every);
+  sending.free_after = 0;  // fuse_replica's fusion frees nothing
+  VKC_ASSIGN(
+      vr_example::SetSender sender,
+      vr_example::SetSender::create(device, fuser, volume, &stream, sending));
+  vr_example::SetLog log([&device] { return device.counters(); });
   VKC_TRY(capture.start());
   std::size_t fused = 0;
   std::size_t coded_at = 0;
   for (;;) {
-    VKC_ASSIGN(const auto frame, capture.poll());
+    const auto t_poll = std::chrono::steady_clock::now();
+    VKC_ASSIGN(auto frame, capture.poll());
     if (!frame) {
       if (capture.exhausted()) break;
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
       continue;
     }
-    VKC_ASSIGN(const vr::sensor::DeviceFrame prepared, prep.prepare(*frame));
-    VKC_TRY(vr_example::fuse_set(fuser, volume, {prepared},
-                                 opt.fusion.max_weight, mode, nullptr));
+    vr_example::SetLog::Set& s = log.begin();
+    s.rows.add_cpu("poll", std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - t_poll)
+                               .count());
+    // A dataset's frame arrives when it is polled, on no capture clock.
+    s.arrived(vr_example::system_now_ns(), 0);
+    vkc::CommandBatch front(device, allocator);
+    front.time(sender.timer());
+    VKC_ASSIGN(const vr::sensor::DeviceFrame prepared,
+               prep.record(front, *frame, &s.rows));
+    VKC_TRY(sender.send(
+        front, {prepared},
+        std::make_shared<vr::sensor::RgbdFrame>(std::move(*frame)), fused,
+        vr_example::frame_pts_ns(fused, vr_example::kNominalFps), s));
     ++fused;
-    if (opt.codec.encode_every > 0 &&
-        fused % std::size_t(opt.codec.encode_every) == 0) {
-      VKC_TRY(stream.code(
-          volume, fused - 1,
-          vr_example::frame_pts_ns(fused - 1, vr_example::kNominalFps)));
-      coded_at = fused;
-    }
+    if (sender.code_due(fused - 1)) coded_at = fused;
   }
   if (fused == 0) {
     return vkc::Status::invalid_argument("no frames were fused");
   }
+  std::fputs(log.table("per set").c_str(), stdout);
   if (coded_at != fused) {
     VKC_TRY(stream.code(
         volume, fused - 1,
