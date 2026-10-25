@@ -292,7 +292,9 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param max_weight  As @ref integrate.
   /// @param mode        As @ref integrate.
   /// @param gate        Optional word; 0 fuses nothing (a band its allocation
-  ///                    left incomplete).
+  ///                    left incomplete). Must be a complete, aligned word
+  ///                    in a known device-local storage buffer whose full
+  ///                    size fits the device's storage-buffer binding limit.
   /// @param stage       Optional: the caller's scope, whose tile every pass
   ///                    counts to; the compaction is its `"  ..active set"`
   ///                    breakdown, the device half alone, from

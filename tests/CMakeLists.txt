@@ -245,6 +245,19 @@ vr_target_warnings(recon_sensor_gpu_frame_prep_oom_test)
 add_test(NAME recon_sensor_gpu_frame_prep_oom
          COMMAND recon_sensor_gpu_frame_prep_oom_test)
 
+# Submission-loss lifetime fault injection needs the Unix dynamic loader.
+if(UNIX)
+  add_executable(recon_sensor_gpu_frame_prep_submit_test
+                 sensor_gpu_frame_prep_submit_test.cpp)
+  target_link_libraries(
+    recon_sensor_gpu_frame_prep_submit_test
+    PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_sensor_utils
+            ${CMAKE_DL_LIBS})
+  vr_target_warnings(recon_sensor_gpu_frame_prep_submit_test)
+  add_test(NAME recon_sensor_gpu_frame_prep_submit
+           COMMAND recon_sensor_gpu_frame_prep_submit_test)
+endif()
+
 # A set's pictures read back to the host (recon_sensor_utils' PictureReadback)
 # on synthetic NV12 images and NV12 and I420 buffers: exact bytes at odd sizes,
 # offsets and strides, every queue family a buffer comes from, the host memory
@@ -526,6 +539,16 @@ target_link_libraries(
           volumetric_kit::core_test_policy)
 vr_target_warnings(recon_tsdf_device_input_test)
 add_test(NAME recon_tsdf_device_input COMMAND recon_tsdf_device_input_test)
+
+# Borrowed gates are checked before recording or advancing the fusion tick.
+add_executable(recon_tsdf_recorded_integrate_test
+               tsdf_recorded_integrate_test.cpp)
+target_link_libraries(
+  recon_tsdf_recorded_integrate_test PRIVATE volumetric_kit::recon_tsdf
+                                             volumetric_kit::core_test_policy)
+vr_target_warnings(recon_tsdf_recorded_integrate_test)
+add_test(NAME recon_tsdf_recorded_integrate
+         COMMAND recon_tsdf_recorded_integrate_test)
 
 # tsdf integrate set: several cameras allocated and fused in one call each must
 # give, under classic, the grid fusing them one at a time gives, bit for bit,
@@ -996,6 +1019,16 @@ target_link_libraries(
                                    volumetric_kit::core_test_policy)
 vr_target_warnings(recon_codec_encoder_test)
 add_test(NAME recon_codec_encoder COMMAND recon_codec_encoder_test)
+
+# Allocation refusal preserves the predictor, GOP and retryable front results.
+add_executable(recon_codec_encoder_oom_test codec_encoder_oom_test.cpp
+                                            test_allocation_failure.cpp)
+target_link_libraries(
+  recon_codec_encoder_oom_test
+  PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_codec_encoder_oom_test)
+add_test(NAME recon_codec_encoder_oom COMMAND recon_codec_encoder_oom_test)
 
 add_executable(recon_codec_decoder_test codec_decoder_test.cpp)
 target_link_libraries(

@@ -300,13 +300,22 @@ core::Status TsdfIntegrator::record_integrate(
     IntegrationMode mode, const volume::DeviceCount* gate,
     core::GpuStageScope* stage, core::StageMetrics* metrics) {
   VKC_ASSIGN(const Checked checked, check(grid, frames));
-  if (gate != nullptr &&
-      (gate->buffer == nullptr || !gate->buffer->valid() ||
-       gate->offset % sizeof(std::uint32_t) != 0 ||
-       gate->buffer->size() < gate->offset + sizeof(std::uint32_t))) {
-    return core::Status::invalid_argument(
-        "TsdfIntegrator::record_integrate: the gate's word is missing, "
-        "misaligned or past its buffer");
+  if (gate != nullptr) {
+    constexpr VkDeviceSize word_bytes = sizeof(std::uint32_t);
+    constexpr const char* name = "TsdfIntegrator::record_integrate: gate";
+    if (gate->buffer == nullptr || gate->offset % word_bytes != 0 ||
+        gate->buffer->size() < word_bytes ||
+        gate->offset > gate->buffer->size() - word_bytes) {
+      return core::Status::invalid_argument(
+          "TsdfIntegrator::record_integrate: the gate's word is missing, "
+          "misaligned or past its buffer");
+    }
+    VKC_TRY(core::StorageInput(*gate->buffer)
+                .check(name, gate->offset + word_bytes));
+    // The descriptor binds the whole buffer. This also keeps its word index
+    // below the dispatch shader's no-gate sentinel.
+    VKC_TRY(core::check_storage_buffer_range(name, gate->buffer->size(),
+                                             max_storage_buffer_range_));
   }
   if (checked.live.empty()) return {};
   // Every block slot: an allocation recorded before this one may fill any.

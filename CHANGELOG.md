@@ -514,6 +514,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `codec`: refused output-vector allocations preserve the encoder reference,
+  GOP and forced-intra request; failed back recordings retain the front
+  results and release tentative output slots so a retry encodes the same frame.
+- `volume`: a refused resize restores the settlement frontier, and blocking
+  stale-block removal counts only its own removals when earlier recordings
+  have completed without settlement.
+- `tsdf`: recorded fusion rejects overflowing gate offsets and invalid borrowed
+  storage-buffer metadata before recording commands or advancing the tick.
+- `sensor`: frame preparation retains external device pictures when queue
+  submission reports device loss, matching the core's pending-work lifetime.
 - `examples`: **the fusion grid starts within the device's
   `maxStorageBufferRange`**, where every example started at 16,384 buckets
   or more, 256 MiB an attribute, which lavapipe's 128 MiB refused at create.
