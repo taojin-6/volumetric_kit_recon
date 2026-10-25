@@ -17,11 +17,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `finish` and `abandon` (`PendingExtract`) and `DeviceMesh::ready`;
   `Decoder::claim_input`, `record`, `finish`, `abandon`, `last_rounds` and
   `decode` of a claimed slot (`PendingDecode`); `record_growing` and
-  `finish_growing` (`Finished`). A rafa2-like P-frame decoded and meshed
-  this way is one submit with no staging buffer, 39 dispatches and 47
-  barriers (48 where the ring copies); it was 6 submits and 7 staging
-  buffers. Tests: `recon_volume_recorded`, `recon_mesh_recorded_extract`,
-  `recon_codec_recorded`.
+  `finish_growing` (`Finished`); `VoxelHashMap::held_device_list`. A
+  rafa2-like P-frame decoded and meshed this way is one submit; the decision
+  has its counts before and after. Tests: `recon_volume_recorded`,
+  `recon_mesh_recorded_extract`, `recon_codec_recorded`.
 - `stream`, `networking`: **reads into caller memory**:
   `StreamReader::read`, `ChunkParser::read` and `StreamClient::read` take
   `(record, dst, capacity)` and allocate nothing, and a `next` with no
@@ -31,19 +30,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `codec`, `mesh`, `volume`: **the blocking calls are record, one submit
   and finish**, and the per-step submits and readbacks are gone.
   `allocate` and `remove` submit once for every K rounds, up to the same 10;
-  `extract_device` once over the map's last list; `decode` once (it was 4);
-  `rebuild` once. The decoder judges rows 11 to 13 on the device and reads
-  its payload in place. Migration:
-  - A frame the decoder refuses on the device moves the map's
-    `topology_epoch` and `tick`, though the grid is untouched: a cache keyed
-    on them sees a change.
+  `extract_device` once, its compaction in that submit when the map's last
+  list no longer holds; `decode` once (it was 4); `rebuild` once. The
+  decoder judges rows 11 to 13 on the device and reads its payload in place.
+  Migration:
+  - Every decode moves the map's `topology_epoch`, a frame that removes no
+    block included, and a frame the decoder refuses on the device moves
+    `tick` too, though the grid is untouched: a cache keyed on them sees a
+    change every frame.
+  - The encoder after an `extract_device` compacts its own list; an extract
+    after the encoder still reuses the encoder's.
   - A producer that records its next extract before the consumer takes the
     last mesh sizes `MarchingCubesConfig::slot_count` to the consumer's
     frames in flight plus two.
-  - `ExtractTimings::dispatch_ms` is the one submit and its wait, refit
-    included, and `readback_ms` reads near zero for `extract_device`.
-  - `decode_growing`'s metrics hold the attempt that succeeded, and a
-    recovery's `"  ..grow"` or `"  ..retry"`; a refit is `"  ..refit"`.
+  - `ExtractTimings::compact_ms` is the compaction's recording, and
+    `dispatch_ms` the recording, the one submit and its wait, refit
+    included; `readback_ms` reads near zero for `extract_device`.
+  - `decode_growing`'s metrics hold its first decode's rows and a recovery,
+    its decode again included, as one `"  ..grow"` or `"  ..retry"` row
+    inside `"codec decode"`, as `finish_growing`'s do;
+    `MarchingCubes::finish` adds its host time to `"marching cubes"`, over a
+    refit's `"  ..refit"`.
   - A recorded call's rows carry their host halves at recording; merge
     their device halves from `PendingBatch::device_rows`.
   - recon needs core 0.21.0 (`HostRing`, `DeviceCounters::dispatches` and

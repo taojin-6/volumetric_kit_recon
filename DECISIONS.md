@@ -276,7 +276,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-09-30**](#2026-09-30--with-the-spans-off-an-extracts-active-list-stays-on-the-device-and-the-map-hands-back-its-last-compaction-while-nothing-has-changed-since) —
   With the spans off, an extract's active list stays on the device, and the
   map hands back its last compaction while nothing has changed since. The spans
-  went on 2026-10-06.
+  went on 2026-10-06. *Amended 2026-10-24:* an extract records its own
+  compaction into its batch when the last list does not hold, so only an
+  extract after the encoder reuses one.
 - [**2026-10-01**](#2026-10-01--every-block-slot-carries-stamps-ticks-of-one-clock-on-the-map-each-written-by-the-pass-that-knows-its-fact-the-grid-frees-the-blocks-no-allocation-has-asked-for-and-no-voxel-has-weighted-in-max_age-ticks) —
   Every block slot carries stamps, ticks of one clock on the map, each
   written by the pass that knows its fact; the grid frees the blocks no
@@ -718,8 +720,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   allocation run K = 3 device rounds, the extract sizes itself on the
   device, and the decoder judges rows 11 to 13 there; each gathers its
   results into a ring slot read after the batch. The blocking calls are
-  record, one submit and finish. A rafa2-like P-frame's batch records 39
-  dispatches and 47 barriers (48 where the ring copies).
+  record, one submit and finish.
 
 ## Decision record
 
@@ -14952,9 +14953,9 @@ the last one left: a round runs only while the last lost bucket-lock races
 and met no capacity limit, as the host loop did. After the last round it
 writes the outcome whole into a result slot and closes the caller's gate on
 any failure, so what is gated on it after the rounds runs nothing. `settle`
-reads the slot and refreshes the heap's host copy. K = 3: no call needed
-more than 2 of the host rounds in 4,230 frames on four devices, so one round
-is spare. The blocking calls repeat record, submit and settle while lost
+reads the slot and refreshes the heap's host copy. K = 3
+(`kRecordedRounds` says why). The blocking calls repeat record, submit and
+settle while lost
 races alone remain, up to the 10 rounds they always had: one submit for
 every K rounds, and no readback buffer.
 
@@ -14964,8 +14965,12 @@ one-thread kernel that sizes the marching cubes from the compaction's count
 marching cubes, and a finalize that gathers the results and zeroes the
 command's `indexCount` when the surface outgrew the slot. `finish` reads
 them and, on an overflow, grows the slot and meshes again in a blocking
-batch of its own (`"  ..refit"`). The 1.5x growth stays, so a density rise
-under it costs no refit. `DeviceMesh::ready` names the extractor's timeline
+batch of its own (`"  ..refit"`, a breakdown of the call's
+`"marching cubes"`). The 1.5x growth stays, so a density rise under it
+costs no refit. `extract_device` binds the map's last list while it holds,
+as after the encoder, and otherwise records the compaction into its one
+batch, so an encoder after it compacts its own (amends the 2026-09-30
+device-list entry). `DeviceMesh::ready` names the extractor's timeline
 value the batch set: a consumer's GPU wait on it waits on a value already
 reached, which the shared queue allows (the header's D10). A producer that
 records its next extract before the consumer takes the last mesh needs
@@ -14977,9 +14982,11 @@ is recorded: the grid, the header, the tables, the reference, N against the
 heap. Rows 11 to 13, which crossed the bus before the grid changed, are now
 a gate kernel's: it opens the removal and allocation rounds, which close it
 on their own failure, and the apply, the inverse and the deblock are
-indirect slices of N behind it. A frame refused on the device leaves the
-grid and the reference untouched but moves `topology_epoch` and `tick`, as
-the 2026-10-13 coordinate entry foresaw. The payload is bound where it lies
+indirect slices of N behind it. The removal is recorded whatever the diff
+holds, since the host no longer knows it, so every frame moves
+`topology_epoch`; a frame refused on the device moves `tick` too, though the
+grid and the reference stay untouched, as the 2026-10-13 coordinate entry
+foresaw. The payload is bound where it lies
 in the slot, at a byte offset the kernels take. Every update of the batch
 (the tables, the segment words, the steps) comes before its first dispatch,
 so MoltenVK opens no blit encoder mid-batch. `finish` settles both rounds
@@ -14987,12 +14994,14 @@ and reads the results slot. `rebuild` is one batch, one submit and a wait,
 its results in the same slot. `record_growing` grows a heap the frame
 outgrows before recording; `finish_growing` decodes the frame again from
 the pending frame's own slot, after a grow (once) or as it is (twice), so a
-recovery needs no other input slot.
+recovery needs no other input slot. A recovery's host time, its decode
+again included, is one `"  ..grow"` or `"  ..retry"` row within
+`"codec decode"`, so the totals count it.
 
 **Gathers write whole structs.** Each gather assigns its results with one
 constructor, and a `static_assert` ties the host struct's size to its
-fields. In test builds core poisons an output range before the batch runs,
-so a field a kernel skipped shows as the poison.
+fields. recon's GPU tests switch on core's ring-output poison
+(`tests/gpu_test.hpp`), so a field a kernel skipped shows as the poison.
 
 **The slots are leases (the free rule's user side).** A result or input
 slot is claimed at record and held by the token -- `RecordedRounds`,

@@ -884,8 +884,9 @@ decision), except `compact_active_blocks_on_device`'s: its
 compaction serial and the heap's free count, and `check_device_block_list`
 refuses one that a full compaction, allocation, resize, remove, clear or
 move has made stale. While the last one still holds, the call returns it
-again, dispatching and reporting nothing, so the encoder after an extract
-reuses the extract's compaction (2026-09-30). A fuse culls instead and leaves
+again, dispatching and reporting nothing, so an extract after the encoder
+reuses the encoder's compaction (2026-09-30); an extract records its own
+into its batch when none holds (2026-10-24). A fuse culls instead and leaves
 none: `record_compaction` records its compaction into the fuse's own batch,
 the list and its count left on the device for the dispatches after it.
 `topology_epoch()` lives on the *map* — the object that frees a block
