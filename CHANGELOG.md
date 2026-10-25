@@ -48,6 +48,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `"  ..rans encode"`. Tests: `recon_codec_encoder`,
   `recon_codec_device_frame`, `recon_codec_inter`, `recon_codec_step_layout`,
   `recon_codec_block_lists`, `recon_codec_dct`, `recon_codec_bitstream`.
+- `stream`, `networking`: **a record's payload in two runs, its CRC computed
+  once** (the 2026-10-25 decision): `stream::RecordPayload` and the
+  `ChunkEncoder::frame`, `StreamWriter::append` and `StreamServer::publish`
+  overloads that take it, so an encoded frame's head and payload are written
+  and served as they lie, under one CRC. Tests: `recon_stream_chunks`,
+  `recon_stream_container`, `recon_networking_server`.
 
 ### Changed
 

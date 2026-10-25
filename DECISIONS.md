@@ -15163,6 +15163,16 @@ a grid of none. And a compaction recorded into the front's batch gives the
 map no count to hold, so an extract after the encoder compacts its own list,
 where it took the encoder's back.
 
+**A record's payload is one CRC in two runs (amends the 2026-10-21 chunk
+entry).** A frame's file record and its live chunk each computed the
+payload's CRC, over a vector joined from the frame. `stream::RecordPayload`
+holds the head and the payload as two runs and their CRC, computed once by
+`of`; `ChunkEncoder::frame`, `StreamWriter::append` (one `writev` of four
+parts) and `StreamServer::publish` (its one copy, of both runs) take it and
+compute none. The data-and-size overloads are `of` and that call. Bytes
+changed after `of` go out under the CRC of what they held, which a reader
+refuses: the tests change one to show no second CRC.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
