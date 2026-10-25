@@ -8,6 +8,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- CI: **the iOS compile check targets iOS 26.0**, the family's iOS floor:
+  the macOS leg compiles `PixelBufferImporter` and its header for
+  `arm64-apple-ios26.0`.
 - `codec`, `mesh`, `volume`: **a frame decodes and meshes in the caller's
   batch** (the 2026-10-24 decision), every count on the device and the
   results read once the batch has run:
