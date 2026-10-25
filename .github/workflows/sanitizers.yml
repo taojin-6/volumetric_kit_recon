@@ -23,7 +23,7 @@ jobs:
       ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Skip cleanly until a build system exists (the infra PR lands before the
       # CMake build), mirroring _build.yml's detect guard. Without this the job
@@ -98,7 +98,7 @@ jobs:
 
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/_deps
           key: ${{ steps.deps.outputs.key }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt', 'cmake/vr_sanitizers.cmake', '.github/workflows/sanitizers.yml') }}

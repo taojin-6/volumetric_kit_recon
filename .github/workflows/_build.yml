@@ -122,7 +122,7 @@ jobs:
             mkdir -p "${__GL_SHADER_DISK_CACHE_PATH}"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Detect build system
         id: detect
@@ -339,7 +339,7 @@ jobs:
       # is restored (DECISIONS.md, 2026-10-16, says why).
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/_deps
           key: deps-${{ inputs.os }}-${{ matrix.build_type }}-brew${{ steps.brew.outputs.key || 'none' }}-ws${{ steps.ws.outputs.hash }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt') }}
