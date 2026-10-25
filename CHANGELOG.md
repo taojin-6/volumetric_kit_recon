@@ -477,6 +477,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **public CUDA interop on recon's device**
+  (`sensor/video/cuda_interop.hpp`, `VR_WITH_CUDA` builds; it includes
+  cuda.h, so `recon_sensor_video` carries the toolkit's headers PUBLIC):
+  `cuda_ordinal_of`, `CudaContext` (the GPU's primary context), `CudaStream`
+  and `CudaBufferMapping::map`, which takes an `ExportedBuffer`'s descriptor
+  and refuses one already taken. `HevcDecoder` (NVDEC) and `JpegDecoder`
+  (nvJPEG) hand their pictures over through it, in place of their internal
+  copies of these types; libcuda is still loaded at run time. The host-only
+  `recon_sensor_video_cuda_slot` test goes with the picture slot's
+  hand-written moves. Test: `recon_sensor_video_cuda_interop`.
 - `io`: **`load_textured_mesh`** (`textured_mesh.hpp`, in
   `recon_io_assimp`): a static asset's triangles with one UV per vertex,
   positions repeated at UV seams, and its diffuse map's path, resolved

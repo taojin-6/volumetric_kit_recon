@@ -1124,25 +1124,24 @@ if(APPLE OR VR_WITH_FFMPEG)
   add_test(NAME recon_sensor_video_jpeg COMMAND recon_sensor_video_jpeg_test)
 
   if(VR_WITH_CUDA)
-    # Host-only ownership and allocation-failure checks. The test supplies the
-    # driver table: no CUDA device, driver library, or decoder is opened.
-    add_executable(recon_sensor_video_cuda_slot_test
-                   sensor_video_cuda_slot_test.cpp test_allocation_failure.cpp)
-    target_link_libraries(recon_sensor_video_cuda_slot_test
-                          PRIVATE volumetric_kit::recon_core)
-    target_include_directories(recon_sensor_video_cuda_slot_test
-                               PRIVATE ${_vr_video_src})
-    target_include_directories(recon_sensor_video_cuda_slot_test SYSTEM
-                               PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
-    vr_target_warnings(recon_sensor_video_cuda_slot_test)
-    add_test(NAME recon_sensor_video_cuda_slot
-             COMMAND recon_sensor_video_cuda_slot_test)
+    # The public CUDA interop on this machine's GPU, which skips as the decoder
+    # tests do; it calls libcuda through a loader of its own.
+    add_executable(recon_sensor_video_cuda_interop_test
+                   sensor_video_cuda_interop_test.cpp)
+    target_link_libraries(
+      recon_sensor_video_cuda_interop_test
+      PRIVATE volumetric_kit::recon_sensor_video
+              volumetric_kit::core_test_policy ${CMAKE_DL_LIBS})
+    vr_target_warnings(recon_sensor_video_cuda_interop_test)
+    add_test(NAME recon_sensor_video_cuda_interop
+             COMMAND recon_sensor_video_cuda_interop_test)
 
-    # The Status of a failed driver or nvJPEG call. It compiles the CUDA source
-    # itself, which loads libcuda for the error's name and opens no device.
+    # The Status of a failed driver or nvJPEG call. It compiles the driver
+    # source itself, which loads libcuda for the error's name and opens no
+    # device.
     add_executable(
       recon_sensor_video_cuda_error_test sensor_video_cuda_error_test.cpp
-                                         ${_vr_video_src}/cuda_pictures.cpp)
+                                         ${_vr_video_src}/cuda_driver.cpp)
     target_link_libraries(
       recon_sensor_video_cuda_error_test
       PRIVATE volumetric_kit::recon_core volumetric_kit::core_test_policy
