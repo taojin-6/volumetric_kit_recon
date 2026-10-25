@@ -54,7 +54,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - A recorded call's rows carry their host halves at recording; merge
     their device halves from `PendingBatch::device_rows`.
   - recon needs core 0.21.0 (`HostRing`, `DeviceCounters::dispatches` and
-    `barriers`), pinned at core #52's head until it merges.
+    `barriers`), pinned at core #52's merge (4e16bbc).
   Tests: the suites above, `recon_codec_decoder`, `recon_codec_inter`,
   `recon_codec_device_frame` (the payload at every offset mod 4 and past
   the binding alignment), `recon_codec_decode_grid`.
