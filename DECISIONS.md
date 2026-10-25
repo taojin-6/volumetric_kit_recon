@@ -507,6 +507,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-08**](#2026-10-08--apples-pixel-buffer-importer-is-public-pixelbufferimporter-in-recon_sensor_apple-on-every-apple-build-ios-included-with-no-ffmpeg) —
   Apple's pixel-buffer importer is public: `PixelBufferImporter` in
   `recon_sensor_apple`, on every Apple build, iOS included, with no FFmpeg.
+  *Amended 2026-10-25:* CI compiles the importer for iOS 26.0.
 
 - [**2026-10-10**](#2026-10-10--grid-validation-bounds-the-truncation-band-by-the-depth-kernels-integer-representation) —
   Grid validation rejects non-finite metrics and bounds the truncation band by

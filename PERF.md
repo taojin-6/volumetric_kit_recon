@@ -75,7 +75,7 @@ Bytes moved per set, four cameras (4K colour, 640 × 576 depth, 1 cm voxels):
 | bytes | from → to | how often | item |
 |---|---|---|---|
 | depth, 0.7 MB per camera | host → device | every set | unavoidable |
-| NV12, 12 MB per camera | NVDEC surface → Vulkan buffer (CUDA copy), or VideoToolbox image → buffer | every set | required on NVIDIA; L3 on Apple |
+| NV12, 12 MB per camera | on NVIDIA three device copies: NVDEC's map of its surface, FFmpeg's copy into a frame of its own, recon's CUDA copy into the Vulkan buffer; or VideoToolbox image → buffer | every set | required on NVIDIA; L3 on Apple |
 | active block list, 16 B per block (~0.8 MB on the lab rig) | device → host → device | every remesh | P5 |
 | colour, 33 MB per camera | prep output → texturer's buffer | every remesh | P4 |
 | colour, 33 MB per camera | prep output → gfx atlas image | every remesh | L4 (kept) |
