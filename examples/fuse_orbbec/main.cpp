@@ -3,10 +3,11 @@
 
 // fuse_orbbec: live reconstruction from an Orbbec (Femto Mega) camera or a
 // synced rig of them. Reads its cameras (sensor::OrbbecSensor) as a
-// sensor::SensorArray, which groups a rig's frames by trigger and prepares each
-// set on the GPU in one batch, fuses it into a sparse TSDF volume
-// (tsdf::Fuser), and after run.frames frames extracts a
-// marching-cubes mesh and writes it to a binary PLY.
+// sensor::SensorArray, which groups a rig's frames by trigger and records
+// each set's prep into the set's one batch, fuses it there into a sparse TSDF
+// volume (tsdf::Fuser, through vr_example::SetSender), and after run.frames
+// frames extracts a marching-cubes mesh and writes it to a binary PLY. It
+// prints a table per set at the end (vr_example::SetLog).
 //
 //   fuse_orbbec --config config/examples/fuse_orbbec.json
 //   fuse_orbbec --help
@@ -50,8 +51,10 @@
 // the stream is finished and its viewers closed, the cameras are released
 // and the PLY is written. A second signal of the same kind ends the process.
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <optional>
@@ -73,6 +76,7 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
@@ -199,6 +203,14 @@ vkc::Status run(const Options& opt) {
                          : "fused";
   vr_example::RigSets sets(*array, static_cast<std::size_t>(opt.run.frames));
   vr_example::SetLog log([&device] { return device.counters(); });
+  // Every set coded, as it fuses: prep, fusion, free pass and the frame's
+  // front half in one submit, its rANS half in a second.
+  std::optional<vr_example::SetSender> sender;
+  if (volume) {
+    VKC_ASSIGN(sender, vr_example::SetSender::create(
+                           device, *fuser, *volume, stream ? &*stream : nullptr,
+                           vr_example::sender_config(opt, "fuse_orbbec", 1)));
+  }
   // A set's trigger is on the system clock only where every camera stamps on
   // the host's, as a rig's always do.
   const bool host_clock = vr_example::on_host_clock(*array);
@@ -208,7 +220,7 @@ vkc::Status run(const Options& opt) {
     while (!sets.done()) {
       vr_example::SetLog::Set& s = log.begin();
       VKC_ASSIGN(sensor::FrameSet set, sets.next(&s.rows));
-      s.arrived(0, host_clock ? set.timestamp_ns : 0);
+      s.arrived(set.arrival_ns, host_clock ? set.timestamp_ns : 0);
       // A set's stages run here, in turn, on its frames; operation=stream runs
       // none past the poll, any readback and any dump, and the set is
       // released as it came.
@@ -219,13 +231,20 @@ vkc::Status run(const Options& opt) {
                                         &s.rows));
       }
       VKC_TRY(dump.write(set, ids, readback ? &luma : nullptr));
-      if (volume) {
-        // One row for the batch: the cameras prepare together.
+      if (sender) {
+        // One row for the prep: the cameras prepare together, into the
+        // set's front batch, whose commands read the set's pictures. A set
+        // stamped before the last frame recorded, as a clock stepping back
+        // stamps it, is coded at that frame's time rather than refused.
+        vkc::CommandBatch front(device, allocator);
+        front.time(sender->timer());
         VKC_ASSIGN(const sensor::DeviceFrameSet prepared,
-                   array->process(set, &s.rows));
-        VKC_TRY(vr_example::fuse_and_code(*fuser, *volume, prepared,
-                                          sets.sets() - 1, opt.fusion,
-                                          stream ? &*stream : nullptr, &s));
+                   array->record_process(front, set, &s.rows));
+        const std::uint64_t pts_ns =
+            std::max(prepared.timestamp_ns, stream ? stream->last_pts_ns() : 0);
+        VKC_TRY(sender->send(front, prepared.frames,
+                             std::make_shared<sensor::FrameSet>(std::move(set)),
+                             sets.sets() - 1, pts_ns, s));
       } else {
         s.published();  // operation=stream: polled and released only
       }

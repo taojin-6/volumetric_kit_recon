@@ -58,6 +58,15 @@ inline double row_ms(const vkc::StageMetrics& m, const char* name) {
   return row != nullptr ? row->cpu_ms : 0.0;
 }
 
+/// @return A row's device milliseconds, or 0 if @p m has no row of that
+///         name or it was not timed on the device.
+inline double row_device_ms(const vkc::StageMetrics& m, const char* name) {
+  const vkc::StageRow* row = find_row(m, name);
+  return row != nullptr && row->device == vkc::DeviceTime::Measured
+             ? row->gpu_ms
+             : 0.0;
+}
+
 /// @brief Print an accuracy / coverage / F-score comparison, in mm.
 inline void print_comparison(const vr::eval::MeshComparison& c, float voxel) {
   auto line = [voxel](const char* name, const vr::eval::DistanceStats& s) {
@@ -422,8 +431,129 @@ class CodecStream {
     VKC_ASSIGN(const Bytes bytes, encoder_.encode(source, &encoded));
     if (set != nullptr) set->rows.merge(encoded);
     const vkc::Status played =
-        play(bytes, frame, pts_ns, encoded,
+        play(vr::stream::RecordPayload::of(bytes.data(), bytes.size()), frame,
+             pts_ns, encoded,
              static_cast<std::uint32_t>(source.grid().num_blocks), set);
+    if (!played.ok()) encoder_.force_intra();
+    return played;
+  }
+
+  /// @return Whether a stage row named @p name is an encode's
+  ///         (`Encoder::record_front`'s, `record_back`'s and `finish`'s), so
+  ///         a batch's device rows split between the encode and the rest of
+  ///         a set.
+  static bool encode_row(const char* name) {
+    for (const char* row :
+         {"codec encode", "  ..encode set", "  ..observed", "  ..forward",
+          "  ..tables", "  ..rans encode", "  ..tail"}) {
+      if (std::strcmp(name, row) == 0) return true;
+    }
+    return false;
+  }
+
+  /// @brief Record @p source's frame's front half into @p front, after what
+  ///        it holds -- a sender's fusion -- for @ref finish
+  ///        (`Encoder::record_front`), its rows the frame's own.
+  /// @return The pending frame; InvalidArgument for a finished stream; or
+  ///         the encoder's refusal, with nothing recorded.
+  vkc::Result<vr::codec::PendingEncode> record(
+      vkc::CommandBatch& front, vr::volume::VoxelBlockGrid& source) {
+    if (finished_) {
+      return vkc::Status::invalid_argument("CodecStream: finished");
+    }
+    front_rows_ = vkc::StageMetrics{};
+    max_blocks_ = static_cast<std::uint32_t>(source.grid().num_blocks);
+    return encoder_.record_front(front, source, &front_rows_);
+  }
+
+  /// @brief Once the front batch @ref record recorded into has resolved:
+  ///        its device rows, the encode's (@ref encode_row) into the frame's
+  ///        rows, the rest into @p rest, when given.
+  void front_ran(const std::vector<vkc::StageRow>& device_rows,
+                 vkc::StageMetrics* rest) {
+    std::vector<vkc::StageRow> encode;
+    std::vector<vkc::StageRow> others;
+    for (const vkc::StageRow& row : device_rows) {
+      (encode_row(row.name) ? encode : others).push_back(row);
+    }
+    front_rows_.merge_device(encode);
+    if (rest != nullptr) rest->merge_device(others);
+  }
+
+  /// @brief The front half again, in a batch of its own and waited on: what
+  ///        a sender does after a fusion done again (`FuseReport::redone`,
+  ///        rare), whose front batch encoded the grid without the set.
+  /// @return The new pending frame, @p pending dropped; or the encoder's or
+  ///         the batch's failure.
+  vkc::Result<vr::codec::PendingEncode> redo(
+      const vr::codec::PendingEncode& pending,
+      vr::volume::VoxelBlockGrid& source) {
+    encoder_.abandon(pending);
+    vkc::CommandBatch front(*device_, *allocator_);
+    VKC_ASSIGN(const vr::codec::PendingEncode again, record(front, source));
+    const vkc::Status ran = [&]() -> vkc::Status {
+      VKC_ASSIGN(vkc::PendingBatch done, front.submit_async({}, {}));
+      VKC_TRY(done.wait());
+      front_ran(done.device_rows(), nullptr);
+      return {};
+    }();
+    if (!ran.ok()) {
+      encoder_.abandon(again);
+      return ran;
+    }
+    return again;
+  }
+
+  /// @brief Once @p pending's front batch has resolved (@ref front_ran):
+  ///        code its rANS half in a batch of its own and wait on it
+  ///        (`"wait: frame"`), finish the frame, then play it as @ref code
+  ///        does -- written (`"write"`) and published (`"publish"`) as its
+  ///        head and payload lie, under one CRC (`stream::RecordPayload`),
+  ///        the set published, and decoded, when the stream decodes, from
+  ///        the decoder's input slot they are copied into.
+  /// @param frame   As @ref code.
+  /// @param pts_ns  As @ref code.
+  /// @param set     The sender's set: its rows take the frame's and the
+  ///                waits', its type and whether its payload took a tail.
+  /// @return As @ref code; an order refusal drops @p pending first.
+  vkc::Status finish(const vr::codec::PendingEncode& pending, std::size_t frame,
+                     std::uint64_t pts_ns, SetLog::Set& set) {
+    if (finished_ ||
+        (coded_ > 0 && (frame <= last_frame_ || pts_ns < last_pts_ns_))) {
+      encoder_.abandon(pending);
+      return vkc::Status::invalid_argument(
+          "CodecStream: frame " + std::to_string(frame) + " at " +
+          std::to_string(pts_ns) + " ns does not follow frame " +
+          std::to_string(last_frame_) + " at " + std::to_string(last_pts_ns_) +
+          " ns, or the stream is finished");
+    }
+    vkc::StageMetrics back_rows;
+    vkc::CommandBatch back(*device_, *allocator_);
+    const vkc::Status coded = [&]() -> vkc::Status {
+      VKC_TRY(encoder_.record_back(back, pending, &back_rows));
+      VKC_ASSIGN(vkc::PendingBatch done, back.submit_async({}, {}));
+      {
+        // The output: waited on at once.
+        const vkc::WaitScope wait(&set.rows, "wait: frame");
+        VKC_TRY(done.wait());
+      }
+      back_rows.merge_device(done.device_rows());
+      return {};
+    }();
+    if (!coded.ok()) {
+      encoder_.abandon(pending);
+      return coded;
+    }
+    VKC_ASSIGN(const vr::codec::EncodedFrame encoded,
+               encoder_.finish(pending, &back_rows));
+    vkc::StageMetrics rows = front_rows_;
+    rows.merge(back_rows);
+    set.rows.merge(rows);
+    set.tail = find_row(back_rows, "  ..tail") != nullptr;
+    const vkc::Status played = play(
+        vr::stream::RecordPayload::of(encoded.head.data(), encoded.head.size(),
+                                      encoded.payload, encoded.payload_size),
+        frame, pts_ns, rows, max_blocks_, &set);
     if (!played.ok()) encoder_.force_intra();
     return played;
   }
@@ -536,11 +666,15 @@ class CodecStream {
       const vkc::StageMetrics& decode = decode_stages(types[t]);
       print_stage_rows("encode, per " + name, encode, s.count, 4);
       if (decoder_) print_stage_rows("decode, per " + name, decode, s.count, 4);
-      const double enc = row_ms(encode, "  ..rans encode") / double(s.count);
-      const double dec = row_ms(decode, "  ..rans decode") / double(s.count);
+      // The coders' device time: their host halves are only their
+      // recording, as each runs in its caller's batch.
+      const double enc =
+          row_device_ms(encode, "  ..rans encode") / double(s.count);
+      const double dec =
+          row_device_ms(decode, "  ..rans decode") / double(s.count);
       std::printf("    rANS: %.2f ms encode", enc);
       if (decoder_) std::printf(", %.2f ms decode", dec);
-      std::printf(" wall clock per %s", name.c_str());
+      std::printf(" on the device per %s", name.c_str());
       if (every > 0) {
         // Against the source's interval: what coding every frame live must
         // fit. A standalone mesh or final-grid snapshot has no measured
@@ -585,17 +719,19 @@ class CodecStream {
     std::filesystem::remove(path, ignored);
   }
 
-  // What code() does once the encoder returns frame @p frame's @p bytes:
-  // record and serve them, decode them into the player if the stream
-  // decodes, and keep and write their row, @p encoded its encode's stage
-  // rows. The source's slots, @p max_blocks, bound its frames' blocks: the
-  // player's ceiling. @p set, when given, takes the write's and the
-  // publish's rows and is published before the decode.
-  vkc::Status play(const Bytes& bytes, std::size_t frame, std::uint64_t pts_ns,
-                   const vkc::StageMetrics& encoded, std::uint32_t max_blocks,
-                   SetLog::Set* set) {
+  // What code() and finish() do once the encoder returns frame @p frame's
+  // @p bytes -- its head, then its payload where the encoder left it, under
+  // one CRC: record and serve them, decode them into the player if the
+  // stream decodes, from the decoder's input slot they are copied into, and
+  // keep and write their row, @p encoded its encode's stage rows. The
+  // source's slots, @p max_blocks, bound its frames' blocks: the player's
+  // ceiling. @p set, when given, takes the write's and the publish's rows and
+  // is published before the decode.
+  vkc::Status play(const vr::stream::RecordPayload& bytes, std::size_t frame,
+                   std::uint64_t pts_ns, const vkc::StageMetrics& encoded,
+                   std::uint32_t max_blocks, SetLog::Set* set) {
     VKC_ASSIGN(const vr::codec::FrameInfo info,
-               vr::codec::read_frame_info(bytes.data(), bytes.size()));
+               vr::codec::read_frame_info(bytes.first(), bytes.first_size()));
     vr::stream::RecordInfo record;
     // A reader starts, or seeks, at a key: a frame that decodes alone.
     record.key = info.type == vr::codec::FrameType::kIntra;
@@ -605,15 +741,14 @@ class CodecStream {
     vkc::StageMetrics* rows = set != nullptr ? &set->rows : nullptr;
     if (writer_) {
       const vkc::StageScope write(rows, "write");
-      VKC_TRY(writer_->append(record, bytes.data(), bytes.size()));
+      VKC_TRY(writer_->append(record, bytes));
     }
     // After the file, so no viewer gets a frame the file lacks. Returning a
     // refusal would leave coded_ behind the file, whose writer would then
     // refuse the next seq.
     if (server_) {
       const vkc::StageScope publish(rows, "publish");
-      const vkc::Status served =
-          server_->publish(record, bytes.data(), bytes.size());
+      const vkc::Status served = server_->publish(record, bytes);
       if (!served.ok()) {
         vr::log_message(vkc::LogLevel::Warning,
                         "CodecStream: frame " + std::to_string(frame) +
@@ -630,17 +765,25 @@ class CodecStream {
     const auto t = static_cast<std::size_t>(info.type);
     vkc::StageMetrics decoded;
     if (decoder_) {
+      // The frame's one copy on the way to the decoder: into its slot.
+      VKC_ASSIGN(const vkc::HostSlot slot, decoder_->claim_input(bytes.size()));
+      if (bytes.first_size() != 0) {
+        std::memcpy(slot.data(), bytes.first(), bytes.first_size());
+      }
+      if (bytes.second_size() != 0) {
+        std::memcpy(slot.data() + bytes.first_size(), bytes.second(),
+                    bytes.second_size());
+      }
       if (!player_) {
         VKC_ASSIGN(
             vr::volume::VoxelBlockGrid g,
-            vr::codec::make_decode_grid(*device_, *allocator_, bytes.data(),
+            vr::codec::make_decode_grid(*device_, *allocator_, slot.data(),
                                         bytes.size(), max_blocks));
         player_.emplace(std::move(g));
       }
       const std::int32_t buckets = player_->grid().num_buckets;
-      const vkc::Status status =
-          vr::codec::decode_growing(*decoder_, bytes.data(), bytes.size(),
-                                    *player_, max_blocks, &decoded);
+      const vkc::Status status = vr::codec::decode_growing(
+          *decoder_, slot, bytes.size(), *player_, max_blocks, &decoded);
       grew_ = grew_ || player_->grid().num_buckets != buckets;
       VKC_TRY(status);
       decode_rows_[t].merge(decoded);
@@ -676,6 +819,10 @@ class CodecStream {
   vkc::StageMetrics decode_rows_[2];
   std::vector<CodecRow> rows_;
   bool grew_ = false;  // a decode grew the player grid
+  // The frame in flight between record() and finish(): its front half's
+  // rows, and its source's slots.
+  vkc::StageMetrics front_rows_;
+  std::uint32_t max_blocks_ = 0;
 };
 
 }  // namespace vr_example

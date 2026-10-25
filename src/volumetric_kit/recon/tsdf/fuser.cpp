@@ -188,9 +188,15 @@ core::Result<PendingFuse> Fuser::record_fuse(
     const volume::DeviceCount* gated = recorded->gated ? &gate : nullptr;
     const std::vector<volume::DepthInput> depths(frames.begin(), frames.end());
     // One row for the set, the round and the compaction its breakdowns with
-    // their device halves alone, as its host time holds theirs.
+    // their device halves alone, as its host time holds theirs. The rows are
+    // placed now, the stage's first, so a batch's later stages, whose device
+    // halves come back with theirs, do not come between them.
     core::GpuStageScope stage(metrics, timer_, "integrate");
     core::StageMetrics parts;
+    if (metrics != nullptr) {
+      metrics->add_cpu("integrate", 0.0);
+      metrics->add_cpu("  ..allocate", 0.0);
+    }
     if (gated != nullptr) {
       VKC_TRY(batch.fill(gate_, 0, sizeof(std::uint32_t), 1u));
     }
@@ -201,7 +207,7 @@ core::Result<PendingFuse> Fuser::record_fuse(
                                       batch, depths, gated, &round));
     }
     VKC_TRY(integrator_.record_integrate(batch, grid, frames, max_weight, mode,
-                                         gated, &stage));
+                                         gated, &stage, metrics));
   }
   recorded->serial = next_serial();
   pending_ = std::move(recorded);

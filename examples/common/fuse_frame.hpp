@@ -120,10 +120,37 @@ inline vr::tsdf::IntegrationMode integration_mode(bool dynamic) {
                  : vr::tsdf::IntegrationMode::Classic;
 }
 
+/// @brief A set's prepared frames as the fuser takes them: each frame's input,
+///        pointing at its colour in @ref colors. Moved, never copied, so the
+///        pointers hold.
+struct FuseInputs {
+  std::vector<vr::tsdf::ColorFrame> colors;
+  std::vector<vr::tsdf::FrameInput> frames;
+};
+
+/// @brief The fuser's inputs for @p frames, as `sensor::GpuFramePrep` hands
+///        them out: nothing is uploaded, and depth and colour are fused with
+///        their own cameras (@ref device_color). An empty entry is skipped.
+inline FuseInputs fuse_inputs(
+    const std::vector<std::optional<vr::sensor::DeviceFrame>>& frames) {
+  FuseInputs in;
+  in.colors.reserve(frames.size());  // the inputs point into it
+  for (const std::optional<vr::sensor::DeviceFrame>& frame : frames) {
+    if (!frame) continue;
+    const vr::tsdf::ColorFrame* color = nullptr;
+    if (frame->has_color()) {
+      in.colors.push_back(device_color(*frame));
+      color = &in.colors.back();
+    }
+    in.frames.push_back(
+        {{vkc::StorageInput(*frame->depth), frame->depth_camera}, color});
+  }
+  return in;
+}
+
 /// @brief Fuse a set of frames already on the device, as
-///        `sensor::GpuFramePrep` hands them out, through @p fuser: nothing is
-///        uploaded, and depth and colour are fused with their own cameras. An
-///        empty entry is skipped; one frame is `{frame}`. What the set did to
+///        `sensor::GpuFramePrep` hands them out, through @p fuser
+///        (@ref fuse_inputs): one frame is `{frame}`. What the set did to
 ///        the grid is printed (@ref print_fuse_report).
 /// @param fuser       The fuser.
 /// @param grid        The volume to fuse into.
@@ -139,23 +166,17 @@ inline vkc::Status fuse_set(
     const std::vector<std::optional<vr::sensor::DeviceFrame>>& frames,
     float max_weight, vr::tsdf::IntegrationMode mode,
     vkc::StageMetrics* metrics) {
-  std::vector<vr::tsdf::ColorFrame> colors;
-  std::vector<vr::tsdf::FrameInput> inputs;
-  colors.reserve(frames.size());  // the inputs point into it
-  for (const std::optional<vr::sensor::DeviceFrame>& frame : frames) {
-    if (!frame) continue;
-    const vr::tsdf::ColorFrame* color = nullptr;
-    if (frame->has_color()) {
-      colors.push_back(device_color(*frame));
-      color = &colors.back();
-    }
-    inputs.push_back(
-        {{vkc::StorageInput(*frame->depth), frame->depth_camera}, color});
-  }
+  const FuseInputs in = fuse_inputs(frames);
   VKC_ASSIGN(const vr::tsdf::FuseReport report,
-             fuser.fuse(grid, inputs, max_weight, mode, metrics));
+             fuser.fuse(grid, in.frames, max_weight, mode, metrics));
   print_fuse_report(report);
   return {};
+}
+
+/// @return Whether `fusion.free_after`'s pass is due after @p sets fused
+///         sets: every @p free_after of them; never at 0.
+inline bool free_due(std::uint64_t sets, int free_after) {
+  return free_after > 0 && sets % static_cast<std::uint64_t>(free_after) == 0;
 }
 
 /// @brief `fusion.free_after`'s pass, run after each fused set: every
@@ -176,10 +197,9 @@ inline void free_stale_blocks_every(vr::volume::VoxelBlockGrid& grid,
                                     std::uint64_t sets, int free_after,
                                     const char* program,
                                     vkc::StageMetrics* metrics) {
-  const auto every = static_cast<std::uint32_t>(free_after);
-  if (every == 0 || sets % every != 0) return;
+  if (!free_due(sets, free_after)) return;
   const vkc::Result<std::uint32_t> freed =
-      grid.free_stale_blocks(every, metrics);
+      grid.free_stale_blocks(static_cast<std::uint32_t>(free_after), metrics);
   if (!freed) {
     std::fprintf(stderr, "%s: free blocks: %s\n", program,
                  freed.status().message().c_str());

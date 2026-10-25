@@ -45,9 +45,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no list, so an extract after it compacts its own; a P-frame planned over a
   grid of no block finishes as an I-frame of none (as `encode` always
   coded it); an I-frame of none records no back half and so reports no
-  `"  ..rans encode"`. Tests: `recon_codec_encoder`,
+  `"  ..rans encode"`. `decode_growing` also takes the frame in a decoder's
+  input slot (`Decoder::claim_input`), so a sender decodes the bytes it
+  wrote with no copy of its own. Tests: `recon_codec_encoder`,
   `recon_codec_device_frame`, `recon_codec_inter`, `recon_codec_step_layout`,
-  `recon_codec_block_lists`, `recon_codec_dct`, `recon_codec_bitstream`.
+  `recon_codec_block_lists`, `recon_codec_dct`, `recon_codec_bitstream`,
+  `recon_codec_decode_grid`, `recon_example_codec_stream`.
 - `stream`, `networking`: **a record's payload in two runs, its CRC computed
   once** (the 2026-10-25 decision): `stream::RecordPayload` and the
   `ChunkEncoder::frame`, `StreamWriter::append` and `StreamServer::publish`
@@ -67,6 +70,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the encoder's breakdowns carry their own device halves. Tests:
   `recon_example_set_log`, `recon_codec_replica_run` (new),
   `recon_volume_block_stamps`, `recon_codec_encoder`.
+- examples: **the senders record each set into two batches** (`SetSender`
+  in `set_codec.hpp`, in place of `fuse_and_code`; the 2026-10-25
+  decision): a set's prep, fuse, free pass and frame's front half in one,
+  the frame's rANS half in the next (`CodecStream::record`, `front_ran`,
+  `finish`, and `redo` after a fusion done again), the frame written and
+  published from its slot under one CRC. A warm coded set is 2 submits, 2
+  waits and no staging buffer, from 6, 6 and 4. fuse_orbbec waits on its
+  sensors' notifications rather than sleeping between polls. Migration: a
+  coded row's encode host time no longer holds
+  the GPU waits, which are the set's `"wait: front"` and `"wait: frame"`
+  rows; the report's rANS line is device time. Tests:
+  `recon_example_set_codec`, `recon_example_codec_stream`,
+  `recon_codec_replica_run`.
 - `codec`, `mesh`, `volume`: **a frame decodes and meshes in the caller's
   batch** (the 2026-10-24 decision), every count on the device and the
   results read once the batch has run:

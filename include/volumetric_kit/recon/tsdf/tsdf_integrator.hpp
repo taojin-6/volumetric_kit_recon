@@ -297,13 +297,17 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    counts to; the compaction is its `"  ..active set"`
   ///                    breakdown, the device half alone, from
   ///                    `PendingBatch::device_rows`.
+  /// @param metrics     Optional: @p stage's own rows, in which the
+  ///                    breakdown's row is placed now, after the stage's
+  ///                    rows before it, its host half 0.
   /// @return OK; or, with nothing recorded, @ref integrate's refusals.
   core::Status record_integrate(core::CommandBatch& batch,
                                 volume::VoxelBlockGrid& grid,
                                 const std::vector<FrameInput>& frames,
                                 float max_weight, IntegrationMode mode,
                                 const volume::DeviceCount* gate = nullptr,
-                                core::GpuStageScope* stage = nullptr);
+                                core::GpuStageScope* stage = nullptr,
+                                core::StageMetrics* metrics = nullptr);
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
@@ -321,7 +325,8 @@ class VR_TSDF_API TsdfIntegrator {
       core::CommandBatch& batch, volume::VoxelBlockGrid& grid,
       const std::vector<FrameInput>& frames, const Checked& checked,
       float max_weight, IntegrationMode mode, const volume::DeviceCount* gate,
-      std::uint32_t max_blocks, core::GpuStageScope* stage);
+      std::uint32_t max_blocks, core::GpuStageScope* stage,
+      core::StageMetrics* metrics);
 
   // Borrowed (must outlive this).
   core::Device* device_ = nullptr;

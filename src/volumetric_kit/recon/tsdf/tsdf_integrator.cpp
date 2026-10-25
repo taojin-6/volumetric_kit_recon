@@ -275,6 +275,8 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
   // give. Inert when metrics is null; it spans the wait, and takes the batch's
   // device halves after it.
   core::GpuStageScope stage(metrics, gpu_timer_, "integrate");
+  // Its row first, ahead of its compaction's (record_checked).
+  if (metrics != nullptr) metrics->add_cpu("integrate", 0.0);
   VKC_ASSIGN(const Checked checked, check(grid, frames));
   if (checked.live.empty()) return {};
   // The heap counter says whether the grid holds a block, so no second
@@ -285,7 +287,7 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
   if (held == 0) return {};
   core::CommandBatch batch(*device_, *allocator_);
   VKC_TRY(record_checked(batch, grid, frames, checked, max_weight, mode,
-                         nullptr, held, &stage));
+                         nullptr, held, &stage, metrics));
   VKC_ASSIGN(core::PendingBatch pending, batch.submit_async({}, {}));
   VKC_TRY(pending.wait());
   if (metrics != nullptr) metrics->merge_device(pending.device_rows());
@@ -296,7 +298,7 @@ core::Status TsdfIntegrator::record_integrate(
     core::CommandBatch& batch, VoxelBlockGrid& grid,
     const std::vector<FrameInput>& frames, float max_weight,
     IntegrationMode mode, const volume::DeviceCount* gate,
-    core::GpuStageScope* stage) {
+    core::GpuStageScope* stage, core::StageMetrics* metrics) {
   VKC_ASSIGN(const Checked checked, check(grid, frames));
   if (gate != nullptr &&
       (gate->buffer == nullptr || !gate->buffer->valid() ||
@@ -310,7 +312,7 @@ core::Status TsdfIntegrator::record_integrate(
   // Every block slot: an allocation recorded before this one may fill any.
   return record_checked(batch, grid, frames, checked, max_weight, mode, gate,
                         static_cast<std::uint32_t>(grid.grid().num_blocks),
-                        stage);
+                        stage, metrics);
 }
 
 core::Result<TsdfIntegrator::Checked> TsdfIntegrator::check(
@@ -435,7 +437,8 @@ core::Status TsdfIntegrator::record_checked(
     core::CommandBatch& batch, VoxelBlockGrid& grid,
     const std::vector<FrameInput>& frames, const Checked& checked,
     float max_weight, IntegrationMode mode, const volume::DeviceCount* gate,
-    std::uint32_t max_blocks, core::GpuStageScope* stage) {
+    std::uint32_t max_blocks, core::GpuStageScope* stage,
+    core::StageMetrics* metrics) {
   const VoxelGridParams& grid_params = grid.grid();
   const auto vpb = static_cast<std::uint32_t>(grid_params.voxels_per_block);
   const std::vector<std::size_t>& live = checked.live;
@@ -496,9 +499,14 @@ core::Status TsdfIntegrator::record_checked(
   VKC_TRY(batch.upload(color_cam_buf_, 0, color_cams.data(), color_cam_bytes));
 
   // The compaction, its own breakdown: its device half alone, as the stage's
-  // row holds its host time and its tiles too.
+  // row holds its host time and its tiles too. Its row is placed now, after
+  // the stage's, which the caller placed, so a batch's later stages do not
+  // come between them.
   core::StageMetrics parts;
   volume::RecordedBlockList active;
+  if (metrics != nullptr && stage != nullptr && stage->timer() != nullptr) {
+    metrics->add_cpu("  ..active set", 0.0);
+  }
   {
     core::GpuStageScope compaction(
         stage != nullptr && stage->timer() != nullptr ? &parts : nullptr,

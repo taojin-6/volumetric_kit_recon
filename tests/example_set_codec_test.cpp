@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// fuse_orbbec's coded sets (examples/common/set_codec.hpp), with no camera
+// The senders' coded sets (examples/common/set_codec.hpp), with no camera
 // driver: two fake cameras 3 m apart, read as a sensor array and prepared on
 // the device as a rig's are. Each camera sees a back wall 2 m ahead and, in
 // the first three sets, a near wall 1 m ahead over the left of its picture,
 // which then leaves, so the cameras see past it to the back wall. Nine sets
-// fused through fuse_and_code at a fusion.free_after of 3 and a
+// sent through vr_example::SetSender at a fusion.free_after of 3 and a
 // fusion.max_weight of 1.5, and coded at an intra period of 30 into a .vrst:
 // a Geometry record each, only the first a key, each record's set the set's
 // index and its pts the set's time, and every frame decodes through
@@ -21,7 +21,11 @@
 // pass after set 5 frees exactly the near blocks that never held an observed
 // voxel. The back walls stay in every frame and grid either way, and a
 // free_after of 0 frees nothing. The grid holds the same near blocks with a
-// stream and without. On the host, a path that is the stream's or the CSV's
+// stream and without. A coded set is 2 submits and 2 host waits, a set fused
+// alone 1 and 1, a free pass's adding none, warm sets no staging buffer, and
+// the front batch's dispatches stay below 80; the blocking calls code the
+// same frames, and so do they on a grid of 32 buckets, whose first set's
+// fusion is done again. On the host, a path that is the stream's or the CSV's
 // file through a link refused, one beside them taken, and one that cannot be
 // checked refused; and the stream decoding only with a CSV or a sweep. The
 // device part skips with no device.
@@ -46,6 +50,7 @@
 #include "scratch_dir.hpp"
 #include "set_codec.hpp"
 #include "test_check.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/recon/camera/array_calibration.hpp"
 #include "volumetric_kit/recon/codec/decode_grid.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
@@ -201,8 +206,29 @@ bool holds(const std::vector<vr::Vec3i>& whole,
                        vr::volume::coord_less);
 }
 
-// Push, poll and prepare kSets sets, fusing each through fuse_and_code and
-// coding it into a new stream at `path`, unless empty, and check the grid
+// What one set cost on the device, as Device::counters count it, and whether
+// its fusion was done again.
+struct SetCounts {
+  std::uint64_t submits = 0;
+  std::uint64_t host_waits = 0;
+  std::uint64_t staging = 0;
+  std::uint64_t dispatches = 0;
+  std::uint64_t barriers = 0;
+  bool redone = false;
+  bool tail = false;  // its payload outgrew its guess (CodecStream::finish)
+};
+
+// How code_sets sends its sets: through the sender, or the blocking calls a
+// set took before it; into a grid of `buckets`; each set's counts kept.
+struct Run {
+  bool sender = true;
+  std::int32_t buckets = 1024;
+  std::vector<SetCounts>* counts = nullptr;
+};
+
+// Push, poll and prepare kSets sets, sending each through the sender
+// (vr_example::SetSender), or the blocking calls with `run`, and coding it
+// into a new stream at `path`, unless empty, and check the grid
 // after each, kept in `grids`: after the second set its heaviest voxel at
 // fusion.max_weight, which the near walls' two sets pass; the back walls
 // always; the near walls' surface while the cameras see them, and under
@@ -211,7 +237,8 @@ bool holds(const std::vector<vr::Vec3i>& whole,
 // under Dynamic, the pass after kClearedFreedSet frees the rest; with no
 // pass, all kept.
 int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
-              const std::string& path, std::vector<Walls>* grids) {
+              const std::string& path, std::vector<Walls>* grids,
+              const Run& run = {}) {
   auto a = std::make_unique<Camera>("A", sensor::SyncRole::Primary);
   auto b = std::make_unique<Camera>("B", sensor::SyncRole::Secondary);
   Camera* cameras[] = {a.get(), b.get()};
@@ -238,7 +265,7 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
   // maxStorageBufferRange Vulkan guarantees, and lavapipe refuses that grid.
   auto grid = vr_example::create_fusion_grid(gpu.device, gpu.allocator,
                                              fusion.voxel_size_m,
-                                             fusion.truncation_m, 1024);
+                                             fusion.truncation_m, run.buckets);
   CHECK(grid.ok());
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
   CHECK(fuser.ok());
@@ -255,6 +282,15 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
     CHECK(made.ok());
     coded.emplace(std::move(made).value());
   }
+  vr_example::SetSender::Config sending;
+  sending.max_weight = fusion.max_weight;
+  sending.mode = vr_example::integration_mode(fusion.dynamic);
+  sending.free_after = fusion.free_after;
+  sending.program = "example_set_codec";
+  auto sender = vr_example::SetSender::create(
+      gpu.device, *fuser, *grid, coded ? &*coded : nullptr, sending);
+  CHECK(sender.ok());
+  vr_example::SetLog log([&gpu] { return gpu.device.counters(); });
   grids->clear();
   for (std::size_t s = 0; s < kSets; ++s) {
     for (Camera* c : cameras) c->push(s);
@@ -264,11 +300,50 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
       set = array.poll_set();
     }
     CHECK(set.ok() && set.value() && set.value()->complete());
-    auto prepared = array.process(*set.value());
-    CHECK(prepared.ok() && prepared->timestamp_ns == set_time(s));
-    CHECK(vr_example::fuse_and_code(*fuser, *grid, *prepared, s, fusion,
-                                    coded ? &*coded : nullptr, nullptr)
-              .ok());
+    vr_example::SetLog::Set& logged = log.begin();
+    if (run.sender) {
+      // The sender's set: the prep recorded into its front batch.
+      vkc::CommandBatch front(gpu.device, gpu.allocator);
+      front.time(sender->timer());
+      auto prepared = array.record_process(front, *set.value(), &logged.rows);
+      CHECK(prepared.ok() && prepared->timestamp_ns == set_time(s));
+      const std::uint64_t pts_ns =
+          std::max(prepared->timestamp_ns, coded ? coded->last_pts_ns() : 0);
+      const vkc::Status sent = sender->send(
+          front, prepared->frames,
+          std::make_shared<sensor::FrameSet>(std::move(*set.value())), s,
+          pts_ns, logged);
+      if (!sent.ok()) {
+        std::fprintf(stderr, "set %zu: %s\n", s, sent.message().c_str());
+      }
+      CHECK(sent.ok());
+    } else {
+      // The blocking calls, each a batch of its own, as a set was sent
+      // before the sender.
+      auto prepared = array.process(*set.value());
+      CHECK(prepared.ok() && prepared->timestamp_ns == set_time(s));
+      CHECK(vr_example::fuse_set(
+                *fuser, *grid, prepared->frames, fusion.max_weight,
+                vr_example::integration_mode(fusion.dynamic), nullptr)
+                .ok());
+      vr_example::free_stale_blocks_every(*grid, s + 1, fusion.free_after,
+                                          "example_set_codec", nullptr);
+      if (coded) {
+        CHECK(coded
+                  ->code(*grid, s,
+                         std::max(prepared->timestamp_ns, coded->last_pts_ns()))
+                  .ok());
+      }
+    }
+    // The set's own, from its begin to its publish: a decode after it is
+    // the stream's diagnostic, not the set's.
+    if (run.counts != nullptr) {
+      CHECK(logged.is_published());
+      const vkc::DeviceCounters c = logged.counted();
+      run.counts->push_back({c.submits, c.host_waits, c.staging_buffers,
+                             c.dispatches, c.barriers, logged.redone,
+                             logged.tail});
+    }
     if (s == 1) {  // read once: the whole attribute is slow in Debug
       auto weights = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
                                                     *grid, "weight");
@@ -373,6 +448,59 @@ int check_stream(vr_test::GpuContext& gpu, const std::string& path,
   return 0;
 }
 
+// Whether the streams at `a` and `b` hold the same records, info and bytes.
+int same_streams(const std::string& a, const std::string& b) {
+  auto ra = stream::StreamReader::open(a);
+  auto rb = stream::StreamReader::open(b);
+  CHECK(ra.ok() && rb.ok());
+  stream::Position pa = (*ra)->begin();
+  stream::Position pb = (*rb)->begin();
+  for (;;) {
+    stream::Record x;
+    stream::Record y;
+    const vkc::Result<bool> more_a = (*ra)->next(&pa, &x);
+    const vkc::Result<bool> more_b = (*rb)->next(&pb, &y);
+    CHECK(more_a.ok() && more_b.ok() && *more_a == *more_b);
+    if (!*more_a) return 0;
+    CHECK(x.info.key == y.info.key && x.info.seq == y.info.seq &&
+          x.info.set == y.info.set && x.info.pts_ns == y.info.pts_ns);
+    std::vector<std::uint8_t> px;
+    std::vector<std::uint8_t> py;
+    CHECK((*ra)->read(x, &px).ok() && (*rb)->read(y, &py).ok() && px == py);
+  }
+}
+
+// A set's device counts, printed: a coded set is 2 submits and 2 host waits
+// -- the front batch's and the frame's -- and a set fused alone 1 and 1, a
+// free pass's set adding none. A payload past its guess adds its tail's
+// submit, wait and gather. A warm set places no staging buffer but the one a
+// payload slot's growth takes, for a frame larger than any before. The front
+// batch's dispatches stay below the Apple step near 80 a batch (the
+// 2026-10-24 entry); the back batch's are 4.
+int counts_case(const std::vector<SetCounts>& counts, bool coded,
+                const char* what) {
+  for (std::size_t s = 0; s < counts.size(); ++s) {
+    const SetCounts& c = counts[s];
+    std::printf(
+        "  %s set %zu: %llu submits, %llu waits, %llu staging, %llu "
+        "dispatches, %llu barriers%s%s\n",
+        what, s, static_cast<unsigned long long>(c.submits),
+        static_cast<unsigned long long>(c.host_waits),
+        static_cast<unsigned long long>(c.staging),
+        static_cast<unsigned long long>(c.dispatches),
+        static_cast<unsigned long long>(c.barriers),
+        c.redone ? ", fused again" : "", c.tail ? ", a payload tail" : "");
+    if (c.redone) continue;  // a fusion done again blocks, as it must
+    const std::uint64_t tail = c.tail ? 1 : 0;
+    const std::uint64_t batches = (coded ? 2 : 1) + tail;
+    CHECK(c.submits == batches && c.host_waits == batches);
+    const std::uint64_t front = coded ? c.dispatches - 4 - tail : c.dispatches;
+    CHECK(front < 80);
+    if (s >= 3) CHECK(c.staging <= 1);
+  }
+  return 0;
+}
+
 int gpu_main(vr_test::GpuContext& gpu) {
   vr_test::Scratch scratch("recon_example_set_codec_");
   for (const bool dynamic : {true, false}) {
@@ -380,17 +508,44 @@ int gpu_main(vr_test::GpuContext& gpu) {
     fusion.dynamic = dynamic;
     fusion.free_after = kFreeAfter;
     fusion.max_weight = kMaxWeight;
-    const std::string path =
-        (scratch.path / (dynamic ? "dynamic.vrst" : "classic.vrst")).string();
+    const std::string name = dynamic ? "dynamic" : "classic";
+    const std::string path = (scratch.path / (name + ".vrst")).string();
     std::vector<Walls> coded;
-    CHECK(code_sets(gpu, fusion, path, &coded) == 0);
+    std::vector<SetCounts> counts;
+    CHECK(code_sets(gpu, fusion, path, &coded, Run{true, 1024, &counts}) == 0);
     CHECK(check_stream(gpu, path, dynamic, coded) == 0);
+    CHECK(counts_case(counts, true, name.c_str()) == 0);
+    // The blocking calls code the same frames.
+    const std::string blocking =
+        (scratch.path / (name + "_blocking.vrst")).string();
+    std::vector<Walls> before;
+    CHECK(code_sets(gpu, fusion, blocking, &before, Run{false}) == 0);
+    CHECK(same_streams(path, blocking) == 0);
     // Fused alone, the grid holds the same near blocks after every set.
     std::vector<Walls> alone;
-    CHECK(code_sets(gpu, fusion, "", &alone) == 0);
+    std::vector<SetCounts> fused;
+    CHECK(code_sets(gpu, fusion, "", &alone, Run{true, 1024, &fused}) == 0);
+    CHECK(counts_case(fused, false, (name + " fused").c_str()) == 0);
     for (std::size_t s = 0; s < kSets; ++s) {
       CHECK(alone[s].near_blocks == coded[s].near_blocks);
     }
+  }
+  // A grid of 32 buckets: the first set's round meets the capacity limit, so
+  // its fusion is done again and grown, and its frame's front half after it.
+  // The frames are the blocking calls'.
+  {
+    cfg::Fusion fusion;
+    fusion.dynamic = true;
+    fusion.free_after = kFreeAfter;
+    fusion.max_weight = kMaxWeight;
+    const std::string path = (scratch.path / "redo.vrst").string();
+    const std::string blocking = (scratch.path / "redo_blocking.vrst").string();
+    std::vector<Walls> grids;
+    std::vector<SetCounts> counts;
+    CHECK(code_sets(gpu, fusion, path, &grids, Run{true, 32, &counts}) == 0);
+    CHECK(!counts.empty() && counts[0].redone);
+    CHECK(code_sets(gpu, fusion, blocking, &grids, Run{false, 32}) == 0);
+    CHECK(same_streams(path, blocking) == 0);
   }
   cfg::Fusion never;  // Dynamic, freeing nothing
   never.dynamic = true;

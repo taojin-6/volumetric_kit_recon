@@ -2057,9 +2057,11 @@ The live counterpart is its own example, not a `fuse_replica` flag:
 **`fuse_orbbec`** (`VR_WITH_ORBBEC`) reads one `OrbbecSensor`, or with
 `source.sync_config` one per camera of the file on the host's clock
 (`source.apply_sync` writing the settings a camera differs in), as a
-`SensorArray` posed by `source.calibration`; it prepares each set on the GPU,
-fuses it through `fuse_and_code` (`set_codec.hpp`: `fuse_set`, then the
-`fusion.free_after` pass), and writes a PLY after `run.frames` frames.
+`SensorArray` posed by `source.calibration`; it waits on the cameras'
+notifications for each set, records its prep, fuse, `fusion.free_after` pass
+and, when it codes, the frame's front half into one batch through
+`SetSender` (`set_codec.hpp`, which codec_replica shares; the frame's rANS
+half is a second batch), and writes a PLY after `run.frames` frames.
 `operation: "stream"` only streams: each set is polled, counted and released, with no
 GPU preparation, fusion or mesh, so a run measures the cameras' stream and
 decode alone. `diagnostics.readback: true` reads each set's luma back through
@@ -2116,7 +2118,8 @@ reclaims the retained colour buffers without waiting for that frame's number.
 draws it.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `codec.encode_every` frames it
-encodes, then decodes with `decode_growing` into a player grid
+encodes, in the set's batches (`SetSender`), then decodes with
+`decode_growing` from the decoder's input slot into a player grid
 `make_decode_grid` built from the first frame. It reports the
 bitrate at the coded frame rate and, at an intra period above 1, a
 GOP's (an I-frame and the period's P-frames, each at its type's

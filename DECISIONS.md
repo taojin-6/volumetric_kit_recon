@@ -721,16 +721,17 @@ entries relevant to your task; later amendments supersede earlier rules.
   device, and the decoder judges rows 11 to 13 there; each gathers its
   results into a ring slot read after the batch. The blocking calls are
   record, one submit and finish.
-- [**2026-10-25**](#2026-10-25--a-senders-figures-are-per-set-and-the-compactions-a-set-times-are-named-apart-amends-the-2026-09-27-encoder-entry) —
-  A sender's figures are per set: fuse_orbbec and codec_replica print each
-  row's mean, p50, p95 and max over the sets, the device's counters per set
-  and the latency to publish, P-frame, I-frame and uncoded sets apart; the
-  encoder's and the free pass's compactions are `"  ..encode set"` and
-  `"  ..stale set"`, apart from a fuse's `"  ..active set"`. A sensor may
-  notify; a set's prep, one allocation round, its fuse (gated on the whole
-  band where strict, a refused set fused again at its own tick) and the free
-  pass record into the caller's batch; an encode is two halves in the
-  caller's batches, every count on the device, the payload in a slot.
+- [**2026-10-25**](#2026-10-25--a-sender-records-each-set-into-two-batches-every-count-on-the-device-and-its-figures-are-per-set-amends-the-2026-09-27-encoder-2026-09-28-device-memory-2026-10-10-fusion-and-2026-10-21-chunk-entries) —
+  A sender records each set into two batches: its prep, one allocation
+  round, its fuse (gated on the whole band where strict, a refused set fused
+  again at its own tick), the free pass and the frame's front half in one,
+  the frame's rANS half in the next, the payload in a slot and written and
+  served under one CRC: 2 submits and no staging buffer a warm coded set,
+  from 6 and 4. A sensor may notify. fuse_orbbec and codec_replica print
+  each row's mean, p50, p95 and max over the sets, the device's counters per
+  set and the latency to publish, P-frame, I-frame and uncoded sets apart;
+  the encoder's and the free pass's compactions are `"  ..encode set"` and
+  `"  ..stale set"`, apart from a fuse's `"  ..active set"`.
 
 ## Decision record
 
@@ -15046,7 +15047,7 @@ ring copies (its output copies' barrier); `recon_codec_recorded` pins them.
 That is half the Apple step near 80 dispatches a batch, so none of its
 levers is needed.
 
-### 2026-10-25 — A sender's figures are per set, and the compactions a set times are named apart (amends the 2026-09-27 encoder entry).
+### 2026-10-25 — A sender records each set into two batches, every count on the device, and its figures are per set (amends the 2026-09-27 encoder, 2026-09-28 device-memory, 2026-10-10 fusion and 2026-10-21 chunk entries).
 
 **Per set, not per camera frame.** fuse_orbbec divided its stage totals by
 the camera frames, and codec_replica printed none, so neither showed what a
@@ -15172,6 +15173,39 @@ parts) and `StreamServer::publish` (its one copy, of both runs) take it and
 compute none. The data-and-size overloads are `of` and that call. Bytes
 changed after `of` go out under the CRC of what they held, which a reader
 refuses: the tests change one to show no second CRC.
+
+**The senders record a set into two batches (the 2026-10-10 fusion entry's
+2026-10-22 amendment, its next step).** `SetSender`
+(`examples/common/set_codec.hpp`), which fuse_orbbec and codec_replica share
+in place of `fuse_and_code`, records a set's prep, its fuse, the free pass
+when due and a coded set's front half (`CodecStream::record`) into one batch
+and waits on it once; `CodecStream::finish` records the back half into a
+second, waits, and writes and publishes the frame from its slot. A set fused
+again records its front half again, in a batch of its own
+(`CodecStream::redo`). A set begins when its frames are handed out and ends
+at the frame's publish, or its fuse's finish when it is not coded. Per set,
+on the four-frame wall `recon_codec_replica_run` codes (RTX 4090, Release):
+
+| set | submits | host waits | staging buffers | dispatches | barriers |
+|---|---|---|---|---|---|
+| P-frame, before | 6 | 6 | 4 | 18 | 31 |
+| P-frame, after | 2 | 2 | 0 | 33 | 43 |
+| I-frame (the first set), before | 7 | 7 | 5 | 16 | 30 |
+| I-frame (the first set), after | 2 | 2 | 11 | 30 | 40 |
+
+The first set places the rings' slots, which later sets reuse; a frame
+larger than any before grows its payload slot, one staging buffer, and a
+payload past the slot's copied guess adds a tail's submit. Dispatches and
+barriers rise because every pass is sized on the device: an indirect pass
+adds the dispatch that writes its arguments, and the sort, the diff and the
+count run over the grid's block slots. A warm synthetic four-camera set's
+front batch is 31 dispatches, 45 with the free pass
+(`recon_example_set_codec` prints and pins them below the Apple step near
+80), and the back batch 4. The same test's strict sets redo on the 4090
+alone: its first set, a grid's first and so gated, and in three runs of four
+its fourth, each redo growing nothing, so a round left incomplete by lost
+races; lavapipe redoes none. The senders count redos (`fused again`), and
+M6 counts them on room0's four-camera sets.
 
 ## Measured lessons
 

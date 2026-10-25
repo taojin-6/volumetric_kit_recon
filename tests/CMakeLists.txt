@@ -422,14 +422,15 @@ vr_target_warnings(recon_example_codec_stream_test)
 add_test(NAME recon_example_codec_stream
          COMMAND recon_example_codec_stream_test)
 
-# fuse_orbbec's coded sets (examples/common/set_codec.hpp), with no camera
-# driver: fake cameras read as a sensor array and prepared on the device, each
-# set fused and coded into a .vrst whose records, keys, sets and pts are the
-# sets', every frame decoded. A wall the cameras later see past: under Dynamic
-# gone from the frames that see past it, and its blocks freed by the
-# fusion.free_after pass due; under Classic its observed blocks kept. On the
-# host, a path that is the stream's or the CSV's file refused. The device part
-# skips with no device.
+# The senders' coded sets (examples/common/set_codec.hpp), with no camera
+# driver: fake cameras read as a sensor array, each set's prep, fusion, free
+# pass and frame recorded by the sender and coded into a .vrst whose records,
+# keys, sets and pts are the sets', every frame decoded, the blocking calls'
+# frames. A wall the cameras later see past: under Dynamic gone from the frames
+# that see past it, and its blocks freed by the fusion.free_after pass due;
+# under Classic its observed blocks kept. A coded set is 2 submits and 2 waits,
+# a fused one 1 and 1. On the host, a path that is the stream's or the CSV's
+# file refused. The device part skips with no device.
 add_executable(recon_example_set_codec_test example_set_codec_test.cpp)
 target_include_directories(recon_example_set_codec_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
