@@ -43,6 +43,7 @@
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
+#include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
@@ -281,10 +282,16 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(on_device);
     const vr::tsdf::FrameInput frame{
         {vkc::StorageInput(on_device.value()), narrow}, nullptr};
+    vr::tsdf::FuserConfig partial;
+    partial.allow_partial = true;
+    vkc::Result<vr::tsdf::Fuser> fuser =
+        vr::tsdf::Fuser::create(gpu.device, gpu.allocator, partial);
+    CHECK(fuser);
     vkc::StageMetrics fused;
-    CHECK(integrator.value().allocate_and_integrate(
-        grid.value(), {frame}, 5.0f, vr::tsdf::IntegrationMode::Classic,
-        nullptr, &fused));
+    vkc::Result<vr::tsdf::FuseReport> report =
+        fuser.value().fuse(grid.value(), {frame}, 5.0f,
+                           vr::tsdf::IntegrationMode::Classic, &fused);
+    CHECK(report && !report.value().redone && report.value().grows == 0);
     CHECK(row_reports_both_halves(fused, "integrate", device_can_time,
                                   "fused set"));
     CHECK(find(fused, "allocate") == nullptr);

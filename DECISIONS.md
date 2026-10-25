@@ -726,7 +726,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   row's mean, p50, p95 and max over the sets, the device's counters per set
   and the latency to publish, P-frame, I-frame and uncoded sets apart; the
   encoder's and the free pass's compactions are `"  ..encode set"` and
-  `"  ..stale set"`, apart from a fuse's `"  ..active set"`.
+  `"  ..stale set"`, apart from a fuse's `"  ..active set"`. A sensor may
+  notify; a set's prep, one allocation round, its fuse (gated on the whole
+  band where strict, a refused set fused again at its own tick) and the free
+  pass record into the caller's batch.
 
 ## Decision record
 
@@ -11688,6 +11691,11 @@ made after it, so what the set could not allocate lands with the next. An
 empty grid's first set keeps the rounds: whether the call ticks depends on
 whether the grid gains a block. Strict fusion is unchanged.
 
+*Amended 2026-10-25 (the sender's batch):* strict fusion and an empty
+grid's first set record one round too, the fuse gated on the whole band, and
+`Fuser::finish` fuses a refused set again, blocking, at the tick it was
+recorded at.
+
 `tsdf::Fuser` owns the per-set sequence formerly in
 `examples/common/fuse_frame.hpp`: grow ahead past `kGrowThreshold`, allocate
 all frame bands, grow and retry capacity failures, then integrate the set.
@@ -15093,6 +15101,39 @@ device planes only while `PendingBatch::in_flight` says the device may still
 read them. The outputs are leased (a held flag the frame's deleter clears
 with release order), as the core's ring slots are, where `use_count() == 1`
 and an acquire fence raced under TSan with libc++.
+
+**A set fuses in the caller's batch, strict too (amends the 2026-10-10
+fusion entry and its 2026-10-22 amendment, and the 2026-10-24 one-batch
+entry).** `Fuser::record_fuse` records one allocation round of every frame's
+band (`VoxelHashMap::record_allocate_from_depth`) and the fuse
+(`TsdfIntegrator::record_integrate`) after the prep. Where the set needs its
+whole band -- a strict fuser, or any grid's first set -- the fuse is gated on
+a word the round's gather closes on any failure (`hash_rounds.comp`, a third
+instance with the depth round between its two passes). `finish` settles the
+round and fuses a refused set again, blocking (`FuseReport::redone`), as a
+set was fused before. That redo keeps the clock: a gated fuse takes its tick
+at record and writes nothing, so `finish` takes the tick back
+(`VoxelHashMap::rewind_tick`) first. Without that, each redo added a tick,
+a free pass freed blocks a set early, and `recon_example_set_codec` failed
+on the 4090, whose first and fourth sets redid. A redone set's batch recorded what came
+after the fuse (the free pass, an encode's front half) over the grid without
+the set. One round, rather than K device rounds of depth, is the owner's Q1:
+a strict room0 set already took a single round (2026-10-22), so a redo
+should be rare; the senders count them. Partial fusion is unchanged.
+
+The blocking calls are these records, a submit and the settle:
+`allocate_from_depth` repeats its round while lost races alone remain, up
+to 10, with no readback buffer, and `free_stale_blocks` is
+`VoxelBlockGrid::record_free_stale` (the compaction, the stamp pass sized
+from its count, `record_remove` of the list it writes), one recording of
+K = 3 rounds where it was up to 10 host rounds, so a contended block waits
+for the next pass. Each record takes a serial, and `settle` moves the heap's
+host copy only past every recording settled and every blocking call since,
+so a redo or a free pass is never undone by an older settle.
+`allocate_and_integrate` and `allocate_from_depth`'s `then` go;
+`dispatch_with_retry` stays for triangles and the rehash. A warm strict set
+of device frames is one submit, one wait and no staging buffer
+(`recon_tsdf_fuser`), where it took two waits.
 
 ## Measured lessons
 

@@ -21,6 +21,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_sensor_gpu_frame_prep_oom`, `recon_sensor_array`,
   `recon_sensor_array_process`, `recon_sensor_trigger_grouper`,
   `recon_sensor_rgbd_sensor`, `recon_example_fuse_orbbec_sets`.
+- `volume`, `tsdf`: **a set fuses in the caller's batch, strict too** (the
+  2026-10-25 decision): `Fuser::record_fuse`, `finish` and `abandon`,
+  `PendingFuse` and `FuseReport::redone`;
+  `VoxelHashMap::record_allocate_from_depth` and `rewind_tick`;
+  `VoxelBlockGrid::record_free_stale`; `TsdfIntegrator::record_integrate`.
+  A strict set, or any grid's first, is one round and a fuse gated on the
+  whole band, and `finish` fuses a refused set again, blocking, at its own
+  tick: a warm strict set is one submit and one wait. `allocate_from_depth`
+  and `free_stale_blocks` are their records, a submit and the settle;
+  recordings settle in any order. Migration: `free_stale_blocks` runs 3
+  removal rounds, not up to 10, so a contended block waits for the next
+  pass, and it moves the topology epoch even when it frees nothing. Tests:
+  `recon_tsdf_fuser`, `recon_tsdf_fuser_oom`, `recon_volume_recorded`,
+  `recon_volume_block_stamps`, `recon_tier_stage_metrics`.
 
 ### Changed
 
@@ -915,6 +929,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- `tsdf`, `volume`: **`TsdfIntegrator::allocate_and_integrate` and
+  `allocate_from_depth`'s `then`** (BREAKING; the 2026-10-25 decision).
+  Migrating: `Fuser::record_fuse` records a set's round and fuse into a
+  caller's batch, and `VoxelHashMap::record_allocate_from_depth` a round
+  alone. Tests: `recon_tsdf_fuser`, `recon_tier_stage_metrics`.
 - build: **install rules and the package config** (BREAKING; the
   2026-10-22 decision). recon is consumed by commit: `VR_INSTALL`,
   `volumetric_kit_reconConfig.cmake` and `find_package(volumetric_kit_recon)`

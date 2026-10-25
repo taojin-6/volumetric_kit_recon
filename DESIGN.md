@@ -876,7 +876,8 @@ zeroes the listed blocks and frees them through the map's, the zeroing
 recorded into the map's first round (`remove`'s `first_round`) ahead of
 the delete, so it takes no submit of its own.
 One body serves it and garbage collection, so the stale-block list stays on
-the GPU through deletion; only the stale and retry counts reach the host.
+the GPU through deletion, its count sizing the removal there; only the
+removal's outcome reaches the host.
 A compaction still reads its list back, in the count's own submit while the
 set stays within a quarter past its last count (the 2026-09-28 residency
 decision), except `compact_active_blocks_on_device`'s: its
@@ -914,8 +915,12 @@ so it is not a peak-memory budget for resize (2026-10-10).
 `allocate_from_depth` also takes a list of frames (`DepthInput`), every
 frame dispatched in each round's one submit, on a set of its own; a round
 that retries dispatches them all again, and the rounds are the call's, not
-each frame's. A caller's `then` shares the first round's submit, after its
-readbacks, and makes that round the only one. Opt-in
+each frame's. `record_allocate_from_depth` records one such round into a
+caller's batch, its outcome in a result slot and an optional gate closed on
+any failure; the blocking call is that round, one submit and `settle`,
+repeated while lost races alone remain. `settle` moves the heap's host copy
+only to a recording newer than every one settled and every blocking call
+since, so recordings settle in any order. Opt-in
 `StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every
 retry round) and on both compaction entry points (an `"active set"` row,
 breakdown-prefixed when the caller already has a stage open).
@@ -929,12 +934,18 @@ writes voxels -- `TsdfIntegrator`, `MeshIntegrator`, the codec's
 inverse -- advances the clock first and stamps `changed` on what it
 changed, so the clock counts writes (one a set, for the rig) and a
 reader's recorded tick is older than every later change, however the calls
-interleave. The init kernel zeroes the records, the delete kernel zeroes a
+interleave. A fuse its gate closed on wrote nothing, so `Fuser::finish`
+takes its tick back (`rewind_tick`) before fusing the set again. The init kernel zeroes the records, the delete kernel zeroes a
 freed slot's, and `resize` copies them forward, the rehash stamping
 nothing. A consumer compares ticks and resets nothing:
 `free_stale_blocks(max_age)` frees the blocks whose newer stamp is older
 than that, through the grid's remove body over the pass's list, so the band the
-allocator still asks for stays, and the live examples run it every
+allocator still asks for stays. `record_free_stale` records it into a
+caller's batch, at the tick then: the compaction, the stamp pass sized from
+its count, and `record_remove` of the list it writes, one recording of
+K rounds, so a block a lost race keeps waits for the next pass;
+`free_stale_blocks` is that, one submit and `settle`, its result the heap's
+gain (2026-10-25). The live examples run it every
 `fusion.free_after` sets (`free_stale_blocks_every`, `fuse_frame.hpp`); the
 iOS scanner reads `changed` through `read_block_stamps`.
 
@@ -975,7 +986,11 @@ reached (2026-10-06), which the map's host copy of the heap counter
 answers. The list and its count stay on the device: a one-thread kernel
 (`tsdf_dispatch_args.comp`) turns the count into the fuse's indirect
 dispatches, so a fuse is one submit that reads nothing back; the frames
-are staged.
+are staged. `record_integrate` records it into a caller's batch after an
+allocation of the same frames (2026-10-25): the passes are bounded by the
+grid's block slots, none runs behind a closed gate word, the tick is taken
+at record, and every frame's cameras go up in one write each ahead of the
+compaction. `integrate` is that, one submit and its wait.
 `integrate` also takes a list of frames
 (`FrameInput`, a `DepthInput` and its colour, so one list feeds both
 calls): one compaction and one submit for them all, each frame a dispatch
@@ -987,24 +1002,29 @@ before the integrate kernel fuses any, so one camera's free space never
 erases what another fuses in the same set, and the grid does not depend on
 the frames' order but for the running average's arithmetic (2026-10-08). A
 frame with no pixels fuses nothing, as it allocates nothing (2026-09-30).
-`Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). It
-grows ahead past `kGrowThreshold`, allocates every frame's band in one
-`allocate_from_depth`, grows and retries on capacity failures, then integrates
-once. `max_grows_per_set` bounds successful grows including grow-ahead
-(default 4; zero fixes capacity). The default requires a complete band and
-retries pure lock contention up to four times beyond the tier's own rounds.
-An incomplete band returns an error before integration; a failed call may
-already have resized or allocated zeroed blocks. An unsuccessful grow-ahead
-can still be followed by successful allocation into the existing grid.
+`Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). A set
+records into a caller's batch (`record_fuse`, 2026-10-25): a grow ahead past
+`kGrowThreshold`, blocking, then one allocation round of every frame's band
+(`record_allocate_from_depth`) and `record_integrate`. Where the set needs
+its whole band -- the default, or a grid holding no block -- the fuse is
+gated on a word the round closes on any failure, and `finish`, once the
+batch has resolved, fuses a refused set again, blocking
+(`FuseReport::redone`): allocation retrying pure lock contention up to four
+times beyond the tier's own rounds and growing for capacity, then the
+integrate, at the tick the set was recorded at (`rewind_tick`). `fuse` is
+the record, one submit and `finish`. `max_grows_per_set` bounds successful
+grows including grow-ahead (default 4; zero fixes capacity). An incomplete
+band returns an error before integration; a failed call may already have
+resized or allocated zeroed blocks. An unsuccessful grow-ahead can still be
+followed by successful allocation into the existing grid.
 
 `allow_partial` explicitly opts live callers into integrating what fits.
 `fuse_viewer` and `rig_viewer` enable it with a two-grow bound. That mode
 leaves pure lock contention for the next set and privately backs off a failed
-grow for 60 map ticks at the same size. Once its grid holds a block, a set is
-one submit (`TsdfIntegrator::allocate_and_integrate`): one allocation round,
-the compaction and the fuse, and a grow for a capacity limit made after it,
-so what the set could not allocate lands with the next (2026-10-10, amended
-2026-10-22). Its fuser belongs to one grid.
+grow for 60 map ticks at the same size. Once its grid holds a block, a set's
+fuse is ungated, taking what the round placed, and a grow for a capacity
+limit is made after it, so what the set could not allocate lands with the
+next (2026-10-10, amended 2026-10-22). Its fuser belongs to one grid.
 `FuseReport` carries the before/after bucket counts, grows, allocation
 failures, any failed-grow status and final occupancy; failed allocation
 requests can refer to the same block repeatedly. Host allocation exceptions

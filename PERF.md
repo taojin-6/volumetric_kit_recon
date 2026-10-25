@@ -135,8 +135,8 @@ kernels.
 | P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | landed (#129); a fuse's list is no longer reused (2026-10-06) |
 | P4 | Bind texture views in place, with no per-remesh copies | measured 0.26–0.51 ms GPU per remesh at 4K, 0.04–0.12 at 720p | M | P1's descriptor-array decision | deferred |
 | P2 | Record a set's frame prep in one batch | measured parity once host colour stages on threads; the pipeline's unit of work | S | — | landed (`SensorArray::process`); recorded into the sender's batch (`record_process`, 2026-10-25) |
-| P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | step 1 landed (#268); set time unmeasured |
-| P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | landed (#132); device-list follow-up landed (#146) |
+| P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | step 1 landed (#268); step 2, a strict set in the caller's batch, landed (2026-10-25); set time unmeasured |
+| P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | landed (#132); device-list follow-up landed (#146); recorded into the set's batch (`record_free_stale`, 2026-10-25) |
 | P9 | Allocate only the band blocks a sample can weight | ~60% of a static room's active set holds no weight; compaction, integrate and meshing scale with it | M | — | open, measure first |
 | D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | superseded: the decoders hand out device pictures only |
 | D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | landed (#130) |
@@ -383,6 +383,13 @@ is measured.
 > 1 after; a strict `Fuser` takes 2, from 3. The set's time is unmeasured;
 > measure it on the RTX 5090.
 
+> **Step 2 landed (2026-10-25): a strict set is one submit too, in the
+> caller's batch.** `Fuser::record_fuse` records the round and a fuse gated
+> on the whole band after the set's prep, and the free pass can follow in
+> the same batch (`record_free_stale`); a set whose round lost a race is
+> fused again, blocking (`FuseReport::redone`). A warm strict set of device
+> frames: 1 submit, 1 wait, no staging buffer (`recon_tsdf_fuser`).
+
 With P1, P2 and P5 in place, three host decisions split a set, two of them
 taken off by step 1:
 
@@ -393,8 +400,8 @@ taken off by step 1:
   `allow_partial`; offline callers require complete allocation (2026-10-10).
   Done for the live viewers: once the grid holds a block, the tally comes
   back in the set's one submit, and a grow for a capacity limit lands a set
-  late. The examples that write a mesh (`fuse_replica` and the rest) keep
-  the synchronous grow.
+  late. Done for strict sets (step 2): the round gates the fuse on the
+  device, and only a refused set, fused again, grows synchronously.
 - **The triangle count, which sizes the texture dispatch and the arena
   refit.** Keep it: a refit is rare once the plan has measured density.
 

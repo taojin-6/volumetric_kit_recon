@@ -5,7 +5,11 @@
 // bands. Growth, grow-ahead, and a bounded failure preserve the expected
 // voxel data and integration tick. A live grid holding a block fuses a set in
 // one submit to the same voxels, stamps and tick, its new blocks included,
-// and grows a set late. Skips when no device is available.
+// and grows a set late. The record form (record_fuse, finish) gives what the
+// tier calls give from a grid's first set on, a refused set fused again at
+// its own tick; a token is the fuser's last record only; and a warm strict
+// set is one submit with no staging buffer. Skips when no device is
+// available.
 
 #include <cstddef>
 #include <cstdint>
@@ -170,15 +174,21 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(blocks > 256);
 
   // Default settings complete a band requiring four doublings. The former
-  // two-grow default returned success with only 256 of these 604 blocks.
+  // two-grow default returned success with only 256 of these 604 blocks. The
+  // first set's round meets the capacity limit, so its gated fuse runs
+  // nothing and finish fuses it again, growing, at the tick it was recorded
+  // at: each set takes one.
   {
     auto fuser = make_fuser(dev, alloc);
     auto grid = make_grid(dev, alloc, params(8));
     CHECK(fuser.ok() && grid.ok());
     for (int pass = 0; pass < 2; ++pass) {
+      const std::uint32_t tick = grid->map().tick();
       auto report = fuser->fuse(*grid, set);
       CHECK(report.ok() && report->dropped == 0);
       CHECK(report->load_factor == grid->map().load_factor().value());
+      CHECK(report->redone == (pass == 0));
+      CHECK(grid->map().tick() == tick + 1);
       if (pass == 0) {
         CHECK(report->grows == 4);
         CHECK(report->from_buckets == 8 && report->to_buckets == 128);
@@ -207,8 +217,9 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(report.ok() && report->grows == 0 && grid->map().tick() == tick);
   }
 
-  // An incomplete band is an error before integration. A later fuser with
-  // enough growth allowance can complete the same grid and frame.
+  // An incomplete band is an error before integration, which leaves the
+  // tick. A later fuser with enough growth allowance can complete the same
+  // grid and frame.
   {
     tsdf::FuserConfig config;
     config.max_grows_per_set = 2;
@@ -230,27 +241,144 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(vr_test::same_grids(ctx, *reference, *grid));
   }
 
-  // A live grid's steady state: once it holds a block, a partial fuser
-  // allocates, compacts and fuses a set in one submit, to the voxels, stamps
-  // and tick the tier calls give, in either mode.
-  for (const tsdf::IntegrationMode mode :
-       {tsdf::IntegrationMode::Classic, tsdf::IntegrationMode::Dynamic}) {
-    tsdf::FuserConfig config;
-    config.allow_partial = true;
-    auto fuser = make_fuser(dev, alloc, config);
-    auto expected = make_grid(dev, alloc, params(1024));
-    auto grid = make_grid(dev, alloc, params(1024));
-    CHECK(fuser.ok() && expected.ok() && grid.ok());
-    for (int pass = 0; pass < 3; ++pass) {
-      auto failed = expected->map().allocate_from_depth(depths);
-      CHECK(failed.ok() && failed.value() == 0);
-      CHECK(integrator->integrate(*expected, set, 5.0f, mode).ok());
-      auto report = fuser->fuse(*grid, set, 5.0f, mode);
-      CHECK(report.ok() && report->dropped == 0 && report->grows == 0);
+  // A live grid's steady state: once it holds a block (the tier calls fuse
+  // the first set on both grids), a fuser, partial or strict, allocates,
+  // compacts and fuses a set in one submit, to the voxels, stamps and tick
+  // the tier calls give, in either mode.
+  for (const bool partial : {true, false}) {
+    for (const tsdf::IntegrationMode mode :
+         {tsdf::IntegrationMode::Classic, tsdf::IntegrationMode::Dynamic}) {
+      tsdf::FuserConfig config;
+      config.allow_partial = partial;
+      auto fuser = make_fuser(dev, alloc, config);
+      auto expected = make_grid(dev, alloc, params(1024));
+      auto grid = make_grid(dev, alloc, params(1024));
+      CHECK(fuser.ok() && expected.ok() && grid.ok());
+      for (int pass = 0; pass < 3; ++pass) {
+        auto failed = expected->map().allocate_from_depth(depths);
+        CHECK(failed.ok() && failed.value() == 0);
+        CHECK(integrator->integrate(*expected, set, 5.0f, mode).ok());
+        if (pass == 0) {
+          failed = grid->map().allocate_from_depth(depths);
+          CHECK(failed.ok() && failed.value() == 0);
+          CHECK(integrator->integrate(*grid, set, 5.0f, mode).ok());
+          continue;
+        }
+        auto report = fuser->fuse(*grid, set, 5.0f, mode);
+        CHECK(report.ok() && report->dropped == 0 && report->grows == 0);
+        CHECK(!report->redone);
+      }
+      CHECK(vr_test::same_grids(ctx, *expected, *grid));
+      CHECK(same_stamps(*expected, *grid));
+      CHECK(grid->map().tick() == expected->map().tick());
     }
-    CHECK(vr_test::same_grids(ctx, *expected, *grid));
-    CHECK(same_stamps(*expected, *grid));
-    CHECK(grid->map().tick() == expected->map().tick());
+  }
+
+  // The record form, the set's fusion recorded into a caller's batch, is
+  // fuse(): the same voxels, stamps and tick from a grid's first set on, in
+  // either mode, one camera or the set, partial or strict. A first set holds
+  // no block, so it needs its whole band in either mode: gated, and fused
+  // again, at its own tick, should its round lose a race.
+  for (const bool partial : {true, false}) {
+    for (const tsdf::IntegrationMode mode :
+         {tsdf::IntegrationMode::Classic, tsdf::IntegrationMode::Dynamic}) {
+      for (const std::size_t cameras : {std::size_t{1}, set.size()}) {
+        const std::vector<tsdf::FrameInput> frames(set.begin(),
+                                                   set.begin() + cameras);
+        const std::vector<vol::DepthInput> band(frames.begin(), frames.end());
+        tsdf::FuserConfig config;
+        config.allow_partial = partial;
+        auto fuser = make_fuser(dev, alloc, config);
+        auto expected = make_grid(dev, alloc, params(1024));
+        auto grid = make_grid(dev, alloc, params(1024));
+        CHECK(fuser.ok() && expected.ok() && grid.ok());
+        for (int pass = 0; pass < 2; ++pass) {
+          auto failed = expected->map().allocate_from_depth(band);
+          CHECK(failed.ok() && failed.value() == 0);
+          CHECK(integrator->integrate(*expected, frames, 5.0f, mode).ok());
+          vkc::CommandBatch batch(dev, alloc);
+          auto pending = fuser->record_fuse(batch, *grid, frames, 5.0f, mode);
+          CHECK(pending.ok());
+          CHECK(batch.submit().ok());
+          auto report = fuser->finish(*pending, *grid);
+          CHECK(report.ok() && report->dropped == 0 && report->grows == 0);
+          CHECK(pass == 0 || !report->redone);
+        }
+        CHECK(vr_test::same_grids(ctx, *expected, *grid));
+        CHECK(same_stamps(*expected, *grid));
+        CHECK(grid->map().tick() == expected->map().tick());
+      }
+    }
+  }
+
+  // A token is the fuser's last record only: a record supersedes one, which
+  // finish then refuses, as it refuses an abandoned one and another grid; an
+  // abandoned record's result slot goes back, so records past the map's
+  // slots still claim one.
+  {
+    auto fuser = make_fuser(dev, alloc);
+    auto grid = make_grid(dev, alloc, params(1024));
+    auto other = make_grid(dev, alloc, params(1024));
+    CHECK(fuser.ok() && grid.ok() && other.ok());
+    for (std::uint32_t r = 0; r < vol::VoxelHashMap::kResultSlots + 2; ++r) {
+      vkc::CommandBatch batch(dev, alloc);
+      auto pending = fuser->record_fuse(batch, *grid, set);
+      CHECK(pending.ok());
+      CHECK(batch.submit().ok());
+      fuser->abandon(*pending);
+      CHECK(fuser->finish(*pending, *grid).status().domain() ==
+            vkc::Status::Code::InvalidArgument);
+    }
+    vkc::CommandBatch first_batch(dev, alloc);
+    auto first = fuser->record_fuse(first_batch, *grid, set);
+    CHECK(first.ok() && first_batch.submit().ok());
+    vkc::CommandBatch second_batch(dev, alloc);
+    auto second = fuser->record_fuse(second_batch, *grid, set);
+    CHECK(second.ok() && second_batch.submit().ok());
+    CHECK(fuser->finish(*first, *grid).status().domain() ==
+          vkc::Status::Code::InvalidArgument);
+    CHECK(fuser->finish(*second, *other).status().domain() ==
+          vkc::Status::Code::InvalidArgument);
+    CHECK(fuser->finish(*second, *grid).ok());
+  }
+
+  // A warm set of device frames is one submit, one host wait and no
+  // staging buffer, strict as the senders fuse.
+  {
+    std::vector<vkc::Buffer> depth_buffers;
+    std::vector<vkc::Buffer> color_buffers;
+    std::vector<tsdf::ColorFrame> device_colors = colors;
+    for (int c = 0; c < kCameras; ++c) {
+      auto depth =
+          vr_test::upload_device_buffer(dev, alloc, views[c].depth.data(),
+                                        views[c].depth.size() * sizeof(float));
+      auto color = vr_test::upload_device_buffer(
+          dev, alloc, views[c].color.data(),
+          views[c].color.size() * sizeof(std::uint32_t));
+      CHECK(depth.ok() && color.ok());
+      depth_buffers.push_back(std::move(depth).value());
+      color_buffers.push_back(std::move(color).value());
+    }
+    std::vector<tsdf::FrameInput> device_set;
+    for (int c = 0; c < kCameras; ++c) {
+      device_colors[std::size_t(c)].pixels = nullptr;
+      device_colors[std::size_t(c)].buffer = &color_buffers[std::size_t(c)];
+      device_set.push_back(
+          {{vkc::StorageInput(depth_buffers[std::size_t(c)]), views[c].cam},
+           &device_colors[std::size_t(c)]});
+    }
+    auto fuser = make_fuser(dev, alloc);
+    auto grid = make_grid(dev, alloc, params(1024));
+    CHECK(fuser.ok() && grid.ok());
+    CHECK(fuser->fuse(*grid, device_set).ok());
+    CHECK(fuser->fuse(*grid, device_set).ok());
+    const vkc::DeviceCounters was = dev.counters();
+    auto report = fuser->fuse(*grid, device_set);
+    const vkc::DeviceCounters now = dev.counters();
+    CHECK(report.ok() && !report->redone);
+    CHECK(now.submits - was.submits == 1);
+    CHECK(now.host_waits - was.host_waits <= 1);
+    CHECK(now.staging_buffers == was.staging_buffers);
   }
 
   // There, a set's new blocks are fused in its own submit: once a grid holds
@@ -304,20 +432,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
       dropped = again->dropped;
     }
     CHECK(dropped == 0);
-  }
-
-  // The one submit needs a grid holding a block: an empty grid's first set
-  // allocates, with the tier's retries, and then integrates.
-  {
-    auto empty = make_grid(dev, alloc, params(1024));
-    CHECK(empty.ok());
-    const std::uint32_t tick = empty->map().tick();
-    CHECK(integrator
-              ->allocate_and_integrate(*empty, set, 5.0f,
-                                       tsdf::IntegrationMode::Classic, nullptr)
-              .status()
-              .domain() == vkc::Status::Code::InvalidArgument);
-    CHECK(empty->map().tick() == tick && empty->map().allocated_blocks() == 0);
   }
 
   // Live callers opt in: each bound includes the next set's grow-ahead,
