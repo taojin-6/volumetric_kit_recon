@@ -28,9 +28,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_sensor_video_ffmpeg_error` is `recon_sensor_video_ffmpeg`, which
   also reads a frame's codes. CI's iOS check compiles and links
   `recon_sensor_video` with the importer (`tools/ios_build_check.sh`).
-- CI: **the iOS compile check targets iOS 27.0**, the family's iOS floor:
+- CI: **the iOS compile check targets iOS 26.0**, the family's iOS floor:
   the macOS leg compiles `PixelBufferImporter` and its header for
-  `arm64-apple-ios27.0`.
+  `arm64-apple-ios26.0`.
 - `codec`, `mesh`, `volume`: **a frame decodes and meshes in the caller's
   batch** (the 2026-10-24 decision), every count on the device and the
   results read once the batch has run:

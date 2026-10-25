@@ -509,7 +509,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-08**](#2026-10-08--apples-pixel-buffer-importer-is-public-pixelbufferimporter-in-recon_sensor_apple-on-every-apple-build-ios-included-with-no-ffmpeg) —
   Apple's pixel-buffer importer is public: `PixelBufferImporter` in
   `recon_sensor_apple`, on every Apple build, iOS included, with no FFmpeg.
-  *Amended 2026-10-25:* CI compiles the importer for iOS 27.0.
+  *Amended 2026-10-25:* CI compiles the importer for iOS 26.0.
   *Amended again 2026-10-25:* `recon_sensor_video` is no longer behind
   `VR_WITH_FFMPEG` on Apple, and CI's iOS check links it with the importer.
 
@@ -15051,7 +15051,7 @@ VideoToolbox path is deleted. The class, `DecodedPicture` and the codes are
 unchanged, and so is Linux, NVDEC through FFmpeg. `recon_sensor_video`
 builds on every Apple platform, as `recon_sensor_apple` does, and the
 Orbbec driver builds on macOS without FFmpeg. Nothing keeps the decoders
-off iOS now: they need no FFmpeg, and the floor is 27.0, above the iOS 17
+off iOS now: they need no FFmpeg, and the floor is 26.0, above the iOS 17
 that VideoToolbox's hardware key needs (the 2026-10-08 entry), so they
 cross-compile to iOS unchanged, as every tier does (the 2026-08-01 entry).
 `VR_WITH_FFMPEG` on Apple fails the configure and names the fix, so no
@@ -15096,7 +15096,7 @@ the slices:
 has no hardware HEVC decoder (`VTIsHardwareDecodeSupported`), and the
 session requires it
 (`kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder`),
-with no software fallback: a stream it cannot open is refused. iOS 27, the
+with no software fallback: a stream it cannot open is refused. iOS 26, the
 floor, has the key, so there is no availability check. One internal home,
 `videotoolbox.cpp`, opens the sessions of both decoders (NV12 on
 Metal-compatible IOSurfaces, the range its caller asks for: the stream's,
@@ -15120,7 +15120,7 @@ stream's own; the decoder, Orbbec and JPEG tests pass on the direct path.
 refuses every truncated SPS, on every leg, the sanitizers' included. On
 Apple, a configure with `VR_WITH_FFMPEG` fails with the message
 (`recon_subproject_apple_ffmpeg`). The macOS leg's iOS check compiles
-`recon_sensor_video` and the importer for iOS 27.0 and links them against
+`recon_sensor_video` and the importer for iOS 26.0 and links them against
 the iOS SDK (`tools/ios_build_check.sh`), leaving unresolved only their
 dependencies' symbols (the core's, recon's other tiers' and Vulkan's).
 Mutating the range, the reordering, the leading-picture skip or the crop
@@ -15132,8 +15132,8 @@ need no `ffmpeg` formula; the NVIDIA leg is unchanged.
 **Validation.** Apple M4 (Mac mini), macOS 27.0.1, Release with warnings
 as errors, the Orbbec SDK 2.10.6 and no FFmpeg: the 115 tests pass under
 the validation layer with `VR_TEST_HEVC_BACKEND=videotoolbox`, the threaded
-ones again under ThreadSanitizer (Debug), the iOS check links for iOS 27.0
-(Xcode 27.0), and the viewer leg's targets build and their 6 tests pass.
+ones again under ThreadSanitizer (Debug), the iOS check links (Xcode 27.0),
+and the viewer leg's targets build and their 6 tests pass.
 RTX 5090, Ubuntu, Release with FFmpeg 8.0 and CUDA 13.4: the 115 tests
 pass on NVDEC (`VR_TEST_HEVC_BACKEND=cuda`), and the host-only video tests
 under ASan and UBSan. Not run on a camera; for iOS, compiled and linked
