@@ -509,8 +509,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-08**](#2026-10-08--apples-pixel-buffer-importer-is-public-pixelbufferimporter-in-recon_sensor_apple-on-every-apple-build-ios-included-with-no-ffmpeg) —
   Apple's pixel-buffer importer is public: `PixelBufferImporter` in
   `recon_sensor_apple`, on every Apple build, iOS included, with no FFmpeg.
-  *Amended 2026-10-25:* the iOS floor is 27.0, so CI compiles the importer
-  for iOS 27.0, and the VideoToolbox key `VtJpeg` reaches is within it.
+  *Amended 2026-10-25:* CI compiles the importer for iOS 27.0.
   *Amended again 2026-10-25:* `recon_sensor_video` is no longer behind
   `VR_WITH_FFMPEG` on Apple, and CI's iOS check links it with the importer.
 
