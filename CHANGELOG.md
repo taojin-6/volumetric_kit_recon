@@ -25,7 +25,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   2026-10-25 decision): `Fuser::record_fuse`, `finish` and `abandon`,
   `PendingFuse` and `FuseReport::redone`;
   `VoxelHashMap::record_allocate_from_depth` and `rewind_tick`;
-  `VoxelBlockGrid::record_free_stale`; `TsdfIntegrator::record_integrate`.
+  `VoxelBlockGrid::record_free_stale`; `TsdfIntegrator::record_integrate`
+  and `check_frames`, which `record_fuse` runs before it records anything.
   A strict set, or any grid's first, is one round and a fuse gated on the
   whole band, and `finish` fuses a refused set again, blocking, at its own
   tick: a warm strict set is one submit and one wait. `allocate_from_depth`
@@ -39,13 +40,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   2026-10-25 decision): `Encoder::record_front`, `record_back`, `finish` and
   `abandon`, `PendingEncode` and `EncodedFrame`, whose payload stays in an
   encoder slot. Every count stays on the device until the front's results
-  slot; `encode` is the halves, 2 submits and, warm, no staging buffer (it
-  was 4 and 4), its bytes, rows and refusals as they were, plus
-  `"  ..tables"`. Migration: a compaction the encoder records leaves the map
-  no list, so an extract after it compacts its own; a P-frame planned over a
-  grid of no block finishes as an I-frame of none (as `encode` always
-  coded it); an I-frame of none records no back half and so reports no
-  `"  ..rans encode"`. `decode_growing` also takes the frame in a decoder's
+  slot; `encode` is the halves, 2 submits (the decision has the counts),
+  its bytes, rows and refusals as they were, plus `"  ..tables"`; a warm
+  encoder records no quantization steps. Migration: a compaction the
+  encoder records leaves the map no list, so an extract after it compacts
+  its own; a P-frame planned over a grid of no block finishes as an I-frame
+  of none (as `encode` always coded it); an I-frame of none records no back
+  half and so reports no `"  ..rans encode"`. `decode_growing` also takes
+  the frame in a decoder's
   input slot (`Decoder::claim_input`), so a sender decodes the bytes it
   wrote with no copy of its own. Tests: `recon_codec_encoder`,
   `recon_codec_device_frame`, `recon_codec_inter`, `recon_codec_step_layout`,
@@ -74,13 +76,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in `set_codec.hpp`, in place of `fuse_and_code`; the 2026-10-25
   decision): a set's prep, fuse, free pass and frame's front half in one,
   the frame's rANS half in the next (`CodecStream::record`, `front_ran`,
-  `finish`, and `redo` after a fusion done again), the frame written and
-  published from its slot under one CRC. A warm coded set is 2 submits, 2
-  waits and no staging buffer, from 6, 6 and 4. fuse_orbbec waits on its
-  sensors' notifications rather than sleeping between polls. Migration: a
-  coded row's encode host time no longer holds
-  the GPU waits, which are the set's `"wait: front"` and `"wait: frame"`
-  rows; the report's rANS line is device time. Tests:
+  `finish`, and `redo` after a fusion done again, timed as
+  `"wait: redo"`), the frame written and published from its slot under one
+  CRC: 2 submits a warm coded set (the decision has the counts).
+  fuse_orbbec waits on its sensors' notifications rather than sleeping
+  between polls. Migration: a codec row's host columns (`encode_host_ms`,
+  `decode_host_ms`) are host busy time on every path, their waits on the
+  device left out (a sender's are the set's `"wait: front"` and
+  `"wait: frame"` rows); the `"set"` row's wait is its rows' since the set
+  arrived; the report's rANS line is device time. Tests:
   `recon_example_set_codec`, `recon_example_codec_stream`,
   `recon_codec_replica_run`.
 - `codec`, `mesh`, `volume`: **a frame decodes and meshes in the caller's

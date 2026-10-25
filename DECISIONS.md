@@ -15061,7 +15061,12 @@ the latencies. Every set is timed: timing every frame cost 0.02 ms of host
 time on the 4090 (M0). A set ends at its frame's publish, so the decode a
 codec example runs after it counts in neither its rows nor its counters.
 Writing and publishing a frame are rows of their own (`"write"`,
-`"publish"`), and so is a sender's one CRC of it (`"crc"`).
+`"publish"`), and so is a sender's one CRC of it (`"crc"`). The `"set"`
+row's wait is what its rows waited since the set arrived, so its busy and
+wait add up to its wall time. A row first seen in a later set takes its
+place after the row before it there, so a breakdown stays inside its
+stage. A codec row's host columns are busy time on every path: `encode`
+waits inside its row, a sender outside it (`make_codec_row`).
 
 **The compactions are named apart.** The 2026-09-27 entry kept the
 encoder's compaction under the map's `"  ..active set"`, and the free
@@ -15097,7 +15102,9 @@ record_process` a set's. The depth, and packed colour at the binding
 alignment after it, goes into the pass's one `core::HostRing` slot: in place
 where mapped device memory is cached, one copy elsewhere. One slot suffices:
 the frame is copied in at record, when the pass's last batch, which binds the
-slot and the kernels' sets, must have resolved. `prepare` and
+slot and the kernels' sets, must have resolved. Every frame's slot is
+claimed before any buffer grows, so a record refused while that batch is
+unresolved frees nothing it reads. `prepare` and
 `prepare_batch` are the record, one submit and its wait, and abandon the
 device planes only while `PendingBatch::in_flight` says the device may still
 read them. The outputs are leased (a held flag the frame's deleter clears
@@ -15111,9 +15118,10 @@ band (`VoxelHashMap::record_allocate_from_depth`) and the fuse
 (`TsdfIntegrator::record_integrate`) after the prep. Where the set needs its
 whole band -- a strict fuser, or any grid's first set -- the fuse is gated on
 a word the round's gather closes on any failure (`hash_rounds.comp`, a third
-instance with the depth round between its two passes). `finish` settles the
-round and fuses a refused set again, blocking (`FuseReport::redone`), as a
-set was fused before. That redo keeps the clock: a gated fuse takes its tick
+instance with the depth round between its two passes). The set is checked
+as the fuse checks it first (`TsdfIntegrator::check_frames`), so a refused
+set records no round. `finish` settles the round and fuses a refused set
+again, blocking (`FuseReport::redone`), as a set was fused before. That redo keeps the clock: a gated fuse takes its tick
 at record and writes nothing, so `finish` takes the tick back
 (`VoxelHashMap::rewind_tick`) first. Without that, each redo added a tick,
 a free pass freed blocks a set early, and `recon_example_set_codec` failed
@@ -15156,8 +15164,9 @@ last frame's size per entry plus 25%; a frame past it gathers the rest again
 into its own output range (a tail), since the core's test poison fills a
 copied output range at its batch's front (the owner's Q3). `encode` is the
 halves, 2 submits where it took 4, and no staging buffer warm where it took
-4, one a batch that read back. Two choices follow from the
-device deciding the count. Whether the grid holds a block to code is the
+4, one a batch that read back. The quantization steps never change, so
+once a frame has finished, the front records no update for them. Two
+choices follow from the device deciding the count. Whether the grid holds a block to code is the
 front's to answer, so a P-frame planned at record over a grid of none
 finishes as an I-frame of none, with no back batch, the bytes `encode` gave
 a grid of none. And a compaction recorded into the front's batch gives the
@@ -15182,7 +15191,8 @@ when due and a coded set's front half (`CodecStream::record`) into one batch
 and waits on it once; `CodecStream::finish` records the back half into a
 second, waits, and writes and publishes the frame from its slot. A set fused
 again records its front half again, in a batch of its own
-(`CodecStream::redo`). A set begins when its frames are handed out and ends
+(`CodecStream::redo`, `"wait: redo"`), and its frame's rows keep both
+front halves. A set begins when its frames are handed out and ends
 at the frame's publish, or its fuse's finish when it is not coded. Per set,
 on the four-frame wall `recon_codec_replica_run` codes (RTX 4090, Release):
 
@@ -15198,14 +15208,34 @@ larger than any before grows its payload slot, one staging buffer, and a
 payload past the slot's copied guess adds a tail's submit. Dispatches and
 barriers rise because every pass is sized on the device: an indirect pass
 adds the dispatch that writes its arguments, and the sort, the diff and the
-count run over the grid's block slots. A warm synthetic four-camera set's
-front batch is 31 dispatches, 45 with the free pass
-(`recon_example_set_codec` prints and pins them below the Apple step near
-80), and the back batch 4. The same test's strict sets redo on the 4090
-alone: its first set, a grid's first and so gated, and in three runs of four
-its fourth, each redo growing nothing, so a round left incomplete by lost
-races; lavapipe redoes none. The senders count redos (`fused again`), and
-M6 counts them on room0's four-camera sets.
+count run over the grid's block slots. `recon_example_set_codec`'s warm
+coded sets have a front batch of 31 dispatches at two cameras, 41 at a
+rig's four, 45 and 55 with the free pass, and a back batch of 4; it pins
+every warm front below the Apple step near 80 at both counts. A set fused
+again costs 3 more submits (the blocking round and fuse, and the front half
+again), 2 when it is not coded.
+
+**What follows the front batch's first dispatch.** The R3 rule records
+small parameters ahead of a batch's first dispatch, since MoltenVK encodes
+an update as a blit. Each stage keeps it within itself, but a sender's
+front batch starts with the set's prep, so what the fuse and the encode
+write comes after dispatches. A probe that counted each batch's commands
+(RTX 4090 and lavapipe alike, two or four cameras) found, after the first
+dispatch of a warm coded set's front batch, 5 inline updates (the fusion's
+cameras and frustum planes), 7 fills and 2 copies -- 10 fills with the free
+pass -- or 6 compute-to-transfer switches (9). The quantization steps were
+a sixth update, which a warm encoder no longer records. Whether a fill is a
+blit on MoltenVK is V1's question, and what the switches cost on Apple is
+unmeasured: M5 and M6 run on the 4090.
+
+**Redos, Q1's input.** The test's strict sets redo on the 4090 -- its first
+set, a grid's first and so gated, and its fourth, whose new band loses
+races, at two cameras and at four -- each growing nothing; lavapipe redid
+the first in one run of two. At a rig's grid (four cameras of 640x576, 2 cm
+voxels, 16,384 buckets, Dynamic, 24 to 156 new blocks a set) a probe redid
+none after the first in 49 and 59 sets. The senders count redos
+(`fused again`); codec_replica sends one camera a set, so M6 cannot count
+four-camera redos, and the owner's rig run is what decides Q1.
 
 ## Measured lessons
 
