@@ -20,7 +20,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   home opens VideoToolbox's sessions for both decoders.
   `Options::configure_ffmpeg_logging` does nothing on Apple. Linux is
   unchanged. Tests: `recon_sensor_video_hevc` (libavcodec's MD5s for three
-  `testsrc2` clips, Main 10, a skipped access unit) and
+  `testsrc2` clips, parameter sets that change mid-stream, Main 10, a
+  skipped access unit) and
   `recon_sensor_video_hevc_syntax` (every leg);
   `recon_sensor_video_frame_color` reads H.273 codes, on every leg, and
   `recon_sensor_video_ffmpeg_error` is `recon_sensor_video_ffmpeg`, which

@@ -15069,7 +15069,9 @@ the slices:
   left/top-cropped clip decodes to other pixels than libavcodec's). It
   crops the right and the bottom itself. A format is made from the
   sequence's VPS, SPS and PPSs; a changed set makes a new one, on the same
-  session where `VTDecompressionSessionCanAcceptFormatDescription` allows.
+  session where `VTDecompressionSessionCanAcceptFormatDescription` allows
+  (an M4 allows none of the test clips' SPS changes, the range alone
+  included, so each takes a new session).
 - **Display order.** VideoToolbox hands pictures back in decode order. The
   decoder computes each picture's order count (8.3.1) and holds pictures
   as the output process does (C.5.2): shown once more wait than the SPS
@@ -15107,8 +15109,10 @@ without frame 1 fails frames 2 and 3 and decodes from 4).
 libavcodec's own decode, in display order: one with no colour description
 (video range), one full range, and the first cropped 8 at the right and the
 bottom. NVDEC takes nothing under 144x144, so they are Apple's. Main 10 and
-the left/top crop are refused; a skipped access unit is reported; the
-decoder, Orbbec and JPEG tests pass on the direct path.
+the left/top crop are refused; a skipped access unit is reported; one
+decoder sent the patch clip, its full-range copy and two `testsrc2` clips
+in turn hands out each sequence at its own size and range, the samples the
+stream's own; the decoder, Orbbec and JPEG tests pass on the direct path.
 `recon_sensor_video_hevc_syntax` reads every committed clip's syntax and
 refuses every truncated SPS, on every leg, the sanitizers' included. On
 Apple, a configure with `VR_WITH_FFMPEG` fails with the message
