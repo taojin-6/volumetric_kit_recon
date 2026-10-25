@@ -111,6 +111,7 @@ target_link_libraries(
           volumetric_kit::recon_tsdf volumetric_kit::recon_volume
           volumetric_kit::recon_core volumetric_kit::core_test_policy)
 vr_target_warnings(recon_tier_stage_metrics_test)
+target_link_libraries(recon_tier_stage_metrics_test PRIVATE ${CMAKE_DL_LIBS})
 add_test(NAME recon_tier_stage_metrics COMMAND recon_tier_stage_metrics_test)
 
 # volume coordinate math: pure host transforms (world <-> voxel <-> block,

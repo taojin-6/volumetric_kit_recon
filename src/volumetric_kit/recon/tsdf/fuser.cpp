@@ -137,12 +137,11 @@ core::Result<FuseReport> Fuser::fuse(volume::VoxelBlockGrid& grid,
   VKC_ASSIGN(const PendingFuse pending,
              record_fuse(batch, grid, frames, max_weight, mode, metrics));
   const core::Status ran = [&]() -> core::Status {
+    // Device work may run before submit returns. Its enclosing host row must
+    // include submission as well as the wait, even if the wait finds it done.
+    const core::StageScope fusing(metrics, "integrate");
     VKC_ASSIGN(core::PendingBatch done, batch.submit_async({}, {}));
-    {
-      // The set's wait is its fusion's.
-      const core::StageScope fusing(metrics, "integrate");
-      VKC_TRY(done.wait());
-    }
+    VKC_TRY(done.wait());
     if (metrics != nullptr) metrics->merge_device(done.device_rows());
     return {};
   }();

@@ -522,6 +522,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   have completed without settlement.
 - `tsdf`: recorded fusion rejects overflowing gate offsets and invalid borrowed
   storage-buffer metadata before recording commands or advancing the tick.
+- `tsdf`: blocking fusion's host timing includes queue submission, so work that
+  finishes during submission remains inside its reported host span.
 - `sensor`: frame preparation retains external device pictures when queue
   submission reports device loss, matching the core's pending-work lifetime.
 - `examples`: **the fusion grid starts within the device's
