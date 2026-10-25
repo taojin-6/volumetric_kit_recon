@@ -53,13 +53,13 @@ jobs:
       # (the SDK installed per job; see _build.yml), and leaves the others on
       # the default OFF, so both configurations build on every PR.
       #
-      # `ffmpeg` builds the video decoders, which hand out pictures on the
-      # device only (the 2026-10-06 device-only decoder decision): on 24.04
-      # with `cuda` (VR_WITH_CUDA=ON, the toolkit installed per job: NVDEC and
-      # nvJPEG; 24.04's FFmpeg 6.1 is the floor) and on the Mac
-      # (VideoToolbox). `hevc_backend` names the hardware each must decode
-      # on, so their tests fail rather than skip without it. The other Linux
-      # legs build without them.
+      # The video decoders hand out pictures on the device only (the
+      # 2026-10-06 device-only decoder decision). The Mac builds them always,
+      # on VideoToolbox with no FFmpeg; `ffmpeg` builds them on 24.04 with
+      # `cuda` (VR_WITH_CUDA=ON, the toolkit installed per job: NVDEC and
+      # nvJPEG; 24.04's FFmpeg 6.1 is the floor). `hevc_backend` names the
+      # hardware each must decode on, so their tests fail rather than skip
+      # without it. The other Linux legs build without them.
       # `assimp` builds the optional mesh loader on Linux and macOS; the other
       # legs build image / PLY IO without it.
       #
@@ -88,7 +88,6 @@ jobs:
             container: ''
             build_types: '["Debug","Release"]'
             orbbec_sdk: true
-            ffmpeg: true
             assimp: true
             hevc_backend: videotoolbox
     uses: ./.github/workflows/_build.yml

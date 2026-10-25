@@ -8,6 +8,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `sensor/video`: **`HevcDecoder` decodes through VideoToolbox directly on
+  Apple**, with no FFmpeg (the 2026-10-25 decision). It reads the parameter
+  sets and slice headers itself, hands VideoToolbox each picture's slices,
+  and puts the pictures in display order by their order count; hardware
+  decoding is required, with no software fallback. The pictures are written
+  at the range the stream declares (video range without a VUI), so the
+  samples are the stream's own. A picture predicted from a skipped access
+  unit is `IoError`. `recon_sensor_video`, like `recon_sensor_apple`, builds
+  on every Apple platform with no FFmpeg, and the Orbbec driver on macOS
+  without it; one internal home opens VideoToolbox's sessions for both
+  decoders.
+  `Options::configure_ffmpeg_logging` does nothing on Apple. Linux is
+  unchanged. Tests: `recon_sensor_video_hevc` (libavcodec's MD5s for three
+  `testsrc2` clips, parameter sets that change mid-stream, Main 10, a
+  skipped access unit) and
+  `recon_sensor_video_hevc_syntax` (every leg);
+  `recon_sensor_video_frame_color` reads H.273 codes, on every leg, and
+  `recon_sensor_video_ffmpeg_error` is `recon_sensor_video_ffmpeg`, which
+  also reads a frame's codes. CI's iOS check compiles and links
+  `recon_sensor_video` with the importer (`tools/ios_build_check.sh`).
 - CI: **the iOS compile check targets iOS 26.0**, the family's iOS floor:
   the macOS leg compiles `PixelBufferImporter` and its header for
   `arm64-apple-ios26.0`.
@@ -911,6 +931,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- build: **`VR_WITH_FFMPEG` on Apple** (BREAKING): the configure fails and
+  names the fix, since Apple's decoders use no FFmpeg; FFmpeg's VideoToolbox
+  path goes with it. Migrating: drop `-DVR_WITH_FFMPEG=ON` and the `ffmpeg`
+  formula from Apple builds, as CI's macOS legs do. Test:
+  `recon_subproject_apple_ffmpeg`.
 - build: **install rules and the package config** (BREAKING; the
   2026-10-22 decision). recon is consumed by commit: `VR_INSTALL`,
   `volumetric_kit_reconConfig.cmake` and `find_package(volumetric_kit_recon)`

@@ -30,14 +30,15 @@ on:
         description: >-
           Install the pinned Orbbec SDK and build with VR_WITH_ORBBEC=ON, so
           this leg compiles cmake/vr_orbbec.cmake and runs the SDK smoke test.
-          Needs ffmpeg.
+          Needs ffmpeg off macOS.
         required: false
         type: boolean
         default: false
       ffmpeg:
         description: >-
           Install FFmpeg and build with VR_WITH_FFMPEG=ON, so this leg builds
-          the video decoders and runs their tests. Needs cuda off macOS.
+          the video decoders and runs their tests. Linux only, with cuda:
+          macOS builds them always, with no FFmpeg.
         required: false
         type: boolean
         default: false
@@ -203,9 +204,8 @@ jobs:
       # supplies the GLM math headers recon_core's types alias; molten-vk is
       # the Vulkan driver; shaderc provides glslc for the compute shaders and
       # spirv-tools the spirv-val that checks them;
-      # vulkan-loader/-headers/-tools/-validationlayers complete the SDK;
-      # ffmpeg (with pkgconf to find it) for a VR_WITH_FFMPEG leg. A job on
-      # the self-hosted Mac installs nothing (DECISIONS.md, 2026-10-16): it
+      # vulkan-loader/-headers/-tools/-validationlayers complete the SDK. A job
+      # on the self-hosted Mac installs nothing (DECISIONS.md, 2026-10-16): it
       # fails, naming any formula missing. A hosted runner installs what its
       # image lacks.
       # TODO: take this check-or-install, and viewer.yml's check, from a core
@@ -221,9 +221,6 @@ jobs:
         run: |
           pkgs="cmake glm molten-vk vulkan-headers vulkan-loader vulkan-tools"
           pkgs="$pkgs vulkan-validationlayers shaderc spirv-tools"
-          if [ "${{ inputs.ffmpeg }}" = "true" ]; then
-            pkgs="$pkgs ffmpeg pkgconf"
-          fi
           if [ "${{ inputs.assimp }}" = "true" ]; then
             pkgs="$pkgs assimp"
           fi
@@ -374,7 +371,7 @@ jobs:
           fi
 
       # Default ("Unix Makefiles") generator + a parallel make build, per project
-      # preference — no Ninja.
+      # preference — no Ninja. The compile commands are the iOS check's flags.
       - name: Configure
         if: steps.detect.outputs.present == 'true'
         # Retry to ride out transient FetchContent git-clone DNS blips.
@@ -382,6 +379,7 @@ jobs:
           ok=0
           for attempt in 1 2 3; do
             if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+                -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
                 -DVR_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
                 -DVR_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
                 -DVR_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }} \
@@ -428,10 +426,9 @@ jobs:
       # and the Orbbec decode workers, which the sanitizer job, on
       # address and undefined only and with no Orbbec SDK, never runs. In a
       # tree of their own that reuses the sources FetchContent fetched for
-      # build/, as the Apple importer's step below does, built for those
-      # tests alone (recon_tsan_tests, tests/CMakeLists.txt), with the Orbbec
-      # SDK and FFmpeg as this leg has them. Debug only: the races do not
-      # depend on the build type.
+      # build/, built for those tests alone (recon_tsan_tests,
+      # tests/CMakeLists.txt), with the Orbbec SDK as this leg has it. Debug
+      # only: the races do not depend on the build type.
       - name: Threaded tests under ThreadSanitizer (macOS)
         if: >-
           steps.detect.outputs.present == 'true' && runner.os == 'macOS'
@@ -453,7 +450,6 @@ jobs:
           cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=Debug \
             -DVR_SANITIZE=thread -DVR_BUILD_EXAMPLES=OFF \
             -DVR_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
-            -DVR_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
             -DVR_WITH_ASSIMP=OFF "${flags[@]}"
           cmake --build build-tsan \
             --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
@@ -461,40 +457,16 @@ jobs:
           ctest --test-dir build-tsan --output-on-failure --no-tests=error \
             -R '^recon_(networking_|stream_container$|example_info_log$|sensor_orbbec_(decode_worker|jpeg|hevc|open_sensors)$)'
 
-      # recon_sensor_apple promises two builds the step above does not make
-      # (DECISIONS.md, 2026-10-08): with no FFmpeg, and for iOS. So build and
-      # run the importer's test again without FFmpeg, in a tree of its own
-      # that reuses the sources FetchContent fetched for build/ (as gfx's
-      # Xcode check does), then compile the importer, and its header as plain
-      # C++, for the iOS app's floor with that tree's include paths and
-      # definitions and ARC. Release only: neither promise
-      # depends on the build type.
-      - name: Apple importer with no FFmpeg, and for iOS (macOS)
+      # recon_sensor_apple and recon_sensor_video promise an iOS build
+      # (DECISIONS.md, 2026-10-08 and 2026-10-25), which the steps above do
+      # not make: compile them for the iOS floor with build/'s flags and link
+      # them against the iOS SDK (tools/ios_build_check.sh). Release only: the
+      # promise does not depend on the build type.
+      - name: iOS build check (macOS)
         if: >-
           steps.detect.outputs.present == 'true' && runner.os == 'macOS'
           && matrix.build_type == 'Release'
-        env:
-          VKC_REQUIRE_VULKAN_DEVICE: '1'
-          VKC_TEST_VALIDATION: '1'
-          VKC_TEST_SYNC_VALIDATION: ${{ inputs.sync_validation && '1' || '' }}
-          DYLD_LIBRARY_PATH: ${{ env.VR_LAYER_LIBRARY_PATH }}
         run: |
-          shopt -s nullglob
-          flags=()
-          for src in build/_deps/*-src; do
-            dep=$(basename "${src}" -src | tr '[:lower:]' '[:upper:]')
-            flags+=("-DFETCHCONTENT_SOURCE_DIR_${dep}=${PWD}/${src}")
-          done
-          rm -rf build-apple
-          cmake -S . -B build-apple -DCMAKE_BUILD_TYPE=Release \
-            -DVR_BUILD_EXAMPLES=OFF -DVR_WITH_ORBBEC=OFF -DVR_WITH_FFMPEG=OFF \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "${flags[@]}"
-          cmake --build build-apple \
-            --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
-            --target recon_sensor_apple_pixel_buffer_importer_test
-          ctest --test-dir build-apple --output-on-failure --no-tests=error \
-            -R '^recon_sensor_apple_pixel_buffer_importer$'
-
           # The iOS SDK ships with full Xcode only, and xcode-select may name
           # the command line tools where Xcode is installed: fall back to an
           # Xcode.app, through DEVELOPER_DIR, which is per process.
@@ -514,35 +486,5 @@ jobs:
             exit 1
           fi
           echo "iOS SDK: ${sdk}"
-
-          # The importer's include paths and definitions, from its compile
-          # command in build-apple.
-          importer=src/volumetric_kit/recon/sensor/apple/pixel_buffer_importer.mm
-          python3 -I -c '
-          import json, os, shlex, sys
-          db, want = sys.argv[1], os.path.realpath(sys.argv[2])
-          for entry in json.load(open(db)):
-              path = os.path.join(entry["directory"], entry["file"])
-              if os.path.realpath(path) != want:
-                  continue
-              args = iter(entry.get("arguments") or shlex.split(entry["command"]))
-              for arg in args:
-                  if arg in ("-I", "-isystem", "-D"):
-                      print(arg)
-                      print(next(args))
-                  elif arg.startswith(("-I", "-isystem", "-D")):
-                      print(arg)
-              sys.exit(0)
-          sys.exit("no compile command for " + want)
-          ' build-apple/compile_commands.json "${importer}" \
-            > build-apple/importer_flags.txt
-          args=()
-          while IFS= read -r arg; do
-            args+=("${arg}")
-          done < build-apple/importer_flags.txt
-          ios=(xcrun --sdk iphoneos clang++ -target arm64-apple-ios26.0
-               -std=c++17 -Wall -Wextra -Wpedantic -Werror
-               -fsyntax-only "${args[@]}")
-          "${ios[@]}" -x objective-c++ -fobjc-arc "${importer}"
-          echo '#include "volumetric_kit/recon/sensor/apple/pixel_buffer_importer.hpp"' \
-            | "${ios[@]}" -x c++ -
+          rm -rf build-ios-check
+          tools/ios_build_check.sh build/compile_commands.json build-ios-check
