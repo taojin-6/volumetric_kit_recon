@@ -1331,11 +1331,18 @@ drains every sensor each `poll_set`, groups the frames into a `FrameSet` by
 its internal `TriggerGrouper`, around the primary's frames on the host
 clock within `tolerance_us` (by default 0.4 of the fastest member's frame
 period, 13.3 ms at 30 fps), and stamps each frame with its sensor's pose
-from the `ArrayCalibration`, which must pose every sensor. Opened with a
-device, its
-`process(set)` prepares a set through `GpuFramePrep::prepare_batch`: every
-frame checked, then every pass's uploads and every pass's kernels recorded
-into one `CommandBatch`, one submit and one wait. A `FrameSet`'s
+from the `ArrayCalibration`, which must pose every sensor. `wait_set`
+blocks for a set on one condition variable that every sensor's
+notification wakes (`IRgbdSensor::set_frame_notify`, which `open` asks of
+each; the Orbbec driver notifies from its mailbox as a pair lands, the camera
+goes or the decoder fails), and on the grouping's next deadline, when a
+trigger stops waiting for a late sensor; it never sleeps a fixed time. A
+set's `arrival_ns` is its latest frame's (`RgbdFrame::arrival_ns`, the
+system clock at the driver's frame callback). Opened with a
+device, its `record_process(batch, set)` records a set's preparation into a
+caller's batch through `GpuFramePrep::record_set`: every frame checked, then
+every pass's copies and every pass's kernels; `process(set)` is that, one
+submit and its wait. A `FrameSet`'s
 `skew_ns(i)` is sensor i's frame's time less the trigger's, signed, and its
 `spread_ns()` the latest of its frames' times less the earliest.
 **`sensor/utils`'s `GpuFramePrep`** undistorts an `RgbdFrame`
@@ -1368,17 +1375,21 @@ hands its colour over as packed R'G'B' words instead
 2026-10-07 packed-colour decision), copied into the pass's input like the
 images; the colour pass samples R, G and B as byte planes four bytes apart,
 through the same bilinear sampler and coverage test. The depth, and any
-packed colour after it, goes up through one batch into device-local inputs,
-by a staging buffer the pass keeps, and both passes run in the same submit,
-the copies timed with them. The staging is
-kept because several passes allocating a 4K frame's at once made VMA
-allocate a block for every set (46 ms a rig set on an RTX 5090, 4.8 ms
-kept). The frame *holds* its device-local
-buffers, and `prepare` reuses one only once no frame does, so a frame kept
-past the next is still itself; the whole frame is checked before anything
-is uploaded or timed, a depth range from 0 included, and `prepare` is
-`prepare_batch` over a set of one. Both return `OutOfMemory` for a host
-allocation failure while staging, preserving previously returned frames.
+packed colour after it at the binding alignment, is copied into the pass's
+one persistent slot (`core::HostRing`), which the batch binds in place where
+mapped device memory is cached and copies once into its device-only mirror
+elsewhere; nothing is allocated per frame (a batch staging per call made VMA
+allocate a block for every set: 46 ms a rig set on an RTX 5090, 4.8 ms
+kept). `record(batch, frame)` records the copy and both passes into a
+caller's batch, and `prepare` is that, one submit and its wait; a record
+before the pass's last batch resolves is refused, as it binds the slot. The
+frame *holds* its device-local
+buffers through a lease, and the pass reuses one only once no frame holds
+it, so a frame kept past the next is still itself; the whole frame is
+checked before anything is recorded or timed, a depth range from 0 and a
+plane's queue family included, and `prepare` is `prepare_batch` over a set
+of one. Both return `OutOfMemory` for a host allocation failure,
+preserving previously returned frames.
 `depth_within_color` (off by
 default; `rig_viewer` turns it on) zeroes depth outside the colour camera's
 view, by the colour pass's own coverage test, so nothing is fused that no

@@ -15063,6 +15063,37 @@ row. The map takes a row's name from its caller since the extract's
 device time too, where they held host time alone, so the sort's cost shows
 in `"  ..forward"`.
 
+**A sensor may notify, and the array waits on it (amends the 2026-10-06
+`IRgbdSensor` and 2026-10-07 rig entries).** fuse_orbbec slept 1 ms between
+empty polls. `IRgbdSensor::set_frame_notify` lets a sensor call a consumer as
+each frame is held, or as it fails; the default refuses
+(`Status::Code::Unsupported`), so a sensor that does not notify is polled as
+before. `SensorArray::open` asks each sensor, and `wait_set` blocks on one
+condition variable until a notification or the grouping's next deadline,
+when a trigger stops waiting for a late sensor. The notification owns its
+wake state through a `shared_ptr`, so a call in flight as the array goes
+touches nothing freed. The Orbbec driver notifies from its mailbox after a
+pair lands (no lock held across the two), on a disconnect and when the
+colour decoder fails, so a fault surfaces at once rather than at the 10 s
+silence limit. Each frame's `arrival_ns` is the system clock at the SDK's
+frame callback, written into the depth frame's system timestamp, which both
+colour decoders pass on unchanged (`rebuilt_pair`), so nothing new is
+plumbed; a set's is its latest frame's.
+
+**The prep records into the caller's batch (amends the 2026-09-28 residency
+entry's kept staging).** `GpuFramePrep::record` and `record_set` record a
+frame's copy and both passes into a caller's batch, and `SensorArray::
+record_process` a set's. The depth, and packed colour at the binding
+alignment after it, goes into the pass's one `core::HostRing` slot: in place
+where mapped device memory is cached, one copy elsewhere. One slot suffices:
+the frame is copied in at record, when the pass's last batch, which binds the
+slot and the kernels' sets, must have resolved. `prepare` and
+`prepare_batch` are the record, one submit and its wait, and abandon the
+device planes only while `PendingBatch::in_flight` says the device may still
+read them. The outputs are leased (a held flag the frame's deleter clears
+with release order), as the core's ring slots are, where `use_count() == 1`
+and an acquire fence raced under TSan with libc++.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

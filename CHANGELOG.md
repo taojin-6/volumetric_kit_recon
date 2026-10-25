@@ -6,6 +6,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `sensor`: **a set's prep records into a caller's batch, and the array
+  waits on its sensors' notifications** (the 2026-10-25 decision):
+  `GpuFramePrep::record` and `record_set`, `SensorArray::record_process`
+  and `wait_set`, `IRgbdSensor::set_frame_notify` (the default refuses with
+  `Unsupported`; `OrbbecSensor` notifies), `RgbdFrame::arrival_ns` and
+  `FrameSet::arrival_ns`. A pass's depth and packed colour go through its
+  persistent `core::HostRing` slot, its staging buffer gone, and its outputs
+  are leased. Migration: a record before the pass's last batch resolves is
+  refused; a plane's unknown queue family is refused with the frame's checks,
+  timing no row. Tests: `recon_sensor_gpu_frame_prep`,
+  `recon_sensor_gpu_frame_prep_oom`, `recon_sensor_array`,
+  `recon_sensor_array_process`, `recon_sensor_trigger_grouper`,
+  `recon_sensor_rgbd_sensor`, `recon_example_fuse_orbbec_sets`.
+
 ### Changed
 
 - examples: **fuse_orbbec and codec_replica print a table per set**

@@ -18,7 +18,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -261,32 +260,24 @@ class RigSets {
   /// @brief Wait for the next set and cut it to the frames the run still
   ///        takes (@ref cut_set).
   ///
-  /// The host time of the poll that hands the set out is @p stages' `"poll"`
-  /// row; an empty poll is the loop waiting, not the driver working. Each
-  /// secondary's skew to the primary is kept for @ref print_stats, and a
-  /// single camera's first set prints its age against the host's clock.
+  /// Blocked on the cameras' notifications (`SensorArray::wait_set`): the
+  /// time blocked is @p stages' `"wait: cameras"` row, the polls' host time
+  /// its `"poll"`. Each secondary's skew to the primary is kept for
+  /// @ref print_stats, and a single camera's first set prints its age against
+  /// the host's clock.
   /// @param stages  Optional stage rows; null measures nothing.
   /// @return The set; `Status::Code::IoError` after @ref kSilenceLimit with
   ///         none, naming a sync secondary's cause; or the array's error.
   vkc::Result<vr::sensor::FrameSet> next(vkc::StageMetrics* stages) {
-    for (;;) {
-      const auto t_poll = std::chrono::steady_clock::now();
-      VKC_ASSIGN(std::optional<vr::sensor::FrameSet> set, array_.poll_set());
-      const auto now = std::chrono::steady_clock::now();
-      if (set) {
-        if (stages != nullptr) {
-          stages->add_cpu(
-              "poll",
-              std::chrono::duration<double, std::milli>(now - t_poll).count());
-        }
-        last_set_ = now;
-        keep(*set);
-        return std::move(*set);
-      }
-      if (now - last_set_ > kSilenceLimit) return silence();
-      // Polled faster than the cameras run.
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+        kSilenceLimit - (std::chrono::steady_clock::now() - last_set_));
+    VKC_ASSIGN(
+        std::optional<vr::sensor::FrameSet> set,
+        array_.wait_set(std::max(left, std::chrono::milliseconds(0)), stages));
+    if (!set) return silence();
+    last_set_ = std::chrono::steady_clock::now();
+    keep(*set);
+    return std::move(*set);
   }
 
   /// @brief Print the array's sets, each camera's counters, `lost`

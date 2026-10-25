@@ -4,8 +4,9 @@
 // fuse_orbbec's sets (examples/common/fuse_orbbec_sets.hpp). The cut: a run
 // of N frames keeps a set's first frames in the array's order, past its
 // missing ones, and lets the rest go, their pictures with them. The run over
-// an array of pushed fake cameras: each set waited for, counted and cut, the
-// run done at exactly N frames, a set missing a secondary counted as it came,
+// an array of pushed fake cameras: each set waited for on their
+// notifications, counted and cut, the run done at exactly N frames, a set
+// missing a secondary counted as it came,
 // and each secondary's skew to the primary over every frame it sent, the
 // primary's none. The single camera a calibration file names: the one asked
 // for if posed, or the file's only posed one, past a camera listed for its
@@ -15,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -97,6 +99,7 @@ class Pushed final : public sensor::IRgbdSensor {
     frame.timestamp_ns = timestamp_ns;
     frame.sequence = timestamp_ns;
     frames_.push_back(std::move(frame));
+    if (notify_) notify_();
   }
 
   const sensor::SensorInfo& info() const noexcept override { return info_; }
@@ -115,10 +118,15 @@ class Pushed final : public sensor::IRgbdSensor {
     return {};
   }
   sensor::SensorStats stats() const noexcept override { return {}; }
+  vkc::Status set_frame_notify(std::function<void()> notify) override {
+    notify_ = std::move(notify);
+    return {};
+  }
 
  private:
   sensor::SensorInfo info_;
   std::vector<sensor::RgbdFrame> frames_;
+  std::function<void()> notify_;
 };
 
 // A run of 4 frames from a primary "P" and its secondary "S", in that order:
@@ -178,9 +186,12 @@ int run() {
   CHECK(std::fabs(lag.worst_ms - 0.12) < 1e-9);
   CHECK(sets.skew(0).frames == 0 && sets.skew(0).sum_ms == 0.0);
 
-  // The poll that hands a set out is its one row.
-  CHECK(stages.rows().size() == 1);
+  // The polls, and the wait for the silent secondary, blocked on the
+  // cameras' notifications until the array stopped waiting for it.
+  CHECK(stages.rows().size() == 2);
   CHECK(std::string(stages.rows()[0].name) == "poll");
+  CHECK(std::string(stages.rows()[1].name) == "wait: cameras");
+  CHECK(stages.rows()[1].wait_ms > 0.0);
   return 0;
 }
 

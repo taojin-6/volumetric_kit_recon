@@ -134,7 +134,7 @@ kernels.
 | P3 | Deduplicate depth allocation before dilating | measured −50% a set on the M5 Max, −62% on the RTX 5090 (over P1) | M | — | landed (#128) |
 | P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | landed (#129); a fuse's list is no longer reused (2026-10-06) |
 | P4 | Bind texture views in place, with no per-remesh copies | measured 0.26–0.51 ms GPU per remesh at 4K, 0.04–0.12 at 720p | M | P1's descriptor-array decision | deferred |
-| P2 | Record a set's frame prep in one batch | measured parity once host colour stages on threads; the pipeline's unit of work | S | — | landed (`SensorArray::process`) |
+| P2 | Record a set's frame prep in one batch | measured parity once host colour stages on threads; the pipeline's unit of work | S | — | landed (`SensorArray::process`); recorded into the sender's batch (`record_process`, 2026-10-25) |
 | P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | step 1 landed (#268); set time unmeasured |
 | P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | landed (#132); device-list follow-up landed (#146) |
 | P9 | Allocate only the band blocks a sample can weight | ~60% of a static room's active set holds no weight; compaction, integrate and meshing scale with it | M | — | open, measure first |
@@ -315,6 +315,13 @@ is measured.
 
 ### P2 — Record a set's frame prep in one batch
 
+> **Recorded into the sender's batch (2026-10-25):** `GpuFramePrep::record`
+> and `record_set`, behind `SensorArray::record_process`, put a set's prep in
+> the batch that fuses and codes it, and each pass's depth goes through its
+> persistent `core::HostRing` slot, in place on Apple and lavapipe and one
+> copy on a discrete GPU, where the kept staging was a memcpy and a copy on
+> every device. `prepare_batch` is the record, one submit and its wait.
+>
 > **Landed (2026-10-06) as `GpuFramePrep::prepare_batch`, behind
 > `SensorArray::process`, for the pipeline rather than for speed:** one batch
 > a set is what the pipelined stages will submit behind the previous stage
