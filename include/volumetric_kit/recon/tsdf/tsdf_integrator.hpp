@@ -336,8 +336,9 @@ class VR_TSDF_API TsdfIntegrator {
   // outlive them) by KernelSetBuilder at create().
   core::ComputeKernel kernel_;
   core::ComputeKernel clear_kernel_;
-  // Sizes their dispatches from the compaction's device count into args_,
-  // a VkDispatchIndirectCommand a dispatch, grown to the most a call has had.
+  // recon's count-to-slices kernel, sizing their dispatches from the
+  // compaction's device count into args_, a VkDispatchIndirectCommand a
+  // dispatch, grown to the most a call has had.
   core::ComputeKernel args_kernel_;
   core::Buffer args_;
   core::DescriptorPool pool_;

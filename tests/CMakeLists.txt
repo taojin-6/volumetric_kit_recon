@@ -546,6 +546,22 @@ target_link_libraries(
 vr_target_warnings(recon_volume_delete_test)
 add_test(NAME recon_volume_delete COMMAND recon_volume_delete_test)
 
+# volume recorded rounds: record_allocate, record_remove and settle in a
+# caller's batch against the blocking calls, the device count and gate, the
+# rounds' bound under planted contention, one batch holding both kinds with the
+# grid's zeroing first, the split dispatch (core/dispatch.hpp's test seam, by
+# src/), staleness, the steady-state counters and the result slots. Skips with
+# no device.
+add_executable(recon_volume_recorded_test volume_recorded_test.cpp)
+target_link_libraries(
+  recon_volume_recorded_test
+  PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+target_include_directories(recon_volume_recorded_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
+vr_target_warnings(recon_volume_recorded_test)
+add_test(NAME recon_volume_recorded COMMAND recon_volume_recorded_test)
+
 # volume resize: allocate, grow the table to more buckets, and verify the active
 # set survives + further allocation past the old capacity works. Skips with no
 # device.
@@ -631,6 +647,20 @@ target_include_directories(recon_mesh_marching_cubes_sparse_test
 vr_target_warnings(recon_mesh_marching_cubes_sparse_test)
 add_test(NAME recon_mesh_marching_cubes_sparse
          COMMAND recon_mesh_marching_cubes_sparse_test)
+
+# mesh recorded extract: record_extract, finish and abandon against
+# extract_device, sharing on and off; the refit and its later ready value, the
+# closed gate, the empty set, abandoned and dropped tokens, the skipped signal,
+# the superseded pending, ready across a move, the steady-state counters and the
+# sharing refusal. Skips with no device.
+add_executable(recon_mesh_recorded_extract_test mesh_recorded_extract_test.cpp)
+target_link_libraries(
+  recon_mesh_recorded_extract_test
+  PRIVATE volumetric_kit::recon_mesh Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_mesh_recorded_extract_test)
+add_test(NAME recon_mesh_recorded_extract
+         COMMAND recon_mesh_recorded_extract_test)
 
 # mesh MarchingCubesConfig: prove a consumer's extra buffer usage reaches the
 # vertex arena and index run -- on the first allocation AND across a grow -- and
@@ -962,6 +992,21 @@ target_include_directories(
 vr_target_warnings(recon_codec_decode_grid_test)
 add_test(NAME recon_codec_decode_grid COMMAND recon_codec_decode_grid_test)
 
+# codec tier, a frame decoded and meshed in the caller's batch: the recorded
+# decode against decode(), deblock on and off; the host refusals, which record
+# nothing; a device refusal gating the extract after it; superseded and
+# abandoned tokens and the input slots; the rows; the steady-state counters; the
+# pinned dispatches and barriers of a rafa2-like P-frame's batch; and
+# record_growing and finish_growing. Links recon_mesh, which the codec tier
+# itself may not. Skips with no device.
+add_executable(recon_codec_recorded_test codec_recorded_test.cpp)
+target_link_libraries(
+  recon_codec_recorded_test
+  PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_mesh Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_codec_recorded_test)
+add_test(NAME recon_codec_recorded COMMAND recon_codec_recorded_test)
+
 # Allocation injection stays in its own executable: factory diagnostics and a
 # metrics merge after a committed P-frame, followed by the next P-frame.
 add_executable(recon_codec_decode_grid_oom_test codec_decode_grid_oom_test.cpp
@@ -973,6 +1018,17 @@ target_link_libraries(
 vr_target_warnings(recon_codec_decode_grid_oom_test)
 add_test(NAME recon_codec_decode_grid_oom
          COMMAND recon_codec_decode_grid_oom_test)
+
+# A pending-frame allocation failure stays inside record and both blocking
+# decode APIs, preserves the grid/reference, and permits the same P-frame retry.
+add_executable(recon_codec_decoder_oom_test codec_decoder_oom_test.cpp
+                                            test_allocation_failure.cpp)
+target_link_libraries(
+  recon_codec_decoder_oom_test
+  PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_codec_decoder_oom_test)
+add_test(NAME recon_codec_decoder_oom COMMAND recon_codec_decoder_oom_test)
 
 # Apple's pixel buffers imported as images (recon_sensor_apple, any Apple build,
 # with or without FFmpeg): buffers made here, read back in place, prepared as a

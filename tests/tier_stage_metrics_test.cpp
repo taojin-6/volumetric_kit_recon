@@ -339,8 +339,10 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(first.total_gpu_ms() == whole->gpu_ms);
     CHECK(first.total_cpu_ms() == whole->cpu_ms);
 
-    // Nothing changed since, so the map's list holds and nothing compacts; a
-    // steady extract is its one dispatch's submit, which is the stage's tile.
+    // A list the map compacted itself, as the encoder does, holds, so the
+    // extract binds it and records no compaction; a steady extract is then
+    // its one dispatch's submit, which is the stage's tile.
+    CHECK(grid.value().map().compact_active_blocks_on_device());
     vkc::StageMetrics again;
     vr::mesh::ExtractTimings timings;
     CHECK(mc.value().extract_device(grid.value(), 0.0f, &timings, &again));

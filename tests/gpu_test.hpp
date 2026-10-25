@@ -8,7 +8,9 @@
 // VKC_TEST_VALIDATION and VKC_TEST_SYNC_VALIDATION mean here what they mean in
 // the core's tests, every error the validation layer reports fails the test,
 // and a test skips by returning the core's test::kSkipExitCode, every test's
-// SKIP_RETURN_CODE (tests/CMakeLists.txt).
+// SKIP_RETURN_CODE (tests/CMakeLists.txt). As in the core's tests, the
+// policy's RingOutputPoison poisons every ring output before its batch runs,
+// so a result word a kernel skips shows (`CommandBatch::output`).
 //
 //   int gpu_main(vr_test::GpuContext& gpu) {
 //     ... // make, test and destroy everything on gpu.device
@@ -108,6 +110,7 @@ int run_on_gpu(Test& test, const vkc::test::LogCapture& log) {
 template <typename Test>
 int run_on_gpu(Test&& test, vkc::test::LogCapture::ErrorHandler on_error = {}) {
   const vkc::test::ValidationSession validation;
+  const vkc::test::RingOutputPoison poison;
   const vkc::test::LogCapture log(std::move(on_error));
   return log.exit_code(detail::run_on_gpu(test, log));
 }

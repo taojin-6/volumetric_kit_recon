@@ -8,6 +8,57 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`, `mesh`, `volume`: **a frame decodes and meshes in the caller's
+  batch** (the 2026-10-24 decision), every count on the device and the
+  results read once the batch has run:
+  `VoxelHashMap::record_allocate`, `record_remove` and `settle`
+  (`DeviceCount`, `RecordedRounds`, `kRecordedRounds` 3, `kResultSlots` 4)
+  and `VoxelBlockGrid::record_remove`; `MarchingCubes::record_extract`,
+  `finish` and `abandon` (`PendingExtract`) and `DeviceMesh::ready`;
+  `Decoder::claim_input`, `record`, `finish`, `abandon`, `last_rounds` and
+  `decode` of a claimed slot (`PendingDecode`); `record_growing` and
+  `finish_growing` (`Finished`); `VoxelHashMap::held_device_list`. A
+  rafa2-like P-frame decoded and meshed this way is one submit; the decision
+  has its counts before and after. Tests: `recon_volume_recorded`,
+  `recon_mesh_recorded_extract`, `recon_codec_recorded`.
+- `stream`, `networking`: **reads into caller memory**:
+  `StreamReader::read`, `ChunkParser::read` and `StreamClient::read` take
+  `(record, dst, capacity)` and allocate nothing, and a `next` with no
+  payload holds the record for them, so a live record lands in a decoder's
+  input slot with no host vector. Tests: `recon_stream_container`,
+  `recon_stream_chunks`, `recon_stream_oom`, `recon_networking_client`.
+- `codec`, `mesh`, `volume`: **the blocking calls are record, one submit
+  and finish**, and the per-step submits and readbacks are gone.
+  `allocate` and `remove` submit once for every K rounds, up to the same 10;
+  `extract_device` once, its compaction in that submit when the map's last
+  list no longer holds; `decode` once (it was 4); `rebuild` once. The
+  decoder judges rows 11 to 13 on the device and reads its payload in place.
+  Migration:
+  - Every decode moves the map's `topology_epoch`, a frame that removes no
+    block included, and a frame the decoder refuses on the device moves
+    `tick` too, though the grid is untouched: a cache keyed on them sees a
+    change every frame.
+  - The encoder after an `extract_device` compacts its own list; an extract
+    after the encoder still reuses the encoder's.
+  - A producer that records its next extract before the consumer takes the
+    last mesh sizes `MarchingCubesConfig::slot_count` to the consumer's
+    frames in flight plus two.
+  - `ExtractTimings::compact_ms` is the compaction's recording, and
+    `dispatch_ms` the recording, the one submit and its wait, refit
+    included; `readback_ms` reads near zero for `extract_device`.
+  - `decode_growing`'s metrics hold its first decode's rows and a recovery,
+    its decode again included, as one `"  ..grow"` or `"  ..retry"` row
+    inside `"codec decode"`, as `finish_growing`'s do;
+    `MarchingCubes::finish` adds its host time to `"marching cubes"`, over a
+    refit's `"  ..refit"`.
+  - A recorded call's rows carry their host halves at recording; merge
+    their device halves from `PendingBatch::device_rows`.
+  - recon needs core 0.21.0 (`HostRing`, `DeviceCounters::dispatches` and
+    `barriers`), pinned at core #52's merge (4e16bbc).
+  Tests: the suites above, `recon_codec_decoder`, `recon_codec_inter`,
+  `recon_codec_device_frame` (the payload at every offset mod 4 and past
+  the binding alignment), `recon_codec_decode_grid`.
+
 - `codec`: **the deblock falls back to the exact decode block by block and
   skips no frame** (the 2026-10-21 deblock decision's 2026-10-23
   amendment), where it skipped a frame with an unobserved voxel. A block
@@ -351,6 +402,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `mesh`: empty device subsets produce an empty mesh without dereferencing a
+  null list buffer, including when reusing a populated draw slot.
+- `stream`: `ChunkParser::read` rejects records whose size or metadata differs
+  from the held header, leaving the payload available for a valid retry.
+- `codec`: `Decoder::record` and both blocking `decode` overloads return
+  `OutOfMemory` when pending-frame allocation fails, preserving retry state.
+- `volume`, `mesh`: device count and gate words require valid storage-buffer
+  metadata and a complete aligned four-byte range before recording commands.
 - `examples`: **`codec_mesh`'s mesh conversion table has its `allocate`
   row**, where `convert_frame` passed the conversion's metrics to the
   integrator alone. Regression: `recon_example_mesh_sequence`.

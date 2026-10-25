@@ -279,8 +279,8 @@ The mesh/atlas are ring-buffered, and slots are recycled by the host's report
 as gfx frames retire. A cross-library GPU wait can deadlock against a swapchain
 rebuild, so the release contract is host-side (the 2026-08-03 decision).
 Marching cubes writes a `VkDrawIndexedIndirectCommand` for variable topology;
-the extractor reads back the small control result, while gfx draws the
-geometry buffers directly.
+the extractor reads its few result words from a ring slot, while gfx draws
+the geometry buffers directly.
 
 ## Key gotchas (verified)
 
@@ -859,11 +859,16 @@ needs. Every buffer of both is device-local, reached through a
 `CommandBatch`: `create`, `clear` and `remove` zero on the device (`clear`
 and `remove` before any index is freed, `remove` by a kernel that finds
 each coord's block itself, so its cost is the count's, not the grid's),
-`resize` copies there, a call's
-inputs are uploaded in its first round, and a round reads back its counts.
+`resize` copies there, and a call's inputs are uploaded in its batch.
 `VoxelHashMap::allocate` and `remove`, and `VoxelBlockGrid::remove`, take
 a device buffer of `BlockIndex`, bound where its producer wrote it; a test
-uploads its own coordinates first (`tests/device_blocks.hpp`). Each also takes
+uploads its own coordinates first (`tests/device_blocks.hpp`). Their work
+is recorded into a caller's batch by `record_allocate` and `record_remove`
+(the 2026-10-24 one-batch entry): K = 3 rounds, each sized on the device
+from the last one's tally, the count a `DeviceCount` a kernel wrote and an
+optional gate word, the outcome gathered into a result slot that `settle`
+reads once the batch has run. The blocking calls are record, one submit and
+settle, repeated while lost races alone remain, 10 rounds at most. Each also takes
 a caller's `GpuStageScope`, whose tile every round counts to, as the
 decoder's `"  ..apply"` does. A grid's `create` builds the kernels its removal
 and block pass run, so the first remove compiles nothing. The grid's
@@ -879,8 +884,9 @@ decision), except `compact_active_blocks_on_device`'s: its
 compaction serial and the heap's free count, and `check_device_block_list`
 refuses one that a full compaction, allocation, resize, remove, clear or
 move has made stale. While the last one still holds, the call returns it
-again, dispatching and reporting nothing, so the encoder after an extract
-reuses the extract's compaction (2026-09-30). A fuse culls instead and leaves
+again, dispatching and reporting nothing, so an extract after the encoder
+reuses the encoder's compaction (2026-09-30); an extract records its own
+into its batch when none holds (2026-10-24). A fuse culls instead and leaves
 none: `record_compaction` records its compaction into the fuse's own batch,
 the list and its count left on the device for the dispatches after it.
 `topology_epoch()` lives on the *map* — the object that frees a block
@@ -889,7 +895,8 @@ index — and is a globally unique token re-drawn at `create`, at every
 `DeviceBlockList` anchors on it, so no path may free an index without
 moving it and no two grids may ever share a value. `load_factor()` is the
 occupancy read a per-frame caller can afford (a host copy of the heap
-counter, read back by every round that moves it), and `kGrowThreshold` is
+counter, which every call that moves it refreshes, `settle` for a recorded
+one), and `kGrowThreshold` is
 the occupancy it says to grow at — named here so a UI or an embedder cannot
 draw a ceiling that disagrees with it. No host call reads the table back;
 a kernel binds `entries_buffer()` and reads it through `hash_common.glsl`
@@ -1063,11 +1070,18 @@ consumer releases by generation; the kernel writes a real
 `VkDrawIndexedIndirectCommand`. `extract_device` returns a borrowed
 `DeviceMesh` (valid until the next extract, enforced by a generation stamp),
 `download` takes the single host copy and bridges the two workflows. The
-arena, index run and draw command are device-only, and each extract attempt
-is one batch that reads back the 28-byte command. Given `StageMetrics`,
-`extract_device` reports a `"marching cubes"` row over the compaction's
-`"  ..compact"` and the attempts' `"  ..dispatch"`, tiled inside those
-submits; its timer is made by the first such call. A whole-map extract never
+arena, index run and draw command are device-only. An extract is recorded
+into a caller's batch (`record_extract`, the 2026-10-24 one-batch entry): a
+one-thread kernel sizes the marching cubes from the compaction's count,
+gated, and a finalize gathers the results into a result slot that `finish`
+reads, refitting in a blocking batch of its own when the surface outgrew
+the slot; `DeviceMesh::ready` names the timeline value the batch set.
+`extract_device` records the same over the map's device list (its last
+compaction while that holds) and submits it once. Given `StageMetrics`, it
+reports a
+`"marching cubes"` row over the compaction's `"  ..compact"`, the submit's
+`"  ..dispatch"` and a refit's `"  ..refit"`; its timer is made by the
+first such call. A whole-map extract never
 brings the active list to the host: it compacts onto the device, or takes
 the map's last list back from it, and binds it in place (2026-09-30). An
 `extract_device` overload meshes a `volume::DeviceBlockList` the caller
@@ -1409,7 +1423,8 @@ decoding.
 The codec is implemented, intra frames and P-frames (frame type 1), and it
 codes and decodes on the device alone (2026-10-13): the host does the I/O
 around it (a frame's bytes, and their hash) and the control (a frame's
-header, sections and tables, and small counts and status words read back).
+header, sections and tables, and small counts and status words read back,
+a decode's once its batch has run).
 The CPU rANS coder is the tests' oracle, under `tests/`
 (`codec_oracle*.hpp`), which pins the format's bytes.
 Quantization is one scalar quantizer with a step per DCT basis (2026-10-02):
@@ -1503,16 +1518,24 @@ decodes on the device. A frame past `maxStorageBufferRange` or free memory
 is refused with its code (`InvalidArgument` or `OutOfMemory`); nothing
 decodes on the host.
 `Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
-frame. In the decode's own submit, `detail::BlockLists` merges a P-frame's
-surviving reference blocks with its new ones into the frame's list and each
-block's sources, finds row 13, a new block on a reference block, and diffs
-the hash table against the frame's list into the blocks the grid lacks
-(missing) and those the frame lacks (gone), by count and binary search (the
-header has the mechanism). Nothing sorts, and 24 bytes come back. The
-grid removes the gone blocks and allocates the missing ones from those
-device lists (`VoxelBlockGrid::remove`, `VoxelHashMap::allocate`), keeps
-shared blocks in their slots, then rewrites every voxel's `tsdf` and
-`weight`, and stamps `changed` only on a block it leaves different. Attributes, geometry (exact
+frame. It is `Decoder::record` into a batch, one submit and `finish` (the
+2026-10-24 one-batch entry): the record is parsed in place in an input
+slot, whose payload the reader binds at its byte offset, and the whole
+decode is recorded with every count on the device. `detail::BlockLists`
+merges a P-frame's surviving reference blocks with its new ones into the
+frame's list and each block's sources, finds row 13, a new block on a
+reference block, and diffs the hash table against the frame's list into the
+blocks the grid lacks (missing) and those the frame lacks (gone), by count
+and binary search (the header has the mechanism). Nothing sorts. A gate
+kernel (`detail::FrameGate`) judges rows 11 to 13 and opens the grid's
+removal of the gone blocks and allocation of the missing ones from those
+device lists (`VoxelBlockGrid::record_remove`,
+`VoxelHashMap::record_allocate`), whose rounds close it on failure; behind
+it, sized by N on the device, the frame keeps shared blocks in their slots,
+rewrites every voxel's `tsdf` and `weight`, and stamps `changed` only on a
+block it leaves different. A frame the gate refuses moves the map's epoch
+and tick and leaves the grid untouched. The counts are gathered into a
+results slot, which `finish` reads. Attributes, geometry (exact
 `voxel_size` / `trunc_dist`, off the header), parsing and the heap are all
 checked before the grid is touched. The attributes must be `tsdf` and `weight` and
 nothing else (`VoxelBlockGrid::attribute_count`), since a kept block would
@@ -1523,7 +1546,9 @@ decoder never grows one. Beside it, as `tsdf::Fuser` grows for fusion,
 `decode_grid.hpp` holds a player's growth: `make_decode_grid` builds a
 grid from a frame's header, its heap twice the frame's blocks, and
 `decode_growing` decodes into it, growing it once on `OutOfMemory` and
-decoding again twice at most on `IoError`. Both take the caller's ceiling,
+decoding again twice at most on `IoError`; `record_growing` grows a heap
+the frame outgrows before it records, and `finish_growing` decodes a frame
+the device refused again from its own input slot. Both take the caller's ceiling,
 `max_blocks`: a frame past it is refused before it is decoded, and a grow
 past `make_decode_grid`'s grid for it before it is made, each as
 `InvalidArgument`; the factory checks the header's block count against the
@@ -1533,7 +1558,7 @@ failures from header parsing through grid creation. The growing decode merges
 only its successful attempt's metrics; if that merge runs out of host memory,
 the caller's prior metrics stay unchanged and the decode still succeeds, since
 its reference has committed. Lock contention that
-outlasts four rounds is `IoError`, never `OutOfMemory`, and a free heap
+outlasts the device rounds is `IoError`, never `OutOfMemory`, and a free heap
 that refuses a removed block is `InvalidArgument`. A failure after the
 grid has changed leaves it holding neither frame until a decode
 succeeds. A P-frame decodes against the frame the `Decoder` decoded last,
@@ -1543,12 +1568,11 @@ masks and block list on the device, in the inverse's layout, and its
 each frame block's sources (the 2026-10-12 entry) into the store's spare,
 `inter_apply.comp` makes the blocks there with integers alone, counting any
 source past what is bound, and the inverse reads the spare in the same
-submit; the spare becomes the reference only when the whole decode
+batch; the spare becomes the reference only when the whole decode
 succeeds. An intra frame takes the same apply from its payload alone (the
 2026-10-13 entry). With `Decoder::set_deblock` on (off by default; the
-2026-10-21 deblock entry), the same submit then smooths the frame across its
-block faces, with no submit of its own and its one readback in the same
-batch (`detail::Deblock`, whose header has the filters): a line fit across
+2026-10-21 deblock entry), the same batch then smooths the frame across its
+block faces (`detail::Deblock`, whose header has the filters): a line fit across
 each face, and at coarser steps a Gaussian after it. The host picks the
 filter per frame from the header alone: K and T, the step of DC and the
 zigzag's next three coefficients at their basis peaks, in millimetres,
@@ -1562,8 +1586,8 @@ are not all ones; a line is fitted across a face only when the neighbour's
 flag is set too, so neither side of a face with a masked block is
 line-fitted; the Gaussian holds a masked neighbour's voxels at their
 decoded values through all three passes, its unobserved ones dropping out;
-and the count is read back after the deblock, beside the inverse's reject
-count. The line passes run in place on `tsdf`, a dispatch an axis, a
+and the count joins the results slot, beside the inverse's reject count.
+The line passes run in place on `tsdf`, a dispatch an axis, a
 64-lane workgroup a block and a lane a face line, probing the block and its
 +axis neighbour through `vrResolveOctants` (`block_neighbourhood.glsl`).
 The Gaussian is one dispatch a block over the block and the 1-voxel halo of
@@ -1576,7 +1600,8 @@ observed blocks' `tsdf` change, and a block the deblock writes is stamped
 may change between any two frames.
 `Decoder::rebuild` reconstructs the last decoded frame from the held
 reference with the switch as it is now, into the grid that decode left
-(the grid diff checks its blocks first), so a paused player shows a toggle;
+(the grid diff checks its blocks first, on the device, gating the rest), in
+one batch and one submit, so a paused player shows a toggle;
 `Decoder::last_deblock` reports the filter, T, the frame's blocks and those
 the fallback kept at their exact decode. Both classes report `StageMetrics`
 (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name;
@@ -1805,7 +1830,8 @@ is what makes the two a footer, and the key count is bounded before anything
 is sized by it. Any other file `open` scans, one chunk header per chunk and
 never a payload. `next` returns record headers in file order from a
 `Position` the caller holds, skipping other chunks, and `read` checks the
-header again and the payload's CRC. Every method is `const` over `pread`, so
+header again and the payload's CRC, into caller memory such as a decoder's
+input slot (allocating nothing) or a vector it sizes. Every method is `const` over `pread`, so
 threads share one reader. A payload above `ReaderOptions::max_payload_bytes`
 is `OutOfMemory` before any allocation.
 
@@ -1833,7 +1859,8 @@ most `kMaxSessionBytes` for the session (`InvalidArgument`) and
 Both CRCs are checked on every chunk, a skipped one's too. Other tags, the
 footer included, and a record setting an unknown flag are skipped. Nothing
 resyncs: every call after a failure returns it. Drained between pieces, it
-holds about one chunk.
+holds about one chunk. A `next` with no payload holds the record, its CRC
+checked, for `read` into caller memory, as `StreamClient`'s does live.
 
 Measured on an Apple M5 Max (Release, APFS, warm page cache): CRC-32 at
 2.5 GB/s, 26 times the roughly 95 MB/s of a four-camera recording; appends of
@@ -2191,9 +2218,7 @@ has moved from the example into the validated I/O module. On `mesh`, the greppab
 `TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, measuring a
 return of the default kernel to the per-triangle append (the per-block
 reservation cost ~10% of the dispatch and was taken for incremental
-extraction) — and one submit per extract, since a timed submit costs
-~0.13 ms on MoltenVK and a timed extract pays it for the compaction and for
-each attempt. On `texture`,
+extraction). On `texture`,
 the `TODO(texture)`s: keeping a static keyframe set's
 depth and coverage in the pass between calls, blending views at their seams,
 and a per-triangle tile

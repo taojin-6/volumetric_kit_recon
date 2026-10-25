@@ -16,6 +16,7 @@ struct AllocationFailure {
   std::size_t bytes = 0;
   const void* measured_site = nullptr;
   std::size_t largest = 0;  // the largest allocation while measuring
+  const void* largest_site = nullptr;
   bool armed = false;
   bool injected = false;
   // Optionally replay a failure at a captured allocation site, so an
