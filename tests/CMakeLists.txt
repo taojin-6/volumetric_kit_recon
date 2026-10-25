@@ -1075,35 +1075,54 @@ if(APPLE)
            COMMAND recon_sensor_apple_pixel_buffer_importer_test)
 endif()
 
-# The video decoders (VR_WITH_FFMPEG only). The frame colour test reads the
-# colour off frames built by hand, no codec, and the FFmpeg error test maps
-# error codes; each compiles the internal source itself, as the Orbbec
-# conversion test does. The decoder tests decode the committed clips and JPEGs
-# on this machine's hardware, onto the device; on a GPU with no device path they
-# skip, unless VR_TEST_HEVC_BACKEND says this leg has one, where they fail.
-if(VR_WITH_FFMPEG)
-  set(_vr_video_src ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/video)
-  add_executable(
-    recon_sensor_video_frame_color_test sensor_video_frame_color_test.cpp
-                                        ${_vr_video_src}/frame_color.cpp)
-  target_link_libraries(
-    recon_sensor_video_frame_color_test
-    PRIVATE volumetric_kit::recon_sensor_video PkgConfig::VR_FFMPEG)
-  target_include_directories(recon_sensor_video_frame_color_test
-                             PRIVATE ${_vr_video_src})
-  vr_target_warnings(recon_sensor_video_frame_color_test)
-  add_test(NAME recon_sensor_video_frame_color
-           COMMAND recon_sensor_video_frame_color_test)
+# The video decoders' host pieces, with no codec and no GPU, so on every leg:
+# the colour H.273 codes describe, and the H.265 syntax VideoToolbox's path
+# reads itself, on the committed clips. Each compiles the internal source
+# itself, as the Orbbec conversion test does.
+set(_vr_video_src ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/video)
+add_executable(
+  recon_sensor_video_frame_color_test sensor_video_frame_color_test.cpp
+                                      ${_vr_video_src}/frame_color.cpp)
+target_link_libraries(recon_sensor_video_frame_color_test
+                      PRIVATE volumetric_kit::recon_sensor)
+target_include_directories(recon_sensor_video_frame_color_test
+                           PRIVATE ${_vr_video_src})
+vr_target_warnings(recon_sensor_video_frame_color_test)
+add_test(NAME recon_sensor_video_frame_color
+         COMMAND recon_sensor_video_frame_color_test)
 
-  add_executable(recon_sensor_video_ffmpeg_error_test
-                 sensor_video_ffmpeg_error_test.cpp ${_vr_video_src}/ffmpeg.cpp)
-  target_link_libraries(recon_sensor_video_ffmpeg_error_test
-                        PRIVATE volumetric_kit::core_base PkgConfig::VR_FFMPEG)
-  target_include_directories(recon_sensor_video_ffmpeg_error_test
-                             PRIVATE ${_vr_video_src})
-  vr_target_warnings(recon_sensor_video_ffmpeg_error_test)
-  add_test(NAME recon_sensor_video_ffmpeg_error
-           COMMAND recon_sensor_video_ffmpeg_error_test)
+add_executable(
+  recon_sensor_video_hevc_syntax_test sensor_video_hevc_syntax_test.cpp
+                                      ${_vr_video_src}/hevc_syntax.cpp)
+target_link_libraries(recon_sensor_video_hevc_syntax_test
+                      PRIVATE volumetric_kit::recon_sensor)
+target_include_directories(recon_sensor_video_hevc_syntax_test
+                           PRIVATE ${_vr_video_src})
+target_compile_definitions(
+  recon_sensor_video_hevc_syntax_test
+  PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")
+vr_target_warnings(recon_sensor_video_hevc_syntax_test)
+add_test(NAME recon_sensor_video_hevc_syntax
+         COMMAND recon_sensor_video_hevc_syntax_test)
+
+# The video decoders (on Apple, and elsewhere with VR_WITH_FFMPEG). The FFmpeg
+# helper test maps error codes and a frame's colour fields, compiling ffmpeg.cpp
+# itself. The decoder tests decode the committed clips and JPEGs on this
+# machine's hardware, onto the device; on a GPU with no device path they skip,
+# unless VR_TEST_HEVC_BACKEND says this leg has one, where they fail.
+if(APPLE OR VR_WITH_FFMPEG)
+  if(VR_WITH_FFMPEG)
+    add_executable(recon_sensor_video_ffmpeg_test sensor_video_ffmpeg_test.cpp
+                                                  ${_vr_video_src}/ffmpeg.cpp)
+    target_link_libraries(
+      recon_sensor_video_ffmpeg_test PRIVATE volumetric_kit::recon_sensor
+                                             PkgConfig::VR_FFMPEG)
+    target_include_directories(recon_sensor_video_ffmpeg_test
+                               PRIVATE ${_vr_video_src})
+    vr_target_warnings(recon_sensor_video_ffmpeg_test)
+    add_test(NAME recon_sensor_video_ffmpeg
+             COMMAND recon_sensor_video_ffmpeg_test)
+  endif()
 
   add_executable(recon_sensor_video_hevc_test sensor_video_hevc_test.cpp)
   target_link_libraries(
@@ -1171,7 +1190,7 @@ if(VR_WITH_FFMPEG)
     add_executable(
       recon_sensor_video_vt_jpeg_error_test
       sensor_video_vt_jpeg_error_test.cpp ${_vr_video_src}/jpeg_decoder.cpp
-      ${_vr_video_src}/vt_jpeg.cpp)
+      ${_vr_video_src}/vt_jpeg.cpp ${_vr_video_src}/videotoolbox.cpp)
     target_link_libraries(
       recon_sensor_video_vt_jpeg_error_test
       PRIVATE volumetric_kit::recon_sensor_video
@@ -1586,6 +1605,16 @@ _vr_expect_message(
   recon_subproject_core_without_vulkan
   "volumetric_kit_recon needs volumetric_kit_core's vulkan tier, which the core at .+ was built without: set VKC_WITH_VULKAN ON before"
 )
+# On Apple the decoders use VideoToolbox directly, so VR_WITH_FFMPEG is refused
+# with the fix (cmake/vr_ffmpeg.cmake).
+if(APPLE)
+  _vr_add_subproject_test(recon_subproject_apple_ffmpeg apple_ffmpeg
+                          -DVR_WITH_FFMPEG=ON)
+  _vr_expect_message(
+    recon_subproject_apple_ffmpeg
+    "on Apple the video decoders use VideoToolbox directly and need no FFmpeg. Configure this build with -DVR_WITH_FFMPEG=OFF."
+  )
+endif()
 
 # Start the slowest tests first under `ctest --parallel`. Without a COST, CTest
 # runs tests in the order they were added, and a fresh CI runner has no timing

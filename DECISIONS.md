@@ -415,7 +415,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--the-video-decoders-hand-out-pictures-on-the-device-only-the-hardware-path-is-fixed-per-build-a-stream-the-hardware-refuses-is-an-error-and-off-apple-vr_with_ffmpeg-needs-vr_with_cuda-amends-the-2026-09-27-decoder-2026-09-28-decoded-frame-and-2026-10-06-raw-frames-entries) —
   The video decoders hand out pictures on the device only: the hardware path
   is fixed per build, a stream the hardware refuses is an error, and off
-  Apple `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`.
+  Apple `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`. *Amended 2026-10-25:* on
+  Apple the H.265 decoder uses VideoToolbox directly, with no FFmpeg, and
+  `VR_WITH_FFMPEG` there is a configure error.
 - [**2026-10-06**](#2026-10-06--gpuframeprep-takes-colour-on-the-device-only-and-a-sets-depth-is-staged-on-one-thread-amends-the-2026-09-28-decoded-frame-and-2026-10-06-one-batch-entries) —
   `GpuFramePrep` takes colour on the device only, and a set's depth is
   staged on one thread. (Packed host colour came back the next day.)
@@ -508,6 +510,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   Apple's pixel-buffer importer is public: `PixelBufferImporter` in
   `recon_sensor_apple`, on every Apple build, iOS included, with no FFmpeg.
   *Amended 2026-10-25:* CI compiles the importer for iOS 26.0.
+  *Amended again 2026-10-25:* `recon_sensor_video` is no longer behind
+  `VR_WITH_FFMPEG` on Apple, and CI's iOS check links it with the importer.
 
 - [**2026-10-10**](#2026-10-10--grid-validation-bounds-the-truncation-band-by-the-depth-kernels-integer-representation) —
   Grid validation rejects non-finite metrics and bounds the truncation band by
@@ -722,6 +726,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   device, and the decoder judges rows 11 to 13 there; each gathers its
   results into a ring slot read after the batch. The blocking calls are
   record, one submit and finish.
+- [**2026-10-25**](#2026-10-25--hevcdecoder-decodes-through-videotoolbox-directly-on-apple-no-ffmpeg-the-hardware-decoder-or-none-pictures-in-display-order-by-their-order-count-and-vr_with_ffmpeg-on-apple-a-configure-error-amends-the-2026-10-06-device-only-decoder-and-2026-10-08-pixel-buffer-importer-entries) —
+  `HevcDecoder` decodes through VideoToolbox directly on Apple: no FFmpeg,
+  the hardware decoder or none, pictures put in display order by their
+  order count and written at the range the stream declares;
+  `recon_sensor_video` builds on every Apple platform, and `VR_WITH_FFMPEG`
+  on Apple is a configure error.
 - [**2026-10-25**](#2026-10-25--a-sender-records-each-set-into-two-batches-every-count-on-the-device-and-its-figures-are-per-set-amends-the-2026-09-27-encoder-2026-09-28-device-memory-2026-10-10-fusion-and-2026-10-21-chunk-entries) —
   A sender records each set into two batches: its prep, one allocation
   round, its fuse (gated on the whole band where strict, a refused set fused
@@ -15047,6 +15057,103 @@ decoded and meshed -- records 39 dispatches and 47 barriers, 48 where the
 ring copies (its output copies' barrier); `recon_codec_recorded` pins them.
 That is half the Apple step near 80 dispatches a batch, so none of its
 levers is needed.
+
+### 2026-10-25 — `HevcDecoder` decodes through VideoToolbox directly on Apple: no FFmpeg, the hardware decoder or none, pictures in display order by their order count, and `VR_WITH_FFMPEG` on Apple a configure error (amends the 2026-10-06 device-only decoder and 2026-10-08 pixel-buffer importer entries).
+
+**The rule.** On Apple, `HevcDecoder` decodes through a
+`VTDecompressionSession` of its own (`vt_hevc.cpp`) and hands its pictures
+out through `PixelBufferImporter`, as before, with no copy. FFmpeg's
+VideoToolbox path is deleted. The class, `DecodedPicture` and the codes are
+unchanged, and so is Linux, NVDEC through FFmpeg. `recon_sensor_video`
+builds on every Apple platform, as `recon_sensor_apple` does, and the
+Orbbec driver builds on macOS without FFmpeg. Nothing keeps the decoders
+off iOS now: they need no FFmpeg, and the floor is 26.0, above the iOS 17
+that VideoToolbox's hardware key needs (the 2026-10-08 entry), so they
+cross-compile to iOS unchanged, as every tier does (the 2026-08-01 entry).
+`VR_WITH_FFMPEG` on Apple fails the configure and names the fix, so no
+option is left that does nothing.
+
+**Why.** A Mac decodes the Femto's H.265 with nothing but the platform:
+nothing to install beside the Orbbec SDK, and one decoder from the
+bitstream to the picture, `rig_viewer` and `fuse_orbbec` through the Orbbec
+sensor as before.
+
+**What the decoder reads itself** (`hevc_syntax.cpp`); VideoToolbox decodes
+the slices:
+- **The parameter sets.** Each SPS is read whole, to its trailing bits,
+  before it can refuse the stream, so bytes that do not parse are
+  `IoError` and latch nothing. It refuses what the device path cannot hand
+  out: not 8-bit 4:2:0 (Main 10, 4:0:0), and a window off the coded corner,
+  which VideoToolbox fills from the corner (measured on an M4: the
+  left/top-cropped clip decodes to other pixels than libavcodec's). It
+  crops the right and the bottom itself. A format is made from the
+  sequence's VPS, SPS and PPSs; a changed set makes a new one, on the same
+  session where `VTDecompressionSessionCanAcceptFormatDescription` allows
+  (an M4 allows none of the test clips' SPS changes, the range alone
+  included, so each takes a new session).
+- **Display order.** VideoToolbox hands pictures back in decode order. The
+  decoder computes each picture's order count (8.3.1) and holds pictures
+  as the output process does (C.5.2): shown once more wait than the SPS
+  reorders (`sps_max_num_reorder_pics`), and all at a sequence started
+  afresh, unless it drops them, at an end of sequence and at the end. A
+  stream with no B-frames, the Femto's, shows each picture as it decodes.
+- **Where decoding starts.** The first key frame after `create` or
+  `reset()` starts a sequence afresh; its leading pictures, predicted from
+  before it, are skipped, as FFmpeg skips them, and a picture before any
+  key frame is `IoError`. `reset()` drops the session, so that key frame
+  decodes on a fresh one.
+- **The range.** The session writes NV12 at the range the VUI declares,
+  video range without one. Asked for the other range, VideoToolbox converts
+  the samples (an M4 decoding the full-range clip as video range no longer
+  matches libavcodec). `frame_color.cpp` describes them from H.273 codes,
+  which the VUI and FFmpeg's frame fields share, one home for both paths.
+
+**Hardware or nothing.** `create` returns `Unsupported` where VideoToolbox
+has no hardware HEVC decoder (`VTIsHardwareDecodeSupported`), and the
+session requires it
+(`kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder`),
+with no software fallback: a stream it cannot open is refused. iOS 26, the
+floor, has the key, so there is no availability check. One internal home,
+`videotoolbox.cpp`, opens the sessions of both decoders (NV12 on
+Metal-compatible IOSurfaces, the range its caller asks for: the stream's,
+or JPEG's full range), decodes a sample and maps a failure to its code.
+
+**A skipped access unit is reported.** VideoToolbox reports a picture whose
+reference is missing as bad data, so each picture predicted from a skipped
+access unit is `IoError` up to the next key frame (on an M4: the patch clip
+without frame 1 fails frames 2 and 3 and decodes from 4).
+
+**Tests.** Three `testsrc2` clips at 128x64 with B-frames
+(`tools/make_hevc_fixtures.sh`) decode on VideoToolbox to the MD5 of
+libavcodec's own decode, in display order: one with no colour description
+(video range), one full range, and the first cropped 8 at the right and the
+bottom. NVDEC takes nothing under 144x144, so they are Apple's. Main 10 and
+the left/top crop are refused; a skipped access unit is reported; one
+decoder sent the patch clip, its full-range copy and two `testsrc2` clips
+in turn hands out each sequence at its own size and range, the samples the
+stream's own; the decoder, Orbbec and JPEG tests pass on the direct path.
+`recon_sensor_video_hevc_syntax` reads every committed clip's syntax and
+refuses every truncated SPS, on every leg, the sanitizers' included. On
+Apple, a configure with `VR_WITH_FFMPEG` fails with the message
+(`recon_subproject_apple_ffmpeg`). The macOS leg's iOS check compiles
+`recon_sensor_video` and the importer for iOS 26.0 and links them against
+the iOS SDK (`tools/ios_build_check.sh`), leaving unresolved only their
+dependencies' symbols (the core's, recon's other tiers' and Vulkan's).
+Mutating the range, the reordering, the leading-picture skip or the crop
+refusal fails a test.
+
+**CI.** The macOS legs, the viewer's included, build without FFmpeg and
+need no `ffmpeg` formula; the NVIDIA leg is unchanged.
+
+**Validation.** Apple M4 (Mac mini), macOS 27.0.1, Release with warnings
+as errors, the Orbbec SDK 2.10.6 and no FFmpeg: the 115 tests pass under
+the validation layer with `VR_TEST_HEVC_BACKEND=videotoolbox`, the threaded
+ones again under ThreadSanitizer (Debug), the iOS check links (Xcode 27.0),
+and the viewer leg's targets build and their 6 tests pass.
+RTX 5090, Ubuntu, Release with FFmpeg 8.0 and CUDA 13.4: the 115 tests
+pass on NVDEC (`VR_TEST_HEVC_BACKEND=cuda`), and the host-only video tests
+under ASan and UBSan. Not run on a camera; for iOS, compiled and linked
+only.
 
 ### 2026-10-25 — A sender records each set into two batches, every count on the device, and its figures are per set (amends the 2026-09-27 encoder, 2026-09-28 device-memory, 2026-10-10 fusion and 2026-10-21 chunk entries).
 

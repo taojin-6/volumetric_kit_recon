@@ -140,13 +140,14 @@ build at its root:
 
 ```sh
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
-    -DVR_WITH_ORBBEC=ON -DVR_WITH_FFMPEG=ON -DOrbbecSDK_ROOT=<sdk>
-# on Linux, add -DVR_WITH_CUDA=ON
+    -DVR_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
+# on Linux, add -DVR_WITH_FFMPEG=ON -DVR_WITH_CUDA=ON
 # or once, for every repo that finds it:  export OrbbecSDK_ROOT=<sdk>
 ```
 
 The driver decodes each camera's colour itself, so it needs the video
-decoders too (see below; on Linux, CUDA as well). That builds
+decoders too (see below: every Apple build has them; on Linux, FFmpeg and
+CUDA). That builds
 `volumetric_kit::recon_sensor_orbbec` -- `OrbbecSensor`, one camera as an
 `IRgbdSensor` (`sensor/orbbec/orbbec_sensor.hpp`), which a `SensorArray`
 reads as a synced rig -- and the live example. Every example takes a core
@@ -187,26 +188,25 @@ and output settings before opening any resource. Relative paths are resolved
 from the scenario file's directory, including the sync, calibration and output
 paths.
 
-### Optional: FFmpeg
+### Video decoders
 
 The HEVC and JPEG decoders (`volumetric_kit::recon_sensor_video`,
-`sensor/video/`) are off by default and need FFmpeg ≥ 6.1 installed, found
-through pkg-config. They decode on the GPU's hardware and hand their pictures
-out on the device only: VideoToolbox on macOS, NVDEC and nvJPEG on Linux,
-which need the CUDA 13 toolkit's headers as well (`cmake/vr_cuda.cmake`):
+`sensor/video/`) decode on the GPU's hardware and hand their pictures out on
+the device only. Every Apple build has them, on VideoToolbox with no
+FFmpeg; their pictures reach Vulkan through `PixelBufferImporter`
+(`volumetric_kit::recon_sensor_apple`, `sensor/apple/`). On Linux they are
+off by default: NVDEC through FFmpeg ≥ 6.1, found through pkg-config, and
+nvJPEG, with the CUDA 13 toolkit's headers (`cmake/vr_cuda.cmake`).
+`VR_WITH_FFMPEG` on Apple fails the configure.
 
 ```sh
-brew install ffmpeg pkgconf        # macOS
 sudo apt install pkg-config libavcodec-dev libavutil-dev
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
-    -DVR_WITH_FFMPEG=ON              # on Linux, and -DVR_WITH_CUDA=ON
-# fail, rather than skip, where the decoders find no device path:
+    -DVR_WITH_FFMPEG=ON -DVR_WITH_CUDA=ON
+# fail, rather than skip, where the decoders find no device path
+# (videotoolbox on a Mac):
 VR_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
 ```
-
-VideoToolbox's pictures reach Vulkan through `PixelBufferImporter`
-(`volumetric_kit::recon_sensor_apple`, `sensor/apple/`), which every Apple
-build has, iOS included, with or without FFmpeg.
 
 ## Codec evaluation
 

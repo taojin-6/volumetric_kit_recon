@@ -15,8 +15,8 @@ name: viewer (reusable)
 # atlas both live viewers draw with and the render pass they record, each on a
 # headless device, the device they adopt, and each viewer's config entry,
 # which returns before any window.
-# FFmpeg and the Orbbec SDK are installed too, so rig_viewer is compiled with
-# the other two.
+# The Orbbec SDK is installed too, so rig_viewer is compiled with the other
+# two.
 on:
   workflow_call:
 
@@ -51,8 +51,7 @@ jobs:
           }
           missing=""
           for pkg in cmake glm molten-vk vulkan-headers vulkan-loader \
-              vulkan-tools vulkan-validationlayers shaderc spirv-tools ffmpeg \
-              pkgconf glfw; do
+              vulkan-tools vulkan-validationlayers shaderc spirv-tools glfw; do
             brew list --formula "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
           done
           if [ -n "$missing" ]; then
@@ -82,8 +81,7 @@ jobs:
           ok=0
           for attempt in 1 2 3; do
             if cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-                -DVR_BUILD_VIEWER=ON -DVR_BUILD_TESTS=ON \
-                -DVR_WITH_FFMPEG=ON -DVR_WITH_ORBBEC=ON; then
+                -DVR_BUILD_VIEWER=ON -DVR_BUILD_TESTS=ON -DVR_WITH_ORBBEC=ON; then
               ok=1
               break
             fi

@@ -43,11 +43,11 @@ option(VR_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
 option(VR_WITH_ORBBEC
        "Build the Orbbec-SDK-backed code (requires an installed Orbbec SDK)"
        OFF)
-# OFF by default for the same reasons: FFmpeg is a prerequisite you install
-# (cmake/vr_ffmpeg.cmake), and the iOS build takes none.
+# OFF by default: FFmpeg is a prerequisite you install (cmake/vr_ffmpeg.cmake),
+# and Apple takes none: its decoders, built always, use VideoToolbox directly.
 option(
   VR_WITH_FFMPEG
-  "Build the hardware video decoders (requires FFmpeg, and VR_WITH_CUDA off Apple)"
+  "Build the hardware video decoders off Apple (requires FFmpeg and VR_WITH_CUDA)"
   OFF)
 # OFF by default too: off Apple, the video decoders decode on NVIDIA's hardware
 # through CUDA, so VR_WITH_FFMPEG needs it there (cmake/vr_cuda.cmake).
