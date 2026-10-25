@@ -1605,7 +1605,8 @@ one batch and one submit, so a paused player shows a toggle;
 `Decoder::last_deblock` reports the filter, T, the frame's blocks and those
 the fallback kept at their exact decode. Both classes report `StageMetrics`
 (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name;
-the encoder's `"  ..active set"` is the map's own. The private pieces under
+the encoder's compaction is `"  ..encode set"`, apart from a fuse's
+`"  ..active set"`. The private pieces under
 `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS tables,
 the frame's layout and checks, its device coders, the block lists and the
 reference store. The transform's forward takes a device block list to

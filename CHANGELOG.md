@@ -8,6 +8,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- examples: **fuse_orbbec and codec_replica print a table per set**
+  (`SetLog`, the 2026-10-25 decision), where fuse_orbbec printed means per
+  camera frame: each row's mean, p50, p95 and max over the sets, the
+  device's counters per set and the latency to publish, P-frame, I-frame
+  and uncoded sets apart. A frame's write and publish are rows of their
+  own. The encoder's compaction reports as `"  ..encode set"` and the free
+  pass's as `"  ..stale set"`, apart from a fuse's `"  ..active set"`, and
+  the encoder's breakdowns carry their own device halves. Tests:
+  `recon_example_set_log`, `recon_codec_replica_run` (new),
+  `recon_volume_block_stamps`, `recon_codec_encoder`.
 - `codec`, `mesh`, `volume`: **a frame decodes and meshes in the caller's
   batch** (the 2026-10-24 decision), every count on the device and the
   results read once the batch has run:

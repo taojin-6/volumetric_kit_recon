@@ -27,6 +27,7 @@
 #include <utility>
 #include <vector>
 
+#include "set_log.hpp"
 #include "stage_table.hpp"
 #include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/log.hpp"
@@ -195,13 +196,9 @@ inline FrameSizes frame_sizes(const std::vector<CodecRow>& rows,
   s.count = sizes.size();
   if (sizes.empty()) return s;
   std::sort(sizes.begin(), sizes.end());
-  // Nearest rank: the ceil(p n)-th smallest.
-  const auto rank = [&](std::size_t percent) {
-    return sizes[(s.count * percent + 99) / 100 - 1];
-  };
   s.mean = total / double(s.count);
-  s.p50 = rank(50);
-  s.p95 = rank(95);
+  s.p50 = nearest_rank(sizes, 50);
+  s.p95 = nearest_rank(sizes, 95);
   s.max = sizes.back();
   return s;
 }
@@ -400,12 +397,16 @@ class CodecStream {
   ///                record's set. Above every frame coded before.
   /// @param pts_ns  Its time, its record's pts: no earlier than the frames'
   ///                coded before (@ref frame_pts_ns).
+  /// @param set     Optional: the sender's set this frame codes, whose rows
+  ///                take the encode's and the `"write"` and `"publish"`
+  ///                rows, and which is published once the frame is
+  ///                (`SetLog::Set::published`), before the decode.
   /// @return OK; InvalidArgument, before anything is encoded, for a
   ///         @p frame or @p pts_ns out of order or a finished stream; the
   ///         encode or decode error; `StreamWriter::append`'s error; or
   ///         IoError naming the CSV.
   vkc::Status code(vr::volume::VoxelBlockGrid& source, std::size_t frame,
-                   std::uint64_t pts_ns) {
+                   std::uint64_t pts_ns, SetLog::Set* set = nullptr) {
     // Refused here, not by the writer once the encoder holds the frame.
     if (finished_) {
       return vkc::Status::invalid_argument("CodecStream: finished");
@@ -419,9 +420,10 @@ class CodecStream {
     }
     vkc::StageMetrics encoded;
     VKC_ASSIGN(const Bytes bytes, encoder_.encode(source, &encoded));
+    if (set != nullptr) set->rows.merge(encoded);
     const vkc::Status played =
         play(bytes, frame, pts_ns, encoded,
-             static_cast<std::uint32_t>(source.grid().num_blocks));
+             static_cast<std::uint32_t>(source.grid().num_blocks), set);
     if (!played.ok()) encoder_.force_intra();
     return played;
   }
@@ -587,9 +589,11 @@ class CodecStream {
   // record and serve them, decode them into the player if the stream
   // decodes, and keep and write their row, @p encoded its encode's stage
   // rows. The source's slots, @p max_blocks, bound its frames' blocks: the
-  // player's ceiling.
+  // player's ceiling. @p set, when given, takes the write's and the
+  // publish's rows and is published before the decode.
   vkc::Status play(const Bytes& bytes, std::size_t frame, std::uint64_t pts_ns,
-                   const vkc::StageMetrics& encoded, std::uint32_t max_blocks) {
+                   const vkc::StageMetrics& encoded, std::uint32_t max_blocks,
+                   SetLog::Set* set) {
     VKC_ASSIGN(const vr::codec::FrameInfo info,
                vr::codec::read_frame_info(bytes.data(), bytes.size()));
     vr::stream::RecordInfo record;
@@ -598,11 +602,16 @@ class CodecStream {
     record.pts_ns = pts_ns;
     record.seq = coded_;
     record.set = frame;
-    if (writer_) VKC_TRY(writer_->append(record, bytes.data(), bytes.size()));
+    vkc::StageMetrics* rows = set != nullptr ? &set->rows : nullptr;
+    if (writer_) {
+      const vkc::StageScope write(rows, "write");
+      VKC_TRY(writer_->append(record, bytes.data(), bytes.size()));
+    }
     // After the file, so no viewer gets a frame the file lacks. Returning a
     // refusal would leave coded_ behind the file, whose writer would then
     // refuse the next seq.
     if (server_) {
+      const vkc::StageScope publish(rows, "publish");
       const vkc::Status served =
           server_->publish(record, bytes.data(), bytes.size());
       if (!served.ok()) {
@@ -614,6 +623,10 @@ class CodecStream {
     ++coded_;
     last_frame_ = frame;
     last_pts_ns_ = pts_ns;
+    if (set != nullptr) {
+      set->type = info.type;
+      set->published();
+    }
     const auto t = static_cast<std::size_t>(info.type);
     vkc::StageMetrics decoded;
     if (decoder_) {

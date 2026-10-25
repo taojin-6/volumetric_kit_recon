@@ -385,6 +385,18 @@ target_link_libraries(recon_example_stage_table_test
 vr_target_warnings(recon_example_stage_table_test)
 add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 
+# A sender's per-set log (examples/common/set_log.hpp): counters across each
+# set, P-frame, I-frame and uncoded sets apart, nearest-rank percentiles over
+# the sets that ran a row, n/t, n/a and dash cells, latencies and redo and tail
+# counts. Host only.
+add_executable(recon_example_set_log_test example_set_log_test.cpp)
+target_include_directories(recon_example_set_log_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(recon_example_set_log_test
+                      PRIVATE volumetric_kit::recon_codec)
+vr_target_warnings(recon_example_set_log_test)
+add_test(NAME recon_example_set_log COMMAND recon_example_set_log_test)
+
 # The codec examples' stream (examples/common/codec_stream.hpp): on the host, a
 # row's type and host and device milliseconds, its CSV line, a frame type's
 # sizes, a GOP's bytes and bitrate, a frame's pts, and the comparison options

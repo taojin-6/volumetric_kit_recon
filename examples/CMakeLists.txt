@@ -74,6 +74,19 @@ if(VR_BUILD_TESTS)
   set_tests_properties(
     recon_fuse_replica_run PROPERTIES SKIP_REGULAR_EXPRESSION
                                       "skipping: no Vulkan device")
+  # codec_replica on a device: four frames of the wall, each coded, and the
+  # per-set table they print.
+  add_test(
+    NAME recon_codec_replica_run
+    COMMAND
+      ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:codec_replica>
+      -DCOLOR=${PROJECT_SOURCE_DIR}/tests/data/jpeg/patches_256x144.jpg
+      -DDEPTH=${PROJECT_SOURCE_DIR}/tests/data/replica/depth_1m_256x144.png
+      -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codec-replica-run -P
+      ${PROJECT_SOURCE_DIR}/tests/example_codec_replica_run.cmake)
+  set_tests_properties(
+    recon_codec_replica_run PROPERTIES SKIP_REGULAR_EXPRESSION
+                                       "skipping: no Vulkan device")
   # codec_mesh's order on a device: an existing stream refused before any frame
   # is converted or written, then a two-frame run.
   if(TARGET codec_mesh)

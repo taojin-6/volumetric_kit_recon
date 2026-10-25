@@ -721,6 +721,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   device, and the decoder judges rows 11 to 13 there; each gathers its
   results into a ring slot read after the batch. The blocking calls are
   record, one submit and finish.
+- [**2026-10-25**](#2026-10-25--a-senders-figures-are-per-set-and-the-compactions-a-set-times-are-named-apart-amends-the-2026-09-27-encoder-entry) —
+  A sender's figures are per set: fuse_orbbec and codec_replica print each
+  row's mean, p50, p95 and max over the sets, the device's counters per set
+  and the latency to publish, P-frame, I-frame and uncoded sets apart; the
+  encoder's and the free pass's compactions are `"  ..encode set"` and
+  `"  ..stale set"`, apart from a fuse's `"  ..active set"`.
 
 ## Decision record
 
@@ -15030,6 +15036,32 @@ decoded and meshed -- records 39 dispatches and 47 barriers, 48 where the
 ring copies (its output copies' barrier); `recon_codec_recorded` pins them.
 That is half the Apple step near 80 dispatches a batch, so none of its
 levers is needed.
+
+### 2026-10-25 — A sender's figures are per set, and the compactions a set times are named apart (amends the 2026-09-27 encoder entry).
+
+**Per set, not per camera frame.** fuse_orbbec divided its stage totals by
+the camera frames, and codec_replica printed none, so neither showed what a
+set costs or how it varies. Both now log each set (`SetLog`,
+`examples/common/set_log.hpp`): its rows, the device's counters across it,
+and its latency from arrival and from capture to the frame's publish, on
+the system clock. At the end they print, for P-frame, I-frame and uncoded
+sets apart, each row's mean, nearest-rank p50 and p95, and max of host busy,
+wait and device time over the sets that ran it; the counters per set; and
+the latencies. Every set is timed: timing every frame cost 0.02 ms of host
+time on the 4090 (M0). A set ends at its frame's publish, so the decode a
+codec example runs after it counts in neither its rows nor its counters.
+Writing and publishing a frame are rows of their own (`"write"`,
+`"publish"`).
+
+**The compactions are named apart.** The 2026-09-27 entry kept the
+encoder's compaction under the map's `"  ..active set"`, and the free
+pass's was too. One set's rows hold all three, which then summed into one
+row. The map takes a row's name from its caller since the extract's
+`"  ..compact"`, so the encoder's is `"  ..encode set"`, the free pass's
+`"  ..stale set"`, and the fuse keeps `"  ..active set"`. The encoder's
+`"  ..observed"`, `"  ..forward"` and `"  ..rans encode"` tile their own
+device time too, where they held host time alone, so the sort's cost shows
+in `"  ..forward"`.
 
 ## Measured lessons
 

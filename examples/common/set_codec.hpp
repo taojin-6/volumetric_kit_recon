@@ -37,23 +37,28 @@ namespace vr_example {
 /// @param index   The set's index in the run: the frame's number, above every
 ///                frame coded before, and the sets fused before it.
 /// @param stream  The stream, or null to fuse alone.
-/// @param stages  Optional stage rows for the fusion and the free pass; the
-///                stream keeps the codec's own.
+/// @param log     Optional: the set's row in the run's log, which takes the
+///                fusion's, the free pass's and the codec's rows and is
+///                published once the frame is, or after the free pass when
+///                the set is not coded.
 /// @return OK; `Fuser::fuse`'s or `CodecStream::code`'s error.
 inline vkc::Status fuse_and_code(vr::tsdf::Fuser& fuser,
                                  vr::volume::VoxelBlockGrid& grid,
                                  const vr::sensor::DeviceFrameSet& set,
                                  std::size_t index,
                                  const config::Fusion& fusion,
-                                 CodecStream* stream,
-                                 vkc::StageMetrics* stages) {
+                                 CodecStream* stream, SetLog::Set* log) {
+  vkc::StageMetrics* stages = log != nullptr ? &log->rows : nullptr;
   VKC_TRY(fuse_set(fuser, grid, set.frames, fusion.max_weight,
                    integration_mode(fusion.dynamic), stages));
   free_stale_blocks_every(grid, index + 1, fusion.free_after, "fuse_orbbec",
                           stages);
-  if (stream == nullptr) return {};
+  if (stream == nullptr) {
+    if (log != nullptr) log->published();
+    return {};
+  }
   return stream->code(grid, index,
-                      std::max(set.timestamp_ns, stream->last_pts_ns()));
+                      std::max(set.timestamp_ns, stream->last_pts_ns()), log);
 }
 
 /// @return The outputs of @p opt's stream (@ref codec_outputs), decoding each

@@ -191,6 +191,18 @@ inline vkc::Result<vr::sensor::SensorArray> open_orbbec_array(
   return vr::sensor::SensorArray::open(std::move(sensors), options);
 }
 
+/// @return Whether every sensor of @p array stamps its frames on the host's
+///         clock, so a set's time is on the system clock: a rig's always
+///         are, a single camera's only with `source.host_clock`.
+inline bool on_host_clock(vr::sensor::SensorArray& array) {
+  for (std::size_t i = 0; i < array.size(); ++i) {
+    if (array.sensor(i).info().clock != vr::sensor::ClockDomain::Host) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// @brief Keep @p set's first @p frames frames, in the array's order, and
 ///        drop the rest: a run of N frames stops mid-set.
 /// @return The frames kept.

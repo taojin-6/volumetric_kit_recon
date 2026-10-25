@@ -69,7 +69,7 @@
 #include "interrupt.hpp"
 #include "set_codec.hpp"
 #include "set_dump.hpp"
-#include "stage_table.hpp"
+#include "set_log.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -198,12 +198,17 @@ vkc::Status run(const Options& opt) {
                          ? "streamed"
                          : "fused";
   vr_example::RigSets sets(*array, static_cast<std::size_t>(opt.run.frames));
-  vkc::StageMetrics stage_totals;
+  vr_example::SetLog log([&device] { return device.counters(); });
+  // A set's trigger is on the system clock only where every camera stamps on
+  // the host's, as a rig's always do.
+  const bool host_clock = vr_example::on_host_clock(*array);
   const auto t_start = std::chrono::steady_clock::now();
   const vkc::Status streamed = [&]() -> vkc::Status {
     std::size_t reported = 0;  // the count last reported; a set may pass 100
     while (!sets.done()) {
-      VKC_ASSIGN(sensor::FrameSet set, sets.next(&stage_totals));
+      vr_example::SetLog::Set& s = log.begin();
+      VKC_ASSIGN(sensor::FrameSet set, sets.next(&s.rows));
+      s.arrived(0, host_clock ? set.timestamp_ns : 0);
       // A set's stages run here, in turn, on its frames; operation=stream runs
       // none past the poll, any readback and any dump, and the set is
       // released as it came.
@@ -211,16 +216,18 @@ vkc::Status run(const Options& opt) {
       if (readback) {
         VKC_ASSIGN(luma, readback->read(set.frames,
                                         sensor::PictureReadback::Planes::Luma,
-                                        &stage_totals));
+                                        &s.rows));
       }
       VKC_TRY(dump.write(set, ids, readback ? &luma : nullptr));
       if (volume) {
         // One row for the batch: the cameras prepare together.
         VKC_ASSIGN(const sensor::DeviceFrameSet prepared,
-                   array->process(set, &stage_totals));
-        VKC_TRY(vr_example::fuse_and_code(
-            *fuser, *volume, prepared, sets.sets() - 1, opt.fusion,
-            stream ? &*stream : nullptr, &stage_totals));
+                   array->process(set, &s.rows));
+        VKC_TRY(vr_example::fuse_and_code(*fuser, *volume, prepared,
+                                          sets.sets() - 1, opt.fusion,
+                                          stream ? &*stream : nullptr, &s));
+      } else {
+        s.published();  // operation=stream: polled and released only
       }
       if (sets.frames() / 100 > reported / 100) {
         reported = sets.frames();
@@ -254,17 +261,12 @@ vkc::Status run(const Options& opt) {
   VKC_TRY(finished);
   array.reset();
 
+  std::fputs(log.table("per set").c_str(), stdout);
   if (!volume) {
-    vr_example::print_stage_rows(
-        "stages per set, mean over " + std::to_string(sets.sets()) + " sets",
-        stage_totals, sets.sets());
     std::printf("done: streamed %zu frames in %.1fs (%.1f fps)\n",
                 sets.frames(), secs, fps);
     return {};
   }
-  vr_example::print_stage_rows("stages per fused frame, mean over " +
-                                   std::to_string(sets.frames()) + " frames",
-                               stage_totals, sets.frames());
 
   // --- Mesh -> PLY ---
   VKC_ASSIGN(mesh::Mesh final_mesh, extractor->extract_host(*volume, 0.0f));
