@@ -1725,6 +1725,15 @@ Non-triangle primitives, animation, skinning, morph targets and invalid
 transforms on mesh instances are refused; nodes without meshes are not
 checked.
 
+`io::load_textured_mesh` (`io/textured_mesh.hpp`) runs the same traversal
+with each vertex keyed on its position and first UV channel; `load_mesh`
+keys on the position alone, so its output is unchanged. An OBJ's diffuse map
+path is relative to its material library, which the loader finds through an
+`Assimp::IOSystem` that notes each `.mtl` Assimp opens. Assimp 6 already
+prefixes the path with the library's directory relative to the OBJ, even an
+absolute path; the loader removes that prefix and resolves the rest against
+the library, as it does on earlier releases, which add none.
+
 Mesh coordinates retain the imported scene's scale; neither a metre unit nor
 a target height is guessed. No Assimp normalization or handedness flags are
 enabled, and importer unit/up-axis conversions are switched off where the

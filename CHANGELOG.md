@@ -395,6 +395,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `io`: **`load_textured_mesh`** (`textured_mesh.hpp`, in
+  `recon_io_assimp`): a static asset's triangles with one UV per vertex,
+  positions repeated at UV seams, and its diffuse map's path, resolved
+  against the material file. `load_mesh` is unchanged. Test:
+  `recon_io_textured_mesh`.
 - `mesh`: **`MarchingCubes::extract_device` takes `StageMetrics`**: a
   `"marching cubes"` row over the compaction's `"  ..compact"` and the
   attempts' `"  ..dispatch"`, timed inside the submits an extract already

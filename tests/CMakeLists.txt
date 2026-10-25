@@ -1306,6 +1306,13 @@ if(TARGET recon_io_assimp)
                         PRIVATE volumetric_kit::recon_io_assimp)
   vr_target_warnings(recon_io_mesh_file_test)
   add_test(NAME recon_io_mesh_file COMMAND recon_io_mesh_file_test)
+
+  # io::load_textured_mesh on a procedural OBJ + MTL + PNG cube it writes.
+  add_executable(recon_io_textured_mesh_test io_textured_mesh_test.cpp)
+  target_link_libraries(recon_io_textured_mesh_test
+                        PRIVATE volumetric_kit::recon_io_assimp)
+  vr_target_warnings(recon_io_textured_mesh_test)
+  add_test(NAME recon_io_textured_mesh COMMAND recon_io_textured_mesh_test)
 endif()
 
 # stream: the .vrst container through its public API -- golden bytes whose CRCs
