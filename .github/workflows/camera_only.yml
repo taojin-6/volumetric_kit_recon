@@ -26,7 +26,7 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates git \
             cmake make g++ libglm-dev
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # grep reads all of ldconfig's output: an early exit (-q) could fail the
       # pipe under pipefail and hide a match.
