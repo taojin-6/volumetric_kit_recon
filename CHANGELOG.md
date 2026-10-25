@@ -521,7 +521,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or a caller's (`fusion.buckets`, `codec_replica`'s), at the ceiling the grid
   grows to: 8,192 buckets at 128 MiB, unchanged at 4 GiB. A caller's count it
   lowers is logged as a warning. The sanitizer job now builds the examples, so
-  it runs `recon_fuse_replica_run` on lavapipe.
+  it runs `recon_fuse_replica_run` and `recon_codec_replica_run` on lavapipe.
   Test: `recon_example_fusion_buckets`.
 - `mesh`: empty device subsets produce an empty mesh without dereferencing a
   null list buffer, including when reusing a populated draw slot.

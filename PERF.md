@@ -147,7 +147,7 @@ kernels.
 | P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | landed (#129); a fuse's list is no longer reused (2026-10-06) |
 | P4 | Bind texture views in place, with no per-remesh copies | measured 0.26–0.51 ms GPU per remesh at 4K, 0.04–0.12 at 720p | M | P1's descriptor-array decision | deferred |
 | P2 | Record a set's frame prep in one batch | measured parity once host colour stages on threads; the pipeline's unit of work | S | — | landed (`SensorArray::process`); recorded into the sender's batch (`record_process`, 2026-10-25) |
-| P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | step 1 landed (#268); step 2, a strict set in the caller's batch, landed (2026-10-25); landed for the senders (2026-10-25): prep, fusion, the free pass and the frame's front half in one batch, its rANS half in a second, 2 submits a coded set (the 2026-10-25 decision); set time unmeasured (M6) |
+| P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | step 1 landed (#268); step 2, a strict set in the caller's batch, landed (2026-10-25); landed for the senders (2026-10-25): prep, fusion, the free pass and the frame's front half in one batch, its rANS half in a second, 2 submits a coded set (the 2026-10-25 decision); one camera's set no faster on the RTX 4090 (below) |
 | P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | landed (#132); device-list follow-up landed (#146); recorded into the set's batch (`record_free_stale`, 2026-10-25) |
 | P9 | Allocate only the band blocks a sample can weight | ~60% of a static room's active set holds no weight; compaction, integrate and meshing scale with it | M | — | open, measure first |
 | D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | superseded: the decoders hand out device pictures only |
@@ -406,10 +406,18 @@ is measured.
 > fuse_orbbec and codec_replica record a set's prep, fuse, free pass and
 > frame's front half into one batch and its rANS half into a second
 > (`SetSender`, `CodecStream::record`/`finish`); the 2026-10-25 decision
-> has the counts before and after. The set's time is unmeasured: M6, on
-> the 4090. How often a strict set of four cameras is fused again
-> (`fused again`) is the owner's rig run's to say, as codec_replica sends
-> one camera a set.
+> has the counts before and after. One camera's set is not faster
+> (codec_replica on Replica room0, 400 one-camera sets, each coded; RTX
+> 4090, Release; arrival to publish, the median of 5 interleaved runs):
+> sets 100–399 take 1.864 / 1.995 ms p50 / p95 before and 1.945 / 2.100 ms
+> after. Paced, frames read at each poll, p50 goes 2.558 → 3.119 ms, the
+> driver clocking the GPU lower under two dense batches (median busy SM
+> clock 2595 → 2115 MHz). A submit and its wait cost 0.02–0.03 ms at full
+> clock, and the ring's cached input slot adds 0.064 ms of host time to the
+> 4.9 MB frame's prep; a spike with a write-combined slot (core's TODO on
+> `HostRingDesc::host_access`) took 1.813 / 1.975 ms. How often a strict
+> set of four cameras is fused again (`fused again`) is the owner's rig
+> run's to say, as codec_replica sends one camera a set.
 
 With P1, P2 and P5 in place, three host decisions split a set, two of them
 taken off by step 1:
