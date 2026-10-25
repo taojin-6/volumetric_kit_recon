@@ -428,9 +428,9 @@ add_test(NAME recon_example_codec_stream
 # keys, sets and pts are the sets', every frame decoded, the blocking calls'
 # frames. A wall the cameras later see past: under Dynamic gone from the frames
 # that see past it, and its blocks freed by the fusion.free_after pass due;
-# under Classic its observed blocks kept. A coded set is 2 submits and 2 waits,
-# a fused one 1 and 1. On the host, a path that is the stream's or the CSV's
-# file refused. The device part skips with no device.
+# under Classic its observed blocks kept. A coded set is 2 submits and at most 2
+# waits, a fused one 1 and 1. On the host, a path that is the stream's or the
+# CSV's file refused. The device part skips with no device.
 add_executable(recon_example_set_codec_test example_set_codec_test.cpp)
 target_include_directories(recon_example_set_codec_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)

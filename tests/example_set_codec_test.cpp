@@ -21,8 +21,9 @@
 // pass after set 5 frees exactly the near blocks that never held an observed
 // voxel. The back walls stay in every frame and grid either way, and a
 // free_after of 0 frees nothing. The grid holds the same near blocks with a
-// stream and without. A coded set is 2 submits and 2 host waits, a set fused
-// alone 1 and 1, a free pass's adding none, warm sets no staging buffer, and
+// stream and without. A coded set is 2 submits and at most 2 host waits, a
+// set fused alone 1 and 1, a free pass's adding none, warm sets no staging
+// buffer, and
 // the front batch's dispatches stay below 80; the blocking calls code the
 // same frames, and so do they on a grid of 32 buckets, whose first set's
 // fusion is done again. On the host, a path that is the stream's or the CSV's
@@ -470,9 +471,10 @@ int same_streams(const std::string& a, const std::string& b) {
   }
 }
 
-// A set's device counts, printed: a coded set is 2 submits and 2 host waits
-// -- the front batch's and the frame's -- and a set fused alone 1 and 1, a
-// free pass's set adding none. A payload past its guess adds its tail's
+// A set's device counts, printed: a coded set is 2 submits and at most 2
+// host waits -- the front batch's and the frame's; a wait that finds its
+// batch done blocks nothing and counts none -- and a set fused alone 1 and
+// 1, a free pass's set adding none. A payload past its guess adds its tail's
 // submit, wait and gather. A warm set places no staging buffer but the one a
 // payload slot's growth takes, for a frame larger than any before. The front
 // batch's dispatches stay below the Apple step near 80 a batch (the
@@ -493,7 +495,7 @@ int counts_case(const std::vector<SetCounts>& counts, bool coded,
     if (c.redone) continue;  // a fusion done again blocks, as it must
     const std::uint64_t tail = c.tail ? 1 : 0;
     const std::uint64_t batches = (coded ? 2 : 1) + tail;
-    CHECK(c.submits == batches && c.host_waits == batches);
+    CHECK(c.submits == batches && c.host_waits <= batches);
     const std::uint64_t front = coded ? c.dispatches - 4 - tail : c.dispatches;
     CHECK(front < 80);
     if (s >= 3) CHECK(c.staging <= 1);

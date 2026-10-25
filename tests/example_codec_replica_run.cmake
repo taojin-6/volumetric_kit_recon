@@ -47,16 +47,14 @@ foreach(expected "per set: 3 P-frame sets" "per set: 1 I-frame sets"
     message(FATAL_ERROR "No \"${expected}\" in the per-set table: ${output}")
   endif()
 endforeach()
-# A warm P-frame set is two batches: two submits, two waits, no staging.
+# A warm P-frame set is two batches: two submits and no staging. (A wait that
+# finds its batch done counts none, so the waits are not pinned.)
 string(FIND "${output}" "per set: 3 P-frame sets" p_start)
 string(FIND "${output}" "per set: 1 I-frame sets" i_start)
 math(EXPR p_length "${i_start} - ${p_start}")
 string(SUBSTRING "${output}" ${p_start} ${p_length} p_sets)
-foreach(
-  expected
-  "submits +2.000 +2.000 +2.000 +2.000"
-  "host waits +2.000 +2.000 +2.000 +2.000"
-  "staging buffers +0.000 +0.000 +0.000 +0.000")
+foreach(expected "submits +2.000 +2.000 +2.000 +2.000"
+                 "staging buffers +0.000 +0.000 +0.000 +0.000")
   if(NOT p_sets MATCHES "${expected}")
     message(FATAL_ERROR "No \"${expected}\" for the P-frame sets: ${p_sets}")
   endif()
