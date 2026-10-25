@@ -315,6 +315,11 @@ core::Status TsdfIntegrator::record_integrate(
                         stage, metrics);
 }
 
+core::Status TsdfIntegrator::check_frames(
+    const VoxelBlockGrid& grid, const std::vector<FrameInput>& frames) const {
+  return check(grid, frames).status();
+}
+
 core::Result<TsdfIntegrator::Checked> TsdfIntegrator::check(
     const VoxelBlockGrid& grid, const std::vector<FrameInput>& frames) const {
   if (!valid()) {
@@ -479,7 +484,8 @@ core::Status TsdfIntegrator::record_checked(
   const std::uint32_t tick = map.tick();
 
   // Every frame's cameras first, in one inline write each, ahead of the
-  // compaction, so MoltenVK opens no blit encoder between the passes. The
+  // compaction, so MoltenVK opens no blit encoder between the passes (a
+  // sender's batch has the set's prep and round before them). The
   // camera params ride the SSBOs verbatim; the kernel derives world ->
   // camera from the rigid cam_to_world, so there is no host-side pose
   // inversion. A frame without colour leaves its colour camera zero.

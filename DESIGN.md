@@ -1003,8 +1003,9 @@ erases what another fuses in the same set, and the grid does not depend on
 the frames' order but for the running average's arithmetic (2026-10-08). A
 frame with no pixels fuses nothing, as it allocates nothing (2026-09-30).
 `Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). A set
-records into a caller's batch (`record_fuse`, 2026-10-25): a grow ahead past
-`kGrowThreshold`, blocking, then one allocation round of every frame's band
+records into a caller's batch (`record_fuse`, 2026-10-25): the fuse's checks
+(`check_frames`), a grow ahead past `kGrowThreshold`, blocking, then one
+allocation round of every frame's band
 (`record_allocate_from_depth`) and `record_integrate`. Where the set needs
 its whole band -- the default, or a grid holding no block -- the fuse is
 gated on a word the round closes on any failure, and `finish`, once the

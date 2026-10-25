@@ -309,6 +309,15 @@ class VR_TSDF_API TsdfIntegrator {
                                 core::GpuStageScope* stage = nullptr,
                                 core::StageMetrics* metrics = nullptr);
 
+  /// @brief The checks @ref integrate makes of @p frames before any work,
+  ///        alone: for a caller that records the set's allocation round
+  ///        ahead of @ref record_integrate and refuses before either.
+  /// @param grid    As @ref integrate.
+  /// @param frames  As the set form of @ref integrate.
+  /// @return OK; or @ref integrate's refusals.
+  core::Status check_frames(const volume::VoxelBlockGrid& grid,
+                            const std::vector<FrameInput>& frames) const;
+
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
 

@@ -162,6 +162,9 @@ core::Result<PendingFuse> Fuser::record_fuse(
   if (!valid()) {
     return core::Status::invalid_argument("Fuser::fuse: moved-from fuser");
   }
+  // The fuse's refusals before the round is recorded, or a grow run: a
+  // refused set changes neither the batch nor the grid.
+  VKC_TRY(integrator_.check_frames(grid, frames));
   // Made before an unfinished record is superseded, so a host allocation
   // failure leaves that token finishable.
   auto recorded = std::make_unique<Recorded>();

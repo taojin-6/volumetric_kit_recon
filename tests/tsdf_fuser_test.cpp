@@ -7,7 +7,8 @@
 // one submit to the same voxels, stamps and tick, its new blocks included,
 // and grows a set late. The record form (record_fuse, finish) gives what the
 // tier calls give from a grid's first set on, a refused set fused again at
-// its own tick; a token is the fuser's last record only; and a warm strict
+// its own tick; a token is the fuser's last record only, and a set the fuse
+// refuses records nothing and keeps the last one; and a warm strict
 // set is one submit with no staging buffer. Skips when no device is
 // available.
 
@@ -335,6 +336,20 @@ int gpu_main(vr_test::GpuContext& gpu) {
     vkc::CommandBatch second_batch(dev, alloc);
     auto second = fuser->record_fuse(second_batch, *grid, set);
     CHECK(second.ok() && second_batch.submit().ok());
+    // A set the fuse refuses, here for an empty colour frame, records nothing
+    // -- no round ahead of the fuse -- and leaves the last record the
+    // fuser's.
+    {
+      std::vector<tsdf::FrameInput> refused = set;
+      const tsdf::ColorFrame empty{};
+      refused[0].color = &empty;
+      vkc::CommandBatch batch(dev, alloc);
+      const vkc::DeviceCounters was = dev.counters();
+      CHECK(fuser->record_fuse(batch, *grid, refused).status().domain() ==
+            vkc::Status::Code::InvalidArgument);
+      CHECK(batch.submit().ok());
+      CHECK(dev.counters().submits == was.submits);
+    }
     CHECK(fuser->finish(*first, *grid).status().domain() ==
           vkc::Status::Code::InvalidArgument);
     CHECK(fuser->finish(*second, *other).status().domain() ==

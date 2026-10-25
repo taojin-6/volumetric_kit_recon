@@ -158,8 +158,8 @@ class VR_TSDF_API Fuser {
   ///                    a grow's `"resize"`: host halves now, device halves
   ///                    from `PendingBatch::device_rows`.
   /// @return The pending set (one recording nothing for no frames);
-  ///         @ref fuse's refusals, with nothing recorded; or a grow's
-  ///         failure.
+  ///         @ref fuse's refusals, with nothing recorded or grown and the
+  ///         last pending set still this fuser's; or a grow's failure.
   /// @pre The batch of this fuser's last record has resolved, and nothing
   ///      @p batch holds yet reads @p grid: a grow ahead replaces its buffers.
   core::Result<PendingFuse> record_fuse(
