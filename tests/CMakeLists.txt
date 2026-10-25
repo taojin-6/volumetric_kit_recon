@@ -81,14 +81,6 @@ if(VR_CAMERA_ONLY)
   return()
 endif()
 
-# The GPU tests poison every ring output before its batch runs, as the core's
-# own tests do (gpu_test.hpp). The switch is internal to core_vulkan
-# (ring_slot.hpp), reached as the core's GoogleTest support reaches it.
-#
-# TODO: the core's test policy's switch, once it has one.
-get_target_property(_vr_core_vulkan_dir core_vulkan SOURCE_DIR)
-include_directories("${_vr_core_vulkan_dir}")
-
 # The core tier's own pieces: the version and the log seam's "vr" source.
 add_executable(recon_core_smoke_test core_smoke_test.cpp)
 target_link_libraries(recon_core_smoke_test PRIVATE volumetric_kit::recon_core)

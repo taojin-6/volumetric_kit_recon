@@ -117,7 +117,7 @@ int poisons(vr_test::GpuContext& gpu) {
   std::uint32_t words[4] = {};
   std::memcpy(words, slot->data(), sizeof(words));
   for (const std::uint32_t word : words) {
-    CHECK(word == vkc::detail::kRingOutputPoison);
+    CHECK(word == vkc::test::kRingOutputPoison);
   }
   return 0;
 }
