@@ -191,7 +191,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   16,384 by (1 cm / voxel)², from 1× up to 4×, so `fuse_orbbec`, `rig_viewer`,
   `fuse_viewer` and `fuse_render` start a 5 mm grid at 65,536 buckets, where
   its first set fits, rather than growing through a full table. Test:
-  `recon_example_fuse_keyframe`.
+  `recon_example_fusion_buckets`.
 - `examples`: **the senders print viewers joining and leaving.**
   `serve_stream` and `fuse_orbbec` install `vr_example::print_info_log`
   (`examples/common/info_log.hpp`), which prints Info, Warning and Error as
@@ -402,6 +402,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `examples`: **the fusion grid starts within the device's
+  `maxStorageBufferRange`**, where every example started at 16,384 buckets
+  or more, 256 MiB an attribute, which lavapipe's 128 MiB refused at create.
+  `fusion_buckets` takes the device's range and caps the start, the default
+  or a caller's (`fusion.buckets`, `codec_replica`'s), at the ceiling the grid
+  grows to: 8,192 buckets at 128 MiB, unchanged at 4 GiB. The sanitizer job
+  now builds the examples, so it runs `recon_fuse_replica_run` on lavapipe.
+  Test: `recon_example_fusion_buckets`.
 - `mesh`: empty device subsets produce an empty mesh without dereferencing a
   null list buffer, including when reusing a populated draw slot.
 - `stream`: `ChunkParser::read` rejects records whose size or metadata differs

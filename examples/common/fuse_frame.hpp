@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -24,7 +25,9 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
@@ -36,23 +39,53 @@ namespace vr_example {
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 
-/// @brief The hash-bucket count @ref create_fusion_grid starts at unless told:
-///        16,384 at 1 cm and coarser, scaled by (1 cm / @p voxel_size)^2
-///        finer, as a surface's blocks are, so a first set fits the table it
-///        starts in rather than filling it. The scale stops at 4x (5 mm): a
-///        finer grid starts there and the fuser grows it, rather than taking
-///        gigabytes up front, or at 2.5 mm and finer passing a storage
-///        binding's range.
-/// @param voxel_size  Voxel edge (metres).
-inline std::int32_t fusion_buckets(float voxel_size) {
+/// The attributes of every fusion grid, the three @ref fuse_set writes.
+inline constexpr vr::volume::AttributeSpec kFusionAttributes[] = {
+    {"tsdf", sizeof(float)},
+    {"weight", sizeof(float)},
+    {"color", sizeof(std::uint32_t)}};
+
+/// @brief The hash-bucket count @ref create_fusion_grid starts at.
+///
+/// @p num_buckets when given. Otherwise 16,384 at 1 cm and coarser, scaled by
+/// (1 cm / @p voxel_size)^2 finer, as a surface's blocks are, so a first set
+/// fits the table it starts in rather than filling it. The scale stops at 4x
+/// (5 mm): a finer grid starts there and the fuser grows it, rather than
+/// taking gigabytes up front.
+///
+/// Either is capped at the most buckets whose every attribute array fits one
+/// storage binding of @p max_storage_buffer_range, the ceiling the grid can
+/// never grow past either (@ref vr::volume::VoxelBlockGrid::max_num_buckets):
+/// 8,192 at the 128 MiB Vulkan guarantees, which lavapipe reports, and above
+/// every default at the 4 GiB desktop and Apple GPUs report.
+/// @param voxel_size                Voxel edge (metres).
+/// @param max_storage_buffer_range  The device's limit
+///                                  (`core::max_storage_buffer_range`).
+/// @param num_buckets               The caller's start, if any.
+inline std::int32_t fusion_buckets(
+    float voxel_size, VkDeviceSize max_storage_buffer_range,
+    std::optional<std::int32_t> num_buckets = std::nullopt) {
   const double ratio = 0.01 / double(voxel_size);
-  return static_cast<std::int32_t>(16384.0 *
-                                   std::clamp(ratio * ratio, 1.0, 4.0));
+  const std::int64_t start =
+      num_buckets ? *num_buckets
+                  : std::int64_t(16384.0 * std::clamp(ratio * ratio, 1.0, 4.0));
+  // What one bucket adds to the widest attribute's array: its blocks' voxels.
+  const vr::volume::VoxelGridParams bucket =
+      example_grid_params(voxel_size, voxel_size, 1);
+  std::uint64_t widest = 0;
+  for (const vr::volume::AttributeSpec& attr : kFusionAttributes) {
+    widest = std::max<std::uint64_t>(widest, attr.element_size);
+  }
+  const std::uint64_t bucket_bytes = std::uint64_t(bucket.num_blocks) *
+                                     std::uint64_t(bucket.voxels_per_block) *
+                                     widest;
+  const auto ceiling =
+      static_cast<std::int64_t>(max_storage_buffer_range / bucket_bytes);
+  return static_cast<std::int32_t>(std::min(start, ceiling));
 }
 
 /// @brief The volume every example fuses into: 8x8x8-voxel blocks carrying
-///        the three attributes @ref fuse_set writes -- `tsdf`, `weight` and
-///        `color`.
+///        @ref kFusionAttributes.
 ///
 /// The layout is @ref example_grid_params, which every example shares; the
 /// resolution, the band and the table's starting size are theirs to choose.
@@ -63,20 +96,19 @@ inline std::int32_t fusion_buckets(float voxel_size) {
 /// @param allocator    Its allocator.
 /// @param voxel_size   Voxel edge (metres).
 /// @param trunc_dist   Truncation distance (metres).
-/// @param num_buckets  Initial hash-bucket count, as @ref example_grid_params
-///                     takes it; @ref fusion_buckets when unset.
+/// @param num_buckets  Initial hash-bucket count, which @ref fusion_buckets
+///                     defaults when unset and caps to fit @p device.
 /// @return The grid, or @ref vr::volume::VoxelBlockGrid::create's error.
 inline vkc::Result<vr::volume::VoxelBlockGrid> create_fusion_grid(
     vkc::Device& device, vkc::Allocator& allocator, float voxel_size,
     float trunc_dist, std::optional<std::int32_t> num_buckets = std::nullopt) {
-  const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                             {"weight", sizeof(float)},
-                                             {"color", sizeof(std::uint32_t)}};
   return vr::volume::VoxelBlockGrid::create(
       device, allocator,
-      example_grid_params(voxel_size, trunc_dist,
-                          num_buckets.value_or(fusion_buckets(voxel_size))),
-      attrs, 3);
+      example_grid_params(
+          voxel_size, trunc_dist,
+          fusion_buckets(voxel_size, vkc::max_storage_buffer_range(device),
+                         num_buckets)),
+      kFusionAttributes, std::size(kFusionAttributes));
 }
 
 /// @brief How a prepared frame's colour is fused: through its own camera, the
