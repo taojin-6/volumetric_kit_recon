@@ -73,8 +73,11 @@ std::uint64_t pts(std::size_t frame) {
 
 int row_times() {
   // Host and device alike: the stage, its breakdowns inside it.
+  // A call's host column is its busy time: its waits on the device, which a
+  // call that waits inside its row holds, left out.
   vkc::StageMetrics encode;
-  encode.add_cpu("codec encode", 3.0);
+  encode.add_cpu("codec encode", 3.5);
+  encode.add_wait("codec encode", 0.5);
   encode.add_gpu("codec encode", 1.0);
   encode.add_cpu("  ..active set", 0.5);
   encode.add_gpu("  ..active set", 0.25);
@@ -531,9 +534,12 @@ int periodic(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   for (std::size_t i = 0; i < rows.size(); ++i) {
     CHECK(rows[i].frame == decoded[i] && rows[i].type == types[decoded[i]]);
   }
-  // A type's host spans, summed by stage, are its rows' milliseconds.
+  // A type's host busy spans, summed by stage, are its rows' milliseconds.
   const auto near = [](double a, double b) {
     return std::fabs(a - b) <= 1e-9 * std::fabs(b);
+  };
+  const auto busy = [](const vkc::StageMetrics& m) {
+    return m.total_cpu_ms() - m.total_wait_ms();
   };
   for (const codec::FrameType type : {I, P}) {
     double encode = 0.0;
@@ -544,8 +550,8 @@ int periodic(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
       decode += row.decode_ms.value_or(0.0);
     }
     CHECK(encode > 0.0 && decode > 0.0);
-    CHECK(near(coder.encode_stages(type).total_cpu_ms(), encode));
-    CHECK(near(coder.decode_stages(type).total_cpu_ms(), decode));
+    CHECK(near(busy(coder.encode_stages(type)), encode));
+    CHECK(near(busy(coder.decode_stages(type)), decode));
   }
   coder.report(kFps, 1);
 
@@ -725,10 +731,12 @@ int halves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
     vkc::Result<vkc::PendingBatch> done = front.submit_async({}, {});
     CHECK(done.ok() && done->wait().ok());
     b->front_ran(done->device_rows(), &set.rows);
+    // The batch's encode rows are the frame's, not the set's other rows.
+    CHECK(vr_example::find_row(set.rows, "  ..forward") == nullptr);
     CHECK(b->finish(*pending, frame, pts(frame), set).ok() == (frame != 2));
     CHECK(set.is_published() && set.type.has_value());
-    for (const char* row :
-         {"codec encode", "crc", "write", "publish", "wait: frame"}) {
+    for (const char* row : {"codec encode", "  ..forward", "crc", "write",
+                            "publish", "wait: frame"}) {
       CHECK(vr_example::find_row(set.rows, row) != nullptr);
     }
   }

@@ -5,11 +5,15 @@
 // the device's across it, begin to publish; P-frame, I-frame and uncoded sets
 // apart, a set never published left out; a row's mean, nearest-rank p50, p95
 // and max over the sets that ran it, n/t where some set did not time its
-// device half and a dash for a host-only row; the latencies, n/a where no
-// stamp is known; and the sets fused again and the payload tails. Host only.
+// device half and a dash for a host-only row; a row first seen in a later set
+// placed after the row before it there, a breakdown inside its stage; "set"
+// waiting its rows' waits since arrival; the latencies, n/a where no stamp is
+// known; and the sets fused again and the payload tails. Host only.
 
+#include <chrono>
 #include <cstdio>
 #include <string>
+#include <thread>
 
 #include "set_log.hpp"
 #include "stage_table.hpp"
@@ -40,10 +44,15 @@ int main() {
   CHECK(log.table("per set").empty());
   for (int i = 0; i < 4; ++i) {
     vr_example::SetLog::Set& s = log.begin();
+    if (i == 0) {  // before the set: not its wait
+      s.rows.add_cpu("wait: cameras", 9.0);
+      s.rows.add_wait("wait: cameras", 9.0);
+    }
     s.arrived(vr_example::system_now_ns(), 0);
     s.rows.add_cpu("frame prep", 1.0 + i);
     s.rows.add_wait("frame prep", 0.5);
     s.rows.add_gpu("frame prep", 0.25 * (i + 1));
+    if (i == 2) s.rows.add_cpu("  ..tail", 0.2);  // a breakdown, this set's
     s.rows.add_cpu("write", 0.1);
     if (i == 3) s.rows.add_cpu("block stamps", 2.0);
     device.submits += 2;
@@ -51,6 +60,8 @@ int main() {
     device.staging_buffers += i == 0 ? 1 : 0;
     s.type = codec::FrameType::kInter;
     s.redone = i == 1;
+    // Longer than its rows' waits, so "set" holds them whole.
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
     s.published();
     s.published();  // once only
   }
@@ -82,6 +93,25 @@ int main() {
                  "-        -        -"));
   CHECK(table.find("  block stamps             1     2.000") !=
         std::string::npos);
+  // A breakdown only a later set ran sits inside its stage, before the row
+  // after it there.
+  const std::size_t prep_at = table.find("\n  frame prep ");
+  const std::size_t tail_at = table.find("\n    ..tail ");
+  const std::size_t write_at = table.find("\n  write ");
+  CHECK(prep_at < tail_at && tail_at < write_at &&
+        write_at != std::string::npos);
+  // "set" waits what its rows waited from arrival to publish, 0.5 ms, not the
+  // wait before it.
+  const std::size_t set_at = table.find("\n  set ");
+  CHECK(set_at != std::string::npos);
+  const std::string set_line =
+      table.substr(set_at + 1, table.find('\n', set_at + 1) - set_at - 1);
+  const std::string set_wait =
+      "     0.500    0.500    0.500    0.500         -        -        -  "
+      "      -";
+  CHECK(set_line.size() > set_wait.size() &&
+        set_line.compare(set_line.size() - set_wait.size(), set_wait.size(),
+                         set_wait) == 0);
   // The uncoded set's device half was not timed.
   CHECK(table.find("     n/t      n/t      n/t      n/t") != std::string::npos);
   CHECK(has_line(table,

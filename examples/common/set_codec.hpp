@@ -43,7 +43,7 @@ namespace vr_example {
 /// blocks without an observed voxel, which the coder leaves out. A fusion
 /// the device refused is done again in the fuser's finish
 /// (`FuseReport::redone`), and the frame's front half, which saw the grid
-/// without it, again after it.
+/// without it, again after it (`"wait: redo"`).
 class SetSender {
  public:
   /// @brief How a sender fuses, frees and codes its sets.
@@ -161,7 +161,7 @@ class SetSender {
       return {};
     }
     if (report.redone) {
-      VKC_ASSIGN(coded, stream_->redo(*coded, *grid_));
+      VKC_ASSIGN(coded, stream_->redo(*coded, *grid_, &r));
     }
     return stream_->finish(*coded, index, pts_ns, set);
   }

@@ -68,7 +68,8 @@ class SetLog {
         : counters_(std::move(counters)),
           begin_(counters_ ? counters_() : vkc::DeviceCounters{}) {}
 
-    /// Its stages. `"set"` spans it from @ref arrived to @ref published.
+    /// Its stages. `"set"` spans it from @ref arrived to @ref published, its
+    /// wait the waits of the rows timed in that span.
     vkc::StageMetrics rows;
     /// Its coded frame's type, as the encoder finished it; none for a set
     /// not coded.
@@ -87,6 +88,7 @@ class SetLog {
       arrival_ns_ = arrival_ns;
       capture_ns_ = capture_ns;
       handed_ = Clock::now();
+      waited_before_ms_ = rows.total_wait_ms();
     }
 
     /// @brief Its frame is out, written and published -- or, for a set not
@@ -98,9 +100,14 @@ class SetLog {
       published_ = true;
       end_ = counters_ ? counters_() : vkc::DeviceCounters{};
       published_ns_ = system_now_ns();
-      rows.add_cpu("set", std::chrono::duration<double, std::milli>(
-                              Clock::now() - handed_)
-                              .count());
+      // Busy plus wait is its wall time: the waits are its rows' since
+      // arrived, as a scope over the span would count them.
+      const double wall =
+          std::chrono::duration<double, std::milli>(Clock::now() - handed_)
+              .count();
+      rows.add_wait("set",
+                    std::min(wall, rows.total_wait_ms() - waited_before_ms_));
+      rows.add_cpu("set", wall);
     }
 
     /// @return Whether @ref published ran.
@@ -143,6 +150,7 @@ class SetLog {
     std::uint64_t arrival_ns_ = 0;
     std::uint64_t capture_ns_ = 0;
     std::uint64_t published_ns_ = 0;
+    double waited_before_ms_ = 0.0;  // the rows' waits before arrived
     bool published_ = false;
   };
 
@@ -201,6 +209,40 @@ class SetLog {
     return text;
   }
 
+  // Every row any of `sets` ran, each set's in its order: a row first seen in
+  // a later set goes after the row before it there, past that row's
+  // breakdowns, so a breakdown stays inside its stage and a stage after the
+  // breakdowns of the one before it.
+  static std::vector<const char*> merged_rows(
+      const std::vector<const Set*>& sets) {
+    const auto breakdown = [](const char* name) {
+      return std::strncmp(name, vkc::StageMetrics::kBreakdownPrefix,
+                          std::strlen(vkc::StageMetrics::kBreakdownPrefix)) ==
+             0;
+    };
+    std::vector<const char*> rows;
+    const auto at = [&rows](const char* name) {
+      return std::find_if(rows.begin(), rows.end(), [name](const char* row) {
+        return std::strcmp(row, name) == 0;
+      });
+    };
+    for (const Set* s : sets) {
+      const char* before = nullptr;
+      for (const vkc::StageRow& row : s->rows.rows()) {
+        if (at(row.name) == rows.end()) {
+          auto place = before != nullptr ? at(before) + 1 : rows.begin();
+          while (before != nullptr && place != rows.end() &&
+                 breakdown(*place)) {
+            ++place;
+          }
+          rows.insert(place, row.name);
+        }
+        before = row.name;
+      }
+    }
+    return rows;
+  }
+
   // Four cells of `what`, as wide as stats()'s.
   static std::string cells(const char* what) {
     char text[64];
@@ -220,16 +262,7 @@ class SetLog {
     std::snprintf(line, sizeof line, "  %-20s %5s  %-35s  %-35s  %s\n", "row",
                   "n", "host busy", "wait", "device");
     out += line;
-    // Every row any set ran, in first-seen order.
-    std::vector<const char*> rows;
-    for (const Set* s : sets) {
-      for (const vkc::StageRow& row : s->rows.rows()) {
-        const bool seen = std::any_of(
-            rows.begin(), rows.end(),
-            [&](const char* name) { return std::strcmp(name, row.name) == 0; });
-        if (!seen) rows.push_back(row.name);
-      }
-    }
+    const std::vector<const char*> rows = merged_rows(sets);
     for (const char* row_name : rows) {
       std::vector<double> busy, wait, device;
       vkc::DeviceTime worst = vkc::DeviceTime::None;

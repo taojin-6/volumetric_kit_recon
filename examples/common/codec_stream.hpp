@@ -111,11 +111,12 @@ struct CodecRow {
   std::size_t frame = 0;  ///< The source's index of the frame coded.
   /// An I-frame, or a P-frame on the frame coded before.
   vr::codec::FrameType type = vr::codec::FrameType::kIntra;
-  std::size_t bytes = 0;                   ///< The compressed frame's size.
-  std::uint32_t blocks = 0;                ///< The blocks it carries.
-  double encode_ms = 0.0;                  ///< Encode, host wall clock.
+  std::size_t bytes = 0;     ///< The compressed frame's size.
+  std::uint32_t blocks = 0;  ///< The blocks it carries.
+  /// Encode, host busy: its waits on the device left out, wherever they ran.
+  double encode_ms = 0.0;
   std::optional<double> encode_device_ms;  ///< Encode, device.
-  std::optional<double> decode_ms;         ///< Decode, host wall clock.
+  std::optional<double> decode_ms;         ///< Decode, host busy.
   std::optional<double> decode_device_ms;  ///< Decode, device.
 };
 
@@ -139,8 +140,11 @@ inline std::optional<double> device_ms(const vkc::StageMetrics& m) {
 }
 
 /// @brief A frame's row from the stage rows its encode and decode filled:
-///        each call's host span (`StageMetrics::total_cpu_ms`, its stage
-///        without the breakdowns inside it) and its @ref device_ms.
+///        each call's host busy span (`StageMetrics::total_cpu_ms` less
+///        `total_wait_ms`, its stages without the breakdowns inside them or
+///        their waits on the device: one meaning whether a call waits inside
+///        its rows, as `Encoder::encode` does, or a sender waits outside
+///        them) and its @ref device_ms.
 /// @param decode  The decode's rows, or null for a frame not decoded.
 inline CodecRow make_codec_row(std::size_t frame, vr::codec::FrameType type,
                                std::size_t bytes, std::uint32_t blocks,
@@ -151,10 +155,10 @@ inline CodecRow make_codec_row(std::size_t frame, vr::codec::FrameType type,
   row.type = type;
   row.bytes = bytes;
   row.blocks = blocks;
-  row.encode_ms = encode.total_cpu_ms();
+  row.encode_ms = encode.total_cpu_ms() - encode.total_wait_ms();
   row.encode_device_ms = device_ms(encode);
   if (decode != nullptr) {
-    row.decode_ms = decode->total_cpu_ms();
+    row.decode_ms = decode->total_cpu_ms() - decode->total_wait_ms();
     row.decode_device_ms = device_ms(*decode);
   }
   return row;
@@ -438,19 +442,6 @@ class CodecStream {
     return played;
   }
 
-  /// @return Whether a stage row named @p name is an encode's
-  ///         (`Encoder::record_front`'s, `record_back`'s and `finish`'s), so
-  ///         a batch's device rows split between the encode and the rest of
-  ///         a set.
-  static bool encode_row(const char* name) {
-    for (const char* row :
-         {"codec encode", "  ..encode set", "  ..observed", "  ..forward",
-          "  ..tables", "  ..rans encode", "  ..tail"}) {
-      if (std::strcmp(name, row) == 0) return true;
-    }
-    return false;
-  }
-
   /// @brief Record @p source's frame's front half into @p front, after what
   ///        it holds -- a sender's fusion -- for @ref finish
   ///        (`Encoder::record_front`), its rows the frame's own.
@@ -467,14 +458,16 @@ class CodecStream {
   }
 
   /// @brief Once the front batch @ref record recorded into has resolved:
-  ///        its device rows, the encode's (@ref encode_row) into the frame's
-  ///        rows, the rest into @p rest, when given.
+  ///        its device rows into the frame's rows where the front half placed
+  ///        that row (`Encoder::record_front` places its stage's and each
+  ///        breakdown's as it opens), the rest into @p rest, when given.
   void front_ran(const std::vector<vkc::StageRow>& device_rows,
                  vkc::StageMetrics* rest) {
     std::vector<vkc::StageRow> encode;
     std::vector<vkc::StageRow> others;
     for (const vkc::StageRow& row : device_rows) {
-      (encode_row(row.name) ? encode : others).push_back(row);
+      (find_row(front_rows_, row.name) != nullptr ? encode : others)
+          .push_back(row);
     }
     front_rows_.merge_device(encode);
     if (rest != nullptr) rest->merge_device(others);
@@ -482,18 +475,26 @@ class CodecStream {
 
   /// @brief The front half again, in a batch of its own and waited on: what
   ///        a sender does after a fusion done again (`FuseReport::redone`,
-  ///        rare), whose front batch encoded the grid without the set.
+  ///        rare), whose front batch encoded the grid without the set. The
+  ///        frame's rows keep the first front half's, which the device ran
+  ///        too, and add this one's.
+  /// @param rows  Optional: the set's rows, which take the wait
+  ///              (`"wait: redo"`).
   /// @return The new pending frame, @p pending dropped; or the encoder's or
   ///         the batch's failure.
   vkc::Result<vr::codec::PendingEncode> redo(
       const vr::codec::PendingEncode& pending,
-      vr::volume::VoxelBlockGrid& source) {
+      vr::volume::VoxelBlockGrid& source, vkc::StageMetrics* rows) {
     encoder_.abandon(pending);
+    const vkc::StageMetrics first = std::move(front_rows_);
     vkc::CommandBatch front(*device_, *allocator_);
     VKC_ASSIGN(const vr::codec::PendingEncode again, record(front, source));
     const vkc::Status ran = [&]() -> vkc::Status {
       VKC_ASSIGN(vkc::PendingBatch done, front.submit_async({}, {}));
-      VKC_TRY(done.wait());
+      {
+        const vkc::WaitScope wait(rows, "wait: redo");
+        VKC_TRY(done.wait());
+      }
       front_ran(done.device_rows(), nullptr);
       return {};
     }();
@@ -501,6 +502,9 @@ class CodecStream {
       encoder_.abandon(again);
       return ran;
     }
+    vkc::StageMetrics both = first;
+    both.merge(front_rows_);
+    front_rows_ = std::move(both);
     return again;
   }
 
