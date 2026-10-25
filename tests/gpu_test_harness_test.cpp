@@ -6,7 +6,8 @@
 // that returns 0 fails when the layer reports an error, whether in the test's
 // own calls or for an object the test leaked, which the layer reports as the
 // harness destroys the device; under synchronization validation, a missing
-// barrier fails it too. Then the decoders' skips. Skips where the
+// barrier fails it too. A ring output no kernel writes reads as the core's
+// poison. Then the decoders' skips. Skips where the
 // layer or a device is missing, unless VKC_REQUIRE_VULKAN_DEVICE is set.
 //
 // Under LeakSanitizer on Linux, with the sanitizer job's suppressions
@@ -17,6 +18,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <memory>
 #include <string_view>
 
 #if defined(__has_feature)
@@ -37,7 +40,9 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/vulkan_policy.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/core/vulkan/host_ring.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 
 #include "gpu_test.hpp"
@@ -93,6 +98,28 @@ int races(vr_test::GpuContext& gpu) {
         vkCmdFillBuffer(cmd, handle, 0, VK_WHOLE_SIZE, 2);
       });
   return submitted.ok() ? 0 : 2;
+}
+
+// A batch that binds a ring output and writes none of it: every word reads as
+// the poison, on the device's own path, in place or copied.
+int poisons(vr_test::GpuContext& gpu) {
+  vkc::HostRingDesc desc;
+  desc.slot_bytes = 16;
+  desc.name = "test.poisoned";
+  vkc::Result<std::unique_ptr<vkc::HostRing>> ring =
+      vkc::HostRing::create(gpu.device, gpu.allocator, desc);
+  CHECK(ring.ok());
+  vkc::Result<vkc::HostSlot> slot = (*ring)->claim(16);
+  CHECK(slot.ok());
+  std::memset(slot->data(), 0, 16);
+  vkc::CommandBatch batch(gpu.device, gpu.allocator);
+  CHECK(batch.output(*slot, 0, 16).ok() && batch.submit().ok());
+  std::uint32_t words[4] = {};
+  std::memcpy(words, slot->data(), sizeof(words));
+  for (const std::uint32_t word : words) {
+    CHECK(word == vkc::detail::kRingOutputPoison);
+  }
+  return 0;
 }
 
 #ifdef VR_TEST_LSAN
@@ -154,6 +181,7 @@ int main() {
   const int clean = vr_test::run_on_gpu(passes);
   if (clean == test::kSkipExitCode) return clean;  // no device
   CHECK(clean == 0);
+  CHECK(vr_test::run_on_gpu(poisons) == 0);
   CHECK(vr_test::run_on_gpu(skips) == test::kSkipExitCode);
   CHECK(vr_test::run_on_gpu(misuses) == 1);
   CHECK(vr_test::run_on_gpu(leaks) == 1);
