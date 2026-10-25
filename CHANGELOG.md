@@ -402,6 +402,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `mesh`: empty device subsets produce an empty mesh without dereferencing a
+  null list buffer, including when reusing a populated draw slot.
+- `stream`: `ChunkParser::read` rejects records whose size or metadata differs
+  from the held header, leaving the payload available for a valid retry.
+- `codec`: `Decoder::record` and both blocking `decode` overloads return
+  `OutOfMemory` when pending-frame allocation fails, preserving retry state.
+- `volume`, `mesh`: device count and gate words require valid storage-buffer
+  metadata and a complete aligned four-byte range before recording commands.
 - `examples`: **`codec_mesh`'s mesh conversion table has its `allocate`
   row**, where `convert_frame` passed the conversion's metrics to the
   integrator alone. Regression: `recon_example_mesh_sequence`.

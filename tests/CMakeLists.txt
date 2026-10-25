@@ -1019,6 +1019,17 @@ vr_target_warnings(recon_codec_decode_grid_oom_test)
 add_test(NAME recon_codec_decode_grid_oom
          COMMAND recon_codec_decode_grid_oom_test)
 
+# A pending-frame allocation failure stays inside record and both blocking
+# decode APIs, preserves the grid/reference, and permits the same P-frame retry.
+add_executable(recon_codec_decoder_oom_test codec_decoder_oom_test.cpp
+                                            test_allocation_failure.cpp)
+target_link_libraries(
+  recon_codec_decoder_oom_test
+  PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_codec_decoder_oom_test)
+add_test(NAME recon_codec_decoder_oom COMMAND recon_codec_decoder_oom_test)
+
 # Apple's pixel buffers imported as images (recon_sensor_apple, any Apple build,
 # with or without FFmpeg): buffers made here, read back in place, prepared as a
 # frame's colour, and the refusals. Skips without a device.

@@ -24,7 +24,10 @@ void* operator new(std::size_t bytes) {
   if (failure.measure) {
     failure.bytes = bytes;
     failure.measured_site = site;
-    if (bytes > failure.largest) failure.largest = bytes;
+    if (bytes > failure.largest) {
+      failure.largest = bytes;
+      failure.largest_site = site;
+    }
   }
   if (failure.armed && bytes == failure.bytes &&
       (failure.site == nullptr || failure.site == site)) {
