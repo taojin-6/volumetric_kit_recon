@@ -192,8 +192,8 @@ paths.
 
 The HEVC and JPEG decoders (`volumetric_kit::recon_sensor_video`,
 `sensor/video/`) decode on the GPU's hardware and hand their pictures out on
-the device only. Every Apple build has them, iOS included, on VideoToolbox
-with no FFmpeg; their pictures reach Vulkan through `PixelBufferImporter`
+the device only. Every Apple build has them, on VideoToolbox with no
+FFmpeg; their pictures reach Vulkan through `PixelBufferImporter`
 (`volumetric_kit::recon_sensor_apple`, `sensor/apple/`). On Linux they are
 off by default: NVDEC through FFmpeg ≥ 6.1, found through pkg-config, and
 nvJPEG, with the CUDA 13 toolkit's headers (`cmake/vr_cuda.cmake`).

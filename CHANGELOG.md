@@ -15,9 +15,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decoding is required, with no software fallback. The pictures are written
   at the range the stream declares (video range without a VUI), so the
   samples are the stream's own. A picture predicted from a skipped access
-  unit is `IoError`. `recon_sensor_video` builds on every Apple platform,
-  iOS included, and the Orbbec driver on macOS, without FFmpeg; one internal
-  home opens VideoToolbox's sessions for both decoders.
+  unit is `IoError`. `recon_sensor_video`, like `recon_sensor_apple`, builds
+  on every Apple platform with no FFmpeg, and the Orbbec driver on macOS
+  without it; one internal home opens VideoToolbox's sessions for both
+  decoders.
   `Options::configure_ffmpeg_logging` does nothing on Apple. Linux is
   unchanged. Tests: `recon_sensor_video_hevc` (libavcodec's MD5s for three
   `testsrc2` clips, parameter sets that change mid-stream, Main 10, a

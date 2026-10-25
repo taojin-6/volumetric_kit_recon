@@ -15050,9 +15050,12 @@ out through `PixelBufferImporter`, as before, with no copy. FFmpeg's
 VideoToolbox path is deleted. The class, `DecodedPicture` and the codes are
 unchanged, and so is Linux, NVDEC through FFmpeg. `recon_sensor_video`
 builds on every Apple platform, as `recon_sensor_apple` does, and the
-Orbbec driver builds on macOS without FFmpeg. `VR_WITH_FFMPEG` on Apple
-fails the configure and names the fix, so no option is left that does
-nothing.
+Orbbec driver builds on macOS without FFmpeg. Nothing keeps the decoders
+off iOS now: they need no FFmpeg, and the floor is 27.0, above the iOS 17
+that VideoToolbox's hardware key needs (the 2026-10-08 entry), so they
+cross-compile to iOS unchanged, as every tier does (the 2026-08-01 entry).
+`VR_WITH_FFMPEG` on Apple fails the configure and names the fix, so no
+option is left that does nothing.
 
 **Why.** A Mac decodes the Femto's H.265 with nothing but the platform:
 nothing to install beside the Orbbec SDK, and one decoder from the
@@ -15118,9 +15121,10 @@ refuses every truncated SPS, on every leg, the sanitizers' included. On
 Apple, a configure with `VR_WITH_FFMPEG` fails with the message
 (`recon_subproject_apple_ffmpeg`). The macOS leg's iOS check compiles
 `recon_sensor_video` and the importer for iOS 27.0 and links them against
-the iOS SDK (`tools/ios_build_check.sh`), leaving only the core's, recon's
-other tiers' and Vulkan's symbols to an app. Mutating the range, the
-reordering, the leading-picture skip or the crop refusal fails a test.
+the iOS SDK (`tools/ios_build_check.sh`), leaving unresolved only their
+dependencies' symbols (the core's, recon's other tiers' and Vulkan's).
+Mutating the range, the reordering, the leading-picture skip or the crop
+refusal fails a test.
 
 **CI.** The macOS legs, the viewer's included, build without FFmpeg and
 need no `ffmpeg` formula; the NVIDIA leg is unchanged.
@@ -15132,7 +15136,8 @@ ones again under ThreadSanitizer (Debug), the iOS check links for iOS 27.0
 (Xcode 27.0), and the viewer leg's targets build and their 6 tests pass.
 RTX 5090, Ubuntu, Release with FFmpeg 8.0 and CUDA 13.4: the 115 tests
 pass on NVDEC (`VR_TEST_HEVC_BACKEND=cuda`), and the host-only video tests
-under ASan and UBSan. Not run on a camera, an iPhone or an iPad.
+under ASan and UBSan. Not run on a camera; for iOS, compiled and linked
+only.
 
 ## Measured lessons
 
