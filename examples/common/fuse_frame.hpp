@@ -17,17 +17,21 @@
 #include <cstdint>
 #include <cstdio>
 #include <iterator>
+#include <limits>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "grid_layout.hpp"
+#include "volumetric_kit/core/base/log.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/recon/core/log.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
@@ -53,11 +57,12 @@ inline constexpr vr::volume::AttributeSpec kFusionAttributes[] = {
 /// (5 mm): a finer grid starts there and the fuser grows it, rather than
 /// taking gigabytes up front.
 ///
-/// Either is capped at the most buckets whose every attribute array fits one
-/// storage binding of @p max_storage_buffer_range, the ceiling the grid can
-/// never grow past either (@ref vr::volume::VoxelBlockGrid::max_num_buckets):
-/// 8,192 at the 128 MiB Vulkan guarantees, which lavapipe reports, and above
-/// every default at the 4 GiB desktop and Apple GPUs report.
+/// Either is capped at the ceiling the grid can never grow past either
+/// (@ref vr::volume::VoxelBlockGrid::max_num_buckets): every attribute array
+/// within one storage binding of @p max_storage_buffer_range, and a block
+/// pointer within int32. That is 8,192 at the 128 MiB Vulkan guarantees,
+/// which lavapipe reports, and above every default at the 4 GiB desktop and
+/// Apple GPUs report. A caller's count it lowers is logged as a warning.
 /// @param voxel_size                Voxel edge (metres).
 /// @param max_storage_buffer_range  The device's limit
 ///                                  (`core::max_storage_buffer_range`).
@@ -69,18 +74,24 @@ inline std::int32_t fusion_buckets(
   const std::int64_t start =
       num_buckets ? *num_buckets
                   : std::int64_t(16384.0 * std::clamp(ratio * ratio, 1.0, 4.0));
-  // What one bucket adds to the widest attribute's array: its blocks' voxels.
-  const vr::volume::VoxelGridParams bucket =
+  // max_num_buckets' arithmetic, on the layout of a one-bucket grid.
+  const vr::volume::VoxelGridParams grid =
       example_grid_params(voxel_size, voxel_size, 1);
-  std::uint64_t widest = 0;
+  const auto voxels = std::uint64_t(grid.voxels_per_block);
+  std::uint64_t blocks =
+      std::uint64_t(std::numeric_limits<std::int32_t>::max()) / voxels;
   for (const vr::volume::AttributeSpec& attr : kFusionAttributes) {
-    widest = std::max<std::uint64_t>(widest, attr.element_size);
+    blocks = std::min<std::uint64_t>(
+        blocks, max_storage_buffer_range / (voxels * attr.element_size));
   }
-  const std::uint64_t bucket_bytes = std::uint64_t(bucket.num_blocks) *
-                                     std::uint64_t(bucket.voxels_per_block) *
-                                     widest;
   const auto ceiling =
-      static_cast<std::int64_t>(max_storage_buffer_range / bucket_bytes);
+      static_cast<std::int64_t>(blocks / std::uint64_t(grid.bucket_size));
+  if (num_buckets && start > ceiling) {
+    vr::log_message(vkc::LogLevel::Warning,
+                    "fusion grid: starting at " + std::to_string(ceiling) +
+                        " buckets, not " + std::to_string(start) +
+                        ": the device's maxStorageBufferRange binds no more");
+  }
   return static_cast<std::int32_t>(std::min(start, ceiling));
 }
 

@@ -286,7 +286,8 @@ add_test(NAME recon_example_fuse_keyframe
 
 # The examples' fusion grid starts larger for a finer grid, capped to fit the
 # device's maxStorageBufferRange: the start at lavapipe's 128 MiB and a 4 GiB
-# range on the host, and the cap against the grid's own ceiling on a device.
+# range and a capped caller's warning on the host, and the cap against the
+# grid's own ceiling on a device.
 add_executable(recon_example_fusion_buckets_test
                example_fusion_buckets_test.cpp)
 target_include_directories(recon_example_fusion_buckets_test

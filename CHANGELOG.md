@@ -407,8 +407,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or more, 256 MiB an attribute, which lavapipe's 128 MiB refused at create.
   `fusion_buckets` takes the device's range and caps the start, the default
   or a caller's (`fusion.buckets`, `codec_replica`'s), at the ceiling the grid
-  grows to: 8,192 buckets at 128 MiB, unchanged at 4 GiB. The sanitizer job
-  now builds the examples, so it runs `recon_fuse_replica_run` on lavapipe.
+  grows to: 8,192 buckets at 128 MiB, unchanged at 4 GiB. A caller's count it
+  lowers is logged as a warning. The sanitizer job now builds the examples, so
+  it runs `recon_fuse_replica_run` on lavapipe.
   Test: `recon_example_fusion_buckets`.
 - `mesh`: empty device subsets produce an empty mesh without dereferencing a
   null list buffer, including when reusing a populated draw slot.
