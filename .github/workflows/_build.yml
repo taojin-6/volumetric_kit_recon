@@ -457,8 +457,9 @@ jobs:
           ctest --test-dir build-tsan --output-on-failure --no-tests=error \
             -R '^recon_(networking_|stream_container$|example_info_log$|sensor_orbbec_(decode_worker|jpeg|hevc|open_sensors)$)'
 
-      # recon_sensor_apple and recon_sensor_video promise an iOS build
-      # (DECISIONS.md, 2026-10-08 and 2026-10-25), which the steps above do
+      # recon_sensor_apple and recon_sensor_video, with the H.265 syntax it
+      # reads (recon_sensor_video_syntax), promise an iOS build (DECISIONS.md,
+      # 2026-10-08 and 2026-10-25), which the steps above do
       # not make: compile them for the iOS floor with build/'s flags and link
       # them against the iOS SDK (tools/ios_build_check.sh). Release only: the
       # promise does not depend on the build type.

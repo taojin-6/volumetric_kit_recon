@@ -66,7 +66,8 @@ conventions and Vulkan setup.
   sensors read as one), `…_sensor_apple` (Apple's pixel buffers as images),
   the opt-in `…_sensor_orbbec`
   driver (`VR_WITH_ORBBEC`), `…_sensor_video` decoders (every Apple build,
-  elsewhere `VR_WITH_FFMPEG`), and
+  elsewhere `VR_WITH_FFMPEG`), `…_sensor_video_syntax` (H.265 syntax read
+  on the host, every build), and
   `…_io_assimp` mesh importer (`VR_WITH_ASSIMP`);
   umbrella alias
   `volumetric_kit::recon`.
@@ -129,7 +130,8 @@ links that base tier alone, and `networking` links `stream`.
   SDK. The HEVC and JPEG decoders are another target of
   their own (`sensor/video/`, on the GPU's hardware) and link no camera tier:
   `core` and, on Apple, the Apple importer (`sensor/apple/`), which links
-  `core` alone.
+  `core` alone. The H.265 syntax they read on the host is a target of its
+  own as well, on the family core's base tier alone, in every build.
   The GPU pre-processing and the pictures' readback are a fourth
   (`sensor/utils/`, Vulkan and shaders), so `recon_sensor` itself stays free
   of all of them.
@@ -1283,13 +1285,13 @@ is held from the moment it exists, so a failed mapping or host allocation
 releases it, in its context, before the Vulkan buffer it maps. On Apple,
 through a `VTDecompressionSession` of its own
 (`vt_hevc.cpp`): it reads the parameter sets and each picture's slice
-header itself (`hevc_syntax.cpp`), hands VideoToolbox the picture's slices
-as one length-prefixed sample of a format made from the sequence's VPS, SPS
-and PPSs (a new session only where a changed set needs one), and puts the
-pictures, which come back in decode order, into display order by their
-picture order count: shown once more wait than the SPS reorders, and all at
-a sequence started afresh and at the end. The two IOSurface planes are
-images in `YuvImage::image`, through `sensor/apple`'s
+header itself (`hevc_syntax.hpp`, below), hands VideoToolbox the
+picture's slices as one length-prefixed sample of a format made from the
+sequence's VPS, SPS and PPSs (a new session only where a changed set needs
+one), and puts the pictures, which come back in decode order, into display
+order by their picture order count: shown once more wait than the SPS
+reorders, and all at a sequence started afresh and at the end. The two
+IOSurface planes are images in `YuvImage::image`, through `sensor/apple`'s
 `PixelBufferImporter`, written at the range the VUI declares (video range
 without one), so the samples are the stream's own. A picture whose
 reference is missing, after a skipped access unit, VideoToolbox reports as
@@ -1340,6 +1342,23 @@ taking its descriptor (`InvalidArgument` once taken), and maps the whole
 buffer, which stays the caller's. The one crossing it documents is CUDA
 writes, Vulkan reads: the writing stream or an event is synchronized, then
 the reader acquires the buffer from `VK_QUEUE_FAMILY_EXTERNAL`.
+**`sensor/video`'s H.265 syntax** (`hevc_syntax.hpp`, target
+`recon_sensor_video_syntax`) is public and builds on every platform: host
+code on the family core's base tier, with no codec, GPU or FFmpeg (the
+2026-10-25 public-syntax decision). It is what VideoToolbox's path reads.
+`split_annex_b` finds an access unit's NAL units (`hevc::Nal`, borrowed,
+emulation prevention left in); `vps_id`, `parse_sps` and `parse_pps` read
+the parameter sets' ids and an SPS's size, conformance window, format,
+reorder depth and VUI colour (`ColorCodes`, `color_codes.hpp`: the H.273
+codes FFmpeg's frames are described from too), each SPS through its
+trailing bits; and `parse_slice_start` reads a slice header as far as its
+picture order count, given the parameter sets by id. Bytes that do not
+parse are `IoError`, naming why; a NAL unit of another type than the call
+reads is `InvalidArgument`; a host allocation failure is `OutOfMemory`,
+never an exception. Every parser reads through `hevc::BitReader`:
+the RBSP's bits, MSB first past the emulation prevention bytes, as u(n),
+ue(v) and se(v), zeros past the end with `overrun()` set, and whether what
+is left is the trailing bits.
 **`sensor/apple`'s `PixelBufferImporter`** (`recon_sensor_apple`, on every
 Apple build, iOS included, with no FFmpeg) hands an 8-bit NV12
 `CVPixelBuffer` on an IOSurface to Vulkan in place: each plane becomes a
