@@ -15491,7 +15491,9 @@ errors and the ubuntu leg's options, under the validation layer: the 107
 tests pass, and the two sender tests under sync validation too. Apple M4
 (Mac mini), macOS 27.0.1, Release with Orbbec, Assimp and the viewers: the
 132 tests pass under the validation layer, the iOS check links, and the 11
-threaded tests pass under ThreadSanitizer (Debug). The raw viewer fell back
+threaded tests pass under ThreadSanitizer (Debug). Built Debug with clang
+under ASan and UBSan on the RTX 5090, the networking tests and the three
+example tests pass. The raw viewer fell back
 after 10 records of 64 KiB on Linux, 2 of them sent, and after 15 on macOS,
 7 sent. The on-demand stress run published 121,616 records in 1.5 s and
 forced 148 keys for 164 joins and fall-backs, its viewers jumping 104
