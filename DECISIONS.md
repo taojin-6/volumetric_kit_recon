@@ -15208,9 +15208,12 @@ entry's kept staging).** `GpuFramePrep::record` and `record_set` record a
 frame's copy and both passes into a caller's batch, and `SensorArray::
 record_process` a set's. The depth, and packed colour at the binding
 alignment after it, goes into the pass's one `core::HostRing` slot: in place
-where mapped device memory is cached, one copy elsewhere. One slot suffices:
-the frame is copied in at record, when the pass's last batch, which binds the
-slot and the kernels' sets, must have resolved. Every frame's slot is
+where mapped device memory is cached, one copy of a write-combined slot
+elsewhere (core 0.22.0's `HostAccess::SequentialWrite`; the host only writes
+it). A decoder's input slot stays cached, as the host checks, parses and
+hashes the record in it. One slot suffices: the frame is copied in at
+record, when the pass's last batch, which binds the slot and the kernels'
+sets, must have resolved. Every frame's slot is
 claimed before any buffer grows, so a record refused while that batch is
 unresolved frees nothing it reads. `prepare` and
 `prepare_batch` are the record, one submit and its wait, and abandon the

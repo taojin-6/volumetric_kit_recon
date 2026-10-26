@@ -112,9 +112,10 @@ endif()
 # dependencies that expose private include paths to the tiers below and never
 # become part of their link interface. The oldest core recon's libraries build
 # with is checked in the core that arrives (third_party/, which also checks the
-# config tier the examples and tests need): 0.21.0 for the host rings a frame's
-# input and results go through (core::HostRing).
-set(VR_CORE_MIN_VERSION 0.21.0)
+# config tier the examples and tests need): 0.22.0 for the host rings a frame's
+# input and results go through (core::HostRing), the sensor's frame ring marked
+# write-only (HostRingDesc::host_access).
+set(VR_CORE_MIN_VERSION 0.22.0)
 add_subdirectory(third_party)
 
 add_subdirectory(src)
