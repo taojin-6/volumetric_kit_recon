@@ -102,6 +102,7 @@
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
+#include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
@@ -213,7 +214,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // The far plane follows the depth gate the frames carry.
   const float max_depth = opt.fusion.max_depth_m;
 
-  auto grid_result = vr_example::create_fusion_grid(
+  auto grid_result = rtsdf::create_fusion_grid(
       rdevice, rallocator, opt.fusion.voxel_size_m, opt.fusion.truncation_m);
   if (!grid_result) {
     std::fprintf(stderr, "grid: %s\n", grid_result.status().message().c_str());

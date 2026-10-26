@@ -8,6 +8,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`, `tsdf`, `volume`: **a run's sets, the fusion grid and the block
+  layout are library calls** (the 2026-10-25 decision):
+  `sensor::RigSets` (`sensor/array/rig_sets.hpp`), `tsdf::create_fusion_grid`
+  and `fusion_buckets` (`tsdf/fusion_grid.hpp`), and
+  `volume::block_grid_params`, in place of the examples' `RigSets`, the grid
+  of `fuse_frame.hpp` and `grid_layout.hpp`, which are gone.
+  `codec::make_decode_grid` builds with the layout; its grid is unchanged.
+  The examples call them, and print and code as before. Tests:
+  `recon_sensor_array_rig_sets` (new), `recon_tsdf_fusion_grid` (was
+  `recon_example_fusion_buckets`), `recon_volume_coords`,
+  `recon_example_fuse_orbbec_sets`.
 - `sensor`: **the H.265 syntax reader is public** (the 2026-10-25
   decision): `sensor/video/hevc_syntax.hpp`, target
   `volumetric_kit::recon_sensor_video_syntax`, host code built on every

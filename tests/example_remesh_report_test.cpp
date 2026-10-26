@@ -14,7 +14,6 @@
 
 #include "device_blocks.hpp"
 #include "gpu_test.hpp"
-#include "grid_layout.hpp"
 #include "remesh_report.hpp"
 #include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
@@ -24,6 +23,7 @@
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/recon/volume/voxel_grid.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -57,8 +57,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)}};
   auto made = vol::VoxelBlockGrid::create(
-      gpu.device, gpu.allocator,
-      vr_example::example_grid_params(0.01f, 0.04f, 256), attrs, 2);
+      gpu.device, gpu.allocator, vol::block_grid_params(0.01f, 0.04f, 256),
+      attrs, 2);
   CHECK(made.ok());
   vol::VoxelBlockGrid& grid = made.value();
 
