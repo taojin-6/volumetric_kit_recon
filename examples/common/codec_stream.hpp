@@ -8,8 +8,8 @@
 // grown as frames need (codec/decode_grid.hpp), and keep a row per coded
 // frame, which the report sums by frame type and the CSV lists; the frames
 // themselves go to a .vrst file, each I-frame a key, and to the viewers of a
-// live server. An I-frame after a frame the player missed is the stream's
-// policy, kept here.
+// live server. An I-frame after a frame the player missed, and one a viewer
+// waits for, are the stream's policy, kept here.
 
 #include <algorithm>
 #include <cmath>
@@ -254,7 +254,9 @@ struct CodecOutputs {
   std::string stream;
   /// Where to serve those records live, as they are recorded
   /// (`networking::StreamServer`, the session the stream's); none serves
-  /// nothing. Defaulted, so two-field braces stay quiet under
+  /// nothing. Its viewers' requests for a key are met at the next frame
+  /// (@ref CodecStream::code), so it may serve without `replay_gop`.
+  /// Defaulted, so two-field braces stay quiet under
   /// -Wmissing-field-initializers.
   std::optional<vr::networking::ServerOptions> serve = std::nullopt;
   /// Decode each frame into the player grid, for its row's decode columns,
@@ -406,6 +408,9 @@ class CodecStream {
   ///        frame the server refuses is logged at Warning and never fails the
   ///        call: the viewers lose the rest of its GOP, the recording
   ///        nothing. Without @ref CodecOutputs::decode, no frame is decoded.
+  ///        The frame is an I-frame when a viewer joined or fell back since
+  ///        the last frame (`StreamServer::key_wanted` rose), as it waits
+  ///        for a key.
   /// @param frame   The source's index of the frame: its row's, and its
   ///                record's set. Above every frame coded before.
   /// @param pts_ns  Its time, its record's pts: no earlier than the frames'
@@ -431,6 +436,7 @@ class CodecStream {
           std::to_string(last_frame_) + " at " + std::to_string(last_pts_ns_) +
           " ns");
     }
+    key_on_request();
     vkc::StageMetrics encoded;
     VKC_ASSIGN(const Bytes bytes, encoder_.encode(source, &encoded));
     if (set != nullptr) set->rows.merge(encoded);
@@ -444,7 +450,10 @@ class CodecStream {
 
   /// @brief Record @p source's frame's front half into @p front, after what
   ///        it holds -- a sender's fusion -- for @ref finish
-  ///        (`Encoder::record_front`), its rows the frame's own.
+  ///        (`Encoder::record_front`), its rows the frame's own. The front
+  ///        half decides the frame's type, so a viewer's request for a key
+  ///        is read here, as @ref code reads it; it stands until a frame is
+  ///        returned, so a front half recorded again (@ref redo) keeps it.
   /// @return The pending frame; InvalidArgument for a finished stream; or
   ///         the encoder's refusal, with nothing recorded.
   vkc::Result<vr::codec::PendingEncode> record(
@@ -452,6 +461,7 @@ class CodecStream {
     if (finished_) {
       return vkc::Status::invalid_argument("CodecStream: finished");
     }
+    key_on_request();
     front_rows_ = vkc::StageMetrics{};
     max_blocks_ = static_cast<std::uint32_t>(source.grid().num_blocks);
     return encoder_.record_front(front, source, &front_rows_);
@@ -719,6 +729,19 @@ class CodecStream {
     return vkc::Status::io_error("CodecStream: cannot write the CSV " + path);
   }
 
+  // Make the next frame an I-frame (Encoder::force_intra) when a viewer
+  // joined or fell back since the last frame read the server's count: it
+  // waits for a key. The request stands until a frame is returned, so a frame
+  // refused or recorded again still makes it; joins between two frames make
+  // one.
+  void key_on_request() noexcept {
+    if (!server_) return;
+    const std::uint64_t wanted = server_->key_wanted();
+    if (wanted == key_wanted_) return;
+    key_wanted_ = wanted;
+    encoder_.force_intra();
+  }
+
   // Close a stream that holds no record and remove its file at `path`, so a
   // rerun is refused for its real cause, not for this empty stream.
   static void take_back(std::unique_ptr<vr::stream::StreamWriter>& writer,
@@ -818,6 +841,8 @@ class CodecStream {
   // Null when not serving, or once finished.
   std::unique_ptr<vr::networking::StreamServer> server_;
   std::unique_ptr<vr::stream::StreamWriter> writer_;  // null without a stream
+  // The server's key_wanted() when a frame last read it (key_on_request).
+  std::uint64_t key_wanted_ = 0;
   std::ofstream csv_;           // open when outputs_.csv names a file
   std::uint64_t coded_ = 0;     // frames encoded and recorded: the next seq
   std::size_t last_frame_ = 0;  // the last of them, once coded_ > 0

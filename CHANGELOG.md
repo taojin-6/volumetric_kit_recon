@@ -8,6 +8,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `networking`, examples: **keys on demand** (the 2026-10-25 keys-on-demand
+  decision): `ServerOptions::replay_gop`, true by default as before; false,
+  a joiner waits for the next key, the log keeps only what connected viewers
+  still need, and a viewer that a record would take `max_gop_bytes` behind
+  waits for the next key, alone; newest key wins in both modes, and a
+  record past `max_gop_bytes` on its own is logged at Warning in both.
+  `StreamServer::key_wanted()` counts the joins and fall-backs. The codec
+  examples' `CodecStream` reads it before
+  each frame's front half, in `code` and in `SetSender::send`, and codes an
+  I-frame when it rose; fuse_orbbec serves without `replay_gop`, so a viewer
+  that joins or falls behind gets a key at the next set, and `serve_stream`
+  keeps it. Tests: `recon_networking_gop_log`, `recon_networking_server`,
+  `recon_networking_server_oom`,
+  `recon_networking_stress` (both modes, under TSan too),
+  `recon_example_set_codec`, `recon_example_config`.
 - `sensor`, `tsdf`, `volume`: **a run's sets, the fusion grid and the block
   layout are library calls** (the 2026-10-25 decision):
   `sensor::RigSets` (`sensor/array/rig_sets.hpp`), `tsdf::create_fusion_grid`
@@ -94,6 +109,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `sensor`: **frame prep samples NV12 plane images where they are** (the
+  2026-10-25 plane-image decision): `GpuFramePrep` reads a picture's
+  `YuvImage::image` planes through two combined image samplers, in a second
+  entry of the colour pass over the same body, rather than copying them into
+  a buffer of its own; its `sensor.raw_color` buffer goes. The words are the
+  buffer form's, bit for bit. `PixelBufferImporter`'s plane images gain
+  `SAMPLED` usage and a view, and keep `TRANSFER_SRC`. Migration: plane
+  images given to `GpuFramePrep` need `SAMPLED` usage and a view, in
+  `GENERAL` or `SHADER_READ_ONLY_OPTIMAL`, and must be 2D, of one layer and
+  one sample (an arrayed or 3D image's first layer is no longer taken), and
+  no longer need `TRANSFER_SRC`,
+  which `PictureReadback` still needs. Tests:
+  `recon_sensor_gpu_frame_prep`, `recon_sensor_gpu_frame_prep_submit`,
+  `recon_sensor_picture_readback`,
+  `recon_sensor_apple_pixel_buffer_importer`.
 - CI: **the sanitizer job runs on the owner's Linux GPU boxes**, on the
   host. On the lab box it takes 1 min 45 s (build 32 s, tests 64 s, 5 at a
   time), where a hosted 4-vCPU runner took 5-8 minutes and set every PR's

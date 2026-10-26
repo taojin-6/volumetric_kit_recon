@@ -252,6 +252,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   decoder, for H.265 and MJPEG alike, hands its picture to Vulkan in place,
   and `GpuFramePrep` takes I420 or NV12 from the host or the device. The
   software decoding and fallbacks it kept went on 2026-10-06.
+  *Amended 2026-10-25:* VideoToolbox's plane images are sampled where they
+  are, not copied (the plane-image entry).
 - [**2026-09-28**](#2026-09-28--a-device-takes-submits-from-several-threads-at-once-each-records-on-a-command-pool-of-its-own-and-only-the-queue-is-locked) —
   A `Device` takes submits from several threads at once: each records on a
   command pool of its own, and only the queue is locked.
@@ -512,6 +514,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   *Amended 2026-10-25:* CI compiles the importer for iOS 26.0.
   *Amended again 2026-10-25:* `recon_sensor_video` is no longer behind
   `VR_WITH_FFMPEG` on Apple, and CI's iOS check links it with the importer.
+  *And 2026-10-25 (the plane-image entry):* its planes gain `SAMPLED` usage
+  and a view.
 
 - [**2026-10-10**](#2026-10-10--grid-validation-bounds-the-truncation-band-by-the-depth-kernels-integer-representation) —
   Grid validation rejects non-finite metrics and bounds the truncation band by
@@ -677,7 +681,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   alone). The wire is the `.vrst` file's bytes; a viewer behind skips to a
   newer key, only at a chunk boundary, so no P-frame goes without its
   references; a viewer joins at the cached GOP; `publish` never waits; a
-  viewer types the sender's address.
+  viewer types the sender's address. *Amended 2026-10-25:* a live sender
+  serves keys on demand instead (`replay_gop` false), and the cached GOP
+  stays the default.
 - [**2026-10-21**](#2026-10-21--meshintegrator-finds-each-voxels-nearest-triangle-with-an-exact-early-exit-a-triangle-is-ruled-out-only-by-a-lower-bound-less-a-rounding-margin-of-its-own-strictly-above-the-voxels-limit) —
   `MeshIntegrator` finds each voxel's nearest triangle with an exact early
   exit: a workgroup per block sorts its bin by a lower bound, and a triangle
@@ -748,6 +754,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   `recon_sensor_video_syntax`): host code on the core's base tier alone,
   built on every platform, its parsers returning `Result` and its
   `BitReader` public with them.
+- [**2026-10-25**](#2026-10-25--frame-prep-samples-nv12-plane-images-where-they-are-in-a-second-entry-of-the-colour-pass-and-the-plane-copies-go-amends-the-2026-09-28-decoded-frame-and-2026-10-08-pixel-buffer-importer-entries) —
+  Frame prep samples NV12 plane images where they are, through combined
+  image samplers in a second entry over the colour pass's body, to the
+  buffer form's words bit for bit; the two plane copies and their scratch
+  buffer go. Plane images need `SAMPLED` usage and a view for frame prep,
+  `TRANSFER_SRC` for readback, and the importer's carry both.
 - [**2026-10-25**](#2026-10-25--a-runs-sets-the-fusion-grid-and-the-block-layout-are-library-calls-rigsets-in-the-arrays-tier-create_fusion_grid-in-tsdf-and-block_grid_params-in-volume-opening-a-rig-stays-the-callers) —
   A run's sets, the fusion grid and the block layout move from the examples
   into the library: `sensor::RigSets` in `recon_sensor_array`,
@@ -755,6 +767,14 @@ entries relevant to your task; later amendments supersede earlier rules.
   `volume::block_grid_params`, which `codec::make_decode_grid` builds with
   too. Opening a rig stays the three public calls, and a set's prep and all
   printing stay the caller's.
+- [**2026-10-25**](#2026-10-25--a-live-sender-makes-keys-on-demand-a-joiner-waits-for-the-next-key-the-server-keeps-what-its-viewers-still-need-and-a-viewer-that-falls-max_gop_bytes-behind-waits-for-a-key-alone-amends-the-2026-10-21-networking-entry) —
+  Keys on demand: without `ServerOptions::replay_gop`, a joiner waits for
+  the next key, the server keeps only what its viewers still need, and a
+  viewer that falls `max_gop_bytes` behind waits for a key, alone; newest
+  key wins still. `StreamServer::key_wanted()` counts both, and the codec
+  examples' `CodecStream` codes an I-frame at its next front half when it
+  rises. fuse_orbbec serves so; `serve_stream`, which cannot make a key,
+  replays the GOP.
 
 ## Decision record
 
@@ -7807,6 +7827,8 @@ raw pass runs over both codecs.
 
 **Next**: measured first, the colour kernel reading Apple's plane images
 directly, which saves the copy's 0.28-0.31 ms of GPU.
+*Done 2026-10-25 (the plane-image entry):* the colour pass samples them
+where they are, and the copy is gone.
 
 *Amended 2026-10-01 (PERF.md's D1 and D3):* the fallback is no longer
 silent, and an exported picture buffer was already out of the BAR.
@@ -15420,6 +15442,69 @@ one zero or never, a code of 32 zeros taken, se(v)'s sign, the trailing
 bits unchecked, a short unit's payload, the null-data and type checks --
 fails the test.
 
+### 2026-10-25 — Frame prep samples NV12 plane images where they are, in a second entry of the colour pass, and the plane copies go (amends the 2026-09-28 decoded-frame and 2026-10-08 pixel-buffer importer entries).
+
+**The rule.** `GpuFramePrep` reads a picture's `YuvImage::image` planes in
+place. The colour pass has two entries over one body
+(`undistort_color.glsl`: the lens, the coverage test, the chroma siting, the
+bilinear weights and the conversion): `undistort_color.comp` reads planes
+in a buffer or packed host words, and `undistort_color_images.comp` reads
+the two plane images through combined image samplers at integer coordinates
+(`texelFetch`), making each sample its 8-bit code again with
+`round(v * 255)`. Both entries therefore give the same words for the same
+samples. The two plane copies `record_inputs` recorded go, with the pass's
+`sensor.raw_color` buffer (12.4 MB a 4K camera) and two of a frame's timed
+spans. `KernelSetBuilder` binds storage buffers only, so the image entry's
+layout is built by hand: two combined image samplers and the output, its
+set from a pool of its own, its sampler nearest and clamped, which
+`texelFetch` never uses to filter. No core change.
+
+**What a plane image needs.** Frame prep takes `SAMPLED` usage and a view,
+in `GENERAL` or `SHADER_READ_ONLY_OPTIMAL`, of a 2D image of one layer and
+one sample: the entry reads it as a `sampler2D`, which a 3D, arrayed or
+multisampled image's view does not match, where the copy took the first
+layer and refused multisampling. `PictureReadback` still copies
+the images and takes `TRANSFER_SRC`. One check serves both, told which
+reader asks (`detail::ImageRead`), and each refusal names what its reader
+needs. `PixelBufferImporter`'s planes carry both usages and a view, and
+their one barrier out of `UNDEFINED` makes them visible to compute reads as
+well as copies. Planes in a buffer (NVDEC, nvJPEG) and packed host words are
+read as before.
+
+**Why.** The copy cost 0.28-0.31 ms of GPU a 4K picture on the M5 Max (the
+2026-09-28 decoded-frame entry), every set, and a scratch buffer per camera.
+Sampling in place nets 0.80 ms of device time a 4-camera 4K set on the M4,
+back to back, though the pass reads images more slowly than the copied
+buffer (PERF.md's L3 row has both arms, and paced sets).
+
+**Tests.** Plane images larger than the picture, sampled in place in either
+layout, prepare to the words the same samples give from buffer rows, bit for
+bit (`recon_sensor_gpu_frame_prep`, every leg), and on a Mac so does a
+patterned picture on a real IOSurface, its rows longer than the picture,
+against its own bytes in a buffer
+(`recon_sensor_apple_pixel_buffer_importer`). Images without `SAMPLED`
+usage (a view present), without a view, in a copy's layout, or 3D, arrayed
+or multisampled (either plane) are refused by frame prep, and a
+sampled-only image by readback. The claim-before-grow case no longer has
+the copy's buffer to catch a growth recorded before its claim; it catches
+it through the outputs.
+
+**Validation.** Apple M4 (Mac mini), macOS 27.0.1, Release with warnings
+as errors, under the validation layer: the 112 tests pass on VideoToolbox,
+the sensor tests under sync validation too, and the iOS check links; four
+4K surfaces' imported planes, views included, allocate in Metal exactly what
+bare textures do. RTX 4090, Release with warnings as errors: the 107 tests
+pass on the NVIDIA driver and on lavapipe under the validation layer, and
+the frame-prep, readback, array and set-codec tests under sync validation.
+Mutants, on every leg: growing the buffers before the claim (#282's
+mutation) fails the claim-before-grow case, the validation layer reporting
+the unresolved batch's outputs destroyed; Cb and Cr swapped, the luma read
+a column over and an image without a view taken each fail, and so does the
+check without its `SAMPLED` condition, without any one of its 2D, layer and
+sample conditions, or with either plane's shape unchecked. The luma left
+unrounded (`v * 255`) passes on the M4 and the RTX 4090 and fails on
+lavapipe, which is why the entry rounds.
+
 ### 2026-10-25 — A run's sets, the fusion grid and the block layout are library calls: `RigSets` in the array's tier, `create_fusion_grid` in `tsdf` and `block_grid_params` in `volume`; opening a rig stays the caller's.
 
 **The rule.** Three pieces the examples kept in `examples/common` move to
@@ -15491,6 +15576,114 @@ a lone sync secondary's cause left out, fewer blocks than bucket entries,
 another chain length, a fusion grid without `color` or with another band, a
 NaN voxel's start passed to the integer conversion, the block count's int32
 product -- fails a test or the build.
+
+### 2026-10-25 — A live sender makes keys on demand: a joiner waits for the next key, the server keeps what its viewers still need, and a viewer that falls `max_gop_bytes` behind waits for a key, alone (amends the 2026-10-21 networking entry).
+
+**The rule.** `ServerOptions::replay_gop`, true by default, is the
+2026-10-21 server: a joiner gets the GOP since the newest key. False, a
+viewer joins waiting for the next key and from it gets every record, in
+order. One that a record would leave more than `max_gop_bytes` behind the
+newest finishes its chunk under way and waits for the next key again,
+alone; a lost copy sends every viewer back so. The server keeps only the
+records a viewer still has to send. Newest key wins in both modes.
+`StreamServer::key_wanted()` counts each join and each fall-back, and the
+viewers waiting for a key that is lost; a key within `max_gop_bytes` counts
+none, as every viewer goes on from it; 0 with `replay_gop`. A record past
+`max_gop_bytes` on its own, which no viewer can take, is logged at Warning
+in both modes. The codec examples' `CodecStream` reads the count before
+each frame's front half, in `code` and in `record` (so in
+`SetSender::send`), and calls `Encoder::force_intra()` when it rose since
+the last read. `codec_outputs` serves without `replay_gop`, so
+fuse_orbbec's viewers that join or fall behind get a key at the next set;
+`serve_stream` replays a file, cannot make a key, and keeps it.
+
+**Why.** The 2026-10-21 entry joined viewers at the cached GOP because
+waiting for the next key showed nothing for up to a second, and a replayed
+file cannot force one. A live sender can: the joiner waits one set, 33 ms
+at 30 fps, and is sent the key alone, not the GOP since the last one (up to
+1.3 MB). And a GOP past `max_gop_bytes`, at any
+`EncoderConfig::intra_period`, no longer freezes every viewer to the next
+key: the server holds what the slowest viewer still needs, and a viewer
+that falls that far behind within a GOP waits for a key alone. Newest key
+wins still bounds the lag of one slower than the stream to about a GOP:
+simulated on the GOP log for 600 s at 30 fps, at the rig's rate at 1 cm
+(the 2026-10-21 entry's 0.78 MB key every 30 records and 9.4 MB/s, so
+0.3 MB P-frames) and the default limit, a viewer taking 95% of the stream
+fell 7 s behind before a fall-back without it, and stays within 2 records
+with it, as when replaying. So a key counts none: a viewer it would take
+past the limit goes on from it, and a second key made for that viewer
+would only add to its backlog (without the skip, at a 2 MiB limit, the
+simulated sender forced 239 keys in the 600 s, 189 with the viewer not
+waiting; with it, none).
+
+**Where the key is read.** The encoder picks I or P as the front half is
+recorded (`Encoder::record_front`), so the count is read there, before the
+fusion's batch is submitted, and a rise during a set keys the next. The
+request stands until a frame is returned (the encoder's `finish`), so a
+frame refused or abandoned, as when a fusion done again records the front
+half again (`CodecStream::redo`), keeps it; joins between two frames make
+one key; and the intra period counts from it. There is no limit past one
+key a frame: a host that rejoins every set keys every set, and since a
+viewer is unauthenticated (the 2026-10-21 entry), a limit would not stop a
+determined one.
+
+**Tests.** The GOP log, with no socket: replaying counts no join; on demand,
+a joiner gets nothing until the next key, then every record; a viewer
+holding its key under way stays at exactly `max_gop_bytes` behind and falls
+back, counted, at the next record, the viewer keeping up getting every record;
+a viewer behind skips to a newer key, which counts none though the viewer
+would be past the limit with it; a record or key past the limit alone; a
+lost copy, and a lost key counting a lone joiner again; and seeded runs of
+records, lost copies and keys, and viewers joining, pulling, falling behind
+and leaving, the bytes held never past the limit and none with no viewer in,
+the count exactly the joins, fall-backs and waits a lost key ends, and each
+viewer's records its key's run, broken only by the newest key. On loopback:
+a joiner counted, then the next key and every record after; a raw viewer
+that stops reading falls back, counted, once 512 KiB are behind it, then
+drains a run from the first key, the new key and the P-frames after it,
+while a client reading each record gets every one and is never counted; one
+that stops reading over 3 GOPs of 1 MiB gets the newest GOP, in both modes;
+a key past the limit alone logged at Warning, its joiner not counted again,
+and a P-frame past it sending the viewer back, counted, at Warning; a copy
+failing (an allocation failure injected, in `recon_networking_server_oom`,
+apart so the rest link under TSan on Linux too) counting the viewer it sends
+back, and a lost key the one waiting, before `publish` returns; replaying,
+nothing counted. The stress run in both modes, its publisher keying on the count,
+under TSan on the Mac leg. On a device (`recon_example_set_codec`), served
+as fuse_orbbec serves, through `SetSender::send` and through `code`, each
+viewer reading each set as it is published: keys at the intra period of 4
+with no joiner; three joins before set 2 and one before set 7 key 0, 2, 6
+and 7, each viewer's first record the key at its set; and, on 32 buckets
+with the cameras seeing a patch until set 3,
+set 3's fusion done again and its frame a key with a joiner, a P-frame with
+none. `recon_example_config` pins fuse_orbbec's serve options to
+`replay_gop` false.
+
+**Validation.** RTX 5090, Ubuntu 26.04, GCC 15.2, Release with warnings as
+errors and the ubuntu-26.04 leg's options, under the validation layer: the 108
+tests pass, and the sender, config and networking tests under sync
+validation too. RTX 4090, Ubuntu 26.04, Release with the ubuntu-24.04 leg's
+Orbbec, FFmpeg, CUDA and Assimp: the 127 tests pass; the keyed sender,
+server and stress tests 20 runs of 20 each; and the GOP log, socket,
+server, stress and stream container tests under ThreadSanitizer (clang,
+Debug). Apple M4
+(Mac mini), macOS 27.0.1, Release with Orbbec, Assimp and the viewers: the
+133 tests pass under the validation layer, the iOS check links, and the 12
+threaded tests pass under ThreadSanitizer (Debug). Built Debug with clang
+under ASan and UBSan on the RTX 5090, the networking tests and the three
+example tests pass. The raw viewer fell back
+after 10 records of 64 KiB on Linux, 2 of them sent, and after 15 on macOS,
+7 sent. The on-demand stress run published 127,618 records in 1.5 s and
+forced 34 keys for 44 joins and fall-backs, its viewers jumping 403
+times. Mutations each fail a test: the count read only in `code` or only in
+`record`, or after the front half (a key one set late); a key forced while
+any viewer is counted, or one per join; `abandon` dropping the request (the
+fusion done again); a joiner let in at once rather than at the next key, and
+no fall-back (GOP log and server each); a fall-back or a join not counted;
+the count not published after `publish`, or after a lost copy; the log never
+trimmed; no newest-key skip on demand (GOP log, server); a key counting the
+viewers it would take past the limit; a lost key counting no waiting viewer;
+no Warning on demand; and fuse_orbbec's options replaying the GOP.
 
 ## Measured lessons
 

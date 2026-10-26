@@ -7,11 +7,26 @@
 // newer key, and the chunk it holds survives the log's replacement; a GOP past
 // max_gop_bytes, or one whose record could not be copied, is dropped until the
 // next key; and, over seeded random runs of records and viewers, no P-frame is
-// ever handed out without every record since its key.
+// ever handed out without every record since its key. Replaying counts no
+// join. Keys on demand: a joiner gets nothing until the next key, then every
+// record; one that would fall past max_gop_bytes behind gets no P-frame
+// without its references, then the next key, while a viewer keeping up gets
+// every record; newest key wins, so a viewer behind goes on from a newer
+// key, which counts none even where the viewer would otherwise fall back; a
+// lost copy sends every viewer back to waiting, and a lost key counts the
+// waiting ones again; each join and each fall-back counts in key_wanted;
+// and, over seeded random runs, the bytes held stay within max_gop_bytes,
+// none with no viewer in, the count is exactly the joins, the fall-backs and
+// the waits a lost key ends, and each viewer's records are its key's run,
+// broken only by the newest key.
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
+#include <list>
 #include <memory>
+#include <optional>
 #include <random>
 #include <vector>
 
@@ -167,7 +182,7 @@ int failed_copy_case() {
   CHECK(log.append(chunk(0, true), true));
   GopLog::Cursor live;
   CHECK(drain(log, &live) == (Seqs{0}));
-  log.break_gop();
+  log.break_gop(false);
   CHECK(!log.open());
   CHECK(!log.append(chunk(2, false), false));
   CHECK(log.next(&live) == nullptr);
@@ -205,7 +220,7 @@ int never_without_key_case() {
         keys_seen += key ? 1 : 0;
         (void)log.append(chunk(seq++, key, size), key);
       } else if (what < 32) {
-        log.break_gop();
+        log.break_gop(false);
         ++seq;  // the record lost
       } else if (what < 36 && viewers.size() < 6) {
         viewers.emplace_back();
@@ -238,6 +253,280 @@ int never_without_key_case() {
   return 0;
 }
 
+// Replaying, a viewer starts at the GOP's key, so none is counted wanting
+// one, and joining and leaving change nothing it is handed.
+int replay_counts_no_join_case() {
+  GopLog log(1 << 20);
+  CHECK(log.append(chunk(0, true), true));
+  GopLog::Cursor viewer;
+  log.join(&viewer);
+  CHECK(log.key_wanted() == 0);
+  CHECK(drain(log, &viewer) == (Seqs{0}));
+  CHECK(log.append(chunk(1, false), false));
+  log.leave(&viewer);
+  GopLog::Cursor late;
+  CHECK(drain(log, &late) == (Seqs{0, 1}));
+  CHECK(log.key_wanted() == 0);
+  return 0;
+}
+
+// Keys on demand: with no viewer nothing is kept; a joiner, counted, gets
+// nothing until the next key, then every record; a second joiner mid-GOP
+// waits for the next key, which the first gets in its turn; what every
+// viewer took goes at the next record, and what only a leaver needed too.
+int on_demand_join_case() {
+  GopLog log(1 << 20, false);
+  CHECK(!log.append(chunk(0, true), true));
+  CHECK(!log.append(chunk(1, false), false));
+  CHECK(log.bytes() == 0 && log.key_wanted() == 0);
+  GopLog::Cursor first;
+  log.join(&first);
+  CHECK(log.key_wanted() == 1 && !log.open());
+  CHECK(!log.append(chunk(2, false), false));
+  CHECK(log.next(&first) == nullptr);
+  CHECK(log.append(chunk(3, true), true));
+  CHECK(log.open());
+  CHECK(log.append(chunk(4, false), false));
+  CHECK(drain(log, &first) == (Seqs{3, 4}));
+  GopLog::Cursor second;
+  log.join(&second);
+  CHECK(log.key_wanted() == 2);
+  CHECK(log.append(chunk(5, false), false));
+  CHECK(log.next(&second) == nullptr);
+  CHECK(drain(log, &first) == (Seqs{5}));
+  CHECK(log.append(chunk(6, true), true));
+  CHECK(log.append(chunk(7, false), false));
+  CHECK(drain(log, &second) == (Seqs{6, 7}));
+  CHECK(drain(log, &first) == (Seqs{6, 7}));
+  CHECK(log.append(chunk(8, false), false));
+  CHECK(log.bytes() == 16);
+  CHECK(drain(log, &first) == (Seqs{8}));
+  log.leave(&second);
+  CHECK(log.append(chunk(9, false), false));
+  CHECK(log.bytes() == 16);
+  CHECK(drain(log, &first) == (Seqs{9}));
+  log.leave(&first);
+  CHECK(!log.append(chunk(10, false), false));
+  CHECK(!log.append(chunk(11, true), true));
+  CHECK(log.bytes() == 0 && log.key_wanted() == 2);
+  return 0;
+}
+
+// Keys on demand, max_gop_bytes 3000: a viewer that stops taking chunks,
+// holding its key under way, stays with exactly 3000 bytes behind it and
+// falls back, counted, at the record that would leave it more; what only it
+// needed goes; the chunk it holds stays whole; it gets no P-frame after it,
+// then the next key. The viewer keeping up gets every record and is never
+// counted. A record past the limit alone sends every viewer back, and a key
+// past it lets none in.
+int on_demand_fall_back_case() {
+  GopLog log(3000, false);
+  GopLog::Cursor slow;
+  GopLog::Cursor fast;
+  log.join(&slow);
+  log.join(&fast);
+  CHECK(log.append(chunk(0, true, 1000), true));
+  const Chunk under_way = log.next(&slow);
+  CHECK(under_way != nullptr && seq_of(under_way) == 0);
+  CHECK(drain(log, &fast) == (Seqs{0}));
+  const std::size_t sizes[] = {1000, 1000, 991, 9};  // 3000 behind it
+  for (std::uint64_t seq = 1; seq <= 4; ++seq) {
+    CHECK(log.append(chunk(seq, false, sizes[seq - 1]), false));
+    CHECK(drain(log, &fast) == (Seqs{seq}));
+  }
+  CHECK(log.key_wanted() == 2 && log.bytes() == 3000);
+  CHECK(log.append(chunk(5, false, 9), false));
+  CHECK(log.key_wanted() == 3 && log.bytes() == 9);
+  CHECK(under_way.use_count() == 1 && under_way->size() == 1000);
+  CHECK(log.next(&slow) == nullptr);
+  CHECK(drain(log, &fast) == (Seqs{5}));
+  CHECK(log.append(chunk(6, false, 10), false));
+  CHECK(log.next(&slow) == nullptr);
+  CHECK(drain(log, &fast) == (Seqs{6}));
+  CHECK(log.append(chunk(7, true, 500), true));
+  CHECK(log.append(chunk(8, false, 500), false));
+  CHECK(drain(log, &slow) == (Seqs{7, 8}));
+  CHECK(drain(log, &fast) == (Seqs{7, 8}));
+  CHECK(log.key_wanted() == 3);
+  CHECK(!log.append(chunk(9, false, 3001), false));
+  CHECK(log.key_wanted() == 5 && log.bytes() == 0);
+  CHECK(!log.append(chunk(10, true, 3001), true));
+  CHECK(log.key_wanted() == 5);
+  CHECK(log.next(&slow) == nullptr && log.next(&fast) == nullptr);
+  CHECK(log.append(chunk(11, true, 3000), true));
+  CHECK(drain(log, &slow) == (Seqs{11}));
+  CHECK(drain(log, &fast) == (Seqs{11}));
+  return 0;
+}
+
+// Keys on demand, a lost copy: every viewer in falls back, counted, a
+// waiting one not again, and the next key lets both in. A lost key counts
+// again a lone joiner that waited for it, as well as every viewer in; a
+// lost P-frame does not.
+int on_demand_lost_copy_case() {
+  GopLog log(1 << 20, false);
+  GopLog::Cursor in;
+  GopLog::Cursor waiting;
+  log.join(&in);
+  CHECK(log.append(chunk(0, true), true));
+  CHECK(drain(log, &in) == (Seqs{0}));
+  log.join(&waiting);
+  CHECK(log.key_wanted() == 2);
+  log.break_gop(false);
+  CHECK(log.key_wanted() == 3 && !log.open() && log.bytes() == 0);
+  CHECK(!log.append(chunk(2, false), false));
+  CHECK(log.next(&in) == nullptr && log.next(&waiting) == nullptr);
+  CHECK(log.append(chunk(3, true), true));
+  CHECK(drain(log, &in) == (Seqs{3}));
+  CHECK(drain(log, &waiting) == (Seqs{3}));
+  CHECK(log.key_wanted() == 3);
+  log.break_gop(true);  // key 4 lost
+  CHECK(log.key_wanted() == 5 && !log.open() && log.bytes() == 0);
+
+  GopLog lone_log(1 << 20, false);
+  GopLog::Cursor lone;
+  lone_log.join(&lone);
+  CHECK(lone_log.key_wanted() == 1);
+  lone_log.break_gop(false);  // P-frame 0 lost: it waits for a key still
+  CHECK(lone_log.key_wanted() == 1);
+  lone_log.break_gop(true);  // key 1, made for it, lost
+  CHECK(lone_log.key_wanted() == 2);
+  CHECK(lone_log.append(chunk(2, true), true));
+  CHECK(drain(lone_log, &lone) == (Seqs{2}));
+  CHECK(lone_log.key_wanted() == 2);
+  return 0;
+}
+
+// Keys on demand, max_gop_bytes 3000, newest key wins: a viewer behind,
+// holding its key under way, gets that chunk whole, then the newer key and
+// what follows it, the rest skipped and dropped. The key counts none, though
+// the viewer, at 2500 bytes behind, would be past the limit with the key
+// had it to send the rest first: it goes on from the key. Of two newer keys
+// before it asks again, the newest wins.
+int on_demand_newest_key_wins_case() {
+  GopLog log(3000, false);
+  GopLog::Cursor slow;
+  GopLog::Cursor fast;
+  log.join(&slow);
+  log.join(&fast);
+  CHECK(log.append(chunk(0, true, 1000), true));
+  const Chunk under_way = log.next(&slow);
+  CHECK(under_way != nullptr && seq_of(under_way) == 0);
+  CHECK(drain(log, &fast) == (Seqs{0}));
+  CHECK(log.append(chunk(1, false, 1000), false));
+  CHECK(drain(log, &fast) == (Seqs{1}));
+  CHECK(log.append(chunk(2, false, 1500), false));
+  CHECK(drain(log, &fast) == (Seqs{2}));
+  CHECK(log.bytes() == 2500 && log.key_wanted() == 2);
+  CHECK(log.append(chunk(3, true, 1000), true));
+  CHECK(log.key_wanted() == 2 && !slow.waiting && log.bytes() == 1000);
+  CHECK(under_way.use_count() == 1 && under_way->size() == 1000);
+  CHECK(log.append(chunk(4, false, 10), false));
+  CHECK(drain(log, &slow) == (Seqs{3, 4}));
+  CHECK(drain(log, &fast) == (Seqs{3, 4}));
+  CHECK(log.append(chunk(5, true, 10), true));
+  CHECK(log.append(chunk(6, true, 10), true));
+  CHECK(log.append(chunk(7, false, 10), false));
+  CHECK(drain(log, &slow) == (Seqs{6, 7}));
+  CHECK(drain(log, &fast) == (Seqs{6, 7}));
+  CHECK(log.key_wanted() == 2);
+  return 0;
+}
+
+// Keys on demand, seeded runs of records (a key now and then, sizes past a
+// small limit at times, a lost copy at times, a key at times) and viewers
+// that join, pull, fall behind and leave at random: the bytes held never pass
+// the limit and are none while no viewer is in; the count rises by one for
+// each join, each viewer in that falls back, and each viewer waiting when a
+// key is lost, and by none for a key kept; a viewer's first chunk is the
+// newest key kept, and so is the next chunk of one that has not had it;
+// otherwise each chunk follows the one it got before.
+int on_demand_random_case() {
+  for (std::uint32_t seed = 1; seed <= 40; ++seed) {
+    std::mt19937 rng(seed);
+    const auto pick = [&rng](std::uint64_t low, std::uint64_t high) {
+      return std::uniform_int_distribution<std::uint64_t>(low, high)(rng);
+    };
+    const std::uint64_t limit = pick(200, 4000);
+    GopLog log(limit, false);
+    struct Viewer {
+      GopLog::Cursor cursor;
+      bool any = false;
+      std::uint64_t last = 0;
+      bool was_waiting = true;
+    };
+    std::list<Viewer> viewers;  // the log holds their cursors' addresses
+    std::uint64_t seq = 0;
+    std::uint64_t counted = 0;            // what key_wanted should be
+    std::optional<std::uint64_t> newest;  // the newest key kept
+    std::uint64_t got = 0;
+    std::uint64_t jumps = 0;
+    const auto before = [&viewers] {
+      for (Viewer& v : viewers) v.was_waiting = v.cursor.waiting;
+    };
+    for (int step = 0; step < 4000; ++step) {
+      const std::uint64_t what = pick(0, 99);
+      if (what < 30) {
+        const bool key = pick(0, 9) == 0;
+        before();
+        if (log.append(chunk(seq, key, pick(9, 600)), key) && key) {
+          newest = seq;
+        }
+        ++seq;
+        for (const Viewer& v : viewers) {
+          counted += !v.was_waiting && v.cursor.waiting ? 1 : 0;
+        }
+        CHECK(log.bytes() <= limit);
+        CHECK(log.open() || log.bytes() == 0);
+      } else if (what < 31) {
+        const bool key = pick(0, 2) == 0;
+        before();
+        log.break_gop(key);
+        ++seq;  // the record lost
+        for (const Viewer& v : viewers) {
+          counted += !v.was_waiting || key ? 1 : 0;
+        }
+        CHECK(!log.open() && log.bytes() == 0);
+      } else if (what < 35 && viewers.size() < 6) {
+        viewers.emplace_back();
+        log.join(&viewers.back().cursor);
+        ++counted;
+      } else if (what < 37 && !viewers.empty()) {
+        auto gone =
+            std::next(viewers.begin(),
+                      static_cast<std::ptrdiff_t>(pick(0, viewers.size() - 1)));
+        log.leave(&gone->cursor);
+        viewers.erase(gone);
+      } else if (!viewers.empty()) {
+        Viewer& v = *std::next(
+            viewers.begin(),
+            static_cast<std::ptrdiff_t>(pick(0, viewers.size() - 1)));
+        const Chunk c = log.next(&v.cursor);
+        if (c == nullptr) continue;
+        const std::uint64_t s = seq_of(c);
+        const bool to_key = !v.any || (newest && v.last < *newest);
+        if (to_key ? !newest || s != *newest || !key_of(c)
+                   : s != v.last + 1 || key_of(c)) {
+          std::fprintf(stderr,
+                       "FAIL seed %u: %llu after %llu (any %d), newest key "
+                       "%lld\n",
+                       seed, static_cast<unsigned long long>(s),
+                       static_cast<unsigned long long>(v.last), v.any,
+                       newest ? static_cast<long long>(*newest) : -1LL);
+          return 1;
+        }
+        jumps += v.any && s != v.last + 1 ? 1 : 0;
+        v.any = true;
+        v.last = s;
+        ++got;
+      }
+      CHECK(log.key_wanted() == counted);
+    }
+    CHECK(got > 0 && jumps > 0);
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -247,6 +536,12 @@ int main() {
   if (overflow_case() != 0) return 1;
   if (failed_copy_case() != 0) return 1;
   if (never_without_key_case() != 0) return 1;
+  if (replay_counts_no_join_case() != 0) return 1;
+  if (on_demand_join_case() != 0) return 1;
+  if (on_demand_fall_back_case() != 0) return 1;
+  if (on_demand_lost_copy_case() != 0) return 1;
+  if (on_demand_newest_key_wins_case() != 0) return 1;
+  if (on_demand_random_case() != 0) return 1;
   std::puts("networking gop log: OK");
   return 0;
 }

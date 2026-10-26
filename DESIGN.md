@@ -1373,7 +1373,9 @@ is left is the trailing bits.
 **`sensor/apple`'s `PixelBufferImporter`** (`recon_sensor_apple`, on every
 Apple build, iOS included, with no FFmpeg) hands an 8-bit NV12
 `CVPixelBuffer` on an IOSurface to Vulkan in place: each plane becomes a
-Metal texture imported as an image (`VK_EXT_metal_objects`), made once per
+Metal texture imported as an image (`VK_EXT_metal_objects`), with a view and
+`SAMPLED` and `TRANSFER_SRC` usage, so `GpuFramePrep` samples it and
+`PictureReadback` copies it, made once per
 surface and kept while pictures keep arriving on it, the images holding the
 pixel buffer. The images are EXCLUSIVE unless `create` is given the queue
 families that read them, by `BufferDesc::queue_families`' rule with the
@@ -1450,12 +1452,17 @@ buffer (`YuvImage::device`, with per-plane offsets and strides) are bound
 where they are, from
 the first plane, once the batch has taken them over from the queue family
 that owns them (`YuvImage::queue_family`; the 2026-09-28 decoded-frame
-decision). NV12's planes may come as images instead (`YuvImage::image`),
-which the batch copies into the pass's input. A dataset decoded on the host
-hands its colour over as packed R'G'B' words instead
+decision). NV12's planes may come as images instead (`YuvImage::image`,
+with `SAMPLED` usage and a view), which the colour pass samples where they
+are, with no copy: a second entry over the same body
+(`undistort_color_images.comp`, `undistort_color.glsl`) binds them as two
+combined image samplers, reads them at integer coordinates and makes each
+sample its 8-bit code again (`round(v * 255)`), so its words are the buffer
+form's, bit for bit (the 2026-10-25 plane-image decision). A dataset decoded
+on the host hands its colour over as packed R'G'B' words instead
 (`RgbdFrame::color_packed`, `io::load_color_packed`'s layout; the
-2026-10-07 packed-colour decision), copied into the pass's input like the
-images; the colour pass samples R, G and B as byte planes four bytes apart,
+2026-10-07 packed-colour decision), copied into the pass's slot after the
+depth; the colour pass samples R, G and B as byte planes four bytes apart,
 through the same bilinear sampler and coverage test. The depth, and any
 packed colour after it at the binding alignment, is copied into the pass's
 one persistent slot (`core::HostRing`), which the batch binds in place where
@@ -1490,7 +1497,8 @@ host allocation failure. The copies land in host memory it keeps (`Staging`,
 cached for reading), grown to the largest read, and each `PictureView` points
 into it until the next read, so the frames may go at once. A picture is
 checked by the rules `GpuFramePrep` applies to one (`yuv_planes.hpp`), with
-`TRANSFER_SRC` for its buffer where the pass needs storage usage.
+`TRANSFER_SRC` where the pass needs a buffer's storage usage, or images'
+`SAMPLED` usage and views.
 An Orbbec frame holds its SDK pair and the SDK
 context, with the models and the depth-to-colour extrinsic from the factory
 calibration (the extrinsic's rotation made one: the Femto Mega's is not, the
@@ -1995,16 +2003,28 @@ every interface, and starts an accept thread; one thread per viewer sends,
 at most `max_viewers` (4) at once, first come, and a connection past them is
 closed at accept. `publish` frames the record by the writer's rules, copies
 its chunk once, takes one lock to append it to the GOP log and wakes the
-viewers: it never waits on a socket. The log holds one GOP, the newest key and every
+viewers: it never waits on a socket. A viewer takes its next chunk only once
+its socket polls writable, under 128 KiB unsent (`TCP_NOTSENT_LOWAT`), and
+a P-frame never goes out without the records it is predicted from. At a
+chunk boundary a viewer goes on from a newer key if one has come: newest key
+wins, in either mode, so a lagging viewer's seq jumps to a key. By
+default (`replay_gop`) the log holds one GOP, the newest key and every
 record after it, as chunks shared by the viewers still to send them. A
 viewer's first record, after its `VRST` chunk, is the GOP's key, and the
-log keeps every record since. It takes its next chunk only once its socket
-polls writable, under 128 KiB unsent (`TCP_NOTSENT_LOWAT`), and at that
-chunk boundary goes on from a newer key if one has come: newest key wins, so a
-P-frame never goes out without the records it is predicted from, and a
-lagging viewer's seq jumps to a key. A record that would take the GOP past
+log keeps every record since. A record that would take the GOP past
 `max_gop_bytes` (64 MiB) drops it and every record until the next key, as
-a copy that fails does (`OutOfMemory`). A viewer whose end acknowledges no
+a copy that fails does (`OutOfMemory`). Without `replay_gop` (the
+2026-10-25 keys-on-demand entry), a viewer joins waiting for the next key, then
+gets every record, in order, but by newest key wins; one that a record would
+leave more than `max_gop_bytes` behind finishes its chunk under way and
+waits for the next key again, alone, as every viewer does after a lost copy.
+The log keeps only the records a viewer still has to send, none before the
+newest key. Each join and each fall-back counts in `key_wanted()`, an
+atomic any thread reads, which a live sender answers with a key at its next
+frame; a lost key counts its waiting viewers again, a key within
+`max_gop_bytes` counts none, and with `replay_gop` it stays 0. A fall-back
+is logged at Info, and a record past `max_gop_bytes` on its own, which no
+viewer can take, at Warning. A viewer whose end acknowledges no
 byte for `stall_limit` (10 s) with bytes waiting is closed: a slow reader
 stays while its end acknowledges a byte within the limit (one behind a large
 receive buffer may not), as does one with nothing waiting. Viewers that
@@ -2038,8 +2058,8 @@ three-argument overload forwards without requesting progress.
 the server listens on it, and a name is looked up for it. Every socket is
 non-blocking and close-on-exec, accepted ones included, and never raises
 SIGPIPE; every call is retried on `EINTR`. The sender sets `TCP_NODELAY`
-and the listener `SO_REUSEADDR`. The GOP log (`gop_log.cpp`) has no socket,
-thread or clock, and is tested alone.
+and the listener `SO_REUSEADDR`. The GOP log (`gop_log.cpp`), in either
+mode, has no socket, thread or clock, and is tested alone.
 
 ## Examples
 
@@ -2217,7 +2237,14 @@ player lacks. `finish` writes the footer. With `serve`, a
 is in the file, if there is one, so no viewer gets a frame the file lacks; a
 record it refuses is logged at Warning and fails no frame, as failing would
 stop the recording. It starts before the file is made, so a port in use
-leaves none, and `finish` closes the viewers.
+leaves none, and `finish` closes the viewers. Before each frame's front half,
+where the encoder picks I or P, `code` and `record` read the server's
+`key_wanted()`: a rise since the last read calls `force_intra()`, which
+stands until a frame is returned, so joins between two frames make one key,
+a refused frame or a front half recorded again after a fusion done again
+keeps it, and the period counts from it. `codec_outputs` serves without
+`replay_gop`, so fuse_orbbec's viewers that join or fall behind get a key at
+the next set; `serve_stream`, which cannot make a key, keeps it.
 
 Before truncating the CSV, creation checks that it does not alias the new
 stream file, including through symlinks or case-insensitive names. An alias
@@ -2381,8 +2408,7 @@ it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
 and nvJPEG hand their pictures over on the device, and VideoToolbox both
 kinds, and a raw Orbbec frame's colour stays on the device over either
-codec; what is left there is the colour kernel reading Apple's plane images
-directly, measured first (`undistort_color.comp`). For H.265: the camera's
+codec, Apple's plane images sampled where they are. For H.265: the camera's
 encoder settings, its key-frame interval above all, which sets what a lost
 frame costs (`camera_stream.cpp`). The rig's next consumer is calib's
 viewer, showing its synchronised sets.
