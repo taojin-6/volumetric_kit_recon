@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// The senders' coded sets (examples/common/set_codec.hpp), with no camera
-// driver: two fake cameras 3 m apart, read as a sensor array and prepared on
-// the device as a rig's are. Each camera sees a back wall 2 m ahead and, in
-// the first three sets, a near wall 1 m ahead over the left of its picture,
-// which then leaves, so the cameras see past it to the back wall. Nine sets
-// sent through vr_example::SetSender at a fusion.free_after of 3 and a
-// fusion.max_weight of 1.5, and coded at an intra period of 30 into a .vrst:
+// A sender's coded sets (sender/set_sender.hpp), with no camera driver: two
+// fake cameras 3 m apart, read as a sensor array and prepared on the device
+// as a rig's are. Each camera sees a back wall 2 m ahead and, in the first
+// three sets, a near wall 1 m ahead over the left of its picture, which then
+// leaves, so the cameras see past it to the back wall. Nine sets sent through
+// sender::SetSender, a free pass every 3 sets and a max_weight of 1.5, and
+// coded at an intra period of 30 into a .vrst:
 // a Geometry record each, only the first a key, each record's set the set's
 // index and its pts the set's time, and every frame decodes through
 // codec::decode_growing. The last set is stamped before the one before it,
@@ -24,19 +24,18 @@
 // stream and without. A coded set is 2 submits and at most 2 host waits, a
 // set fused alone 1 and 1, a free pass's adding none, a set fused again 3
 // more or 2 and one for each further round its allocation takes, warm sets
-// no staging buffer but a payload slot's growth, at most two, and the front
+// no staging buffer but a payload buffer's growth, at most two, and the front
 // batch's dispatches stay below 80, at two cameras and at a rig's four; the
 // blocking calls code the same frames, and so do they on a grid of 32 buckets,
 // whose first set's fusion is done again and its front half, its wait timed.
-// Served as fuse_orbbec serves, keys on demand: with no viewer joining, the
-// frames follow the intra period; viewers joining before a set make its frame
-// a key, one however many join, the period following from it, through the
-// sender and through code, a set whose fusion is done again included, and
-// each viewer's first frame is that key. On the host, a path that is the
-// stream's or the CSV's file through a link refused, one beside them taken,
-// and one that cannot be checked refused; and the stream decoding only with a
-// CSV or a sweep, served without replay_gop. The device part skips with no
-// device.
+// Each set is published once, its frame's type and rows those the frame went
+// out with, the front batch's device rows the frame's only for its front
+// half. Served without replay_gop, keys on demand: with no viewer
+// joining, the frames follow the intra period; viewers joining before a set
+// make its frame a key, one however many join, the period following from it,
+// through the sender and through code, a set whose fusion is done again
+// included, and each viewer's first frame is that key. A sender over a
+// moved-from stream is refused. The device part skips with no device.
 
 #include <algorithm>
 #include <array>
@@ -45,7 +44,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
-#include <fstream>
 #include <initializer_list>
 #include <memory>
 #include <optional>
@@ -58,7 +56,7 @@
 #include "grid_readback.hpp"
 #include "networking_loopback.hpp"
 #include "scratch_dir.hpp"
-#include "set_codec.hpp"
+#include "stage_rows.hpp"
 #include "test_check.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/recon/camera/array_calibration.hpp"
@@ -67,6 +65,9 @@
 #include "volumetric_kit/recon/codec/encoder.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/recon/sender/codec_stream.hpp"
+#include "volumetric_kit/recon/sender/fuse_inputs.hpp"
+#include "volumetric_kit/recon/sender/set_sender.hpp"
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/recon/stream/stream_reader.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
@@ -76,14 +77,66 @@ namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace camera = volumetric_kit::recon::camera;
 namespace codec = volumetric_kit::recon::codec;
-namespace cfg = volumetric_kit::core::config;
+namespace sender = volumetric_kit::recon::sender;
 namespace sensor = volumetric_kit::recon::sensor;
 namespace stream = volumetric_kit::recon::stream;
 namespace networking = volumetric_kit::recon::networking;
 namespace net = vr_test::net;
-namespace fs = std::filesystem;
 
 namespace {
+
+// How the sets fuse and free: 2 cm voxels and an 8 cm band, Classic or
+// Dynamic, a free pass every `free_after` sets (none at 0), and a running
+// average capped at `max_weight`.
+struct Fusion {
+  float voxel_size_m = 0.02F;
+  float truncation_m = 0.08F;
+  bool dynamic = false;
+  int free_after = 0;
+  float max_weight = 5.0F;
+};
+
+vr::tsdf::IntegrationMode mode_of(const Fusion& fusion) {
+  return fusion.dynamic ? vr::tsdf::IntegrationMode::Dynamic
+                        : vr::tsdf::IntegrationMode::Classic;
+}
+
+// A stream's session: one Geometry track at 30 a second.
+stream::Session geometry_session() {
+  stream::Session session;
+  session.writer = "recon_sender_set_sender";
+  stream::Track track;
+  track.kind = stream::TrackKind::Geometry;
+  track.rate = {30, 1};
+  session.tracks.push_back(track);
+  return session;
+}
+
+// A set as the test sees it: its rows, its device counters from its begin to
+// its publish, and how many times it was published.
+struct LoggedSet {
+  explicit LoggedSet(vkc::Device& device)
+      : device_(&device), begin(device.counters()) {}
+  void published() {
+    ++publishes;
+    end = device_->counters();
+  }
+  vkc::DeviceCounters counted() const {
+    vkc::DeviceCounters d;
+    d.submits = end.submits - begin.submits;
+    d.host_waits = end.host_waits - begin.host_waits;
+    d.staging_buffers = end.staging_buffers - begin.staging_buffers;
+    d.dispatches = end.dispatches - begin.dispatches;
+    d.barriers = end.barriers - begin.barriers;
+    return d;
+  }
+
+  vkc::Device* device_;
+  vkc::DeviceCounters begin;
+  vkc::DeviceCounters end;
+  vkc::StageMetrics rows;
+  int publishes = 0;
+};
 
 constexpr std::uint32_t kW = 64, kH = 48;
 constexpr std::size_t kSets = 9;
@@ -287,9 +340,40 @@ struct SetCounts {
   std::uint64_t dispatches = 0;
   std::uint64_t barriers = 0;
   bool redone = false;
-  bool tail = false;  // its payload outgrew its guess (CodecStream::finish)
+  bool tail = false;         // its payload outgrew its guess (Encoder::finish)
   bool redo_waited = false;  // a "wait: redo" row: its front half again
 };
+
+// Whether `sent`, a set sent through the sender, went out as the set's own
+// rows and publish say: published once; coded, with a stream, its frame of
+// the type the file records, its encode rows both halves' and in the set's
+// rows with the write's and the waits', and its decode rows; not coded,
+// without one. Of the front batch's device rows, the front half's are the
+// frame's, the set's holding them once, and the prep's and the fusion's the
+// set's alone.
+bool sent_as_logged(const sender::SetSender::Sent& sent,
+                    const LoggedSet& logged, bool coded) {
+  if (logged.publishes != 1 || sent.coded.has_value() != coded) return false;
+  const vkc::StageMetrics& rows = logged.rows;
+  for (const char* row : {"frame prep", "wait: front"}) {
+    if (vr_test::find_row(rows, row) == nullptr) return false;
+  }
+  if (!coded) return vr_test::find_row(rows, "write") == nullptr;
+  for (const char* row : {"codec encode", "  ..forward", "  ..tables", "crc",
+                          "write", "wait: frame"}) {
+    if (vr_test::find_row(rows, row) == nullptr) return false;
+  }
+  const vkc::StageRow* front =
+      vr_test::find_row(sent.coded->encode, "  ..forward");
+  const vkc::StageRow* in_set = vr_test::find_row(rows, "  ..forward");
+  return front != nullptr && front->device != vkc::DeviceTime::None &&
+         in_set->device == front->device && in_set->gpu_ms == front->gpu_ms &&
+         vr_test::find_row(sent.coded->encode, "frame prep") == nullptr &&
+         vr_test::find_row(sent.coded->encode, "integrate") == nullptr &&
+         vr_test::find_row(sent.coded->encode, "  ..tables") != nullptr &&
+         vr_test::find_row(sent.coded->decode, "codec decode") != nullptr &&
+         sent.coded->bytes > 0 && sent.coded->blocks > 0;
+}
 
 // How code_sets sends its sets: through the sender, or the blocking calls a
 // set took before it; into a grid of `buckets`; each set's counts kept; from
@@ -303,7 +387,7 @@ struct Run {
 };
 
 // Push, poll and prepare kSets sets, sending each through the sender
-// (vr_example::SetSender), or the blocking calls with `run`, and coding it
+// (sender::SetSender), or the blocking calls with `run`, and coding it
 // into a new stream at `path`, unless empty, and check the grid
 // after each, kept in `grids`: after the second set its heaviest voxel at
 // fusion.max_weight, which the near walls' two sets pass; the back walls
@@ -311,8 +395,8 @@ struct Run {
 // Dynamic not after; and the near walls' blocks all kept until the pass
 // after kUnobservedFreedSet, then some (check_stream says which) until,
 // under Dynamic, the pass after kClearedFreedSet frees the rest; with no
-// pass, all kept.
-int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
+// pass, all kept. Each sent set as sent_as_logged says.
+int code_sets(vr_test::GpuContext& gpu, const Fusion& fusion,
               const std::string& path, std::vector<Walls>* grids,
               const Run& run = {}) {
   std::vector<Camera*> cameras;
@@ -330,58 +414,65 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
   CHECK(fuser.ok());
   auto extractor = vr::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
   CHECK(extractor.ok());
-  std::optional<vr_example::CodecStream> coded;
+  std::optional<sender::CodecStream> coded;
   if (!path.empty()) {
     codec::EncoderConfig config;
     config.intra_period = 30;
-    vr_example::CodecOutputs outputs;
+    sender::CodecOutputs outputs;
     outputs.stream = path;
-    auto made = vr_example::CodecStream::create(gpu.device, gpu.allocator,
-                                                config, outputs);
+    auto made = sender::CodecStream::create(gpu.device, gpu.allocator, config,
+                                            geometry_session(), outputs);
     CHECK(made.ok());
     coded.emplace(std::move(made).value());
   }
-  vr_example::SetSender::Config sending;
+  sender::SetSender::Config sending;
   sending.max_weight = fusion.max_weight;
-  sending.mode = vr_example::integration_mode(fusion.dynamic);
+  sending.mode = mode_of(fusion);
   sending.free_after = fusion.free_after;
-  sending.program = "example_set_codec";
-  auto sender = vr_example::SetSender::create(
-      gpu.device, *fuser, *grid, coded ? &*coded : nullptr, sending);
-  CHECK(sender.ok());
-  vr_example::SetLog log([&gpu] { return gpu.device.counters(); });
+  auto out = sender::SetSender::create(gpu.device, *fuser, *grid,
+                                       coded ? &*coded : nullptr, sending);
+  CHECK(out.ok());
   grids->clear();
   for (std::size_t s = 0; s < kSets; ++s) {
     std::optional<sensor::FrameSet> set = next_set(array, cameras, s);
     CHECK(set.has_value());
-    vr_example::SetLog::Set& logged = log.begin();
+    LoggedSet logged(gpu.device);
+    std::optional<sender::SetSender::Sent> sent;
     if (run.sender) {
       // The sender's set: the prep recorded into its front batch.
       vkc::CommandBatch front(gpu.device, gpu.allocator);
-      front.time(sender->timer());
+      front.time(out->timer());
       auto prepared = array.record_process(front, *set, &logged.rows);
       CHECK(prepared.ok() && prepared->timestamp_ns == set_time(s));
       const std::uint64_t pts_ns =
           std::max(prepared->timestamp_ns, coded ? coded->last_pts_ns() : 0);
-      const vkc::Status sent =
-          sender->send(front, prepared->frames,
-                       std::make_shared<sensor::FrameSet>(std::move(*set)), s,
-                       pts_ns, logged);
-      if (!sent.ok()) {
-        std::fprintf(stderr, "set %zu: %s\n", s, sent.message().c_str());
+      auto done =
+          out->send(front, prepared->frames,
+                    std::make_shared<sensor::FrameSet>(std::move(*set)), s,
+                    pts_ns, &logged.rows, [&logged] { logged.published(); });
+      if (!done.ok()) {
+        std::fprintf(stderr, "set %zu: %s\n", s,
+                     done.status().message().c_str());
       }
-      CHECK(sent.ok());
+      CHECK(done.ok());
+      CHECK(sent_as_logged(*done, logged, coded.has_value()));
+      sent = std::move(done).value();
     } else {
       // The blocking calls, each a batch of its own, as a set was sent
       // before the sender.
       auto prepared = array.process(*set);
       CHECK(prepared.ok() && prepared->timestamp_ns == set_time(s));
-      CHECK(vr_example::fuse_set(
-                *fuser, *grid, prepared->frames, fusion.max_weight,
-                vr_example::integration_mode(fusion.dynamic), nullptr)
+      const sender::FuseInputs in = sender::fuse_inputs(prepared->frames);
+      CHECK(fuser
+                ->fuse(*grid, in.frames, fusion.max_weight, mode_of(fusion),
+                       nullptr)
                 .ok());
-      vr_example::free_stale_blocks_every(*grid, s + 1, fusion.free_after,
-                                          "example_set_codec", nullptr);
+      if (fusion.free_after > 0 &&
+          (s + 1) % static_cast<std::size_t>(fusion.free_after) == 0) {
+        CHECK(grid->free_stale_blocks(
+                      static_cast<std::uint32_t>(fusion.free_after), nullptr)
+                  .ok());
+      }
       if (coded) {
         CHECK(coded
                   ->code(*grid, s,
@@ -392,12 +483,12 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
     // The set's own, from its begin to its publish: a decode after it is
     // the stream's diagnostic, not the set's.
     if (run.counts != nullptr) {
-      CHECK(logged.is_published());
+      CHECK(sent.has_value());
       const vkc::DeviceCounters c = logged.counted();
       run.counts->push_back(
           {c.submits, c.host_waits, c.staging_buffers, c.dispatches, c.barriers,
-           logged.redone, logged.tail,
-           vr_example::find_row(logged.rows, "wait: redo") != nullptr});
+           sent->fused.redone, sent->coded && sent->coded->tail,
+           vr_test::find_row(logged.rows, "wait: redo") != nullptr});
     }
     if (s == 1) {  // read once: the whole attribute is slow in Debug
       auto weights = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
@@ -425,7 +516,7 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
     }
   }
   if (coded) {
-    CHECK(coded->rows().size() == kSets);
+    CHECK(coded->coded() == kSets);
     CHECK(coded->finish().ok());
   }
   return 0;
@@ -530,7 +621,7 @@ int same_streams(const std::string& a, const std::string& b) {
 // batch done blocks nothing and counts none -- and a set fused alone 1 and
 // 1, a free pass's set adding none. A payload past its guess adds its tail's
 // submit, wait and gather. A warm set places no staging buffer but the one a
-// payload slot's growth takes, for a frame larger than any before: at most
+// payload buffer's growth takes, for a frame larger than any before: at most
 // two over the run's warm sets, where a readback of every set's would place
 // six. The front batch's dispatches stay below the Apple step near 80 a
 // batch (the 2026-10-24 entry); the back batch's are 4. A set fused again
@@ -590,8 +681,8 @@ struct Keyed {
 
 // Send kSets sets from two cameras as `run` says, Dynamic, freeing nothing,
 // each coded into a new stream at `path` and served on 127.0.0.1 without
-// replay_gop, as fuse_orbbec serves, each joiner counted before the next set
-// is sent. Each viewer gets the frame of the set it joined before, a key,
+// replay_gop, as a live sender serves, each joiner counted before the next
+// set is sent. Each viewer gets the frame of the set it joined before, a key,
 // then every frame after it. `keys` takes whether each set's record is a key,
 // from the file, and `redone` whether each set's fusion was done again.
 int keyed_sets(vr_test::GpuContext& gpu, const Keyed& run,
@@ -601,7 +692,7 @@ int keyed_sets(vr_test::GpuContext& gpu, const Keyed& run,
   auto opened = open_cameras(gpu, 2, run.patch_until, &cameras);
   CHECK(opened.ok());
   sensor::SensorArray array = std::move(opened).value();
-  cfg::Fusion fusion;  // 2 cm voxels, an 8 cm band
+  Fusion fusion;  // 2 cm voxels, an 8 cm band
   fusion.dynamic = true;
   fusion.max_weight = kMaxWeight;
   auto grid = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator,
@@ -612,24 +703,22 @@ int keyed_sets(vr_test::GpuContext& gpu, const Keyed& run,
   CHECK(fuser.ok());
   codec::EncoderConfig config;
   config.intra_period = run.period;
-  vr_example::CodecOutputs outputs;
+  sender::CodecOutputs outputs;
   outputs.stream = path;
   outputs.serve.emplace();
   outputs.serve->host = "127.0.0.1";
   outputs.serve->port = 0;
   outputs.serve->replay_gop = false;
-  auto coded = vr_example::CodecStream::create(gpu.device, gpu.allocator,
-                                               config, outputs);
+  auto coded = sender::CodecStream::create(gpu.device, gpu.allocator, config,
+                                           geometry_session(), outputs);
   CHECK(coded.ok() && coded->server() != nullptr);
   const networking::StreamServer& server = *coded->server();
-  vr_example::SetSender::Config sending;
+  sender::SetSender::Config sending;
   sending.max_weight = fusion.max_weight;
-  sending.mode = vr_example::integration_mode(fusion.dynamic);
-  sending.program = "example_set_codec";
-  auto sender = vr_example::SetSender::create(gpu.device, *fuser, *grid,
-                                              &coded.value(), sending);
-  CHECK(sender.ok());
-  vr_example::SetLog log([&gpu] { return gpu.device.counters(); });
+  sending.mode = mode_of(fusion);
+  auto out = sender::SetSender::create(gpu.device, *fuser, *grid,
+                                       &coded.value(), sending);
+  CHECK(out.ok());
   struct Viewer {
     std::size_t set = 0;  // the set it joined before
     std::unique_ptr<networking::StreamClient> client;
@@ -648,25 +737,24 @@ int keyed_sets(vr_test::GpuContext& gpu, const Keyed& run,
     CHECK(set.has_value());
     bool fused_again = false;
     if (run.sender) {
-      vr_example::SetLog::Set& logged = log.begin();
       vkc::CommandBatch front(gpu.device, gpu.allocator);
-      front.time(sender->timer());
-      auto prepared = array.record_process(front, *set, &logged.rows);
+      front.time(out->timer());
+      auto prepared = array.record_process(front, *set, nullptr);
       CHECK(prepared.ok());
       const std::uint64_t pts_ns =
           std::max(prepared->timestamp_ns, coded->last_pts_ns());
-      CHECK(sender
-                ->send(front, prepared->frames,
-                       std::make_shared<sensor::FrameSet>(std::move(*set)), s,
-                       pts_ns, logged)
-                .ok());
-      fused_again = logged.redone;
+      auto sent = out->send(front, prepared->frames,
+                            std::make_shared<sensor::FrameSet>(std::move(*set)),
+                            s, pts_ns);
+      CHECK(sent.ok() && sent->coded.has_value());
+      fused_again = sent->fused.redone;
     } else {
       auto prepared = array.process(*set);
       CHECK(prepared.ok());
-      CHECK(vr_example::fuse_set(
-                *fuser, *grid, prepared->frames, fusion.max_weight,
-                vr_example::integration_mode(fusion.dynamic), nullptr)
+      const sender::FuseInputs in = sender::fuse_inputs(prepared->frames);
+      CHECK(fuser
+                ->fuse(*grid, in.frames, fusion.max_weight, mode_of(fusion),
+                       nullptr)
                 .ok());
       CHECK(coded
                 ->code(*grid, s,
@@ -699,8 +787,8 @@ int keyed_sets(vr_test::GpuContext& gpu, const Keyed& run,
   return 0;
 }
 
-// Keys on demand, through the sender and through code, served as
-// fuse_orbbec serves: with no viewer joining or falling back, the frames
+// Keys on demand, through the sender and through code, served without
+// replay_gop: with no viewer joining or falling back, the frames
 // follow the intra period of 4, keys at sets 0, 4 and 8; three viewers
 // joining before set 2 make its frame a key, one key, and the frames after it
 // follow the period from it, a key at 6; one joining before set 7 keys it
@@ -746,10 +834,50 @@ int keys_case(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
   return 0;
 }
 
+// A sender over a stream since moved from refuses a set it would code, before
+// recording anything of it; one over the stream it moved into codes it.
+int moved_from(vr_test::GpuContext& gpu) {
+  std::vector<Camera*> cameras;
+  auto opened = open_cameras(gpu, 2, 0, &cameras);
+  CHECK(opened.ok());
+  sensor::SensorArray array = std::move(opened).value();
+  const Fusion fusion;
+  auto grid = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator,
+                                           fusion.voxel_size_m,
+                                           fusion.truncation_m, 1024);
+  auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
+  auto made = sender::CodecStream::create(gpu.device, gpu.allocator, {},
+                                          geometry_session());
+  CHECK(grid.ok() && fuser.ok() && made.ok());
+  sender::CodecStream stream = std::move(made).value();
+  auto left = sender::SetSender::create(gpu.device, *fuser, *grid, &*made, {});
+  auto moved =
+      sender::SetSender::create(gpu.device, *fuser, *grid, &stream, {});
+  CHECK(left.ok() && moved.ok());
+  for (std::size_t s = 0; s < 2; ++s) {
+    std::optional<sensor::FrameSet> set = next_set(array, cameras, s);
+    CHECK(set.has_value());
+    vkc::CommandBatch front(gpu.device, gpu.allocator);
+    auto prepared = array.record_process(front, *set, nullptr);
+    CHECK(prepared.ok());
+    sender::SetSender& out = s == 0 ? *left : *moved;
+    auto sent = out.send(front, prepared->frames,
+                         std::make_shared<sensor::FrameSet>(std::move(*set)), s,
+                         prepared->timestamp_ns);
+    if (s == 0) {
+      CHECK(sent.status().domain() == vkc::Status::Code::InvalidArgument);
+      CHECK(made->coded() == 0 && made->player() == nullptr);
+    } else {
+      CHECK(sent.ok() && sent->coded.has_value() && stream.coded() == 1);
+    }
+  }
+  return 0;
+}
+
 int gpu_main(vr_test::GpuContext& gpu) {
-  vr_test::Scratch scratch("recon_example_set_codec_");
+  vr_test::Scratch scratch("recon_sender_set_sender_");
   for (const bool dynamic : {true, false}) {
-    cfg::Fusion fusion;  // 2 cm voxels, an 8 cm band
+    Fusion fusion;  // 2 cm voxels, an 8 cm band
     fusion.dynamic = dynamic;
     fusion.free_after = kFreeAfter;
     fusion.max_weight = kMaxWeight;
@@ -778,7 +906,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // A rig's four cameras: the Dynamic coded sets' counts, free passes
   // included, against the same bounds.
   {
-    cfg::Fusion fusion;
+    Fusion fusion;
     fusion.dynamic = true;
     fusion.free_after = kFreeAfter;
     fusion.max_weight = kMaxWeight;
@@ -793,7 +921,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // its fusion is done again and grown, and its frame's front half after it,
   // whose wait is the set's "wait: redo". The frames are the blocking calls'.
   {
-    cfg::Fusion fusion;
+    Fusion fusion;
     fusion.dynamic = true;
     fusion.free_after = kFreeAfter;
     fusion.max_weight = kMaxWeight;
@@ -810,76 +938,18 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(code_sets(gpu, fusion, blocking, &grids, Run{false, 32}) == 0);
     CHECK(same_streams(path, blocking) == 0);
   }
-  cfg::Fusion never;  // Dynamic, freeing nothing
+  Fusion never;  // Dynamic, freeing nothing
   never.dynamic = true;
   never.free_after = 0;
   never.max_weight = kMaxWeight;
   std::vector<Walls> kept;
   CHECK(code_sets(gpu, never, "", &kept) == 0);
   CHECK(keys_case(gpu, scratch) == 0);
-  std::puts("example_set_codec: OK");
-  return 0;
-}
-
-// check_apart: a path that does not exist, or is another file, or beside an
-// output that does not exist, is taken; a link to the stream or the CSV is
-// refused, naming both; and a path that cannot be looked up is refused.
-int apart() {
-  vr_test::Scratch scratch("recon_example_set_codec_apart_");
-  vr_example::CodecOutputs outputs;
-  outputs.stream = (scratch.path / "frames.vrst").string();
-  outputs.csv = (scratch.path / "rows.csv").string();
-  const fs::path other = scratch.path / "other.ply";
-  for (const fs::path& file :
-       {fs::path(outputs.stream), fs::path(outputs.csv), other}) {
-    std::ofstream(file) << "x";
-  }
-  CHECK(vr_example::check_apart((scratch.path / "rig.ply").string(), outputs)
-            .ok());
-  CHECK(vr_example::check_apart(other.string(), outputs).ok());
-  CHECK(vr_example::check_apart(other.string(), {}).ok());
-  for (const std::string* target : {&outputs.stream, &outputs.csv}) {
-    const fs::path link =
-        scratch.path / (fs::path(*target).filename().string() + ".ply");
-    fs::create_symlink(*target, link);
-    const vkc::Status refused = vr_example::check_apart(link.string(), outputs);
-    CHECK(refused.domain() == vkc::Status::Code::InvalidArgument);
-    CHECK(refused.message().find(link.string()) != std::string::npos &&
-          refused.message().find(*target) != std::string::npos);
-  }
-  vr_example::CodecOutputs missing;
-  missing.stream = (scratch.path / "missing.vrst").string();
-  CHECK(vr_example::check_apart(other.string(), missing).ok());
-  // A name past every file system's limit cannot be looked up.
-  const fs::path unknowable = scratch.path / std::string(300, 'x');
-  CHECK(vr_example::check_apart(unknowable.string(), outputs).domain() ==
-        vkc::Status::Code::IoError);
-  return 0;
-}
-
-// set_codec_outputs: codec_outputs' paths and port, decoding only with
-// output.csv or codec.sweep, not for a recording or a server alone.
-int decodes() {
-  cfg::Config opt;
-  opt.output.stream = "rig.vrst";
-  opt.output.serve = 47801;
-  const vr_example::CodecOutputs live = vr_example::set_codec_outputs(opt);
-  CHECK(!live.decode && live.stream == "rig.vrst" && live.csv.empty());
-  CHECK(live.serve && live.serve->port == 47801 && !live.serve->replay_gop);
-  cfg::Config listed = opt;
-  listed.output.csv = "rig.csv";
-  const vr_example::CodecOutputs rows = vr_example::set_codec_outputs(listed);
-  CHECK(rows.decode && rows.csv == "rig.csv");
-  cfg::Config swept = opt;
-  swept.codec.sweep = true;
-  CHECK(vr_example::set_codec_outputs(swept).decode);
+  CHECK(moved_from(gpu) == 0);
+  std::puts("recon_sender_set_sender: OK");
   return 0;
 }
 
 }  // namespace
 
-int main() {
-  CHECK(apart() == 0);
-  CHECK(decodes() == 0);
-  return vr_test::run_on_gpu(gpu_main);
-}
+int main() { return vr_test::run_on_gpu(gpu_main); }

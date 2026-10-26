@@ -22,13 +22,11 @@
 #include <utility>
 
 #include "codec_config.hpp"
-#include "codec_stream.hpp"
+#include "codec_report.hpp"
 #include "codec_sweep.hpp"
 #include "config.hpp"
-#include "fuse_frame.hpp"
 #include "replica_config.hpp"
 #include "replica_sensor.hpp"
-#include "set_codec.hpp"
 #include "set_log.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
@@ -38,6 +36,8 @@
 #include "volumetric_kit/recon/eval/mesh_distance.hpp"
 #include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
+#include "volumetric_kit/recon/sender/codec_stream.hpp"
+#include "volumetric_kit/recon/sender/set_sender.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
@@ -47,6 +47,7 @@ namespace vkc = volumetric_kit::core;
 namespace codec = volumetric_kit::recon::codec;
 namespace eval = volumetric_kit::recon::eval;
 namespace mesh = volumetric_kit::recon::mesh;
+namespace sender = volumetric_kit::recon::sender;
 
 namespace {
 
@@ -81,24 +82,30 @@ vkc::Status run(const Options& opt) {
              vr::sensor::GpuFramePrep::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator));
+  const sender::CodecOutputs outputs = vr_example::codec_outputs(opt.output);
+  VKC_ASSIGN(sender::CodecStream stream,
+             sender::CodecStream::create(
+                 device, allocator, config,
+                 vr_example::codec_session("codec_replica",
+                                           {vr_example::kNominalFps, 1}),
+                 outputs));
   VKC_ASSIGN(
-      vr_example::CodecStream stream,
-      vr_example::CodecStream::create(
-          device, allocator, config, vr_example::codec_outputs(opt.output),
-          "codec_replica", {vr_example::kNominalFps, 1}));
+      vr_example::CodecReport report,
+      vr_example::CodecReport::create(opt.output.csv, outputs.stream,
+                                      outputs.decode, config.intra_period));
   std::printf(
       "%zu frames at %.3f m voxels, %s fusion; %s\n", capture.frame_count(),
       double(voxel), opt.fusion.dynamic ? "Dynamic" : "Classic",
       vr_example::codec_settings(config, opt.codec.quantization_table).c_str());
 
   // Fuse, and code the grid every codec.encode_every frames and at the end,
-  // each frame a sender's set (vr_example::SetSender, vr_example::SetLog).
-  vr_example::SetSender::Config sending =
-      vr_example::sender_config(opt, "codec_replica", opt.codec.encode_every);
+  // each frame a sender's set (sender::SetSender, vr_example::SetLog).
+  sender::SetSender::Config sending =
+      vr_example::sender_config(opt, opt.codec.encode_every);
   sending.free_after = 0;  // fuse_replica's fusion frees nothing
   VKC_ASSIGN(
-      vr_example::SetSender sender,
-      vr_example::SetSender::create(device, fuser, volume, &stream, sending));
+      sender::SetSender out,
+      sender::SetSender::create(device, fuser, volume, &stream, sending));
   vr_example::SetLog log([&device] { return device.counters(); });
   VKC_TRY(capture.start());
   std::size_t fused = 0;
@@ -118,27 +125,33 @@ vkc::Status run(const Options& opt) {
     // A dataset's frame arrives when it is polled, on no capture clock.
     s.arrived(vr_example::system_now_ns(), 0);
     vkc::CommandBatch front(device, allocator);
-    front.time(sender.timer());
+    front.time(out.timer());
     VKC_ASSIGN(const vr::sensor::DeviceFrame prepared,
                prep.record(front, *frame, &s.rows));
-    VKC_TRY(sender.send(
-        front, {prepared},
-        std::make_shared<vr::sensor::RgbdFrame>(std::move(*frame)), fused,
-        vr_example::frame_pts_ns(fused, vr_example::kNominalFps), s));
+    VKC_ASSIGN(
+        const sender::SetSender::Sent sent,
+        out.send(front, {prepared},
+                 std::make_shared<vr::sensor::RgbdFrame>(std::move(*frame)),
+                 fused,
+                 vr_example::frame_pts_ns(fused, vr_example::kNominalFps),
+                 &s.rows, [&s] { s.published(); }));
+    VKC_TRY(vr_example::report_sent(sent, fused, "codec_replica", s, &report));
     ++fused;
-    if (sender.code_due(fused - 1)) coded_at = fused;
+    if (out.code_due(fused - 1)) coded_at = fused;
   }
   if (fused == 0) {
     return vkc::Status::invalid_argument("no frames were fused");
   }
   std::fputs(log.table("per set").c_str(), stdout);
   if (coded_at != fused) {
-    VKC_TRY(stream.code(
-        volume, fused - 1,
-        vr_example::frame_pts_ns(fused - 1, vr_example::kNominalFps)));
+    VKC_ASSIGN(const sender::SentFrame last,
+               stream.code(volume, fused - 1,
+                           vr_example::frame_pts_ns(fused - 1,
+                                                    vr_example::kNominalFps)));
+    VKC_TRY(report.add(fused - 1, last));
   }
   VKC_TRY(stream.finish());
-  stream.report(vr_example::kNominalFps, opt.codec.encode_every);
+  report.print(vr_example::kNominalFps, opt.codec.encode_every);
 
   // The last frame's decoded surface against the source's.
   VKC_ASSIGN(const mesh::Mesh source, extractor.extract_host(volume));

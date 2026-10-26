@@ -294,8 +294,8 @@ target_include_directories(recon_example_fuse_keyframe_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
 target_link_libraries(
   recon_example_fuse_keyframe_test
-  PRIVATE volumetric_kit::recon_sensor_utils volumetric_kit::recon_tsdf
-          volumetric_kit::recon_texture volumetric_kit::core_test_policy)
+  PRIVATE volumetric_kit::recon_sender volumetric_kit::recon_texture
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_example_fuse_keyframe_test)
 add_test(NAME recon_example_fuse_keyframe
          COMMAND recon_example_fuse_keyframe_test)
@@ -307,23 +307,18 @@ add_executable(recon_example_config_test example_config_test.cpp)
 target_include_directories(recon_example_config_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
 if(TARGET volumetric_kit::recon_sensor_orbbec)
-  target_link_libraries(
-    recon_example_config_test
-    PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_sensor_orbbec
-            volumetric_kit::core_config)
+  target_link_libraries(recon_example_config_test
+                        PRIVATE volumetric_kit::recon_sensor_orbbec)
   target_compile_definitions(recon_example_config_test
                              PRIVATE VR_TEST_ORBBEC_CONFIG=1)
-else()
-  target_link_libraries(
-    recon_example_config_test
-    PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_sensor
-            volumetric_kit::core_config)
 endif()
-# codec_config.hpp maps the outputs into codec_stream.hpp's CodecOutputs.
+# codec_config.hpp maps the outputs into the sender tier's CodecOutputs, and the
+# sweep's report compares with eval's. recon_sender brings the codec and the
+# sensor tiers: naming them too would repeat their archives on the link line.
 target_link_libraries(
   recon_example_config_test
-  PRIVATE volumetric_kit::recon_eval volumetric_kit::recon_networking
-          volumetric_kit::recon_stream volumetric_kit::recon_tsdf)
+  PRIVATE volumetric_kit::core_config volumetric_kit::recon_eval
+          volumetric_kit::recon_sender)
 target_compile_definitions(
   recon_example_config_test
   PRIVATE VR_CONFIG_FIXTURES="${PROJECT_SOURCE_DIR}/config/examples")
@@ -413,58 +408,26 @@ target_link_libraries(recon_example_set_log_test
 vr_target_warnings(recon_example_set_log_test)
 add_test(NAME recon_example_set_log COMMAND recon_example_set_log_test)
 
-# The codec examples' stream (examples/common/codec_stream.hpp): on the host, a
-# row's type and host and device milliseconds, its CSV line, a frame type's
-# sizes, a GOP's bytes and bitrate, a frame's pts, and the comparison options
-# the codec examples share; on a device, outputs it cannot make refused on
-# create, none written without outputs, a row per decoded frame matching the
-# frame and each type's stage rows its own, the .vrst's records (every encoded
-# frame, byte for byte, a frame the decoder refuses included and the stream
-# going on after it, a key exactly when an I-frame, and the same bytes on a
-# rerun), an I-frame after a frame not decoded or whose CSV row fails, a frame
-# out of order or any call once finished refused before anything is encoded, the
-# CSV replaced on create and written as frames are coded, and the frames served
-# live to a client on 127.0.0.1 port 0 as the file records them. The device part
-# skips with no device.
-add_executable(recon_example_codec_stream_test example_codec_stream_test.cpp)
-target_include_directories(recon_example_codec_stream_test
+# The codec examples' report of a stream (examples/common/codec_report.hpp): on
+# the host, a row's type and host and device milliseconds, its CSV line, a frame
+# type's sizes, a GOP's bytes and bitrate, a frame's pts, the comparison options
+# the codec examples share, a path that is the stream's or the CSV's file
+# refused, and a sender's set stamped from what the set step returned; on a
+# device, a CSV refused after the stream is made or because it is the stream's
+# file, a row per frame matching the frame and each type's stage rows its own,
+# the CSV replaced on create and written as rows come, and a CSV that stops
+# taking rows refused. The device part skips with no device.
+add_executable(recon_example_codec_report_test example_codec_report_test.cpp)
+target_include_directories(recon_example_codec_report_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
 target_link_libraries(
-  recon_example_codec_stream_test
-  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_codec
-          volumetric_kit::recon_eval volumetric_kit::recon_networking
-          volumetric_kit::recon_stream Vulkan::Vulkan)
-vr_target_warnings(recon_example_codec_stream_test)
-add_test(NAME recon_example_codec_stream
-         COMMAND recon_example_codec_stream_test)
-
-# The senders' coded sets (examples/common/set_codec.hpp), with no camera
-# driver: fake cameras read as a sensor array, each set's prep, fusion, free
-# pass and frame recorded by the sender and coded into a .vrst whose records,
-# keys, sets and pts are the sets', every frame decoded, the blocking calls'
-# frames. A wall the cameras later see past: under Dynamic gone from the frames
-# that see past it, and its blocks freed by the fusion.free_after pass due;
-# under Classic its observed blocks kept. A coded set is 2 submits and at most 2
-# waits, a fused one 1 and 1. Served with keys on demand, a frame is a key when
-# a viewer joined before it, once however many, and otherwise at the intra
-# period. On the host, a path that is the stream's or the CSV's file refused.
-# The device part skips with no device.
-add_executable(recon_example_set_codec_test example_set_codec_test.cpp)
-target_include_directories(recon_example_set_codec_test
-                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
-target_link_libraries(
-  recon_example_set_codec_test
-  PRIVATE volumetric_kit::core_config
-          volumetric_kit::core_test_policy
-          volumetric_kit::recon_codec
-          volumetric_kit::recon_eval
-          volumetric_kit::recon_networking
-          volumetric_kit::recon_sensor_array
-          volumetric_kit::recon_stream
-          volumetric_kit::recon_tsdf
+  recon_example_codec_report_test
+  PRIVATE volumetric_kit::core_config volumetric_kit::core_test_policy
+          volumetric_kit::recon_eval volumetric_kit::recon_sender
           Vulkan::Vulkan)
-vr_target_warnings(recon_example_set_codec_test)
-add_test(NAME recon_example_set_codec COMMAND recon_example_set_codec_test)
+vr_target_warnings(recon_example_codec_report_test)
+add_test(NAME recon_example_codec_report
+         COMMAND recon_example_codec_report_test)
 
 # codec_mesh's sequence (examples/codec_mesh/mesh_sequence.hpp), where the mesh
 # example is built. On the host: the frame-number pattern, every file checked
@@ -1570,6 +1533,40 @@ vr_target_warnings(recon_networking_server_oom_test)
 add_test(NAME recon_networking_server_oom
          COMMAND recon_networking_server_oom_test)
 
+# sender tier: the codec stream (sender/codec_stream.hpp) on a grid holding a
+# sphere -- outputs it cannot make and a session that is not one Geometry track
+# refused on create, none written without outputs, each frame as it went out,
+# the .vrst's records (every encoded frame, byte for byte, a frame the decoder
+# refuses included and counted, a key exactly when an I-frame, the same bytes on
+# a rerun), an I-frame after a frame not decoded, a frame out of order or any
+# call once finished or moved from refused, an unfinished stream read whole and
+# an empty one removed, a sender's frames the file code() writes, decode off,
+# and the frames served live to a client on 127.0.0.1 port 0 as the file records
+# them -- and the set step (sender/set_sender.hpp) with no camera driver: fake
+# cameras read as a sensor array, each set's prep, fusion, free pass and frame
+# recorded by the sender and coded into a .vrst whose records, keys, sets and
+# pts are the sets', every frame decoded, the blocking calls' frames. A wall the
+# cameras later see past: under Dynamic gone from the frames that see past it,
+# and its blocks freed by the free pass due; under Classic its observed blocks
+# kept. A coded set is 2 submits and at most 2 waits, a fused one 1 and 1.
+# Served with keys on demand, a frame is a key when a viewer joined before it,
+# once however many, and otherwise at the intra period. The device parts skip
+# with no device.
+foreach(_vr_sender_test codec_stream set_sender)
+  add_executable(recon_sender_${_vr_sender_test}_test
+                 sender_${_vr_sender_test}_test.cpp)
+  target_link_libraries(
+    recon_sender_${_vr_sender_test}_test
+    PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_sender
+            Vulkan::Vulkan)
+  vr_target_warnings(recon_sender_${_vr_sender_test}_test)
+  add_test(NAME recon_sender_${_vr_sender_test}
+           COMMAND recon_sender_${_vr_sender_test}_test)
+endforeach()
+target_link_libraries(
+  recon_sender_set_sender_test PRIVATE volumetric_kit::recon_mesh
+                                       volumetric_kit::recon_sensor_array)
+
 # serve_stream's replay (examples/common/stream_replay.hpp): the records from
 # the first key, seq and key pts across passes by the writer's rules, the dues,
 # damage left out and an allocation failure past it refused, and a damaged
@@ -1690,10 +1687,10 @@ set_tests_properties(recon_codec_decoder PROPERTIES COST 96)
 set_tests_properties(recon_tsdf_mesh_integrate_exact PROPERTIES COST 56)
 set_tests_properties(recon_eval_mesh_distance PROPERTIES COST 55)
 set_tests_properties(recon_codec_device_frame PROPERTIES COST 52)
-set_tests_properties(recon_example_codec_stream PROPERTIES COST 49)
+set_tests_properties(recon_sender_codec_stream PROPERTIES COST 49)
 set_tests_properties(recon_tsdf_mesh_integrate PROPERTIES COST 36)
 set_tests_properties(recon_codec_encoder PROPERTIES COST 30)
-set_tests_properties(recon_example_set_codec PROPERTIES COST 29)
+set_tests_properties(recon_sender_set_sender PROPERTIES COST 29)
 # Waits out RigSets' 10-s silence limit, under any build.
 set_tests_properties(recon_sensor_array_rig_sets PROPERTIES COST 11)
 

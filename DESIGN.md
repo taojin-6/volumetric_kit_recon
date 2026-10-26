@@ -61,7 +61,8 @@ conventions and Vulkan setup.
 - CMake: fetched by commit (`FetchContent`); component targets
   `volumetric_kit::recon_camera`, `…_core`, `…_volume`, `…_tsdf`, `…_mesh`,
   `…_texture`,
-  `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_stream`, `…_networking`, `…_interop` (+ later `…_track`),
+  `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_stream`, `…_networking`,
+  `…_sender`, `…_interop` (+ later `…_track`),
   plus `…_sensor_utils` (GPU pre-processing), `…_sensor_array` (several
   sensors read as one), `…_sensor_apple` (Apple's pixel buffers as images),
   the opt-in `…_sensor_orbbec`
@@ -81,7 +82,9 @@ left. No upward includes.
 branching off **`core`**, `codec` off **`volume`** and `eval`/`io` off **`mesh`**
 (later: `track`). `camera` sits under `sensor` and beside `core`: it
 links the family core's base tier and GLM, and no other recon tier. `stream`
-links that base tier alone, and `networking` links `stream`.
+links that base tier alone, and `networking` links `stream`. `sender` comes
+after `networking`: it links `networking`, `codec`, `tsdf` and `sensor`'s
+GPU pass (`sensor_utils`).
 
 - **`camera`** — the camera vocabulary the drivers and the sensor tier
   share: the double-precision `CameraModel` (image size, intrinsics, OpenCV's
@@ -159,6 +162,11 @@ links that base tier alone, and `networking` links `stream`.
   sockets and threads of their own (2026-10-21). Host-side, on `stream`,
   so the format and the sockets are tested apart; it logs through recon's
   log seam (`core/log.hpp`), header-only over the family core's base tier.
+- **`sender`** — a sender's set step and its codec stream: a prepared set
+  fused, freed on schedule and coded in two batches (`SetSender`), each
+  frame written to a `.vrst` file, served and decoded back
+  (`CodecStream`), and the fuser's inputs for prepared frames
+  (`fuse_inputs`) (2026-10-26). It prints nothing.
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Backend strategy: one Vulkan path
@@ -2061,6 +2069,55 @@ SIGPIPE; every call is retried on `EINTR`. The sender sets `TCP_NODELAY`
 and the listener `SO_REUSEADDR`. The GOP log (`gop_log.cpp`), in either
 mode, has no socket, thread or clock, and is tested alone.
 
+### sender
+
+`recon_sender` is what a sender does with a prepared set
+(`sender/set_sender.hpp`, `sender/codec_stream.hpp`, the 2026-10-26
+entry). `fuse_inputs` (`sender/fuse_inputs.hpp`) hands prepared frames to
+the fuser, nothing uploaded.
+
+**The stream** (`CodecStream`). `create` takes the encoder's settings, the
+session and `CodecOutputs`: a new `.vrst` file, the server's options, and
+whether to decode. It refuses a session that is not one Geometry track,
+then makes the server, so a port in use leaves no file, then the
+file, which must be new, then the encoder and, with `decode`, the decoder,
+so a refused output costs no kernel. A codec error removes the new file
+again, as does destroying the stream unfinished before its first frame. The
+file and the viewers get that session. `code(grid, set, pts_ns)`
+encodes the grid, appends a record (a key exactly when an I-frame), serves
+it once it is in the file, so no viewer gets a frame the file lacks, then
+decodes it with `decode_growing` from the decoder's input buffer into a
+player grid `make_decode_grid` built from the first frame, and returns a
+`SentFrame`: its type, bytes, blocks, whether its payload took a tail, and
+the encode's and the decode's rows. A set or pts out of order is refused
+before it is encoded, so the writer never refuses one the encoder has
+taken. Any other failure after the encode, of the append or the decode,
+calls `force_intra()`, so the next frame never references one the file or
+the player lacks; a frame the decoder refuses stays in the file and counts
+in `coded()`. A record the server refuses is logged at Warning and fails no
+frame, as failing would stop the recording. Before each frame's front half,
+where the encoder picks I or P, the stream reads the server's
+`key_wanted()`: a rise calls `force_intra()`, which stands until a frame is
+returned, so joins between two frames make one key, a refused frame or a
+front half recorded again keeps it, and the period counts from it.
+`finish` closes the viewers and writes the footer, in one attempt.
+
+**The set step** (`SetSender`). `send` records the set's fusion
+(`Fuser::record_fuse`), its free pass every `free_after` sets
+(`record_free_stale`) and, for a set `code_due`, its frame's front half
+into the set's front batch after its prep, submits it and waits once, and
+finishes the fusion; then the frame's back half in a batch of its own, its
+wait, the write, the serve and the decode, as `code` does. A coded set is 2
+submits, a set not coded 1. A fusion done again (`FuseReport::redone`)
+records the front half again after it, in a batch of its own
+(`"wait: redo"`). `sent` runs once the set is published: a coded set's
+frame written and served, before the decode; a set not coded, after its
+fusion. `Sent` holds the fusion's report, a free pass's refusal, which does
+not stop the set, and the frame. The front half, its device rows and the
+back half are no public call: they are the internal class `CodecStream`
+owns (`stream_coder.hpp`), which it hands out only as an incomplete type
+(`coder()`) for `SetSender`'s source to complete.
+
 ## Examples
 
 (`examples/`.) Every example that fuses prepares its frames on the GPU
@@ -2143,9 +2200,8 @@ The live counterpart is its own example, not a `fuse_replica` flag:
 `SensorArray` posed by `source.calibration`; it waits on the cameras'
 notifications for each set (`sensor::RigSets`), records its prep, fuse,
 `fusion.free_after` pass and, when it codes, the frame's front half into one
-batch through `SetSender` (`set_codec.hpp`, which codec_replica shares; the
-frame's rANS half is a second batch), and writes a PLY after `run.frames`
-frames.
+batch through `sender::SetSender`, as codec_replica does (the frame's rANS
+half is a second batch), and writes a PLY after `run.frames` frames.
 `operation: "stream"` only streams: each set is polled, counted and released, with no
 GPU preparation, fusion or mesh, so a run measures the cameras' stream and
 decode alone. `diagnostics.readback: true` reads each set's luma back through
@@ -2159,12 +2215,14 @@ or when it fails, the array's counters, each camera's `lost` frames and, for
 a rig, each secondary's mean and worst skew to the primary. Colour is H.265
 unless `source.color_codec: "mjpeg"`.
 With `output.stream`, `output.csv` or `output.serve` it also codes each
-fused set as one frame through the codec examples' `CodecStream` (the
-2026-10-20 decision), decoding it too only with `output.csv` or
-`codec.sweep` (`set_codec_outputs`), for their decode columns and the
-sweep's grid. `main.cpp` opens the stream before the cameras and
-refuses there a port in use and a PLY that is the stream's or the CSV's file
-under another name. A record's set is the set's index in the run
+fused set as one frame of a `sender::CodecStream` (the 2026-10-20
+decision), decoding it too only with `output.csv` or `codec.sweep`
+(`set_codec_outputs`), for their decode columns and the sweep's grid. Each
+set's row is stamped published once its frame is written and served, before
+any decode, or after its fusion when it is not coded. `main.cpp` opens the
+stream before the cameras and refuses there a port in use and a PLY that is
+the stream's or the CSV's file under another name (`check_apart`). A
+record's set is the set's index in the run
 and its pts the set's time; a set stamped before the last frame, as a clock
 stepping back stamps it, takes that frame's time. A run that fails part-way
 still finishes its stream and reports the frames it coded; one that coded
@@ -2202,9 +2260,8 @@ reclaims the retained colour buffers without waiting for that frame's number.
 draws it.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `codec.encode_every` frames it
-encodes, in the set's batches (`SetSender`), then decodes with
-`decode_growing` from the decoder's input slot into a player grid
-`make_decode_grid` built from the first frame. It reports the
+encodes, in the set's batches (`sender::SetSender`), and the stream
+decodes into its player grid. It reports the
 bitrate at the coded frame rate and, at an intra period above 1, a
 GOP's (an I-frame and the period's P-frames, each at its type's
 mean), and for each frame type its bytes (mean, p50, p95, max) and
@@ -2212,46 +2269,28 @@ both calls' stage rows. It then judges the last decoded
 surface against the source's, mesh to mesh, with the `eval` tier: accuracy,
 coverage and the F-score at half a voxel, since a fused TSDF is projective
 and sampling it would measure the fusion's bias too. `codec.sweep` prints the
-rate–distortion table the defaults are chosen from. The stream, its report
-and the sweep are `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
-The stream keeps a row per decoded frame (source index, frame type, bytes,
-blocks, and encode and decode host and device ms) and writes
-`CodecOutputs`, from `output.csv`, `output.stream` and `output.serve`, as it
-codes. `CodecOutputs::decode`, on by default, decodes each frame into the
-player grid; off, each recorded frame has a row with empty decode columns,
-and no decoder or player grid is made. The CSV gets each row once it is
-kept; the core cannot append, so the file is the stream's own. The
-`.vrst` (`recon_stream`) gets every frame the encoder returns, before it is
-decoded, so a frame the decoder refuses is kept: one Geometry track, at the
-source's nominal rate (the rig's `source.fps`, else 30 a second), and per
-frame a record, a key exactly when it holds an I-frame, whose set is the
-source index and whose pts is that index at 30 fps, as Replica frames carry
-no time. It has no session id or start time, so a rerun writes the same
-bytes. It must be new, so a rerun onto it is refused before anything is
-coded, and a frame index or pts out of order is refused before it is
-encoded, so the writer never refuses one the encoder has taken. Any other
-failure after the encode, of the append, the decode or the CSV, calls
-`force_intra()`, so the next frame never references one the stream or the
-player lacks. `finish` writes the footer. With `serve`, a
-`networking::StreamServer` on the same session serves each record once it
-is in the file, if there is one, so no viewer gets a frame the file lacks; a
-record it refuses is logged at Warning and fails no frame, as failing would
-stop the recording. It starts before the file is made, so a port in use
-leaves none, and `finish` closes the viewers. Before each frame's front half,
-where the encoder picks I or P, `code` and `record` read the server's
-`key_wanted()`: a rise since the last read calls `force_intra()`, which
-stands until a frame is returned, so joins between two frames make one key,
-a refused frame or a front half recorded again after a fusion done again
-keeps it, and the period counts from it. `codec_outputs` serves without
-`replay_gop`, so fuse_orbbec's viewers that join or fall behind get a key at
-the next set; `serve_stream`, which cannot make a key, keeps it.
+rate–distortion table the defaults are chosen from. The codec examples
+stream through the sender tier's `CodecStream` ([sender](#sender)); their
+report and the sweep are `examples/common/codec_report.hpp` and
+`codec_sweep.hpp`. The report (`CodecReport`) keeps a row per frame that
+went out whole, from its `SentFrame` (source index, frame type, bytes,
+blocks, and encode and decode host and device ms), sums each type's stage
+rows, and writes `output.csv` as each row comes; the core cannot append, so
+the file is the report's own. A stream that does not decode
+(`CodecOutputs::decode` off) has rows with empty decode columns.
+`codec_outputs` maps `output.stream` and `output.serve` to `CodecOutputs`,
+and `codec_session` gives the `.vrst` one Geometry track at the source's
+nominal rate (the rig's `source.fps`, else 30 a second), with no session id
+or start time, so a rerun writes the same bytes; a record's set is the
+source index and its pts that index at 30 fps, as Replica frames carry no
+time. `codec_outputs` serves without `replay_gop`, so fuse_orbbec's viewers
+that join or fall behind get a key at the next set; `serve_stream`, which
+cannot make a key, keeps it.
 
-Before truncating the CSV, creation checks that it does not alias the new
-stream file, including through symlinks or case-insensitive names. An alias
-is `InvalidArgument`. The encoder and decoder are made after every output,
-so a refused output costs no kernel; an error after the stream file is made
-removes it for retry, as does destroying the stream unfinished before its
-first frame, and a codec error removes the new CSV too.
+The report opens the CSV once the stream's file is made, and refuses one
+that is that file under another name, through symlinks or case-insensitive
+names (`InvalidArgument`); the stream, dropped unfinished before its first
+frame, then removes its file for a retry.
 
 **`codec_mesh`** codes one mesh or a numbered sequence of them (README,
 Codec evaluation, has the keys). The core
@@ -2380,8 +2419,9 @@ filtered.
 **On `fuse_orbbec`'s stream** (the 2026-10-20 entry): a capture-volume
 crop (`fusion.max_depth_m` is the limit there is), raw RGBD recording and
 replay, colour, an upright world, and the session's host clock and
-calibration, which `CodecStream` does not record. With `output.csv` or
-`codec.sweep` the stream still decodes each frame inside the set loop: on
+calibration (`codec_session` leaves both out). With
+`output.csv` or `codec.sweep` the stream still decodes each frame inside the
+set loop: on
 the lab rig (4 Femtos, RTX 4090, Release; 1 cm, Dynamic, period 30; 303
 sets) a P-frame's decode took 2.70 ms host and 2.14 ms device, 37% and 38%
 of the set's fusion and coding, and 6.49 / 4.38 ms at 5 mm. A loop slower

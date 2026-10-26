@@ -8,10 +8,10 @@
 ///        `tsdf::Fuser`, into the grid `tsdf::create_fusion_grid` makes.
 ///
 /// Header-only and compiled only into the executables that fuse: it includes
-/// the `tsdf` tier and `sensor/utils`, which `vr_example_common` deliberately
-/// does not link. What is left here is the hand-off from a
-/// `sensor::DeviceFrame` to the fuser's inputs, which the tier cannot see,
-/// and the lines the examples print about what a set did to the grid.
+/// the `sender` tier, which `vr_example_common` deliberately does not link.
+/// What is left here is the blocking calls the non-sending examples fuse
+/// with, the fuser's inputs taken from `sender::fuse_inputs`, and the lines
+/// the examples print about what a set did to the grid.
 
 #include <cstdint>
 #include <cstdio>
@@ -21,7 +21,7 @@
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
-#include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/recon/sender/fuse_inputs.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
@@ -31,18 +31,6 @@ namespace vr_example {
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
-
-/// @brief How a prepared frame's colour is fused: through its own camera, the
-///        coverage read off its high byte. Meaningful only when the frame
-///        @ref vr::sensor::DeviceFrame::has_color.
-inline vr::tsdf::ColorFrame device_color(const vr::sensor::DeviceFrame& frame) {
-  vr::tsdf::ColorFrame color{};
-  color.buffer = frame.color.get();
-  color.cam = frame.color_camera;
-  color.encoding = frame.color_encoding;
-  color.coverage_in_alpha = true;
-  return color;
-}
 
 /// @brief Print what a set did to the grid, when it did anything worth a line:
 ///        grew, was refused a grow, or left blocks out.
@@ -73,38 +61,10 @@ inline vr::tsdf::IntegrationMode integration_mode(bool dynamic) {
                  : vr::tsdf::IntegrationMode::Classic;
 }
 
-/// @brief A set's prepared frames as the fuser takes them: each frame's input,
-///        pointing at its colour in @ref colors. Moved, never copied, so the
-///        pointers hold.
-struct FuseInputs {
-  std::vector<vr::tsdf::ColorFrame> colors;
-  std::vector<vr::tsdf::FrameInput> frames;
-};
-
-/// @brief The fuser's inputs for @p frames, as `sensor::GpuFramePrep` hands
-///        them out: nothing is uploaded, and depth and colour are fused with
-///        their own cameras (@ref device_color). An empty entry is skipped.
-inline FuseInputs fuse_inputs(
-    const std::vector<std::optional<vr::sensor::DeviceFrame>>& frames) {
-  FuseInputs in;
-  in.colors.reserve(frames.size());  // the inputs point into it
-  for (const std::optional<vr::sensor::DeviceFrame>& frame : frames) {
-    if (!frame) continue;
-    const vr::tsdf::ColorFrame* color = nullptr;
-    if (frame->has_color()) {
-      in.colors.push_back(device_color(*frame));
-      color = &in.colors.back();
-    }
-    in.frames.push_back(
-        {{vkc::StorageInput(*frame->depth), frame->depth_camera}, color});
-  }
-  return in;
-}
-
 /// @brief Fuse a set of frames already on the device, as
 ///        `sensor::GpuFramePrep` hands them out, through @p fuser
-///        (@ref fuse_inputs): one frame is `{frame}`. What the set did to
-///        the grid is printed (@ref print_fuse_report).
+///        (`sender::fuse_inputs`): one frame is `{frame}`. What the set did
+///        to the grid is printed (@ref print_fuse_report).
 /// @param fuser       The fuser.
 /// @param grid        The volume to fuse into.
 /// @param frames      The prepared frames.
@@ -119,7 +79,7 @@ inline vkc::Status fuse_set(
     const std::vector<std::optional<vr::sensor::DeviceFrame>>& frames,
     float max_weight, vr::tsdf::IntegrationMode mode,
     vkc::StageMetrics* metrics) {
-  const FuseInputs in = fuse_inputs(frames);
+  const vr::sender::FuseInputs in = vr::sender::fuse_inputs(frames);
   VKC_ASSIGN(const vr::tsdf::FuseReport report,
              fuser.fuse(grid, in.frames, max_weight, mode, metrics));
   print_fuse_report(report);

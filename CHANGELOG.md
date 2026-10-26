@@ -8,6 +8,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sender`, examples: **a sender's set step and its codec stream are
+  library calls** (the 2026-10-26 decision): `recon_sender`, a tier after
+  `networking`, holds `SetSender` (`sender/set_sender.hpp`), `CodecStream`,
+  `CodecOutputs` and `SentFrame` (`sender/codec_stream.hpp`) and
+  `fuse_inputs` (`sender/fuse_inputs.hpp`), in place of the examples'
+  `set_codec.hpp`, `codec_stream.hpp` and `fuse_frame.hpp`'s inputs, which
+  are gone. `SetSender::send` returns what the set did (`Sent`) and runs a
+  callback once the set is published; `CodecStream::code` returns the frame
+  (`SentFrame`); neither prints. The examples keep their per-set table and
+  the stream's rows, CSV and summary (`CodecReport`, `codec_report.hpp`),
+  built from what the calls return, and write the same streams. Migration:
+  `CodecStream::create` takes the session (the examples' `codec_session`)
+  and refuses one that is not one Geometry track; the CSV is the
+  report's, so a row it cannot write no longer makes the next frame an
+  I-frame. Tests: `recon_sender_codec_stream` (from
+  `recon_example_codec_stream`), `recon_sender_set_sender` (from
+  `recon_example_set_codec`), `recon_example_codec_report` (new),
+  `recon_example_config`, `recon_example_mesh_sequence`.
 - `networking`, examples: **keys on demand** (the 2026-10-25 keys-on-demand
   decision): `ServerOptions::replay_gop`, true by default as before; false,
   a joiner waits for the next key, the log keeps only what connected viewers
