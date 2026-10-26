@@ -139,6 +139,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `volume`, `codec`: **a compaction records from a const map** (the
+  2026-10-26 const compaction decision): `VoxelHashMap::record_compaction`
+  is `const`, so a caller holding a grid read-only records the active
+  set's compaction, or a frustum's, into its own batch, the list and its
+  count left on the device. It moves no block, stamp, heap count, epoch or
+  tick; a held list of the kind it records goes stale, as before. Until its
+  batch resolves, the map is not resized nor its frusta grown, as for any
+  recorded compaction: a resize refuses that batch at its wait, and a
+  frusta grow under it is undefined behaviour.
+  `codec::Encoder::encode` and `record_front` take a
+  `const volume::VoxelBlockGrid&`; every caller compiles unchanged. Tests:
+  `recon_volume_recorded`, `recon_codec_encoder`.
 - `sensor`: **NVDEC's pictures land in two plane images** (the 2026-10-26
   NVDEC plane-image decision): `HevcDecoder` on NVDEC copies each picture,
   with its one CUDA copy, into an R8 luma and an R8G8 chroma image the
