@@ -908,6 +908,14 @@ reuses the encoder's compaction (2026-09-30); an extract records its own
 into its batch when none holds (2026-10-24). A fuse culls instead and leaves
 none: `record_compaction` records its compaction into the fuse's own batch,
 the list and its count left on the device for the dispatches after it.
+It is `const` (2026-10-26), so a caller holding the grid read-only, such as
+the encoder or a caller handed a const grid, records one into its own batch:
+it moves no block, stamp, heap count, epoch or tick, and writes only the
+map's compaction output (the list, its count, its kind's serial and the
+frusta, `mutable`), which any compaction rewrites. Its batch binds the
+map's kernel sets, so the map is neither resized nor its frusta grown until
+that batch resolves: a resize waits for the queue and the core then refuses
+the batch, while a frusta grow under a running batch is undefined.
 `topology_epoch()` lives on the *map* — the object that frees a block
 index — and is a globally unique token re-drawn at `create`, at every
 `clear` and at every `remove` that accepts its input, never at `resize`: a
@@ -1570,9 +1578,10 @@ batch holds (a sender's fusion), every step whose count only the device
 knows, and `record_back` the rANS coding, sized on the host from the
 front's results; `finish` lays the frame out, its payload left in an
 encoder slot (`EncodedFrame`), and `encode(grid)` is those, a submit and a
-wait each, the head and payload joined: 2 submits. The front takes the
-map's own active list -- the one it holds (`held_device_list`), or one
-compacted into the batch, which leaves the map none, so an extract after
+wait each, the head and payload joined: 2 submits. The front takes a
+const grid and the map's own active list -- the one it holds
+(`held_device_list`), or one compacted into the batch
+(`record_compaction`), which leaves the map none, so an extract after
 compacts its own -- keeps the blocks with an observed voxel, or with
 `EncoderConfig::true_sdf` those holding surface (`DctTransform::record_observed`,
 their count left on the device; the true-SDF passes below share it), sorts

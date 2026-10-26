@@ -203,6 +203,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   observed blocks without surface are dropped too. *Amended 2026-10-22:*
   `make_decode_grid` and `decode_growing` take the caller's block ceiling,
   and refuse a frame or a grow past it as `InvalidArgument`.
+  *Amended 2026-10-26:* the encoder takes a const grid.
 - [**2026-09-27**](#2026-09-27--the-video-decoder-is-recon_sensor_video-a-target-of-its-own-over-an-installed-ffmpeg-hevc-in-host-pictures-out-on-the-first-hardware-back-end-that-decodes-a-built-in-clip-nvidia-ahead-of-an-integrated-gpu-each-ci-leg-requires-the-hardware-it-has) —
   The video decoder is `recon_sensor_video`, a target of its own over an
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
@@ -801,6 +802,16 @@ entries relevant to your task; later amendments supersede earlier rules.
   `GENERAL`; a reader takes each picture over from outside Vulkan in the
   layout it is in, and nothing hands it back. The images take the
   decoder's queue families; nvJPEG keeps its I420 buffer.
+- [**2026-10-26**](#2026-10-26--a-compaction-records-from-a-const-map-and-the-encoder-takes-a-const-grid-the-maps-compaction-output-is-scratch-any-compaction-rewrites-amends-the-2026-09-27-encoder-and-decoder-entry) —
+  `VoxelHashMap::record_compaction` is `const`, so a caller holding a grid
+  read-only records the active set's compaction, or a frustum's, into its
+  own batch. It moves no block, stamp, heap count, epoch or tick; the list,
+  its count, its kind's serial and the frusta are the map's compaction
+  output, `mutable`, and a held list of that kind goes stale as before.
+  `Encoder::encode` and `record_front` take a const grid. One call on a map
+  at a time, const or not, and no resize or frusta grow until the batch has
+  resolved; broken, a resize refuses the batch and a frusta grow is
+  undefined behaviour.
 
 ## Decision record
 
@@ -5486,6 +5497,8 @@ The parent row's device half is the transform, timed through a `GpuStageScope`
 that `DctTransform::forward` and `inverse` now take. The encoder takes the grid
 by non-const reference because compaction runs the map's kernels, as
 `MarchingCubes::extract_host` does. It reads the grid and never writes it.
+*Amended 2026-10-26 (the const compaction entry, below):* a compaction
+records from a const map, so the encoder takes a const grid.
 
 **Measured**, on an analytic sphere (radius 0.12 m, 5 mm voxels, 40 mm band,
 298 coded blocks) meshed with `MarchingCubes` and judged against the true
@@ -15928,6 +15941,97 @@ recorded as in `GENERAL`: both rest on Vulkan's rule for external memory, as
 the buffer's acquire did. A colour attachment mapped without CUDA's flag
 also passes on the RTX 5090, which lays it out alike; the flag rests on
 CUDA's documented rule.
+
+### 2026-10-26 — A compaction records from a const map, and the encoder takes a const grid: the map's compaction output is scratch any compaction rewrites (amends the 2026-09-27 `Encoder` and `Decoder` entry).
+
+**The rule.** `VoxelHashMap::record_compaction` is `const`. A caller that
+holds a grid read-only, one it only reads (the encoder) or one handed to it
+as `const`, records the active set's compaction, or a frustum's, into its
+own batch, and runs its own kernels over the list, the count left on the
+device. Before, such a caller had no way to get the active set on the
+device: every compaction was non-const, and the map holds no list after a
+recorded compaction, as a fuse's or an extract's leaves none.
+
+**What const means here.** The call moves no block, voxel, `BlockStamp`,
+heap count, topology epoch or tick. What it writes is the map's compaction
+output, which every compaction rewrites: the list and its count, device
+scratch written through the batch, which C++ constness does not see; the
+serial that marks an earlier list of the same kind stale; and the frusta it
+uploads, in a buffer it may grow. The two serials and the frusta buffer are
+`mutable` and the frusta upload is `const`; no function body changed, and
+one comment in the upload names the rule below. A list of the kind recorded
+goes stale as before, so `held_device_list` and `check_device_block_list` /
+`_subset`, const queries, can answer differently after a const call. The
+map has no lock: no other call may overlap this one, const or not, and a
+const reference does not make a map shareable across threads. A reader's
+batch on the map's queue is ordered after the batches before it by the
+core's barriers; another queue needs a semaphore, as before.
+
+**Until the batch resolves.** The batch binds the map's own kernel sets, so
+until it has resolved the map must not be resized, nor its frusta grown (a
+frustum compaction of more frusta than any before): the owner of a grid
+grows it only once a reader's batch has resolved. This held for every
+recorded compaction already; a reader's batch can outlive the call that
+recorded it while the owner goes on. A resize submits and waits before it
+replaces a buffer, a wait that follows the batch on the map's queue, so the
+batch has run, and the core refuses it at its wait, its readbacks
+unwritten. A frusta grow waits for nothing: under a batch still running it
+rewrites the set that batch bound and frees its buffer, which is undefined
+behaviour. Handing the old buffer to the growing batch
+(`CommandBatch::retain`) would keep the memory but not the set, which
+Vulkan forbids rewriting under a pending command buffer (with the buffer
+kept, the validation layer still reports the rewrite), so the rule stays a
+precondition.
+
+**The encoder takes a const grid.** `Encoder::encode` and `record_front`
+take `const volume::VoxelBlockGrid&`. The 2026-09-27 entry took the grid
+non-const only for the compaction; the encoder reads it and never writes
+it. Every caller compiles unchanged.
+
+**Why not the caller's own buffers.** A const compaction into buffers the
+caller owns would bind them in the map's kernel set, which the core refuses
+to rewrite while a batch that bound it is pending. The map would then need
+a ring of sets, a limit on pending calls and a reclaim call, itself mutable
+state, and each reader a list of `num_blocks` entries of 16 B. A compaction
+object of the caller's own meets the same set problem at every resize.
+
+**Why not the extract's recorded list.** The list an extract records has no
+stamp, and its count lives only on the device, so a reader could not tell
+whether it still names the active set. A reader pays one table scan in its
+own batch instead, with no submit more; reusing the extract's list waits
+for a measurement in which that scan shows.
+
+**What stays.** The fuse, the free pass, the extract and the blocking
+compactions call the same function and record the same commands: no copy,
+submit or dispatch more. `MarchingCubes::record_extract` and the extract's
+device path are, as the encoder was, non-const only for this call; they
+keep their signatures until a caller needs a const extract.
+
+**Tests.** `recon_volume_recorded` adds a const case: a `static_assert`
+that a const map records one; then, through a const map, the whole set and
+a frustum's subset, each the blocking compaction's list, pointers included,
+in that list's buffer, in the caller's one submit with one dispatch and no
+staging buffer; a held list of the kind recorded goes stale while the other
+kind's holds; and no block, pointer, stamp, heap count, epoch or tick
+moves. A resize case grows the grid under a reader's pending batch of each
+kind, recorded through a const grid: the batch is refused at its wait, its
+count unwritten, the validation layer sees nothing in use freed or
+rewritten, and the reader's next batch counts the blocks again.
+`recon_codec_encoder` encodes through a const grid in its device-list case
+(the same bytes, the `"  ..encode set"` row only when no list holds, no
+list held after), and the helper its halves, rules and tail cases record a
+front half through takes one. Mutation-checked with four planted bugs,
+each caught: the serial left unbumped, the other kind's serial bumped, the
+frustum list returned for the whole set, and a resize that leaves the
+kernel sets on its old buffers.
+
+**Validation.** Release with warnings as errors, under the validation
+layer. RTX 5090, Ubuntu 26.04.1, GCC 15.2, with FFmpeg, CUDA and Assimp,
+and synchronization validation: the 120 tests pass. RTX 4090, the same
+system and options: the 120 tests pass (`recon_sensor_video_jpeg` skips,
+with no JPEG engine). Apple M4 (Mac mini), macOS 27.0.1, with Orbbec,
+Assimp and the viewers: the 135 tests pass, the two changed tests pass
+under synchronization validation too, and the iOS check links.
 
 ## Measured lessons
 
