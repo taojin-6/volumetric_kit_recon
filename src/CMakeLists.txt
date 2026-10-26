@@ -56,6 +56,7 @@ if(NOT VR_CAMERA_ONLY)
     recon_sensor
     recon_sensor_utils
     recon_sensor_array
+    recon_sensor_video_syntax
     recon_codec
     recon_eval
     recon_io

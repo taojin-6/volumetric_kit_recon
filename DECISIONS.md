@@ -743,6 +743,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   set and the latency to publish, P-frame, I-frame and uncoded sets apart;
   the encoder's and the free pass's compactions are `"  ..encode set"` and
   `"  ..stale set"`, apart from a fuse's `"  ..active set"`.
+- [**2026-10-25**](#2026-10-25--the-h265-syntax-reader-is-public-in-a-target-of-its-own-on-every-platform-amends-the-2026-10-25-videotoolbox-decoder-entry) —
+  The H.265 syntax reader is public (`sensor/video/hevc_syntax.hpp`,
+  `recon_sensor_video_syntax`): host code on the core's base tier alone,
+  built on every platform, its parsers returning `Result` and its
+  `BitReader` public with them.
 
 ## Decision record
 
@@ -15344,6 +15349,66 @@ voxels, 16,384 buckets, Dynamic, 24 to 156 new blocks a set) a probe redid
 none after the first in 49 and 59 sets. The senders count redos
 (`fused again`); codec_replica sends one camera a set, so M6 cannot count
 four-camera redos, and the owner's rig run is what decides Q1.
+
+### 2026-10-25 — The H.265 syntax reader is public, in a target of its own on every platform (amends the 2026-10-25 VideoToolbox decoder entry).
+
+**The rule.** The H.265 syntax `HevcDecoder` reads itself on Apple is a
+public header, `sensor/video/hevc_syntax.hpp` (`vr::sensor::hevc`), in a
+target of its own, `recon_sensor_video_syntax`: host code on the family
+core's base tier alone, with no codec, GPU or FFmpeg, so it builds on every
+platform. `recon_sensor_video` links it privately, and VideoToolbox's path
+reads streams through it as before. `ColorCodes`, the H.273 codes an SPS's
+VUI declares, moves from the internal `frame_color.hpp` to the public
+`color_codes.hpp`, since `Sps::color` is one; FFmpeg's path describes its
+frames from the same type, and no copy is left.
+
+**Why public.** `HevcDecoder` asks its caller for every access unit and
+speaks of key frames: a lost unit costs the pictures up to the next one,
+and `reset` starts the stream afresh at one. Public, the reader gives that
+caller the key frames (`split_annex_b`, `is_irap`) and what a stream's SPS
+declares, from the code the decoder reads with, at the cost of no
+dependency past the core's base tier. Its callers are `HevcDecoder` on
+Apple and `recon_sensor_video_hevc_syntax`.
+
+**Its contract is recon's.** The parsers return `Result` and
+`split_annex_b` a `Status`: bytes that do not parse are `IoError`, naming
+why (the decoder passes them on under its name, so its codes are
+unchanged); a NAL unit of another type than the call reads, or null data
+with a size, is `InvalidArgument`; a host allocation failure is
+`OutOfMemory` (`core::exception_status`, built with `-fexceptions`), as in
+recon's other host calls, so no exception leaves the reader. A `Nal` of
+fewer than three bytes has no payload, where its size less the header would
+wrap. `BitReader` is public with the parsers, since every one of them reads
+through it: the RBSP's bits past the emulation prevention bytes, u(n)
+(`VKC_CHECK` past 32 bits), ue(v), se(v) and the trailing bits, with zeros
+and `overrun()` past the end.
+
+**Fields.** The structs keep the fields the decoder and the tests read;
+`Pps::dependent_slice_segments_enabled` and `kBlaWLp`, which nothing read,
+go.
+
+**Tests.** `recon_sensor_video_hevc_syntax` links the public target alone
+and runs on every leg: the bit reader's own cases (an 03 skipped after two
+zeros and kept after one, Exp-Golomb codes up to 31 leading zeros and the
+refusal of 32, reads past the end, the trailing bits, a unit with no
+payload); the clips' syntax as before; every truncated SPS in storage of its
+own length; a slice without its PPS or its SPS; each wrong NAL unit type;
+and noise behind each header, refused only as `IoError`; and each call's
+largest allocation failed, returned as `OutOfMemory`. The decoder tests
+are unchanged. The macOS leg's iOS check compiles and links the new target
+with the decoders.
+
+**Validation.** RTX 5090, Ubuntu 26.04, Release with warnings as errors,
+under the validation layer: the 107 tests pass without FFmpeg or CUDA, and
+the 112 with FFmpeg 8.0 and CUDA 13.4 on NVDEC
+(`VR_TEST_HEVC_BACKEND=cuda`); the host-only video tests pass under ASan
+and UBSan (Debug, GCC 15). Apple M4 (Mac mini), macOS 27.0.1, Release with
+no FFmpeg: the 112 tests pass on VideoToolbox
+(`VR_TEST_HEVC_BACKEND=videotoolbox`) under the validation layer, and the
+iOS check links (Xcode 27.0). Mutating the reader -- an 03 skipped after
+one zero or never, a code of 32 zeros taken, se(v)'s sign, the trailing
+bits unchecked, a short unit's payload, the null-data and type checks --
+fails the test.
 
 ## Measured lessons
 

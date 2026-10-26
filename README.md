@@ -197,7 +197,9 @@ FFmpeg; their pictures reach Vulkan through `PixelBufferImporter`
 (`volumetric_kit::recon_sensor_apple`, `sensor/apple/`). On Linux they are
 off by default: NVDEC through FFmpeg ≥ 6.1, found through pkg-config, and
 nvJPEG, with the CUDA 13 toolkit's headers (`cmake/vr_cuda.cmake`).
-`VR_WITH_FFMPEG` on Apple fails the configure.
+`VR_WITH_FFMPEG` on Apple fails the configure. The H.265 syntax the Apple
+decoder reads (`volumetric_kit::recon_sensor_video_syntax`,
+`sensor/video/hevc_syntax.hpp`) is host code, in every build.
 
 ```sh
 sudo apt install pkg-config libavcodec-dev libavutil-dev

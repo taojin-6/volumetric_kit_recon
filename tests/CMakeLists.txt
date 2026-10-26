@@ -1110,9 +1110,9 @@ if(APPLE)
 endif()
 
 # The video decoders' host pieces, with no codec and no GPU, so on every leg:
-# the colour H.273 codes describe, and the H.265 syntax VideoToolbox's path
-# reads itself, on the committed clips. Each compiles the internal source
-# itself, as the Orbbec conversion test does.
+# the colour H.273 codes describe, compiling the internal source itself, as the
+# Orbbec conversion test does; and the public H.265 syntax
+# (recon_sensor_video_syntax) on the committed clips.
 set(_vr_video_src ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/video)
 add_executable(
   recon_sensor_video_frame_color_test sensor_video_frame_color_test.cpp
@@ -1125,13 +1125,10 @@ vr_target_warnings(recon_sensor_video_frame_color_test)
 add_test(NAME recon_sensor_video_frame_color
          COMMAND recon_sensor_video_frame_color_test)
 
-add_executable(
-  recon_sensor_video_hevc_syntax_test sensor_video_hevc_syntax_test.cpp
-                                      ${_vr_video_src}/hevc_syntax.cpp)
+add_executable(recon_sensor_video_hevc_syntax_test
+               sensor_video_hevc_syntax_test.cpp test_allocation_failure.cpp)
 target_link_libraries(recon_sensor_video_hevc_syntax_test
-                      PRIVATE volumetric_kit::recon_sensor)
-target_include_directories(recon_sensor_video_hevc_syntax_test
-                           PRIVATE ${_vr_video_src})
+                      PRIVATE volumetric_kit::recon_sensor_video_syntax)
 target_compile_definitions(
   recon_sensor_video_hevc_syntax_test
   PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")

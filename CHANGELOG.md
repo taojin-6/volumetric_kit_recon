@@ -8,6 +8,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **the H.265 syntax reader is public** (the 2026-10-25
+  decision): `sensor/video/hevc_syntax.hpp`, target
+  `volumetric_kit::recon_sensor_video_syntax`, host code built on every
+  platform with no codec, GPU or FFmpeg. `split_annex_b`, `vps_id`,
+  `parse_sps`, `parse_pps` and `parse_slice_start` return `Status` or
+  `Result` (`IoError` for bytes that do not parse, `InvalidArgument` for a
+  NAL unit of another type, `OutOfMemory` for a host allocation failure),
+  and read through the public `hevc::BitReader`.
+  `ColorCodes` moves to `sensor/video/color_codes.hpp`. `HevcDecoder` on
+  Apple reads streams through it as before. Test:
+  `recon_sensor_video_hevc_syntax` (every leg, on the public target).
 - `sensor`: **a set's prep records into a caller's batch, and the array
   waits on its sensors' notifications** (the 2026-10-25 decision):
   `GpuFramePrep::record` and `record_set`, `SensorArray::record_process`
