@@ -421,8 +421,9 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       # The tests whose code runs threads again under ThreadSanitizer: the
-      # stream reader two threads share, the server's and the client's
-      # threads, the senders' log handler (examples/common/info_log.hpp),
+      # stream reader two threads share, the mesh handoff's producer and
+      # consumer, the server's and the client's threads, the senders' log
+      # handler (examples/common/info_log.hpp),
       # and the Orbbec decode workers, which the sanitizer job, on
       # address and undefined only and with no Orbbec SDK, never runs. In a
       # tree of their own that reuses the sources FetchContent fetched for
@@ -455,7 +456,7 @@ jobs:
             --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
             --target recon_tsan_tests
           ctest --test-dir build-tsan --output-on-failure --no-tests=error \
-            -R '^recon_(networking_|stream_container$|example_info_log$|sensor_orbbec_(decode_worker|jpeg|hevc|open_sensors)$)'
+            -R '^recon_(networking_|stream_container$|mesh_exchange$|example_info_log$|sensor_orbbec_(decode_worker|jpeg|hevc|open_sensors)$)'
 
       # recon_sensor_apple and recon_sensor_video, with the H.265 syntax it
       # reads (recon_sensor_video_syntax), promise an iOS build (DECISIONS.md,
