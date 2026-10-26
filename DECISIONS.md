@@ -774,7 +774,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   key wins still. `StreamServer::key_wanted()` counts both, and the codec
   examples' `CodecStream` codes an I-frame at its next front half when it
   rises. fuse_orbbec serves so; `serve_stream`, which cannot make a key,
-  replays the GOP.
+  replays the GOP. *Amended 2026-10-26:* that stream is
+  `sender::CodecStream`.
 - [**2026-10-26**](#2026-10-26--a-senders-set-step-and-its-codec-stream-are-library-calls-in-recon_sender-after-networking-the-frames-halves-stay-internal-with-no-friend-amends-the-2026-10-25-two-batch-sender-and-keys-on-demand-entries) —
   A sender's set step and its codec stream move from the examples into
   `recon_sender`, a tier after `networking`: `SetSender`, `CodecStream`,

@@ -290,10 +290,10 @@ see [the networking contract](DESIGN.md#networking). `fuse_orbbec` serves
 the rig's coded frames with `output.serve`, coding the next set as a key
 for a viewer that joins or falls behind, through
 `volumetric_kit::recon_sender`: each set fused and its frame coded in two
-batches, then written, served and decoded back
-([the sender contract](DESIGN.md#sender)). `serve_stream` serves a
-recording live, paced by its pts and looping until Ctrl+C, with no camera or
-GPU; a viewer connects to the sender's `host:port`:
+batches, then written and served ([the sender contract](DESIGN.md#sender)).
+`serve_stream` serves a recording live, paced by its pts and looping until
+Ctrl+C, with no camera or GPU; a viewer connects to the sender's
+`host:port`:
 
 ```sh
 "$recon_root/build/examples/serve_stream/serve_stream" rafa2.vrst  # port 47801

@@ -89,8 +89,8 @@ class VR_SENDER_API SetSender {
   /// @param stream  The stream the sets are coded into, or null to fuse
   ///                alone.
   /// @param config  How it fuses, frees and codes.
-  /// @return The sender, which borrows @p fuser, @p grid and @p stream (each
-  ///         must outlive it); or the timer's failure.
+  /// @return The sender, which borrows @p device, @p fuser, @p grid and
+  ///         @p stream (each must outlive it); or the timer's failure.
   static core::Result<SetSender> create(const core::Device& device,
                                         tsdf::Fuser& fuser,
                                         volume::VoxelBlockGrid& grid,
@@ -124,8 +124,10 @@ class VR_SENDER_API SetSender {
   /// @param sent    Optional: runs once the set is published -- for a coded
   ///                set once its frame is written and served, before the
   ///                decode back; for a set not coded, after its fusion.
-  /// @return What the set did; or the first failure of a call it makes, the
-  ///         fusion's and the frame's tokens dropped.
+  /// @return What the set did; `Status::Code::InvalidArgument`, before
+  ///         anything is recorded, for a set due a frame of a moved-from
+  ///         stream; or the first failure of a call it makes, the fusion's
+  ///         and the frame's tokens dropped.
   core::Result<Sent> send(
       core::CommandBatch& front,
       const std::vector<std::optional<sensor::DeviceFrame>>& frames,
