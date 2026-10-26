@@ -15738,6 +15738,19 @@ published once with its frame's rows. `recon_example_codec_report` keeps
 the rows, CSV, sizes, rates and comparison cases, and
 `recon_example_config` the outputs, the session and the sender's config.
 
+**Validation.** Release with warnings as errors, under the validation
+layer. RTX 4090, Ubuntu 26.04, GCC 15.2, with Orbbec, FFmpeg, CUDA and
+Assimp and synchronization validation: 127 tests pass and the 2 JPEG tests
+skip, with no JPEG engine. codec_replica's `.vrst` from 00530fe6 and from
+this change, on that GPU, compare equal byte for byte: the run test's wall,
+and Replica room0's 400 sets at 1 cm, coded every set at period 30
+(8,361,512 bytes) and every 7th set at period 4, its last frame through
+`code` (4,838,104 bytes). Apple M4 (Mac mini), macOS 27.0.1, with Orbbec,
+Assimp and the viewers: the 135 tests pass, and the iOS check links. Debug
+with clang 21 under ASan and UBSan on the RTX 4090, the sender, report,
+config and replica tests pass; the one leak reported, 248 bytes from the
+driver's device enumeration, is every GPU test's.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
