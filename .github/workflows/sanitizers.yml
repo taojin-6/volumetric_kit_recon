@@ -13,17 +13,17 @@ name: sanitizers
 # the owner installs. The loader is pinned to lavapipe, so the NVIDIA driver,
 # whose allocations LSan would report as leaks, is never loaded, and NVIDIA's
 # implicit layers load only when __NV_PRIME_RENDER_OFFLOAD or
-# NVPRESENT_ENABLE_SMOOTH_MOTION is set, which nothing here sets. On the RTX
-# 5090 box (clang 21, layer 1.4.341) the test processes mapped only the
-# loader, Mesa's device_select layer, the validation layer and lavapipe, and
-# the suite reported nothing but recon_gpu_test_harness's deliberate errors.
+# NVPRESENT_ENABLE_SMOOTH_MOTION is set, which nothing here sets. The
+# validation layer's and Mesa's caches and the tests' scratch directories go
+# to RUNNER_TEMP, which the runner empties every job, not to the host's
+# ~/.cache and /tmp.
 on:
   workflow_call:
 
 jobs:
   asan-ubsan-lsan:
     runs-on: vk-linux-gpu
-    timeout-minutes: 45 # a sanitized build is ~2-4x the plain build
+    timeout-minutes: 15
     # The build legs' containers run as root and leave a root-owned checkout
     # in the workspace, which this job, run as the runner's user, can neither
     # clean nor update: it checks out into a directory of its own there, which
@@ -71,9 +71,10 @@ jobs:
           done
           # Ubuntu packages clang's sanitizer runtimes apart from it.
           if command -v clang++ >/dev/null &&
-              ! echo 'int main() { return 0; }' |
+              ! out=$(echo 'int main() { return 0; }' |
                 clang++ -x c++ -fsanitize=address,undefined - \
-                  -o "${RUNNER_TEMP}/sanitize-check" 2>/dev/null; then
+                  -o "${RUNNER_TEMP}/sanitize-check" 2>&1); then
+            echo "clang++ -fsanitize=address,undefined failed:"; echo "${out}"
             v=$(clang++ -dumpversion | cut -d. -f1)
             missing="${missing} clang's sanitizer runtime (libclang-rt-${v}-dev)"
           fi
@@ -90,6 +91,9 @@ jobs:
           fi
           echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
           echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          mkdir -p "${RUNNER_TEMP}/cache"
+          echo "XDG_CACHE_HOME=${RUNNER_TEMP}/cache" >> "$GITHUB_ENV"
+          echo "TMPDIR=${RUNNER_TEMP}" >> "$GITHUB_ENV"
 
       # lavapipe is REQUIRED here: the whole point of this job is to run the
       # Vulkan-touching code under ASan/UBSan/LSan. If no device comes up we FAIL
