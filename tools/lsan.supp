@@ -6,7 +6,7 @@
 # still reported: never add a `vr::` / `volumetric_kit::` frame here. If a real
 # first-party leak appears, fix it — do not suppress it.
 
-# Mesa / lavapipe — the software Vulkan ICD used on the GPU-less CI runner.
+# Mesa / lavapipe — the software Vulkan ICD the job pins the loader to.
 leak:libvulkan_lvp
 leak:lvp_
 leak:libgallium
