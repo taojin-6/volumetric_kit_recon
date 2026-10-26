@@ -630,9 +630,9 @@ After P6, the GPU could run set N while the host polls and decodes set N+1.
 > `PixelBufferImporter` and a 640 × 576 depth frame, recorded by
 > `record_set` into one batch, submitted and waited; Apple M4 Mac mini,
 > macOS 27.0.1, Release, no validation; six interleaved runs an arm, the
-> order swapped each round, under `minilock --time`; each figure the median
-> of the runs' p50s (spread across runs in brackets), over 270 back-to-back
-> sets and 120 sets paced at 33.3 ms after warm-up:
+> order swapped each round, with no other build or test running; each
+> figure the median of the runs' p50s (spread across runs in brackets), over
+> 270 back-to-back sets and 120 sets paced at 33.3 ms after warm-up:
 >
 > | | before (`5c4aeb34`) | after |
 > |---|---|---|
