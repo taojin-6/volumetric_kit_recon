@@ -53,6 +53,7 @@
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
+#include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
@@ -126,8 +127,8 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
 
   VKC_ASSIGN(
       vol::VoxelBlockGrid volume,
-      vr_example::create_fusion_grid(device, allocator, opt.fusion.voxel_size_m,
-                                     opt.fusion.truncation_m));
+      rtsdf::create_fusion_grid(device, allocator, opt.fusion.voxel_size_m,
+                                opt.fusion.truncation_m));
   VKC_ASSIGN(rtsdf::Fuser fuser, rtsdf::Fuser::create(device, allocator));
   VKC_ASSIGN(rsensor::GpuFramePrep prep,
              rsensor::GpuFramePrep::create(device, allocator));

@@ -115,9 +115,10 @@ target_link_libraries(recon_tier_stage_metrics_test PRIVATE ${CMAKE_DL_LIBS})
 add_test(NAME recon_tier_stage_metrics COMMAND recon_tier_stage_metrics_test)
 
 # volume coordinate math: pure host transforms (world <-> voxel <-> block,
-# negative-coordinate block indexing, truncation band); and the tests' host
-# oracle of the spatial hash (volume_hash_oracle.hpp). CPU-only (no device), so
-# these always run -- not gated on a Vulkan driver.
+# negative-coordinate block indexing, truncation band), the params' validation
+# and the block layout (block_grid_params); and the tests' host oracle of the
+# spatial hash (volume_hash_oracle.hpp). CPU-only (no device), so these always
+# run -- not gated on a Vulkan driver.
 add_executable(recon_volume_coords_test volume_coords_test.cpp)
 target_link_libraries(recon_volume_coords_test
                       PRIVATE volumetric_kit::recon_volume)
@@ -298,22 +299,6 @@ vr_target_warnings(recon_example_fuse_keyframe_test)
 add_test(NAME recon_example_fuse_keyframe
          COMMAND recon_example_fuse_keyframe_test)
 
-# The examples' fusion grid starts larger for a finer grid, capped to fit the
-# device's maxStorageBufferRange: the start at lavapipe's 128 MiB and a 4 GiB
-# range and a capped caller's warning on the host, and the cap against the
-# grid's own ceiling on a device.
-add_executable(recon_example_fusion_buckets_test
-               example_fusion_buckets_test.cpp)
-target_include_directories(recon_example_fusion_buckets_test
-                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
-target_link_libraries(
-  recon_example_fusion_buckets_test
-  PRIVATE volumetric_kit::recon_sensor_utils volumetric_kit::recon_tsdf
-          volumetric_kit::core_test_policy)
-vr_target_warnings(recon_example_fusion_buckets_test)
-add_test(NAME recon_example_fusion_buckets
-         COMMAND recon_example_fusion_buckets_test)
-
 # The core parses and validates scenarios. These tests pin the conversion into
 # the runtime sensor and codec options (the codec's steps checked here, not by
 # core), without opening a camera or GPU.
@@ -344,9 +329,9 @@ target_compile_definitions(
 vr_target_warnings(recon_example_config_test)
 add_test(NAME recon_example_config COMMAND recon_example_config_test)
 
-# fuse_orbbec's sets (examples/common/fuse_orbbec_sets.hpp), where the driver is
-# built: a set's first frames kept, the rest let go, and a run over fake cameras
-# counted, cut to its length and its skew kept. Host only.
+# fuse_orbbec's cameras (examples/common/fuse_orbbec_sets.hpp), where the driver
+# is built: the one camera a calibration file names, and a camera's report. Host
+# only.
 if(TARGET volumetric_kit::recon_sensor_orbbec)
   add_executable(recon_example_fuse_orbbec_sets_test
                  example_fuse_orbbec_sets_test.cpp)
@@ -531,6 +516,17 @@ target_link_libraries(
                                     volumetric_kit::recon_tsdf Vulkan::Vulkan)
 vr_target_warnings(recon_tsdf_fuser_oom_test)
 add_test(NAME recon_tsdf_fuser_oom COMMAND recon_tsdf_fuser_oom_test)
+
+# tsdf fusion grid: the start grows for a finer grid, capped to fit the device's
+# maxStorageBufferRange (lavapipe's 128 MiB and a 4 GiB range, and a capped
+# caller's warning, on the host); on a device, the grid's layout and attributes
+# and the cap against its own ceiling. Skips the device half with no device.
+add_executable(recon_tsdf_fusion_grid_test tsdf_fusion_grid_test.cpp)
+target_link_libraries(
+  recon_tsdf_fusion_grid_test PRIVATE volumetric_kit::core_test_policy
+                                      volumetric_kit::recon_tsdf)
+vr_target_warnings(recon_tsdf_fusion_grid_test)
+add_test(NAME recon_tsdf_fusion_grid COMMAND recon_tsdf_fusion_grid_test)
 
 # The device-input overloads of allocate_from_depth and integrate: the same
 # frame fused from host arrays and from storage buffers must give the same grid.
@@ -863,6 +859,17 @@ target_link_libraries(recon_sensor_array_test
                       PRIVATE volumetric_kit::recon_sensor_array)
 vr_target_warnings(recon_sensor_array_test)
 add_test(NAME recon_sensor_array COMMAND recon_sensor_array_test)
+
+# sensor tier: a run's sets over pushed fake sensors -- each waited for, counted
+# and cut to the run's length, its pictures let go, each secondary's skew kept,
+# the silence limit from the last set and a lone sync secondary named, and the
+# array's refusal passed on. Host-only.
+add_executable(recon_sensor_array_rig_sets_test sensor_array_rig_sets_test.cpp)
+target_link_libraries(recon_sensor_array_rig_sets_test
+                      PRIVATE volumetric_kit::recon_sensor_array)
+vr_target_warnings(recon_sensor_array_rig_sets_test)
+add_test(NAME recon_sensor_array_rig_sets
+         COMMAND recon_sensor_array_rig_sets_test)
 
 # sensor tier: a sensor array's sets prepared on the GPU in one batch, each
 # frame as GpuFramePrep makes it alone and posed by the calibration. Skips
@@ -1686,6 +1693,8 @@ set_tests_properties(recon_example_codec_stream PROPERTIES COST 49)
 set_tests_properties(recon_tsdf_mesh_integrate PROPERTIES COST 36)
 set_tests_properties(recon_codec_encoder PROPERTIES COST 30)
 set_tests_properties(recon_example_set_codec PROPERTIES COST 29)
+# Waits out RigSets' 10-s silence limit, under any build.
+set_tests_properties(recon_sensor_array_rig_sets PROPERTIES COST 11)
 
 # A test skips by exiting with the core's test::kSkipExitCode (gpu_test.hpp). A
 # hang (a fence never signalled, a deadlocked thread) fails in 300 s rather than

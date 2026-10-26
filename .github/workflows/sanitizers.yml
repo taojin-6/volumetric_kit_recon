@@ -6,24 +6,41 @@ name: sanitizers
 # layer with synchronization validation — this is what catches the leak /
 # use-after-free / double-free class the unit tests alone can't detect, and the
 # layer reports a leaked Vulkan object, which LSan cannot see past the driver's
-# suppressions. Not on the GPU box: there LSan reports the proprietary driver's
-# internal allocations as leaks. Invoked by ci.yml, which owns the push /
-# pull_request triggers and the concurrency group.
+# suppressions. Invoked by ci.yml, which owns the push / pull_request triggers
+# and the concurrency group.
+#
+# It runs on the owner's Linux GPU boxes, directly on the host, whose packages
+# the owner installs. The loader is pinned to lavapipe, so the NVIDIA driver,
+# whose allocations LSan would report as leaks, is never loaded, and NVIDIA's
+# implicit layers load only when __NV_PRIME_RENDER_OFFLOAD or
+# NVPRESENT_ENABLE_SMOOTH_MOTION is set, which nothing here sets. The
+# validation layer's and Mesa's caches and the tests' scratch directories go
+# to RUNNER_TEMP, which the runner empties every job, not to the host's
+# ~/.cache and /tmp.
 on:
   workflow_call:
 
 jobs:
   asan-ubsan-lsan:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45 # a sanitized build is ~2-4x the plain build
+    runs-on: vk-linux-gpu
+    timeout-minutes: 15
+    # The build legs' containers run as root and leave a root-owned checkout
+    # in the workspace, which this job, run as the runner's user, can neither
+    # clean nor update: it checks out into a directory of its own there, which
+    # their checkout's `git clean -ffdx` removes.
+    defaults:
+      run:
+        working-directory: sanitizers
     env:
       # Absolute path: ctest changes cwd per test, so a relative suppressions
       # path would silently fail to load.
-      LSAN_OPTIONS: suppressions=${{ github.workspace }}/tools/lsan.supp:print_suppressions=0
+      LSAN_OPTIONS: suppressions=${{ github.workspace }}/sanitizers/tools/lsan.supp:print_suppressions=0
       ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: sanitizers
 
       # Skip cleanly until a build system exists (the infra PR lands before the
       # CMake build), mirroring _build.yml's detect guard. Without this the job
@@ -38,27 +55,45 @@ jobs:
             echo "present=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install dependencies
+      # The runners have no sudo, so the job installs nothing: it fails,
+      # naming what the host lacks and its Ubuntu package. lavapipe's ICD is
+      # found, not hardcoded, as its path moves between Mesa versions, and the
+      # loader is pinned to it alone.
+      - name: Check prerequisites
         if: steps.detect.outputs.present == 'true'
         run: |
-          sudo apt-get update
-          # libglm-dev: GLM headers + CMake config that recon_core's math aliases.
-          # No FFmpeg: the video decoders run on hardware this runner lacks.
-          sudo apt-get install -y --no-install-recommends \
-            cmake clang libglm-dev \
-            libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools \
-            vulkan-tools
-          # lavapipe (software Vulkan) is what lets the Vulkan-touching tests run
-          # on this GPU-less runner. Install it WITHOUT --no-install-recommends:
-          # the driver's runtime deps (LLVM, etc.) otherwise get stripped and it
-          # loads as ERROR_INCOMPATIBLE_DRIVER, which silently skips the GPU tests
-          # — exactly the failure this job exists to prevent.
-          sudo apt-get install -y mesa-vulkan-drivers
-          # Discover the ICD instead of hardcoding a path that moves between mesa
-          # versions, and pin the loader to it.
+          missing=""
+          for tool in clang:clang clang++:clang cmake:cmake make:make \
+              glslangValidator:glslang-tools spirv-val:spirv-tools \
+              vulkaninfo:vulkan-tools; do
+            command -v "${tool%%:*}" >/dev/null ||
+              missing="${missing} ${tool%%:*} (${tool#*:})"
+          done
+          # Ubuntu packages clang's sanitizer runtimes apart from it.
+          if command -v clang++ >/dev/null &&
+              ! out=$(echo 'int main() { return 0; }' |
+                clang++ -x c++ -fsanitize=address,undefined - \
+                  -o "${RUNNER_TEMP}/sanitize-check" 2>&1); then
+            echo "clang++ -fsanitize=address,undefined failed:"; echo "${out}"
+            v=$(clang++ -dumpversion | cut -d. -f1)
+            missing="${missing} clang's sanitizer runtime (libclang-rt-${v}-dev)"
+          fi
+          [ -e /usr/include/vulkan/vulkan.h ] ||
+            missing="${missing} the Vulkan headers (libvulkan-dev)"
+          [ -e /usr/include/glm/glm.hpp ] || missing="${missing} GLM (libglm-dev)"
+          [ -e /usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json ] ||
+            missing="${missing} the validation layer (vulkan-validationlayers)"
           icd=""; for f in /usr/share/vulkan/icd.d/lvp_icd*.json; do [ -e "$f" ] && { icd="$f"; break; }; done
-          [ -n "$icd" ] || { echo "::error::lavapipe ICD not found after install"; exit 1; }
+          [ -n "$icd" ] || missing="${missing} the lavapipe ICD (mesa-vulkan-drivers)"
+          if [ -n "$missing" ]; then
+            echo "::error::install by hand on this self-hosted runner's host, while CI is idle:${missing}"
+            exit 1
+          fi
           echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          mkdir -p "${RUNNER_TEMP}/cache"
+          echo "XDG_CACHE_HOME=${RUNNER_TEMP}/cache" >> "$GITHUB_ENV"
+          echo "TMPDIR=${RUNNER_TEMP}" >> "$GITHUB_ENV"
 
       # lavapipe is REQUIRED here: the whole point of this job is to run the
       # Vulkan-touching code under ASan/UBSan/LSan. If no device comes up we FAIL
@@ -82,26 +117,30 @@ jobs:
       # _build.yml does, so it is not re-fetched and recompiled every run. Here
       # the dependencies are compiled with the sanitizers too (VR_SANITIZE sets
       # its flags globally), so besides the pins the key carries everything that
-      # changes their objects: the compiler, the runner image, this workflow (the
-      # sanitizer and build settings below) and vr_sanitizers.cmake. The
-      # workspace path is in it as in _build.yml, since FetchContent bakes it in.
-      # No restore-keys: a stale match would link objects built for something
-      # else.
+      # changes their objects: the compiler, the host's OS release, the
+      # installed versions of the headers and the shader compiler they build
+      # on, this workflow (the sanitizer and build settings below) and
+      # vr_sanitizers.cmake. The checkout's path is in it as in _build.yml,
+      # since FetchContent bakes it in. No restore-keys: a stale match would
+      # link objects built for something else.
       - name: Dependency cache key
         if: steps.detect.outputs.present == 'true'
         id: deps
         run: |
           hash() { sha256sum | cut -c1-12; }
-          ws=$(printf '%s' "${GITHUB_WORKSPACE}" | hash)
+          ws=$(printf '%s' "${PWD}" | hash)
           cc=$(clang --version | head -1 | hash)
-          echo "key=sanitizers-deps-ws${ws}-cc${cc}-img${ImageVersion:-none}" >> "${GITHUB_OUTPUT}"
+          os=$(. /etc/os-release && printf '%s%s' "${ID}" "${VERSION_ID}")
+          pk=$(dpkg-query -W -f='${Package}=${Version}\n' \
+            libvulkan-dev libglm-dev glslang-tools | hash)
+          echo "key=sanitizers-deps-ws${ws}-cc${cc}-${os}-pk${pk}" >> "${GITHUB_OUTPUT}"
 
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: build/_deps
-          key: ${{ steps.deps.outputs.key }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt', 'cmake/vr_sanitizers.cmake', '.github/workflows/sanitizers.yml') }}
+          path: sanitizers/build/_deps
+          key: ${{ steps.deps.outputs.key }}-${{ hashFiles('sanitizers/third_party/CMakeLists.txt', 'sanitizers/CMakeLists.txt', 'sanitizers/cmake/vr_sanitizers.cmake', 'sanitizers/.github/workflows/sanitizers.yml') }}
 
       # Debug + clang gives the most reliable sanitizer + mesa interop. The
       # examples are built for their tests: lavapipe's maxStorageBufferRange is
@@ -115,8 +154,8 @@ jobs:
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             -DVR_SANITIZE="address;undefined" -DVR_BUILD_EXAMPLES=ON
 
-      # The level is explicit, as in _build.yml's Build step; a hosted runner
-      # sets none, so this runs one job per core.
+      # Runs the runner's CMAKE_BUILD_PARALLEL_LEVEL jobs (its .env), or one
+      # per core where unset, as _build.yml's Build step does.
       - name: Build
         if: steps.detect.outputs.present == 'true'
         run: |
@@ -128,9 +167,10 @@ jobs:
       # detection, driver-backed tests with ASAN_OPTIONS=detect_leaks=0 (ASan +
       # UBSan still on). Prefer extending the suppressions first.
       #
-      # --parallel: a hosted runner sets no CTEST_PARALLEL_LEVEL, so ctest would
-      # otherwise run the suite one test at a time. The slowest tests start
-      # first, by the COST tests/CMakeLists.txt gives them.
+      # Runs the runner's CTEST_PARALLEL_LEVEL tests at once, or one per core
+      # where unset; lavapipe sizes its thread pool to the whole host, so each
+      # test takes more than a core. The slowest tests start first, by the
+      # COST tests/CMakeLists.txt gives them.
       - name: Test
         if: steps.detect.outputs.present == 'true'
         env:
@@ -140,4 +180,6 @@ jobs:
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
           VKC_TEST_SYNC_VALIDATION: '1'
-        run: ctest --test-dir build --output-on-failure --parallel "$(nproc)"
+        run: |
+          ctest --test-dir build --output-on-failure \
+            --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"

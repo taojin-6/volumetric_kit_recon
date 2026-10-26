@@ -70,6 +70,7 @@
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/recon/stream/stream_reader.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
+#include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -321,9 +322,9 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
 
   // 1024 buckets hold the walls' blocks (at most 2250) without a grow, on
   // every device alike: the default start is capped by the device's range.
-  auto grid = vr_example::create_fusion_grid(gpu.device, gpu.allocator,
-                                             fusion.voxel_size_m,
-                                             fusion.truncation_m, run.buckets);
+  auto grid = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator,
+                                           fusion.voxel_size_m,
+                                           fusion.truncation_m, run.buckets);
   CHECK(grid.ok());
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
   CHECK(fuser.ok());
@@ -597,9 +598,9 @@ int keyed_sets(vr_test::GpuContext& gpu, const Keyed& run,
   cfg::Fusion fusion;  // 2 cm voxels, an 8 cm band
   fusion.dynamic = true;
   fusion.max_weight = kMaxWeight;
-  auto grid = vr_example::create_fusion_grid(gpu.device, gpu.allocator,
-                                             fusion.voxel_size_m,
-                                             fusion.truncation_m, run.buckets);
+  auto grid = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator,
+                                           fusion.voxel_size_m,
+                                           fusion.truncation_m, run.buckets);
   CHECK(grid.ok());
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
   CHECK(fuser.ok());

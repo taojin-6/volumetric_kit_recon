@@ -99,11 +99,13 @@ links that base tier alone, and `networking` links `stream`.
   core's one umbrella header (`core/vulkan/vulkan.hpp`) — no other code
   includes `<vulkan/...>` directly.
 - **`volume`** — the sparse voxel hash map in Vulkan buffers; allocate / compact
-  / rehash as compute shaders, a stateless `grow_grid` helper, and a default
-  hash layout (`kDefaultBucketSize`, `kDefaultMaxChain`).
+  / rehash as compute shaders, a stateless `grow_grid` helper, a default
+  hash layout (`kDefaultBucketSize`, `kDefaultMaxChain`) and a default block
+  layout (`block_grid_params`).
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic), the
-  `Fuser` that fuses a set of frames (grow, allocate, integrate), and a
-  triangle mesh's distance field written in (signed, or as a shell).
+  `Fuser` that fuses a set of frames (grow, allocate, integrate), the grid it
+  starts from (`create_fusion_grid`), and a triangle mesh's distance field
+  written in (signed, or as a shell).
 - **`mesh`** — marching-cubes compute shaders and host mesh containers.
 - **`io`** — host asset loading and export, branching off `mesh`; encoded
   images, depth PNGs, PLY/PNG export and opt-in mesh normalization helpers
@@ -807,7 +809,10 @@ representation limit of the depth allocator's `uint32` work-item count:
 256 distinct tile centres times `(2 * 127 + 1)^3` is 4,244,832,000, whereas
 radius 128 overflows. It also keeps the shared host/GLSL radius conversion
 within its integer range. Validation happens before creating a map; the
-coordinate helpers retain that precondition.
+coordinate helpers retain that precondition. `block_grid_params` is the
+default block layout: 8³-voxel blocks in the default hash layout, as many
+blocks as bucket entries, at the caller's resolution, band and table; the
+fusion grid, the decode grid and codec_mesh build with it (2026-10-25).
 
 `VoxelHashMap` drives init / allocate-from-coords, -depth,
 -triangles / remove / compact / compact-in-frusta / resize as GLSL
@@ -1021,6 +1026,12 @@ grows including grow-ahead (default 4; zero fixes capacity). An incomplete
 band returns an error before integration; a failed call may already have
 resized or allocated zeroed blocks. An unsuccessful grow-ahead can still be
 followed by successful allocation into the existing grid.
+`create_fusion_grid` (`tsdf/fusion_grid.hpp`) makes the grid a fusing caller
+starts from: `block_grid_params`' layout carrying float `tsdf` and `weight`
+and the packed `color` the fuser writes, at `fusion_buckets`' start --
+16,384 buckets at 1 cm and coarser, scaled by (1 cm / voxel)² up to 4× finer,
+or the caller's count, capped at the ceiling the grid can never grow past on
+the device (a capped caller's count logged as a warning) (2026-10-25).
 
 `allow_partial` explicitly opts live callers into integrating what fits.
 `fuse_viewer` and `rig_viewer` enable it with a two-grow bound. That mode
@@ -1410,6 +1421,12 @@ every pass's copies and every pass's kernels; `process(set)` is that, one
 submit and its wait. A `FrameSet`'s
 `skew_ns(i)` is sensor i's frame's time less the trigger's, signed, and its
 `spread_ns()` the latest of its frames' times less the earliest.
+`RigSets(array, frames)` (`sensor/array/rig_sets.hpp`) reads a run of N
+frames from a started array: `next` waits for each set (`wait_set`), keeps
+each secondary's skew to the primary, and cuts the set that reaches N to its
+first frames in the array's order; after `kSilenceLimit` (10 s) with no set
+it returns `IoError`, naming a lone sync secondary's cause. The prep stays
+the caller's, recorded into the caller's batch (2026-10-25).
 **`sensor/utils`'s `GpuFramePrep`** undistorts an `RgbdFrame`
 (`sensor/rgbd_frame.hpp`) on the device: depth sampled at the nearest pixel,
 colour bilinearly and converted from Y'CbCr in the same pass, each camera
@@ -1636,8 +1653,9 @@ whether its heap has too few slots or its hash table cannot place the
 blocks. Both are recovered by growing the grid and decoding again; the
 decoder never grows one. Beside it, as `tsdf::Fuser` grows for fusion,
 `decode_grid.hpp` holds a player's growth: `make_decode_grid` builds a
-grid from a frame's header, its heap twice the frame's blocks, and
-`decode_growing` decodes into it, growing it once on `OutOfMemory` and
+grid from a frame's header in `volume::block_grid_params`' layout, its heap
+twice the frame's blocks, and `decode_growing` decodes into it, growing it
+once on `OutOfMemory` and
 decoding again twice at most on `IoError`; `record_growing` grows a heap
 the frame outgrows before it records, and `finish_growing` decodes a frame
 the device refused again from its own input slot. Both take the caller's ceiling,
@@ -2041,8 +2059,9 @@ mode, has no socket, thread or clock, and is tested alone.
 (`sensor::GpuFramePrep`) and fuses them through `tsdf::Fuser`, by
 `examples/common/fuse_frame.hpp`'s `fuse_set`, which hands each
 `DeviceFrame` over with its encoding declaration and prints what a set did
-to the grid (a grow, a declined one, blocks left out), into the one grid layout
-`grid_layout.hpp` defines, which its `create_fusion_grid` builds.
+to the grid (a grow, a declined one, blocks left out), into the grid
+`tsdf::create_fusion_grid` makes; `codec_mesh` converts into
+`volume::block_grid_params`' layout too.
 `fuse_set`'s caller names the integration mode, the one `fusion.dynamic`
 selects (`integration_mode`): `Classic` unless set, except in
 `fuse_orbbec` and `rig_viewer`, whose default is `Dynamic`;
@@ -2094,8 +2113,7 @@ APIs. Stage rows print through one table,
 `fuse_replica`'s extract reports and `fusion.dirty_every` survey in
 `remesh_report.hpp`, the viewers' panels in `viewer_panels.hpp`,
 `rig_viewer`'s panel, progress line and `render.texture_stats` in `rig_report.hpp`,
-and `fuse_orbbec`'s camera lines, set loop and counters in
-`fuse_orbbec_sets.hpp`.
+and `fuse_orbbec`'s camera lines and counters in `fuse_orbbec_sets.hpp`.
 A `main.cpp` is the example's story: options, setup, the loop, the report.
 
 `fuse_replica` runs the spine on a posed Replica-SLAM RGB-D sequence and
@@ -2115,10 +2133,11 @@ The live counterpart is its own example, not a `fuse_replica` flag:
 `source.sync_config` one per camera of the file on the host's clock
 (`source.apply_sync` writing the settings a camera differs in), as a
 `SensorArray` posed by `source.calibration`; it waits on the cameras'
-notifications for each set, records its prep, fuse, `fusion.free_after` pass
-and, when it codes, the frame's front half into one batch through
-`SetSender` (`set_codec.hpp`, which codec_replica shares; the frame's rANS
-half is a second batch), and writes a PLY after `run.frames` frames.
+notifications for each set (`sensor::RigSets`), records its prep, fuse,
+`fusion.free_after` pass and, when it codes, the frame's front half into one
+batch through `SetSender` (`set_codec.hpp`, which codec_replica shares; the
+frame's rANS half is a second batch), and writes a PLY after `run.frames`
+frames.
 `operation: "stream"` only streams: each set is polled, counted and released, with no
 GPU preparation, fusion or mesh, so a run measures the cameras' stream and
 decode alone. `diagnostics.readback: true` reads each set's luma back through

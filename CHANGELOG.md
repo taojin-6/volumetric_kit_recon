@@ -23,6 +23,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_networking_server_oom`,
   `recon_networking_stress` (both modes, under TSan too),
   `recon_example_set_codec`, `recon_example_config`.
+- `sensor`, `tsdf`, `volume`: **a run's sets, the fusion grid and the block
+  layout are library calls** (the 2026-10-25 decision):
+  `sensor::RigSets` (`sensor/array/rig_sets.hpp`), `tsdf::create_fusion_grid`
+  and `fusion_buckets` (`tsdf/fusion_grid.hpp`), and
+  `volume::block_grid_params`, in place of the examples' `RigSets`, the grid
+  of `fuse_frame.hpp` and `grid_layout.hpp`, which are gone.
+  `codec::make_decode_grid` builds with the layout; its grid is unchanged.
+  The examples call them, and print and code as before. Tests:
+  `recon_sensor_array_rig_sets` (new), `recon_tsdf_fusion_grid` (was
+  `recon_example_fusion_buckets`), `recon_volume_coords`,
+  `recon_example_fuse_orbbec_sets`.
 - `sensor`: **the H.265 syntax reader is public** (the 2026-10-25
   decision): `sensor/video/hevc_syntax.hpp`, target
   `volumetric_kit::recon_sensor_video_syntax`, host code built on every
@@ -98,6 +109,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- CI: **the sanitizer job runs on the owner's Linux GPU boxes**, on the
+  host. On the lab box it takes 1 min 45 s (build 32 s, tests 64 s, 5 at a
+  time), where a hosted 4-vCPU runner took 5-8 minutes and set every PR's
+  CI time. It installs nothing: it fails, naming any package the host
+  lacks. The loader stays pinned to lavapipe, so the NVIDIA driver is never
+  loaded; the compiler, flags, tests and options are unchanged. The
+  dependency cache keys on the host's OS release and its Vulkan, GLM and
+  glslang versions in place of the runner image.
 - `sensor`: **the sender's frame slot is write-combined where it is
   copied** (the 2026-10-25 decision, amended): `GpuFramePrep` marks its
   `sensor.raw_frame` ring write-only (`HostAccess::SequentialWrite`), so on
