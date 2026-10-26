@@ -1369,8 +1369,9 @@ GPU's primary context, which every holder shares and none leaves current;
 taking its descriptor (`InvalidArgument` once taken), and maps the whole
 buffer, which stays the caller's; and `CudaImageMapping::map` does the same
 for a `create_exported_image` image of 8-bit `UNORM` with one, two or four
-channels, mapped as a one-level CUDA array of its format and extent. The
-one crossing it documents is CUDA writes, Vulkan reads: the writing stream
+channels, mapped as a one-level CUDA array of its format and extent,
+flagged as a colour attachment where its usage makes it one, as CUDA
+requires. The one crossing it documents is CUDA writes, Vulkan reads: the writing stream
 or an event is synchronized, then the reader acquires the buffer or image
 from `VK_QUEUE_FAMILY_EXTERNAL`, an image once handed over to CUDA in
 `GENERAL` before its first write.
@@ -2464,9 +2465,8 @@ none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
 and nvJPEG hand their pictures over on the device, and VideoToolbox both
 kinds, and a raw Orbbec frame's colour stays on the device over either
 codec, VideoToolbox's and NVDEC's plane images sampled where they are. For
-H.265: the camera's
-encoder settings, its key-frame interval above all, which sets what a lost
-frame costs (`camera_stream.cpp`). The rig's next consumer is calib's
+H.265: the camera's encoder settings, its key-frame interval above all,
+which sets what a lost frame costs (`camera_stream.cpp`). The rig's next consumer is calib's
 viewer, showing its synchronised sets.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
