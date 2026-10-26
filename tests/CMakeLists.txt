@@ -119,7 +119,8 @@ add_test(NAME recon_tier_stage_metrics COMMAND recon_tier_stage_metrics_test)
 # and the block layout (block_grid_params); and the tests' host oracle of the
 # spatial hash (volume_hash_oracle.hpp). CPU-only (no device), so these always
 # run -- not gated on a Vulkan driver.
-add_executable(recon_volume_coords_test volume_coords_test.cpp)
+add_executable(recon_volume_coords_test volume_coords_test.cpp
+                                        test_allocation_failure.cpp)
 target_link_libraries(recon_volume_coords_test
                       PRIVATE volumetric_kit::recon_volume)
 vr_target_warnings(recon_volume_coords_test)
