@@ -71,14 +71,15 @@ if(NOT TARGET volumetric_kit::gfx_glfw)
 endif()
 
 # Name only the tiers that are not already pulled in transitively. recon_texture
-# PUBLIC-links recon_mesh + recon_volume and recon_tsdf PUBLIC-links
-# recon_volume, so listing those again repeats their archives on the link line
-# and Apple's linker warns "ignoring duplicate libraries". Same for gfx_core,
-# which gfx_app / gfx_pipelines / gfx_ui all PUBLIC-link -- gfx_camera does not
-# link it, which is why that one is named. Resist re-adding the covered tiers
-# for readability's sake; the warning comes straight back.
-set(_viewer_recon_libs volumetric_kit::recon_tsdf volumetric_kit::recon_texture
-                       volumetric_kit::recon_sensor_utils vr_example_common)
+# PUBLIC-links recon_mesh + recon_volume and recon_sender (the fuser's inputs,
+# fuse_frame.hpp's) PUBLIC-links recon_tsdf + recon_sensor_utils, so listing
+# those again repeats their archives on the link line and Apple's linker warns
+# "ignoring duplicate libraries". Same for gfx_core, which gfx_app /
+# gfx_pipelines / gfx_ui all PUBLIC-link -- gfx_camera does not link it, which
+# is why that one is named. Resist re-adding the covered tiers for readability's
+# sake; the warning comes straight back.
+set(_viewer_recon_libs volumetric_kit::recon_sender
+                       volumetric_kit::recon_texture vr_example_common)
 set(_viewer_gfx_libs volumetric_kit::gfx_app volumetric_kit::gfx_pipelines
                      volumetric_kit::gfx_camera)
 set(_viewer_common_inc "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -170,8 +171,9 @@ vr_target_warnings(fuse_viewer)
 # leg installs the SDK, so it is compiled on every PR with the other two.
 if(TARGET volumetric_kit::recon_sensor_orbbec)
   add_executable(rig_viewer rig_viewer.cpp)
-  # recon_sensor_array ahead of the list, which names recon_sensor_utils: a
-  # library named before one that links it is named again, as above.
+  # recon_sensor_array ahead of the list, whose recon_sender links
+  # recon_sensor_utils: a library named before one that links it is named again,
+  # as above.
   target_link_libraries(
     rig_viewer
     PRIVATE volumetric_kit::recon_sensor_array ${_viewer_recon_libs}

@@ -774,7 +774,15 @@ entries relevant to your task; later amendments supersede earlier rules.
   key wins still. `StreamServer::key_wanted()` counts both, and the codec
   examples' `CodecStream` codes an I-frame at its next front half when it
   rises. fuse_orbbec serves so; `serve_stream`, which cannot make a key,
-  replays the GOP.
+  replays the GOP. *Amended 2026-10-26:* that stream is
+  `sender::CodecStream`.
+- [**2026-10-26**](#2026-10-26--a-senders-set-step-and-its-codec-stream-are-library-calls-in-recon_sender-after-networking-the-frames-halves-stay-internal-with-no-friend-amends-the-2026-10-25-two-batch-sender-and-keys-on-demand-entries) —
+  A sender's set step and its codec stream move from the examples into
+  `recon_sender`, a tier after `networking`: `SetSender`, `CodecStream`,
+  `SentFrame` and `fuse_inputs`, printing nothing. The frame's halves are an
+  internal class that `CodecStream` hands out only incomplete, so no
+  `friend` is needed. The examples keep their reports, built from what the
+  calls return.
 
 ## Decision record
 
@@ -15191,6 +15199,10 @@ only.
 
 ### 2026-10-25 — A sender records each set into two batches, every count on the device, and its figures are per set (amends the 2026-09-27 encoder, 2026-09-28 device-memory, 2026-10-10 fusion and 2026-10-21 chunk entries).
 
+*Amended 2026-10-26 (below):* `SetSender` and `CodecStream` are
+`recon_sender`'s, and the frame's halves (`record`, `front_ran`, `redo`,
+the pending `finish`) an internal class's.
+
 **Per set, not per camera frame.** fuse_orbbec divided its stage totals by
 the camera frames, and codec_replica printed none, so neither showed what a
 set costs or how it varies. Both now log each set (`SetLog`,
@@ -15579,6 +15591,9 @@ product -- fails a test or the build.
 
 ### 2026-10-25 — A live sender makes keys on demand: a joiner waits for the next key, the server keeps what its viewers still need, and a viewer that falls `max_gop_bytes` behind waits for a key, alone (amends the 2026-10-21 networking entry).
 
+*Amended 2026-10-26 (below):* the stream that reads `key_wanted()` is
+`sender::CodecStream`, in `code` and in `SetSender::send`.
+
 **The rule.** `ServerOptions::replay_gop`, true by default, is the
 2026-10-21 server: a joiner gets the GOP since the newest key. False, a
 viewer joins waiting for the next key and from it gets every record, in
@@ -15684,6 +15699,58 @@ the count not published after `publish`, or after a lost copy; the log never
 trimmed; no newest-key skip on demand (GOP log, server); a key counting the
 viewers it would take past the limit; a lost key counting no waiting viewer;
 no Warning on demand; and fuse_orbbec's options replaying the GOP.
+
+### 2026-10-26 — A sender's set step and its codec stream are library calls, in `recon_sender` after `networking`; the frame's halves stay internal, with no friend (amends the 2026-10-25 two-batch sender and keys-on-demand entries).
+
+**The rule.** `SetSender`, `CodecStream`, `CodecOutputs`, `SentFrame` and
+`fuse_inputs` move from `examples/common` (`set_codec.hpp`,
+`codec_stream.hpp`, `fuse_frame.hpp`) into `recon_sender` (`sender/`), and
+no copy is left. The tier links `sensor_utils`, `tsdf`, `codec`, `stream`
+and `networking`; no earlier tier links both `tsdf` and `codec`, so it
+comes after `networking`. It prints nothing: `SetSender::send` takes the
+set's rows and a `sent` callback, run once the set is published, and
+returns what the set did (`Sent`: the fusion's report, a free pass's
+refusal, the frame); `CodecStream::code` returns the frame (`SentFrame`).
+`create` takes the session, and refuses one that is not one Geometry
+track. The examples keep their reports, built from what the calls
+return: the per-set table (`SetLog`), and the stream's rows, CSV and
+summary (`CodecReport`, `codec_report.hpp`).
+
+**The halves without a friend.** AGENTS.md has no `friend`. The front half,
+its device rows, the front half again after a fusion done again and the
+back half are an internal class, `sender::detail::StreamCoder`
+(`stream_coder.hpp`, beside the tier's sources): `CodecStream` owns it and
+hands it out only as an incomplete type (`coder()`), and `SetSender`'s
+source includes the internal header. The public header gains one accessor
+that nothing outside the library can call through, rather than four record
+calls a caller could misuse.
+
+**What changes in a run.** No frame: codec_replica's `.vrst` is the one
+the examples wrote before, byte for byte. A CSV row the example cannot
+write no longer makes the next frame an I-frame: the CSV is the report's,
+written after the frame went out, and a frame the file and the player both
+hold is a reference they can use. A moved-from stream refuses every call.
+
+**Tests.** `recon_sender_codec_stream` holds the stream's cases of
+`recon_example_codec_stream`, a sender's frames through `SetSender::send`
+the file `code` writes, and the refused session; `recon_sender_set_sender`
+is `recon_example_set_codec`, every count pinned as before, each set
+published once with its frame's rows. `recon_example_codec_report` keeps
+the rows, CSV, sizes, rates and comparison cases, and
+`recon_example_config` the outputs, the session and the sender's config.
+
+**Validation.** Release with warnings as errors, under the validation
+layer. RTX 4090, Ubuntu 26.04, GCC 15.2, with Orbbec, FFmpeg, CUDA and
+Assimp and synchronization validation: 127 tests pass and the 2 JPEG tests
+skip, with no JPEG engine. codec_replica's `.vrst` from 00530fe6 and from
+this change, on that GPU, compare equal byte for byte: the run test's wall,
+and Replica room0's 400 sets at 1 cm, coded every set at period 30
+(8,361,512 bytes) and every 7th set at period 4, its last frame through
+`code` (4,838,104 bytes). Apple M4 (Mac mini), macOS 27.0.1, with Orbbec,
+Assimp and the viewers: the 135 tests pass, and the iOS check links. Debug
+with clang 21 under ASan and UBSan on the RTX 4090, the sender, report,
+config and replica tests pass; the one leak reported, 248 bytes from the
+driver's device enumeration, is every GPU test's.
 
 ## Measured lessons
 
