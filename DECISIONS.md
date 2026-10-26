@@ -509,6 +509,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-08**](#2026-10-08--a-decoded-picture-is-its-yuvimage-with-its-pts-and-encoding-the-one-description-of-a-device-picture-which-a-frame-takes-as-it-is-amends-the-2026-09-28-decoded-frame-and-2026-10-02-gpu-regression-entries) —
   A decoded picture is its `YuvImage`, with its pts and encoding: one
   description of a device picture, which a frame takes as it is.
+  *Amended 2026-10-26:* NVDEC's picture is two plane images, which CUDA
+  wrote; nvJPEG's alone is a buffer.
 - [**2026-10-08**](#2026-10-08--apples-pixel-buffer-importer-is-public-pixelbufferimporter-in-recon_sensor_apple-on-every-apple-build-ios-included-with-no-ffmpeg) —
   Apple's pixel-buffer importer is public: `PixelBufferImporter` in
   `recon_sensor_apple`, on every Apple build, iOS included, with no FFmpeg.
@@ -761,6 +763,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   buffer form's words bit for bit; the two plane copies and their scratch
   buffer go. Plane images need `SAMPLED` usage and a view for frame prep,
   `TRANSFER_SRC` for readback, and the importer's carry both.
+  *Amended 2026-10-26:* NVDEC's pictures are plane images too, which both
+  readers take over from outside Vulkan (the NVDEC plane-image entry).
 - [**2026-10-25**](#2026-10-25--a-runs-sets-the-fusion-grid-and-the-block-layout-are-library-calls-rigsets-in-the-arrays-tier-create_fusion_grid-in-tsdf-and-block_grid_params-in-volume-opening-a-rig-stays-the-callers) —
   A run's sets, the fusion grid and the block layout move from the examples
   into the library: `sensor::RigSets` in `recon_sensor_array`,
@@ -791,6 +795,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   more for each mesh dropped before a commit. A third outcome, with no
   deadline or policy in the exchange. The ring's size counts one frame in
   flight as two.
+- [**2026-10-26**](#2026-10-26--nvdecs-pictures-land-in-two-plane-images-videotoolboxs-form-cudas-one-copy-writes-them-a-reader-takes-each-over-from-outside-vulkan-and-nothing-hands-it-back-amends-the-2026-10-08-decoded-picture-and-2026-10-25-plane-image-entries) —
+  NVDEC's pictures land in two plane images, an R8 luma and an R8G8 chroma,
+  VideoToolbox's form: CUDA's one copy writes them, handed to it once in
+  `GENERAL`; a reader takes each picture over from outside Vulkan in the
+  layout it is in, and nothing hands it back. The images take the
+  decoder's queue families; nvJPEG keeps its I420 buffer.
 
 ## Decision record
 
@@ -15828,6 +15838,96 @@ times under ThreadSanitizer and ten under ASan and UBSan (clang 21). Apple
 M4 (Mac mini), macOS 27.0.1, with Orbbec, Assimp and the viewers, which
 build unchanged: the 135 tests pass, the ThreadSanitizer leg's 13 tests
 pass, `recon_mesh_exchange` among them, and the iOS check links.
+
+### 2026-10-26 — NVDEC's pictures land in two plane images, VideoToolbox's form: CUDA's one copy writes them, a reader takes each over from outside Vulkan, and nothing hands it back (amends the 2026-10-08 decoded-picture and 2026-10-25 plane-image entries).
+
+**The rule.** `HevcDecoder`'s NVDEC path copies each picture, with the one
+CUDA copy it always made, into an R8 luma image and an R8G8 chroma image of
+the picture's size, made with `core::create_exported_image` (core 0.24.0)
+and mapped into CUDA once (`CudaImageMapping`, public beside
+`CudaBufferMapping`), and hands them out as `YuvImage::image` with
+`kQueueFamilyExternal`: the form VideoToolbox's pictures have, so every
+platform's HEVC picture is NV12's two plane images. Its NV12 buffer goes,
+with no switch back. nvJPEG keeps its I420 buffer: it writes only linear
+memory. `GpuFramePrep` samples the images through the entry Apple's
+pictures already take, and `PictureReadback` copies them.
+
+**The crossing.** A new set of images is handed over to CUDA once, in
+`GENERAL`, by a batch of the decoder's own before CUDA's first write: the
+core refuses to take back contents still `UNDEFINED`. Each picture's reader
+then takes the images over from `VK_QUEUE_FAMILY_EXTERNAL` in the layout
+they are in, as it took the buffer: `YuvImage::queue_family` covers images
+now. A readback names them its family's after, or `kQueueFamilyIgnored`
+where they are CONCURRENT, so a later stage does not take them again;
+images that needed no transfer keep `kQueueFamilyIgnored`, as Apple's do.
+Nothing hands them back to CUDA, as nothing handed the buffer back: CUDA
+overwrites the whole picture, the layout stays `GENERAL`, and Vulkan only
+reads them, so nothing need survive the crossing. A set is reused only once
+no picture holds either image: the two are aliases of one owner, so one
+count says. The data flow is unchanged: no submit or wait is added for a
+picture, and a new set's hand-over is one submit, once. An EXCLUSIVE image
+crosses only from outside Vulkan (core), so `GpuFramePrep` refuses one named
+as another family's with the frame's checks; for readers on other families
+the images take `HevcDecoder::Options::queue_families`, which NVDEC ignored,
+by `PixelBufferImporter`'s rule, now one check for both
+(`sensor/sharing_families.hpp`).
+
+**Why.** One picture form on every platform: frame prep and readback read
+NVDEC's planes through the image path they use for VideoToolbox's, and a
+viewer of the cameras gets image planes on Linux too, where a buffer would
+cost it a Vulkan copy into images every picture (calib's live mosaic copies
+a picture's planes only from images and refuses planes in a buffer).
+Measured on the lab RTX 4090 (driver 615.71.10), Release, a 3840x2160
+picture from a device surface with padded rows, CUDA events, the median of
+each of three interleaved rounds of 400 copies: the copy into the two images
+takes 0.030 ms, into the buffer 0.016 ms. Frame prep of one 4K camera with a
+640x576 depth frame, the same picture, device time, medians of 600 prepares
+over six interleaved rounds, other processes keeping the GPU busy
+throughout: 0.100 ms from the images, 0.107 ms from the buffer, with words
+bit for bit the same. One multi-planar image with plane views was the
+alternative; it needs multi-planar formats in the core, and two images
+need none.
+
+**Tests.** `recon_sensor_video_hevc`, on NVDEC and VideoToolbox both: the
+patch clip and its full-range copy decode to libavcodec's MD5 through
+readback, and on NVDEC the cropped clip too (the testsrc2 clips stay
+VideoToolbox's, under NVDEC's smallest picture); each picture is two images,
+on NVDEC of its size in `GENERAL` with `kQueueFamilyExternal`; a held
+picture's images are its own and keep its samples, and on NVDEC a dropped
+one's are reused; frame prep from each decoded picture gives, bit for bit,
+the words the same samples give from NV12 planes in a buffer; a readback
+names NVDEC's images its family's; and the decoder's queue families make
+them CONCURRENT, a readback leaving those `kQueueFamilyIgnored`, and a list
+the importer would refuse fails `create`. `recon_sensor_video_cuda_interop`:
+R8 and R8G8 images of odd size, and an R8G8B8A8 one mapped as the colour
+attachment its usage makes it, which CUDA writes, read back with its bytes
+three rounds over after one hand-over, never handed back; a taken
+descriptor, an empty image and a 16-bit format are refused.
+`recon_sensor_gpu_frame_prep`: plane images taken over from outside Vulkan
+or named as the pass's family give the same words, in either layout; another
+family's EXCLUSIVE images and a family the device lacks are refused.
+`recon_sensor_picture_readback`: the same for its copies, each family's
+naming after. `recon_sensor_orbbec_hevc`: the driver's pictures are images
+on both platforms, CONCURRENT with the families it is given.
+
+**Validation.** Release with warnings as errors, under the validation layer
+and synchronization validation. RTX 4090, Ubuntu 26.04, with Orbbec,
+FFmpeg, CUDA and Assimp: the 129 tests pass, the 2 JPEG tests skipping with
+no JPEG engine. RTX 5090, Ubuntu 26.04, GCC 15.2, the same options: the 129
+tests pass, the JPEG tests on its JPEG engine; Debug with clang 21 under
+ASan and UBSan, NVDEC and nvJPEG included, the 14 sensor tests the change
+touches pass, the only leaks reported the driver's. Apple M4 (Mac mini), macOS
+27.0.1, with Orbbec and Assimp, on VideoToolbox: the 129 tests pass, the
+sensor tests under synchronization validation too, and the iOS check links.
+Mutants on the RTX 4090: a set reused while a picture holds it, a readback
+that leaves NVDEC's images named as outside Vulkan's, frame prep without its
+EXCLUSIVE-image check, and a set never handed over to CUDA each fail a test.
+The layer cannot see CUDA's writes, so it passes with a reader's acquire
+left out, and with the hand-over left out where the images are still
+recorded as in `GENERAL`: both rest on Vulkan's rule for external memory, as
+the buffer's acquire did. A colour attachment mapped without CUDA's flag
+also passes on the RTX 5090, which lays it out alike; the flag rests on
+CUDA's documented rule.
 
 ## Measured lessons
 
