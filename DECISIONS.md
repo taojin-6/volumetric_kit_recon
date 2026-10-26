@@ -15910,15 +15910,21 @@ on both platforms, CONCURRENT with the families it is given.
 **Validation.** Release with warnings as errors, under the validation layer
 and synchronization validation. RTX 4090, Ubuntu 26.04, with Orbbec,
 FFmpeg, CUDA and Assimp: the 129 tests pass, the 2 JPEG tests skipping with
-no JPEG engine. Apple M4 (Mac mini), macOS 27.0.1, with Orbbec and Assimp,
-on VideoToolbox: the 129 tests pass, the sensor tests under synchronization
-validation too, and the iOS check links. Mutants on the RTX 4090: a set
-reused while a picture holds it, a readback that leaves NVDEC's images
-named as outside Vulkan's, frame prep without its EXCLUSIVE-image check, and
-a set never handed over to CUDA each fail a test. The layer cannot see
-CUDA's writes, so it passes with a reader's acquire left out, and with the
-hand-over left out where the images are still recorded as in `GENERAL`: both
-rest on Vulkan's rule for external memory, as the buffer's acquire did.
+no JPEG engine. RTX 5090, Ubuntu 26.04, GCC 15.2, the same options: the 129
+tests pass, the JPEG tests on its JPEG engine; Debug with clang 21 under
+ASan and UBSan, NVDEC and nvJPEG included, the 14 sensor tests the change
+touches pass, the only leaks reported the driver's. Apple M4 (Mac mini), macOS
+27.0.1, with Orbbec and Assimp, on VideoToolbox: the 129 tests pass, the
+sensor tests under synchronization validation too, and the iOS check links.
+Mutants on the RTX 4090: a set reused while a picture holds it, a readback
+that leaves NVDEC's images named as outside Vulkan's, frame prep without its
+EXCLUSIVE-image check, and a set never handed over to CUDA each fail a test.
+The layer cannot see CUDA's writes, so it passes with a reader's acquire
+left out, and with the hand-over left out where the images are still
+recorded as in `GENERAL`: both rest on Vulkan's rule for external memory, as
+the buffer's acquire did. A colour attachment mapped without CUDA's flag
+also passes on the RTX 5090, which lays it out alike; the flag rests on
+CUDA's documented rule.
 
 ## Measured lessons
 
