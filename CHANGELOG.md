@@ -78,8 +78,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a discrete GPU the host fills write-combined staging that one copy takes
   to the device; in place (Apple, lavapipe) nothing changes. A decoder's
   input slot stays cached, as the host parses it in place. recon needs core
-  0.22.0 (`HostRingDesc::host_access`), pinned at core #57's head until it
-  merges.
+  0.22.0 (`HostRingDesc::host_access`, core #57).
   Tests: `recon_codec_recorded` (an input slot is cached on every device),
   `recon_sensor_gpu_frame_prep`.
 - examples: **fuse_orbbec and codec_replica print a table per set**
