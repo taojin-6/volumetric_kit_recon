@@ -73,8 +73,9 @@ if(VR_CAMERA_ONLY)
     endif()
   endforeach()
 elseif(APPLE)
-  # Objective-C++ for the one file that reaches Metal (sensor/apple's
-  # pixel_buffer_importer.mm), at the C++ standard the rest compiles at.
+  # Objective-C++ for the files that reach Metal (sensor/apple's
+  # pixel_buffer_importer.mm and a test's helper), at the C++ standard the rest
+  # compiles at.
   enable_language(OBJCXX)
   set(CMAKE_OBJCXX_STANDARD 17)
   set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
