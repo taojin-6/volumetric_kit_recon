@@ -252,6 +252,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   decoder, for H.265 and MJPEG alike, hands its picture to Vulkan in place,
   and `GpuFramePrep` takes I420 or NV12 from the host or the device. The
   software decoding and fallbacks it kept went on 2026-10-06.
+  *Amended 2026-10-25:* VideoToolbox's plane images are sampled where they
+  are, not copied (the plane-image entry).
 - [**2026-09-28**](#2026-09-28--a-device-takes-submits-from-several-threads-at-once-each-records-on-a-command-pool-of-its-own-and-only-the-queue-is-locked) —
   A `Device` takes submits from several threads at once: each records on a
   command pool of its own, and only the queue is locked.
@@ -512,6 +514,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   *Amended 2026-10-25:* CI compiles the importer for iOS 26.0.
   *Amended again 2026-10-25:* `recon_sensor_video` is no longer behind
   `VR_WITH_FFMPEG` on Apple, and CI's iOS check links it with the importer.
+  *And 2026-10-25 (the plane-image entry):* its planes gain `SAMPLED` usage
+  and a view.
 
 - [**2026-10-10**](#2026-10-10--grid-validation-bounds-the-truncation-band-by-the-depth-kernels-integer-representation) —
   Grid validation rejects non-finite metrics and bounds the truncation band by
@@ -748,6 +752,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   `recon_sensor_video_syntax`): host code on the core's base tier alone,
   built on every platform, its parsers returning `Result` and its
   `BitReader` public with them.
+- [**2026-10-25**](#2026-10-25--frame-prep-samples-nv12-plane-images-where-they-are-in-a-second-entry-of-the-colour-pass-and-the-plane-copies-go-amends-the-2026-09-28-decoded-frame-and-2026-10-08-pixel-buffer-importer-entries) —
+  Frame prep samples NV12 plane images where they are, through combined
+  image samplers in a second entry over the colour pass's body, to the
+  buffer form's words bit for bit; the two plane copies and their scratch
+  buffer go. Plane images need `SAMPLED` usage and a view for frame prep,
+  `TRANSFER_SRC` for readback, and the importer's carry both.
 
 ## Decision record
 
@@ -7800,6 +7810,8 @@ raw pass runs over both codecs.
 
 **Next**: measured first, the colour kernel reading Apple's plane images
 directly, which saves the copy's 0.28-0.31 ms of GPU.
+*Done 2026-10-25 (the plane-image entry):* the colour pass samples them
+where they are, and the copy is gone.
 
 *Amended 2026-10-01 (PERF.md's D1 and D3):* the fallback is no longer
 silent, and an exported picture buffer was already out of the BAR.
@@ -15412,6 +15424,46 @@ iOS check links (Xcode 27.0). Mutating the reader -- an 03 skipped after
 one zero or never, a code of 32 zeros taken, se(v)'s sign, the trailing
 bits unchecked, a short unit's payload, the null-data and type checks --
 fails the test.
+
+### 2026-10-25 — Frame prep samples NV12 plane images where they are, in a second entry of the colour pass, and the plane copies go (amends the 2026-09-28 decoded-frame and 2026-10-08 pixel-buffer importer entries).
+
+**The rule.** `GpuFramePrep` reads a picture's `YuvImage::image` planes in
+place. The colour pass has two entries over one body
+(`undistort_color.glsl`: the lens, the coverage test, the chroma siting, the
+bilinear weights and the conversion): `undistort_color.comp` reads planes
+in a buffer or packed host words, and `undistort_color_images.comp` reads
+the two plane images through combined image samplers at integer coordinates
+(`texelFetch`), making each sample its 8-bit code again with
+`round(v * 255)`. Both entries therefore give the same words for the same
+samples. The two plane copies `record_inputs` recorded go, with the pass's
+`sensor.raw_color` buffer (12.4 MB a 4K camera) and two of a frame's timed
+spans. `KernelSetBuilder` binds storage buffers only, so the image entry's
+layout is built by hand: two combined image samplers and the output, its
+set from a pool of its own, its sampler nearest and clamped, which
+`texelFetch` never uses to filter. No core change.
+
+**What a plane image needs.** Frame prep takes `SAMPLED` usage and a view,
+in `GENERAL` or `SHADER_READ_ONLY_OPTIMAL`; `PictureReadback` still copies
+the images and takes `TRANSFER_SRC`. One check serves both, told which
+reader asks (`detail::ImageRead`), and each refusal names what its reader
+needs. `PixelBufferImporter`'s planes carry both usages and a view, and
+their one barrier out of `UNDEFINED` makes them visible to compute reads as
+well as copies. Planes in a buffer (NVDEC, nvJPEG) and packed host words are
+read as before.
+
+**Why.** The copy cost 0.28-0.31 ms of GPU a 4K picture on the M5 Max (the
+2026-09-28 decoded-frame entry), every set, and a scratch buffer per camera.
+What it nets on a 4-camera set is PERF.md's L3 row.
+
+**Tests.** Plane images larger than the picture, sampled in place, prepare
+to the words the same samples give from buffer rows, bit for bit
+(`recon_sensor_gpu_frame_prep`, every leg), and on a Mac so does a patterned
+picture on a real IOSurface, its rows longer than the picture, against its
+own bytes in a buffer (`recon_sensor_apple_pixel_buffer_importer`). Images
+without `SAMPLED` usage, without a view or in a copy's layout are refused
+by frame prep, and a sampled-only image by readback. The claim-before-grow
+case no longer has the copy's buffer to catch a growth recorded before its
+claim; it catches it through the outputs.
 
 ## Measured lessons
 

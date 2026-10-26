@@ -1362,7 +1362,9 @@ is left is the trailing bits.
 **`sensor/apple`'s `PixelBufferImporter`** (`recon_sensor_apple`, on every
 Apple build, iOS included, with no FFmpeg) hands an 8-bit NV12
 `CVPixelBuffer` on an IOSurface to Vulkan in place: each plane becomes a
-Metal texture imported as an image (`VK_EXT_metal_objects`), made once per
+Metal texture imported as an image (`VK_EXT_metal_objects`), with a view and
+`SAMPLED` and `TRANSFER_SRC` usage, so `GpuFramePrep` samples it and
+`PictureReadback` copies it, made once per
 surface and kept while pictures keep arriving on it, the images holding the
 pixel buffer. The images are EXCLUSIVE unless `create` is given the queue
 families that read them, by `BufferDesc::queue_families`' rule with the
@@ -1433,12 +1435,17 @@ buffer (`YuvImage::device`, with per-plane offsets and strides) are bound
 where they are, from
 the first plane, once the batch has taken them over from the queue family
 that owns them (`YuvImage::queue_family`; the 2026-09-28 decoded-frame
-decision). NV12's planes may come as images instead (`YuvImage::image`),
-which the batch copies into the pass's input. A dataset decoded on the host
-hands its colour over as packed R'G'B' words instead
+decision). NV12's planes may come as images instead (`YuvImage::image`,
+with `SAMPLED` usage and a view), which the colour pass samples where they
+are, with no copy: a second entry over the same body
+(`undistort_color_images.comp`, `undistort_color.glsl`) binds them as two
+combined image samplers, reads them at integer coordinates and makes each
+sample its 8-bit code again (`round(v * 255)`), so its words are the buffer
+form's, bit for bit (the 2026-10-25 plane-image decision). A dataset decoded
+on the host hands its colour over as packed R'G'B' words instead
 (`RgbdFrame::color_packed`, `io::load_color_packed`'s layout; the
-2026-10-07 packed-colour decision), copied into the pass's input like the
-images; the colour pass samples R, G and B as byte planes four bytes apart,
+2026-10-07 packed-colour decision), copied into the pass's slot after the
+depth; the colour pass samples R, G and B as byte planes four bytes apart,
 through the same bilinear sampler and coverage test. The depth, and any
 packed colour after it at the binding alignment, is copied into the pass's
 one persistent slot (`core::HostRing`), which the batch binds in place where
@@ -1473,7 +1480,8 @@ host allocation failure. The copies land in host memory it keeps (`Staging`,
 cached for reading), grown to the largest read, and each `PictureView` points
 into it until the next read, so the frames may go at once. A picture is
 checked by the rules `GpuFramePrep` applies to one (`yuv_planes.hpp`), with
-`TRANSFER_SRC` for its buffer where the pass needs storage usage.
+`TRANSFER_SRC` where the pass needs a buffer's storage usage, or images'
+`SAMPLED` usage and views.
 An Orbbec frame holds its SDK pair and the SDK
 context, with the models and the depth-to-colour extrinsic from the factory
 calibration (the extrinsic's rotation made one: the Femto Mega's is not, the
@@ -2362,8 +2370,7 @@ it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
 and nvJPEG hand their pictures over on the device, and VideoToolbox both
 kinds, and a raw Orbbec frame's colour stays on the device over either
-codec; what is left there is the colour kernel reading Apple's plane images
-directly, measured first (`undistort_color.comp`). For H.265: the camera's
+codec, Apple's plane images sampled where they are. For H.265: the camera's
 encoder settings, its key-frame interval above all, which sets what a lost
 frame costs (`camera_stream.cpp`). The rig's next consumer is calib's
 viewer, showing its synchronised sets.

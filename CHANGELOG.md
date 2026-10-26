@@ -83,6 +83,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `sensor`: **frame prep samples NV12 plane images where they are** (the
+  2026-10-25 plane-image decision): `GpuFramePrep` reads a picture's
+  `YuvImage::image` planes through two combined image samplers, in a second
+  entry of the colour pass over the same body, rather than copying them into
+  a buffer of its own; its `sensor.raw_color` buffer goes. The words are the
+  buffer form's, bit for bit. `PixelBufferImporter`'s plane images gain
+  `SAMPLED` usage and a view, and keep `TRANSFER_SRC`. Migration: plane
+  images given to `GpuFramePrep` need `SAMPLED` usage and a view, in
+  `GENERAL` or `SHADER_READ_ONLY_OPTIMAL`, and no longer `TRANSFER_SRC`,
+  which `PictureReadback` still needs. Tests:
+  `recon_sensor_gpu_frame_prep`, `recon_sensor_gpu_frame_prep_submit`,
+  `recon_sensor_picture_readback`,
+  `recon_sensor_apple_pixel_buffer_importer`.
 - `sensor`: **the sender's frame slot is write-combined where it is
   copied** (the 2026-10-25 decision, amended): `GpuFramePrep` marks its
   `sensor.raw_frame` ring write-only (`HostAccess::SequentialWrite`), so on
