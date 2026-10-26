@@ -758,6 +758,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   buffer form's words bit for bit; the two plane copies and their scratch
   buffer go. Plane images need `SAMPLED` usage and a view for frame prep,
   `TRANSFER_SRC` for readback, and the importer's carry both.
+- [**2026-10-25**](#2026-10-25--a-runs-sets-the-fusion-grid-and-the-block-layout-are-library-calls-rigsets-in-the-arrays-tier-create_fusion_grid-in-tsdf-and-block_grid_params-in-volume-opening-a-rig-stays-the-callers) —
+  A run's sets, the fusion grid and the block layout move from the examples
+  into the library: `sensor::RigSets` in `recon_sensor_array`,
+  `tsdf::create_fusion_grid` and `fusion_buckets` in `recon_tsdf`, and
+  `volume::block_grid_params`, which `codec::make_decode_grid` builds with
+  too. Opening a rig stays the three public calls, and a set's prep and all
+  printing stay the caller's.
 
 ## Decision record
 
@@ -15487,6 +15494,78 @@ check without its `SAMPLED` condition, without any one of its 2D, layer and
 sample conditions, or with either plane's shape unchecked. The luma left
 unrounded (`v * 255`) passes on the M4 and the RTX 4090 and fails on
 lavapipe, which is why the entry rounds.
+
+### 2026-10-25 — A run's sets, the fusion grid and the block layout are library calls: `RigSets` in the array's tier, `create_fusion_grid` in `tsdf` and `block_grid_params` in `volume`; opening a rig stays the caller's.
+
+**The rule.** Three pieces the examples kept in `examples/common` move to
+the tier each depends on, and no copy is left:
+- `sensor::RigSets(array, frames)` (`sensor/array/rig_sets.hpp`, in
+  `recon_sensor_array`): `next(metrics)` waits for a started array's next
+  set on its sensors' notifications (`SensorArray::wait_set`), keeps each
+  secondary's skew to the primary (`skew(i)`), and cuts the set that reaches
+  the run's N frames to its first frames in the array's order; `IoError`
+  after `kSilenceLimit` (10 s) with no set, naming a lone sync secondary's
+  cause.
+- `tsdf::create_fusion_grid` and `fusion_buckets` (`tsdf/fusion_grid.hpp`):
+  the grid a fusing caller starts from, carrying the fuser's float `tsdf`
+  and `weight` and packed `color`, its start sized to the voxel and capped
+  to the device, as the examples' grid was.
+- `volume::block_grid_params` (`volume/voxel_grid.hpp`): 8³-voxel blocks in
+  the default hash layout, as many blocks as bucket entries. Both grid calls
+  build with it, `codec::make_decode_grid` too, in place of its hand-built
+  copy, and a static assertion holds the codec's 8³ to it.
+
+**Why the library.** Six examples built the same grid from an example
+header, codec_mesh took its layout from another, and `make_decode_grid`
+wrote that layout out again by hand; the run's count and cut were tested
+only where the Orbbec driver builds. In the library each has one home and
+its tests run on every leg. Each goes to the tier it needs and no further: `RigSets` takes a `SensorArray`, and drivers
+never link the array, so it is vendor-neutral and not the Orbbec driver's;
+the fusion grid needs `volume` alone, which `tsdf` links; the layout is
+`VoxelGridParams`', in `volume`, where `codec` reaches it.
+
+**What stays the caller's.** Opening a rig is already three public calls
+(`open_orbbec_sensors` or `OrbbecSensor::open`, `read_array_calibration`,
+`SensorArray::open`), so no open helper is added: one would live in the
+driver, which may not link the array. fuse_orbbec's one-camera choice
+(`posed_camera`), its camera lines, the first frame's age and the counters'
+report (`print_rig_stats`) stay in `fuse_orbbec_sets.hpp`: the library
+prints nothing. The prep stays the caller's (`SensorArray::record_process`),
+recorded into the set's front batch with its fusion, so a coded set stays 2
+submits. Nothing changes in a run: fuse_orbbec prints the same lines, and
+every grid, and so every coded frame, is the one it was.
+
+**Tests.** `recon_sensor_array_rig_sets`, on every leg: a run made without
+throwing, its skews empty before a set and read as copies, so none is left
+behind by a set; the run's count, cut and skew over pushed fake sensors
+(moved from `recon_example_fuse_orbbec_sets`), the cut past a missing
+sensor letting the cut frame's picture go, a set past the run's frames
+keeping none, the silence limit counted from the last set and then the
+`IoError` naming a lone sync secondary (a 10-s wait), and the array's
+refusal of a sensor that notifies nothing passed on; `recon_example_fuse_orbbec_sets` keeps the one-camera
+choice and the report, where the driver is built. `recon_tsdf_fusion_grid`
+is `recon_example_fusion_buckets`, plus the grid's layout and attributes
+and a NaN voxel refused with no undefined conversion on the way.
+`recon_volume_coords` checks `block_grid_params`, up to the most buckets
+whose block pointers fit `int32` and saturating past it with no overflow;
+the decode-grid tests and `recon_example_set_codec` pass unchanged on the
+library's grids.
+
+**Validation.** Release with warnings as errors, under the validation
+layer. RTX 4090, Ubuntu 26.04, GCC 15, with Orbbec, FFmpeg, CUDA and
+Assimp and synchronization validation: the 123 tests pass, the 4 that load
+the Orbbec SDK not run and the JPEG test skipping on a GPU with no JPEG
+engine. RTX 5090, with FFmpeg, CUDA and Assimp and synchronization
+validation: the 118 pass. Apple M4 (Mac mini), macOS 27.0.1, with Orbbec,
+Assimp and the viewers: the 133 pass on VideoToolbox, the three viewers
+build, and the iOS check links. The changed tiers' tests pass under ASan
+and UBSan (Debug, clang 21) on both GPUs. Mutating the moved code -- no
+cut, a cut to none skipped, a cut set's frames uncounted, the primary's
+skew kept, a skew read by reference, the silence limit not reset by a set,
+a lone sync secondary's cause left out, fewer blocks than bucket entries,
+another chain length, a fusion grid without `color` or with another band, a
+NaN voxel's start passed to the integer conversion, the block count's int32
+product -- fails a test or the build.
 
 ## Measured lessons
 

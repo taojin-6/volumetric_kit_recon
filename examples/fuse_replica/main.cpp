@@ -45,6 +45,7 @@
 #include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
+#include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace vr = volumetric_kit::recon;
@@ -82,10 +83,10 @@ vkc::Status run(const Options& opt) {
       cam.intrinsics.fy, cam.intrinsics.cx, cam.intrinsics.cy);
 
   // --- Volume + pipeline ---
-  VKC_ASSIGN(vol::VoxelBlockGrid volume,
-             vr_example::create_fusion_grid(
-                 device, allocator, opt.fusion.voxel_size_m,
-                 opt.fusion.truncation_m, opt.fusion.buckets));
+  VKC_ASSIGN(
+      vol::VoxelBlockGrid volume,
+      tsdf::create_fusion_grid(device, allocator, opt.fusion.voxel_size_m,
+                               opt.fusion.truncation_m, opt.fusion.buckets));
   VKC_ASSIGN(tsdf::Fuser fuser, tsdf::Fuser::create(device, allocator));
   VKC_ASSIGN(sensor::GpuFramePrep prep,
              sensor::GpuFramePrep::create(device, allocator));

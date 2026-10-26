@@ -86,9 +86,11 @@
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/networking/stream_server.hpp"
+#include "volumetric_kit/recon/sensor/array/rig_sets.hpp"
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/recon/sensor/utils/picture_readback.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
+#include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace vr = volumetric_kit::recon;
@@ -170,10 +172,10 @@ vkc::Status run(const Options& opt) {
   std::optional<tsdf::Fuser> fuser;
   std::optional<mesh::MarchingCubes> extractor;
   if (opt.operation != vr_example::config::Operation::Stream) {
-    VKC_ASSIGN(vol::VoxelBlockGrid grid,
-               vr_example::create_fusion_grid(device, allocator,
-                                              opt.fusion.voxel_size_m,
-                                              opt.fusion.truncation_m));
+    VKC_ASSIGN(
+        vol::VoxelBlockGrid grid,
+        tsdf::create_fusion_grid(device, allocator, opt.fusion.voxel_size_m,
+                                 opt.fusion.truncation_m));
     volume.emplace(std::move(grid));
     VKC_ASSIGN(tsdf::Fuser f, tsdf::Fuser::create(device, allocator));
     fuser.emplace(std::move(f));
@@ -201,7 +203,7 @@ vkc::Status run(const Options& opt) {
   const char* verb = (opt.operation == vr_example::config::Operation::Stream)
                          ? "streamed"
                          : "fused";
-  vr_example::RigSets sets(*array, static_cast<std::size_t>(opt.run.frames));
+  sensor::RigSets sets(*array, static_cast<std::size_t>(opt.run.frames));
   vr_example::SetLog log([&device] { return device.counters(); });
   // Every set coded, as it fuses: prep, fusion, free pass and the frame's
   // front half in one submit, its rANS half in a second.
@@ -220,6 +222,7 @@ vkc::Status run(const Options& opt) {
     while (!sets.done()) {
       vr_example::SetLog::Set& s = log.begin();
       VKC_ASSIGN(sensor::FrameSet set, sets.next(&s.rows));
+      vr_example::print_first_frame_age(*array, sets, set);
       s.arrived(set.arrival_ns, host_clock ? set.timestamp_ns : 0);
       // A set's stages run here, in turn, on its frames; operation=stream runs
       // none past the poll, any readback and any dump, and the set is
@@ -266,7 +269,7 @@ vkc::Status run(const Options& opt) {
       static_cast<double>(sets.frames()) / (secs > 0.0 ? secs : 1.0);
   // Before any error: a run that stalls still reports what it counted, and
   // finishes the stream it recorded and reports the frames it coded.
-  sets.print_stats();
+  vr_example::print_rig_stats(*array, sets);
   std::fputs(dump.report().c_str(), stdout);
   vkc::Status finished;
   if (stream && stream->coded() > 0) {
