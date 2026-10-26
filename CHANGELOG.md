@@ -83,6 +83,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- CI: **the sanitizer job runs on the owner's Linux GPU boxes**, on the
+  host. On the lab box it takes 1 min 45 s (build 32 s, tests 64 s, 5 at a
+  time), where a hosted 4-vCPU runner took 5-8 minutes and set every PR's
+  CI time. It installs nothing: it fails, naming any package the host
+  lacks. The loader stays pinned to lavapipe, so the NVIDIA driver is never
+  loaded; the compiler, flags, tests and options are unchanged. The
+  dependency cache keys on the host's OS release and its Vulkan, GLM and
+  glslang versions in place of the runner image.
 - `sensor`: **the sender's frame slot is write-combined where it is
   copied** (the 2026-10-25 decision, amended): `GpuFramePrep` marks its
   `sensor.raw_frame` ring write-only (`HostAccess::SequentialWrite`), so on
