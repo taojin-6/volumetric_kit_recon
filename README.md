@@ -287,7 +287,8 @@ versions are refused. See [the codec contract](DESIGN.md#codec) and
 it is recorded (`networking/stream_server.hpp`) and reads it as it arrives
 (`networking/stream_client.hpp`), byte for byte the `.vrst` file's chunks;
 see [the networking contract](DESIGN.md#networking). `fuse_orbbec` serves
-the rig's coded frames with `output.serve`. `serve_stream` serves a
+the rig's coded frames with `output.serve`, coding the next set as a key
+for a viewer that joins or falls behind. `serve_stream` serves a
 recording live, paced by its pts and looping until Ctrl+C, with no camera or
 GPU; a viewer connects to the sender's `host:port`:
 
