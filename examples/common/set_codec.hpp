@@ -81,7 +81,9 @@ class SetSender {
   ///        (`"wait: front"`), finish the fusion; then, for a coded set, the
   ///        back half, its wait (`"wait: frame"`), the write and the publish
   ///        (`CodecStream::finish`). The set is published once its frame is,
-  ///        or after its wait when it is not coded.
+  ///        or after its wait when it is not coded. The frame is a key when a
+  ///        viewer waits for one (`CodecStream::record`), its fusion done
+  ///        again or not.
   /// @param front   Holds the set's prep, timed in @ref timer; submitted
   ///                here.
   /// @param frames  The prepared frames.

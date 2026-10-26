@@ -459,8 +459,10 @@ add_test(NAME recon_example_codec_stream
 # frames. A wall the cameras later see past: under Dynamic gone from the frames
 # that see past it, and its blocks freed by the fusion.free_after pass due;
 # under Classic its observed blocks kept. A coded set is 2 submits and at most 2
-# waits, a fused one 1 and 1. On the host, a path that is the stream's or the
-# CSV's file refused. The device part skips with no device.
+# waits, a fused one 1 and 1. Served with keys on demand, a frame is a key when
+# a viewer joined before it, once however many, and otherwise at the intra
+# period. On the host, a path that is the stream's or the CSV's file refused.
+# The device part skips with no device.
 add_executable(recon_example_set_codec_test example_set_codec_test.cpp)
 target_include_directories(recon_example_set_codec_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
@@ -1497,14 +1499,15 @@ vr_target_warnings(recon_stream_oom_test)
 add_test(NAME recon_stream_oom COMMAND recon_stream_oom_test)
 
 # networking: the server's GOP log with no sockets (join, newest key wins at a
-# chunk boundary, the GOP limit, a lost copy, no P-frame without its key) and
-# the socket calls (each socket's settings read back, no SIGPIPE, the bytes a
-# peer has not acknowledged, a wait a signal interrupts) -- internal and
-# unexported, so the tests compile their sources themselves -- then the server
-# and the client on loopback, 127.0.0.1 port 0 only: the wire against the
-# writer's file, joins, newest key wins, the limits, the rules, teardown,
-# signals, the client's errors against raw senders, and a stress run for
-# ThreadSanitizer. Host-only.
+# chunk boundary, the GOP limit, a lost copy, no P-frame without its key; keys
+# on demand: joins and fall-backs counted, the bytes held bounded) and the
+# socket calls (each socket's settings read back, no SIGPIPE, the bytes a peer
+# has not acknowledged, a wait a signal interrupts) -- internal and unexported,
+# so the tests compile their sources themselves -- then the server and the
+# client on loopback, 127.0.0.1 port 0 only: the wire against the writer's file,
+# joins, newest key wins, keys on demand, the limits, the rules, teardown,
+# signals, the client's errors against raw senders, and a stress run in both
+# modes for ThreadSanitizer. Host-only.
 set(_vr_networking_src
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/networking)
 add_executable(recon_networking_gop_log_test networking_gop_log_test.cpp

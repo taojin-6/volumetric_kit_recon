@@ -8,6 +8,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `networking`, examples: **keys on demand** (the 2026-10-25 keys-on-demand
+  decision): `ServerOptions::replay_gop`, true by default as before; false,
+  a joiner waits for the next key, the log keeps only what connected viewers
+  still need, and a viewer that a record would take `max_gop_bytes` behind
+  waits for the next key, alone. `StreamServer::key_wanted()` counts the
+  joins and fall-backs. The codec examples' `CodecStream` reads it before
+  each frame's front half, in `code` and in `SetSender::send`, and codes an
+  I-frame when it rose; fuse_orbbec serves without `replay_gop`, so a viewer
+  that joins or falls behind gets a key at the next set, and `serve_stream`
+  keeps it. Tests: `recon_networking_gop_log`, `recon_networking_server`,
+  `recon_networking_stress` (both modes, under TSan too),
+  `recon_example_set_codec`, `recon_example_config`.
 - `sensor`: **the H.265 syntax reader is public** (the 2026-10-25
   decision): `sensor/video/hevc_syntax.hpp`, target
   `volumetric_kit::recon_sensor_video_syntax`, host code built on every
