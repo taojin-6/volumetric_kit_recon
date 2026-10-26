@@ -306,23 +306,18 @@ add_executable(recon_example_config_test example_config_test.cpp)
 target_include_directories(recon_example_config_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
 if(TARGET volumetric_kit::recon_sensor_orbbec)
-  target_link_libraries(
-    recon_example_config_test
-    PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_sensor_orbbec
-            volumetric_kit::core_config)
+  target_link_libraries(recon_example_config_test
+                        PRIVATE volumetric_kit::recon_sensor_orbbec)
   target_compile_definitions(recon_example_config_test
                              PRIVATE VR_TEST_ORBBEC_CONFIG=1)
-else()
-  target_link_libraries(
-    recon_example_config_test
-    PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_sensor
-            volumetric_kit::core_config)
 endif()
 # codec_config.hpp maps the outputs into the sender tier's CodecOutputs, and the
-# sweep's report compares with eval's.
+# sweep's report compares with eval's. recon_sender brings the codec and the
+# sensor tiers: naming them too would repeat their archives on the link line.
 target_link_libraries(
-  recon_example_config_test PRIVATE volumetric_kit::recon_eval
-                                    volumetric_kit::recon_sender)
+  recon_example_config_test
+  PRIVATE volumetric_kit::core_config volumetric_kit::recon_eval
+          volumetric_kit::recon_sender)
 target_compile_definitions(
   recon_example_config_test
   PRIVATE VR_CONFIG_FIXTURES="${PROJECT_SOURCE_DIR}/config/examples")
