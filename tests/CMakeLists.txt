@@ -1095,15 +1095,24 @@ add_test(NAME recon_codec_decoder_oom COMMAND recon_codec_decoder_oom_test)
 
 # Apple's pixel buffers imported as images (recon_sensor_apple, any Apple build,
 # with or without FFmpeg): buffers made here, read back in place, prepared as a
-# frame's colour, and the refusals. Skips without a device.
+# frame's colour, what the import allocates in Metal (metal_allocation.mm), and
+# the refusals. Skips without a device.
 if(APPLE)
-  add_executable(recon_sensor_apple_pixel_buffer_importer_test
-                 sensor_apple_pixel_buffer_importer_test.cpp)
+  add_executable(
+    recon_sensor_apple_pixel_buffer_importer_test
+    sensor_apple_pixel_buffer_importer_test.cpp metal_allocation.mm)
+  set_source_files_properties(metal_allocation.mm PROPERTIES COMPILE_OPTIONS
+                                                             -fobjc-arc)
   target_link_libraries(
     recon_sensor_apple_pixel_buffer_importer_test
-    PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_sensor_apple
-            volumetric_kit::recon_sensor_utils "-framework CoreFoundation"
-            "-framework CoreVideo")
+    PRIVATE volumetric_kit::core_test_policy
+            volumetric_kit::recon_sensor_apple
+            volumetric_kit::recon_sensor_utils
+            "-framework CoreFoundation"
+            "-framework CoreVideo"
+            "-framework IOSurface"
+            "-framework Metal"
+            "-framework Foundation")
   vr_target_warnings(recon_sensor_apple_pixel_buffer_importer_test)
   add_test(NAME recon_sensor_apple_pixel_buffer_importer
            COMMAND recon_sensor_apple_pixel_buffer_importer_test)
