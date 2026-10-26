@@ -525,6 +525,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `sensor`: **`PixelBufferImporter`'s plane images bind memory dedicated to
+  them**, for which MoltenVK makes no heap. It backed each plane's memory
+  with a heap of the plane's size that the imported texture never used:
+  13.2 MB a 4K surface on an M4. Test:
+  `recon_sensor_apple_pixel_buffer_importer`.
 - `codec`: refused output-vector allocations preserve the encoder reference,
   GOP and forced-intra request; failed back recordings retain the front
   results and release tentative output slots so a retry encodes the same frame.
