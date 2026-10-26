@@ -483,7 +483,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   The fuse-to-render handoff is `mesh::MeshExchange`: one gfx-free library
   type owns the ring's release, a parked take caps the mark, and an empty
   mesh draws nothing. *Amended 2026-10-19:* an empty mesh goes through
-  `commit` with its payload.
+  `commit` with its payload. *Amended 2026-10-26:* `commit` may drop a mesh
+  too.
 - [**2026-10-08**](#2026-10-08--a-dynamic-set-clears-with-every-camera-before-it-fuses-with-any-amends-the-2026-09-30-one-batch-entry) —
   A Dynamic set clears with every camera before it fuses with any, through a
   clear kernel of its own; a single frame and Classic are unchanged.
@@ -783,6 +784,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   internal class that `CodecStream` hands out only incomplete, so no
   `friend` is needed. The examples keep their reports, built from what the
   calls return.
+- [**2026-10-26**](#2026-10-26--meshexchanges-consumer-may-drop-a-mesh-it-took-a-third-outcome-rather-than-a-deadline-in-the-exchange-and-a-ring-slot-more-for-each-mesh-dropped-before-the-next-commit-amends-the-2026-10-08-meshexchange-entry) —
+  `MeshExchange`'s commit may drop a mesh it took (`CommitDecision::kDrop`):
+  it never becomes live, the next frame takes the newest mesh, and its slot
+  goes with the generations below the next commit, so a ring needs a slot
+  more for each mesh dropped before a commit. A third outcome, with no
+  deadline or policy in the exchange. The ring's size counts one frame in
+  flight as two.
 
 ## Decision record
 
@@ -11827,6 +11835,9 @@ replacing a drawn one, and a parked empty mesh capping the mark and holding
 newer meshes back until it is committed. Under the old rule, all three and
 the seeded runs fail.
 
+*Amended 2026-10-26 (the drop entry, below):* `commit` may return a
+`CommitDecision`, and `kDrop` lets the mesh go undrawn.
+
 The protocol the 2026-08-08 entry derived was example code. `fuse_viewer`
 and `rig_viewer` each held the take, commit and park state machine and the
 producer's release, `viewer_common.hpp` held the mark and the bindable
@@ -15751,6 +15762,72 @@ Assimp and the viewers: the 135 tests pass, and the iOS check links. Debug
 with clang 21 under ASan and UBSan on the RTX 4090, the sender, report,
 config and replica tests pass; the one leak reported, 248 bytes from the
 driver's device enumeration, is every GPU test's.
+
+### 2026-10-26 — `MeshExchange`'s consumer may drop a mesh it took: a third outcome rather than a deadline in the exchange, and a ring slot more for each mesh dropped before the next commit (amends the 2026-10-08 `MeshExchange` entry).
+
+**The rule.** `MeshExchange::begin_frame`'s `commit` returns a
+`CommitDecision`. `kCommit` and `kPark` are what `true` and `false` were,
+and a `commit` may still return `bool`; `kDrop` is new. A dropped mesh
+gives `ExchangeOutcome::kDropped` and never becomes live: the live mesh
+stays drawn. The drop frees the place a parked mesh holds, so the next
+`begin_frame` takes the newest mesh published, one that superseded another
+meanwhile included. A mesh that cannot be bound is still refused before
+`commit` sees it, and an empty mesh may be dropped like any other.
+
+**A third outcome, not a deadline.** A consumer that judges a mesh it took
+stale, such as a viewer that has fallen behind and catches up by skipping
+it, or one it parked that newer meshes have since overtaken, could only
+draw it anyway or keep it parked, holding back every later one. Whether a
+mesh is stale is the consumer's judgement, which the exchange cannot make,
+so the exchange takes no clock and no policy: the consumer decides, and the
+exchange releases what it lets go.
+
+**The ring.** The mark is one monotone value and cannot skip a generation.
+A dropped mesh therefore keeps its slot, as a superseded one does, until the
+frames drawing the meshes before the next one committed retire; dropped
+before any commit, it is released at the next `begin_frame`, as every take
+then is. Each mesh dropped before the next commit holds a slot, so the
+producer's ring needs one more for each a consumer may drop
+(`MeshExchangeConfig::frames_in_flight`, `MarchingCubesConfig::slot_count`).
+Parking needs none: a parked mesh holds the next take back, and the
+producer, with a published mesh waiting, extracts no further. The exchange
+does not cap drops, since a cap would either refuse the consumer's decision
+or hold the producer back while nothing is left to commit; a consumer that
+drops without bound exhausts any ring, as `release_through` says.
+
+**One frame in flight counts as two**, for both producers and with or
+without drops, which corrects the size the headers gave before: the mark is
+computed before the take, so the mesh a commit replaces keeps its slot until
+the committing frame retires. With two or more frames in flight, the frame
+before draws that mesh until then anyway, so only a single frame needs the
+extra slot.
+
+**What stays.** The release, the take and the latch are unchanged, so a
+`bool` commit behaves as before, and `fuse_viewer` and `rig_viewer` keep it.
+
+**Tests.** `recon_mesh_exchange` adds: a drop's outcome, the live mesh
+unchanged and the dropped generation never live; the take after a drop,
+with a mesh parked and then dropped, which takes the mesh that superseded
+another; the mark, dropped before any commit and after one, two drops in a
+row held until the next commit's frames retire; an empty mesh dropped; a
+dropped mesh's payload destroyed unless the commit moved from it; seeded
+runs under one and two frames in flight, of commits, parks and none, one
+or two drops before each commit, empty meshes included, in which no slot a
+frame draws or the consumer has parked is reclaimed and, at the documented
+ring size, no extract is refused, while one slot fewer some are; and the
+`bool` form against `kCommit` and `kPark`, step for step over seeded runs
+with failed claims and forced extracts. Its earlier cases are unchanged.
+Its producer and consumer are two threads, so it now runs in the macOS
+ThreadSanitizer leg too.
+
+**Validation.** Release with warnings as errors, under the validation
+layer. RTX 5090, Ubuntu 26.04, GCC 15.2, with FFmpeg, CUDA and Assimp, and
+synchronization validation: the 120 tests pass, the ThreadSanitizer leg's
+target and tests pass (GCC), and `recon_mesh_exchange` passes ten more
+times under ThreadSanitizer and ten under ASan and UBSan (clang 21). Apple
+M4 (Mac mini), macOS 27.0.1, with Orbbec, Assimp and the viewers, which
+build unchanged: the 135 tests pass, the ThreadSanitizer leg's 13 tests
+pass, `recon_mesh_exchange` among them, and the iOS check links.
 
 ## Measured lessons
 

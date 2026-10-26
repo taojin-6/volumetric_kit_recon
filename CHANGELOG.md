@@ -8,6 +8,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `mesh`: **`MeshExchange`'s consumer may drop a mesh it took** (the
+  2026-10-26 drop decision): `begin_frame`'s commit may return a
+  `CommitDecision`, `kCommit`, `kPark` or `kDrop`, where a `bool` it may
+  still return is `kCommit` or `kPark`. A dropped mesh gives
+  `ExchangeOutcome::kDropped` and never becomes live; the live mesh stays,
+  and the next `begin_frame` takes the newest mesh published. Its slot is
+  released with the generations below the next mesh committed, so a ring
+  needs one slot more for each mesh the consumer may drop before it commits
+  the next (`MeshExchangeConfig::frames_in_flight`,
+  `MarchingCubesConfig::slot_count`). `fuse_viewer` and `rig_viewer` are
+  unchanged. Test: `recon_mesh_exchange`, now in the ThreadSanitizer leg
+  too.
 - `sender`, examples: **a sender's set step and its codec stream are
   library calls** (the 2026-10-26 decision): `recon_sender`, a tier after
   `networking`, holds `SetSender` (`sender/set_sender.hpp`), `CodecStream`,
@@ -601,6 +613,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `mesh`: **`MarchingCubesConfig::slot_count` and
+  `MeshExchangeConfig::frames_in_flight` size the ring with one frame in
+  flight counted as two.** With one frame, the mesh a commit replaces keeps
+  its slot until that frame retires, so at the size they gave, two slots
+  for a producer that extracts once a take frees it, its next extract was
+  refused. `fuse_viewer` and `rig_viewer` run two frames and are unaffected.
+  Test: `recon_mesh_exchange`.
 - `tests`: **`recon_example_set_codec` counts each allocation round of a set
   fused again**, where it counted one. The blocking allocation runs a round,
   a submit each, while lost lock races remain, up to ten. On NVIDIA the first
