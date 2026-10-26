@@ -83,6 +83,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `sensor`: **the sender's frame slot is write-combined where it is
+  copied** (the 2026-10-25 decision, amended): `GpuFramePrep` marks its
+  `sensor.raw_frame` ring write-only (`HostAccess::SequentialWrite`), so on
+  a discrete GPU the host fills write-combined staging that one copy takes
+  to the device; in place (Apple, lavapipe) nothing changes. A decoder's
+  input slot stays cached, as the host parses it in place. recon needs core
+  0.22.0 (`HostRingDesc::host_access`, core #57).
+  Tests: `recon_codec_recorded` (an input slot is cached on every device),
+  `recon_sensor_gpu_frame_prep`.
 - examples: **fuse_orbbec and codec_replica print a table per set**
   (`SetLog`, the 2026-10-25 decision), where fuse_orbbec printed means per
   camera frame: each row's mean, p50, p95 and max over the sets, the
