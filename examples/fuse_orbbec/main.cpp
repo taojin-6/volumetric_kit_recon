@@ -5,7 +5,7 @@
 // synced rig of them. Reads its cameras (sensor::OrbbecSensor) as a
 // sensor::SensorArray, which groups a rig's frames by trigger and records
 // each set's prep into the set's one batch, fuses it there into a sparse TSDF
-// volume (tsdf::Fuser, through vr_example::SetSender), and after run.frames
+// volume (tsdf::Fuser, through sender::SetSender), and after run.frames
 // frames extracts a marching-cubes mesh and writes it to a binary PLY. It
 // prints a table per set at the end (vr_example::SetLog).
 //
@@ -34,7 +34,7 @@
 // seconds without a frame rather than waiting, still reporting them.
 //
 // output.stream, output.csv or output.serve codes each fused set as one frame
-// of the codec examples' stream (vr_example::CodecStream) at the set's time,
+// of a codec stream (sender::CodecStream) at the set's time,
 // the host's clock for a rig, and reports the stream, even when the run fails
 // part-way; codec.sweep then prints the codec's rate-distortion table on the
 // last grid. Only output.csv or codec.sweep decodes each frame too, for the
@@ -63,14 +63,12 @@
 #include <vector>
 
 #include "codec_config.hpp"
-#include "codec_stream.hpp"
+#include "codec_report.hpp"
 #include "codec_sweep.hpp"
 #include "config.hpp"
-#include "fuse_frame.hpp"
 #include "fuse_orbbec_sets.hpp"
 #include "info_log.hpp"
 #include "interrupt.hpp"
-#include "set_codec.hpp"
 #include "set_dump.hpp"
 #include "set_log.hpp"
 #include "volumetric_kit/core/base/result.hpp"
@@ -86,6 +84,8 @@
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/networking/stream_server.hpp"
+#include "volumetric_kit/recon/sender/codec_stream.hpp"
+#include "volumetric_kit/recon/sender/set_sender.hpp"
 #include "volumetric_kit/recon/sensor/array/rig_sets.hpp"
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/recon/sensor/utils/picture_readback.hpp"
@@ -100,6 +100,7 @@ namespace tsdf = volumetric_kit::recon::tsdf;
 namespace mesh = volumetric_kit::recon::mesh;
 namespace sensor = volumetric_kit::recon::sensor;
 namespace eval = volumetric_kit::recon::eval;
+namespace sender = volumetric_kit::recon::sender;
 
 namespace {
 
@@ -134,16 +135,25 @@ vkc::Status run(const Options& opt) {
   // cameras, so a port in use, a rerun onto an existing stream, or a PLY that
   // is its file or the CSV's under another name, is refused before any camera
   // opens. A stream that codes no set is removed again when the run ends ---
-  std::optional<vr_example::CodecStream> stream;
+  std::optional<sender::CodecStream> stream;
+  std::optional<vr_example::CodecReport> report;
   if (!opt.output.stream.empty() || !opt.output.csv.empty() ||
       opt.output.serve != 0) {
-    const vr_example::CodecOutputs outputs = vr_example::set_codec_outputs(opt);
+    const sender::CodecOutputs outputs = vr_example::set_codec_outputs(opt);
     VKC_ASSIGN(
-        vr_example::CodecStream made,
-        vr_example::CodecStream::create(device, allocator, config, outputs,
-                                        "fuse_orbbec", {opt.source.fps, 1}));
+        sender::CodecStream made,
+        sender::CodecStream::create(
+            device, allocator, config,
+            vr_example::codec_session("fuse_orbbec", {opt.source.fps, 1}),
+            outputs));
     stream.emplace(std::move(made));
-    VKC_TRY(vr_example::check_apart(opt.output.path, outputs));
+    VKC_ASSIGN(
+        vr_example::CodecReport rows,
+        vr_example::CodecReport::create(opt.output.csv, outputs.stream,
+                                        outputs.decode, config.intra_period));
+    report.emplace(std::move(rows));
+    VKC_TRY(vr_example::check_apart(opt.output.path,
+                                    {outputs.stream, opt.output.csv}));
     std::printf("codec: %s\n",
                 vr_example::codec_settings(config, opt.codec.quantization_table)
                     .c_str());
@@ -207,11 +217,11 @@ vkc::Status run(const Options& opt) {
   vr_example::SetLog log([&device] { return device.counters(); });
   // Every set coded, as it fuses: prep, fusion, free pass and the frame's
   // front half in one submit, its rANS half in a second.
-  std::optional<vr_example::SetSender> sender;
+  std::optional<sender::SetSender> out;
   if (volume) {
-    VKC_ASSIGN(sender, vr_example::SetSender::create(
-                           device, *fuser, *volume, stream ? &*stream : nullptr,
-                           vr_example::sender_config(opt, "fuse_orbbec", 1)));
+    VKC_ASSIGN(out, sender::SetSender::create(
+                        device, *fuser, *volume, stream ? &*stream : nullptr,
+                        vr_example::sender_config(opt, 1)));
   }
   // A set's trigger is on the system clock only where every camera stamps on
   // the host's, as a rig's always do.
@@ -234,20 +244,26 @@ vkc::Status run(const Options& opt) {
                                         &s.rows));
       }
       VKC_TRY(dump.write(set, ids, readback ? &luma : nullptr));
-      if (sender) {
+      if (out) {
         // One row for the prep: the cameras prepare together, into the
         // set's front batch, whose commands read the set's pictures. A set
         // stamped before the last frame recorded, as a clock stepping back
-        // stamps it, is coded at that frame's time rather than refused.
+        // stamps it, is coded at that frame's time rather than refused. The
+        // set is published once its frame is written and served, before any
+        // decode back, or after its fusion when it is not coded.
         vkc::CommandBatch front(device, allocator);
-        front.time(sender->timer());
+        front.time(out->timer());
         VKC_ASSIGN(const sensor::DeviceFrameSet prepared,
                    array->record_process(front, set, &s.rows));
         const std::uint64_t pts_ns =
             std::max(prepared.timestamp_ns, stream ? stream->last_pts_ns() : 0);
-        VKC_TRY(sender->send(front, prepared.frames,
+        VKC_ASSIGN(const sender::SetSender::Sent sent,
+                   out->send(front, prepared.frames,
                              std::make_shared<sensor::FrameSet>(std::move(set)),
-                             sets.sets() - 1, pts_ns, s));
+                             sets.sets() - 1, pts_ns, &s.rows,
+                             [&s] { s.published(); }));
+        VKC_TRY(vr_example::report_sent(sent, sets.sets() - 1, "fuse_orbbec", s,
+                                        report ? &*report : nullptr));
       } else {
         s.published();  // operation=stream: polled and released only
       }
@@ -275,8 +291,8 @@ vkc::Status run(const Options& opt) {
   if (stream && stream->coded() > 0) {
     finished = stream->finish();
     // A coded frame per source set; one frame alone has no bitrate.
-    if (!stream->rows().empty()) {
-      stream->report(opt.source.fps, stream->rows().size() > 1 ? 1 : 0);
+    if (!report->rows().empty()) {
+      report->print(opt.source.fps, report->rows().size() > 1 ? 1 : 0);
     }
   }
   VKC_TRY(streamed);

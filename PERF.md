@@ -64,8 +64,8 @@ the device:
 
 | batch | code | records | read back |
 |---|---|---|---|
-| front | `SetSender::send`, `set_codec.hpp` | prep (`record_process`), the allocation round and the fuse (`record_fuse`), the free pass when due (`record_free_stale`), the frame's front half (`record_front`) | the round's, the free pass's and the front's results, in ring slots |
-| back | `CodecStream::finish`, `codec_stream.hpp` | the tables inline, rANS and the gather (`record_back`) | the back's results and the payload, in ring slots |
+| front | `SetSender::send`, `sender/set_sender.hpp` | prep (`record_process`), the allocation round and the fuse (`record_fuse`), the free pass when due (`record_free_stale`), the frame's front half (`record_front`) | the round's, the free pass's and the front's results, in ring slots |
+| back | `SetSender::send`'s frame, `sender/codec_stream.cpp` | the tables inline, rANS and the gather (`record_back`) | the back's results and the payload, in ring slots |
 
 A set fused again adds its blocking fuse and a front half of its own; a
 payload past its copied guess, a tail batch.
@@ -405,8 +405,8 @@ is measured.
 > **Landed for the senders (2026-10-25): 2 submits a coded set.**
 > fuse_orbbec and codec_replica record a set's prep, fuse, free pass and
 > frame's front half into one batch and its rANS half into a second
-> (`SetSender`, `CodecStream::record`/`finish`); the 2026-10-25 decision
-> has the counts before and after. One camera's set is not faster
+> (`sender::SetSender`, in the library since 2026-10-26); the 2026-10-25
+> decision has the counts before and after. One camera's set is not faster
 > (codec_replica on Replica room0, 400 one-camera sets, each coded; RTX
 > 4090, Release; arrival to publish, the median of 5 interleaved runs):
 > sets 100–399 take 1.864 / 1.995 ms p50 / p95 before and 1.945 / 2.100 ms

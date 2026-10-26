@@ -44,6 +44,9 @@ if(NOT VR_CAMERA_ONLY)
   # A session served and read live over TCP: the stream's chunks on sockets, off
   # stream (and recon's header-only log seam).
   add_subdirectory(volumetric_kit/recon/networking)
+  # A sender's set step and its codec stream, after networking: it links the
+  # frame prep's types, the fuser, the codec, the container and the server.
+  add_subdirectory(volumetric_kit/recon/sender)
   # TODO: add_subdirectory() for interop as that tier lands.
   list(
     APPEND
@@ -61,7 +64,8 @@ if(NOT VR_CAMERA_ONLY)
     recon_eval
     recon_io
     recon_stream
-    recon_networking)
+    recon_networking
+    recon_sender)
 endif()
 
 # --- recon: umbrella alias --------------------------------------------------
