@@ -761,7 +761,9 @@ no free range runs untimed. `Device::create` enables `scalarBlockLayout`
 because `device_requirements()` asks for it, recon's
 `check_device_requirements` refuses a created or adopted device without it,
 and both record the queue family's `queueFlags`. `create_exported_buffer` (`core/vulkan/external_memory.hpp`) makes
-a buffer CUDA imports, on a device that `exports_memory()`:
+a buffer CUDA imports, and `create_exported_image` a single-plane image,
+whose `CommandBatch::acquire` and `release` carry its layout across, on a
+device that `exports_memory()`:
 `VK_KHR_external_memory_fd`, which `create` enables where offered and
 `requirements()` names as optional (`external_memory`); beside it,
 `find_memory_type` is the type a resource bound by hand takes, the first
@@ -1296,12 +1298,18 @@ them, the size, the matrix's weights, the range and the chroma siting), with
 the stream's pts and its transfer and primaries as an optional
 `ColorEncoding` (empty when that type cannot name them) beside it.
 **`HevcDecoder`** decodes H.265 access units on the hardware. Off Apple,
-through FFmpeg's hardware decoding: NVDEC's picture copied device to device
-into a Vulkan buffer CUDA imported (`core`'s `create_exported_buffer`, on a
-device that `exports_memory`), handed out as NV12 in `YuvImage::device`
-with `kQueueFamilyExternal`. Each CUDA picture buffer's `CudaBufferMapping`
-is held from the moment it exists, so a failed mapping or host allocation
-releases it, in its context, before the Vulkan buffer it maps. On Apple,
+through FFmpeg's hardware decoding: NVDEC's picture copied device to device,
+by one CUDA copy, into two plane images CUDA imported, an R8 luma and an
+R8G8 chroma of the picture's size (`core`'s `create_exported_image`, on a
+device that `exports_memory`), handed out as NV12's `YuvImage::image`, as
+VideoToolbox's are, with `kQueueFamilyExternal` (the 2026-10-26 plane-image
+decision). A set of images is made, mapped and handed over to CUDA in
+`GENERAL` once, and reused only once no picture holds either image; a
+reader takes each picture back from outside Vulkan, and none hands it back.
+The images are shared with `Options::queue_families` as
+`PixelBufferImporter`'s are. Each CUDA mapping is held from the moment it
+exists, so a failed mapping or host allocation releases it, in its context,
+before the Vulkan image it maps. On Apple,
 through a `VTDecompressionSession` of its own
 (`vt_hevc.cpp`): it reads the parameter sets and each picture's slice
 header itself (`hevc_syntax.hpp`, below), hands VideoToolbox the
@@ -1355,12 +1363,16 @@ nvJPEG where the GPU has the engine) and VideoToolbox on the Mac.
 public, and is how both decoders reach CUDA: `cuda_ordinal_of` finds the
 CUDA device whose UUID is the Vulkan device's; `CudaContext` retains that
 GPU's primary context, which every holder shares and none leaves current;
-`CudaStream` is a non-blocking stream of its holder's own; and
+`CudaStream` is a non-blocking stream of its holder's own;
 `CudaBufferMapping::map` imports a `create_exported_buffer` buffer's memory,
 taking its descriptor (`InvalidArgument` once taken), and maps the whole
-buffer, which stays the caller's. The one crossing it documents is CUDA
-writes, Vulkan reads: the writing stream or an event is synchronized, then
-the reader acquires the buffer from `VK_QUEUE_FAMILY_EXTERNAL`.
+buffer, which stays the caller's; and `CudaImageMapping::map` does the same
+for a `create_exported_image` image of 8-bit `UNORM` with one, two or four
+channels, mapped as a one-level CUDA array of its format and extent. The
+one crossing it documents is CUDA writes, Vulkan reads: the writing stream
+or an event is synchronized, then the reader acquires the buffer or image
+from `VK_QUEUE_FAMILY_EXTERNAL`, an image once handed over to CUDA in
+`GENERAL` before its first write.
 **`sensor/video`'s H.265 syntax** (`hevc_syntax.hpp`, target
 `recon_sensor_video_syntax`) is public and builds on every platform: host
 code on the family core's base tier, with no codec, GPU or FFmpeg (the
@@ -1390,9 +1402,10 @@ families that read them, by `BufferDesc::queue_families`' rule with the
 device's own family among them: two or more distinct make them CONCURRENT, so
 a renderer on another family (gfx's, on MoltenVK) reads them in place. The
 decoders' `Options::queue_families` and
-`OrbbecStreamOptions::color_queue_families` pass the families through;
-NVDEC's and nvJPEG's buffers ignore them and are taken over from
-`kQueueFamilyExternal`. It sets a `YuvImage`'s planes and leaves the
+`OrbbecStreamOptions::color_queue_families` pass the families through, and
+NVDEC's plane images take them by the same rule (one check,
+`sharing_families.hpp`); nvJPEG's buffers ignore them and are taken over
+from `kQueueFamilyExternal`. It sets a `YuvImage`'s planes and leaves the
 matrix, range and chroma siting to its caller, who alone knows how the
 samples are coded (a stream's unlabelled colour, say). An iOS camera's
 pictures, such as ARKit's `capturedImage`, can come through it with no
@@ -1461,8 +1474,9 @@ where they are, from
 the first plane, once the batch has taken them over from the queue family
 that owns them (`YuvImage::queue_family`; the 2026-09-28 decoded-frame
 decision). NV12's planes may come as images instead (`YuvImage::image`,
-with `SAMPLED` usage and a view), which the colour pass samples where they
-are, with no copy: a second entry over the same body
+with `SAMPLED` usage and a view), taken over the same way in the layout they
+are in (an EXCLUSIVE image only from outside Vulkan), which the colour pass
+samples where they are, with no copy: a second entry over the same body
 (`undistort_color_images.comp`, `undistort_color.glsl`) binds them as two
 combined image samplers, reads them at integer coordinates and makes each
 sample its 8-bit code again (`round(v * 255)`), so its words are the buffer
@@ -2448,7 +2462,8 @@ it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
 and nvJPEG hand their pictures over on the device, and VideoToolbox both
 kinds, and a raw Orbbec frame's colour stays on the device over either
-codec, Apple's plane images sampled where they are. For H.265: the camera's
+codec, VideoToolbox's and NVDEC's plane images sampled where they are. For
+H.265: the camera's
 encoder settings, its key-frame interval above all, which sets what a lost
 frame costs (`camera_stream.cpp`). The rig's next consumer is calib's
 viewer, showing its synchronised sets.

@@ -127,6 +127,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `sensor`: **NVDEC's pictures land in two plane images** (the 2026-10-26
+  NVDEC plane-image decision): `HevcDecoder` on NVDEC copies each picture,
+  with its one CUDA copy, into an R8 luma and an R8G8 chroma image the
+  device exported, rather than an NV12 buffer, and hands them out as
+  `YuvImage::image`, as VideoToolbox's are, with `kQueueFamilyExternal`;
+  they take `Options::queue_families`, which NVDEC ignored. `GpuFramePrep`
+  and `PictureReadback` take plane images over from their writer's family
+  as they take a buffer, in the layout they are in, and a readback names
+  them its family's after (`kQueueFamilyIgnored` where CONCURRENT). The
+  public CUDA interop gains `CudaImageMapping`. nvJPEG keeps its I420
+  buffer. recon needs core 0.24.0 (`create_exported_image`, core #60;
+  pinned at #61's merge). Migration: an NVDEC picture is
+  `YuvImage::image`, no longer `YuvImage::device`; EXCLUSIVE images named
+  as another Vulkan family's are refused, so share them CONCURRENT.
+  Tests: `recon_sensor_video_hevc`, `recon_sensor_video_cuda_interop`,
+  `recon_sensor_gpu_frame_prep`, `recon_sensor_picture_readback`,
+  `recon_sensor_orbbec_hevc`.
 - `sensor`: **frame prep samples NV12 plane images where they are** (the
   2026-10-25 plane-image decision): `GpuFramePrep` reads a picture's
   `YuvImage::image` planes through two combined image samplers, in a second
