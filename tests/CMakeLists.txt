@@ -693,8 +693,9 @@ add_test(NAME recon_mesh_marching_cubes_config
 
 # mesh MeshExchange: the fuse-to-render handoff against a host model of the ring
 # -- the mark, the take, a parked take never released, an empty mesh drawing
-# nothing, the latch, and a seeded run with failures in which no slot the
-# consumer holds is reclaimed. Host only, so it always runs.
+# nothing, the latch, a seeded run with failures in which no slot the consumer
+# holds is reclaimed, and a dropped mesh, with the ring a consumer that drops
+# needs. Host only, so it always runs.
 add_executable(recon_mesh_exchange_test mesh_exchange_test.cpp)
 target_link_libraries(recon_mesh_exchange_test
                       PRIVATE volumetric_kit::recon_mesh)
@@ -1581,14 +1582,15 @@ vr_target_warnings(recon_example_stream_replay_test)
 add_test(NAME recon_example_stream_replay
          COMMAND recon_example_stream_replay_test)
 
-# The tests whose code runs threads -- a reader shared by two, the sockets', the
-# senders' log, the Orbbec decode workers -- which CI builds and runs again
-# under ThreadSanitizer (.github/workflows/_build.yml): one target to build
-# them.
+# The tests whose code runs threads -- a reader shared by two, the mesh
+# handoff's producer and consumer, the sockets', the senders' log, the Orbbec
+# decode workers -- which CI builds and runs again under ThreadSanitizer
+# (.github/workflows/_build.yml): one target to build them.
 add_custom_target(recon_tsan_tests)
 add_dependencies(
   recon_tsan_tests
   recon_stream_container_test
+  recon_mesh_exchange_test
   recon_networking_gop_log_test
   recon_networking_socket_test
   recon_networking_server_test

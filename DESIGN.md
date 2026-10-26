@@ -1157,9 +1157,10 @@ with a payload that stays with it (its atlas), and owns the ring's release
 (2026-10-08): the renderer's `begin_frame` retires a frame slot, computes the
 mark below every generation a frame in flight, the live mesh or a parked
 take holds, and takes the newest mesh, under one lock; the producer applies
-the mark on its own thread before each extract. Header-only and gfx-free;
-it takes any ring with `release_through`, so a host model of the ring tests
-it. The `DeviceMesh` →
+the mark on its own thread before each extract. The consumer's commit
+commits, parks or drops each mesh taken (2026-10-26). Header-only and
+gfx-free; it takes any ring with `release_through`, so a host model of the
+ring tests it. The `DeviceMesh` →
 `LiveMesh` adapter is the viewers' `recon_gfx_bridge.hpp`.
 
 ### texture
