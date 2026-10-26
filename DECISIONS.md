@@ -15443,7 +15443,10 @@ set from a pool of its own, its sampler nearest and clamped, which
 `texelFetch` never uses to filter. No core change.
 
 **What a plane image needs.** Frame prep takes `SAMPLED` usage and a view,
-in `GENERAL` or `SHADER_READ_ONLY_OPTIMAL`; `PictureReadback` still copies
+in `GENERAL` or `SHADER_READ_ONLY_OPTIMAL`, of a 2D image of one layer and
+one sample: the entry reads it as a `sampler2D`, which a 3D, arrayed or
+multisampled image's view does not match, where the copy took the first
+layer and refused multisampling. `PictureReadback` still copies
 the images and takes `TRANSFER_SRC`. One check serves both, told which
 reader asks (`detail::ImageRead`), and each refusal names what its reader
 needs. `PixelBufferImporter`'s planes carry both usages and a view, and
@@ -15463,8 +15466,9 @@ bit (`recon_sensor_gpu_frame_prep`, every leg), and on a Mac so does a
 patterned picture on a real IOSurface, its rows longer than the picture,
 against its own bytes in a buffer
 (`recon_sensor_apple_pixel_buffer_importer`). Images without `SAMPLED`
-usage, without a view or in a copy's layout are refused by frame prep, and
-a sampled-only image by readback. The claim-before-grow case no longer has
+usage (a view present), without a view, in a copy's layout, or 3D, arrayed
+or multisampled (either plane) are refused by frame prep, and a
+sampled-only image by readback. The claim-before-grow case no longer has
 the copy's buffer to catch a growth recorded before its claim; it catches
 it through the outputs.
 
@@ -15478,7 +15482,9 @@ the frame-prep, readback, array and set-codec tests under sync validation.
 Mutants, on every leg: growing the buffers before the claim (#282's
 mutation) fails the claim-before-grow case, the validation layer reporting
 the unresolved batch's outputs destroyed; Cb and Cr swapped, the luma read
-a column over and an image without a view taken each fail. The luma left
+a column over and an image without a view taken each fail, and so does the
+check without its `SAMPLED` condition, without any one of its 2D, layer and
+sample conditions, or with either plane's shape unchecked. The luma left
 unrounded (`v * 255`) passes on the M4 and the RTX 4090 and fails on
 lavapipe, which is why the entry rounds.
 

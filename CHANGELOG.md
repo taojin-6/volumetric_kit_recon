@@ -91,7 +91,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   buffer form's, bit for bit. `PixelBufferImporter`'s plane images gain
   `SAMPLED` usage and a view, and keep `TRANSFER_SRC`. Migration: plane
   images given to `GpuFramePrep` need `SAMPLED` usage and a view, in
-  `GENERAL` or `SHADER_READ_ONLY_OPTIMAL`, and no longer `TRANSFER_SRC`,
+  `GENERAL` or `SHADER_READ_ONLY_OPTIMAL`, and must be 2D, of one layer and
+  one sample (an arrayed or 3D image's first layer is no longer taken), and
+  no longer need `TRANSFER_SRC`,
   which `PictureReadback` still needs. Tests:
   `recon_sensor_gpu_frame_prep`, `recon_sensor_gpu_frame_prep_submit`,
   `recon_sensor_picture_readback`,
