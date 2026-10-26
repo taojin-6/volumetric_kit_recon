@@ -15447,17 +15447,19 @@ fuse_orbbec's viewers that join or fall behind get a key at the next set;
 waiting for the next key showed nothing for up to a second, and a replayed
 file cannot force one. A live sender can: the joiner waits one set, 33 ms
 at 30 fps, and is sent the key alone, not the GOP since the last one (up to
-1.3 MB). A long GOP no longer meets `max_gop_bytes`, which froze every
-viewer to the next key: the server holds what the slowest viewer still
-needs, and a viewer that falls that far behind within a GOP waits for a
-key alone. Newest key wins still bounds the lag of one slower than the
-stream to about a GOP: simulated on the GOP log for 600 s at 30 fps, with
-0.78 MB keys every 30 records, 0.3 MB P-frames and the default limit, a
-viewer taking 95% of the stream fell 7 s behind before a fall-back without
-it, and stays within 2 records with it, as when replaying. So a key counts none: a viewer it
-would take past the limit goes on from it, and a second key made for that
-viewer would only add to its backlog (without the skip, at a 2 MiB limit,
-the simulated sender forced 239 keys in the 600 s, 189 with the viewer not
+1.3 MB). And a GOP past `max_gop_bytes`, at any
+`EncoderConfig::intra_period`, no longer freezes every viewer to the next
+key: the server holds what the slowest viewer still needs, and a viewer
+that falls that far behind within a GOP waits for a key alone. Newest key
+wins still bounds the lag of one slower than the stream to about a GOP:
+simulated on the GOP log for 600 s at 30 fps, at the rig's rate at 1 cm
+(the 2026-10-21 entry's 0.78 MB key every 30 records and 9.4 MB/s, so
+0.3 MB P-frames) and the default limit, a viewer taking 95% of the stream
+fell 7 s behind before a fall-back without it, and stays within 2 records
+with it, as when replaying. So a key counts none: a viewer it would take
+past the limit goes on from it, and a second key made for that viewer
+would only add to its backlog (without the skip, at a 2 MiB limit, the
+simulated sender forced 239 keys in the 600 s, 189 with the viewer not
 waiting; with it, none).
 
 **Where the key is read.** The encoder picks I or P as the front half is
