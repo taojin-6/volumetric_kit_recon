@@ -11,10 +11,11 @@
 // coded(), and the stream going on after it, byte for byte what an encoder
 // returns, a key exactly when an I-frame, and the same file on a rerun; after
 // a frame encoded but not decoded, an I-frame where the encoder would code a
-// P-frame; a frame out of order, or any call once finished or moved from,
-// refused before anything is encoded; a stream never finished still read
-// whole, and one dropped before its first frame removed; a sender's frames,
-// through SetSender, the file code() writes, byte for byte; and, served on
+// P-frame, through code() and through SetSender; a frame out of order, or any
+// call once finished or moved from, refused before anything is encoded; a
+// stream never finished still read whole, and one dropped before its first
+// frame removed; a sender's frames, through SetSender, the file code()
+// writes, byte for byte; and, served on
 // 127.0.0.1 port 0 (never every interface), every frame the file records
 // reaching a client as it is coded, with the file's seq, key, pts, set, bytes
 // and offset, and the end once finished, a frame the file refuses never
@@ -462,11 +463,12 @@ int serves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 
 // A sender's frames (SetSender::send with no frames to fuse, so each set is
 // its frame alone), recorded into a front batch, then finished: the file
-// code() writes, byte for byte, I- and P-frames, a frame the decoder refuses
-// included, each set published once, before its decode, its rows its frame's
-// encode with "crc", "write", "publish" and the waits, and each frame as
-// code() returns it. A frame out of order is refused, its front dropped, and
-// the stream goes on.
+// code() writes, byte for byte, I- and P-frames, and two frames on `other`
+// that the decoder refuses, the second an I-frame as code() makes it, where
+// the encoder would code a P-frame on the first; each set published once,
+// before its decode, its rows its frame's encode with "crc", "write",
+// "publish" and the waits, and each frame as code() returns it. A frame out
+// of order is refused, its front dropped, and the stream goes on.
 int halves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
            vol::VoxelBlockGrid& other, const vr_test::Scratch& scratch) {
   codec::EncoderConfig config;
@@ -493,19 +495,20 @@ int halves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                      [published] { ++*published; });
   };
   for (std::size_t frame = 0; frame < 5; ++frame) {
-    vol::VoxelBlockGrid& grid = frame == 2 ? other : source;
+    const bool refused = frame == 2 || frame == 3;
+    vol::VoxelBlockGrid& grid = refused ? other : source;
     const vkc::Result<sender::SentFrame> x = a->code(grid, frame, pts(frame));
-    CHECK(x.ok() == (frame != 2));
+    CHECK(x.ok() != refused);
     vkc::StageMetrics rows;
     int published = 0;
     const vkc::Result<sender::SetSender::Sent> y =
         send(grid, frame, &rows, &published);
-    CHECK(y.ok() == (frame != 2) && published == 1);
+    CHECK(y.ok() != refused && published == 1);
     for (const char* row : {"codec encode", "  ..forward", "crc", "write",
                             "publish", "wait: front", "wait: frame"}) {
       CHECK(vr_test::find_row(rows, row) != nullptr);
     }
-    if (frame == 2) continue;
+    if (refused) continue;
     CHECK(y->coded.has_value() && !y->fused.redone);
     const sender::SentFrame& sent = *y->coded;
     CHECK(sent.type == x->type && sent.bytes == x->bytes &&

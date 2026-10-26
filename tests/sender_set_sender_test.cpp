@@ -29,7 +29,8 @@
 // blocking calls code the same frames, and so do they on a grid of 32 buckets,
 // whose first set's fusion is done again and its front half, its wait timed.
 // Each set is published once, its frame's type and rows those the frame went
-// out with. Served without replay_gop, keys on demand: with no viewer
+// out with, the front batch's device rows the frame's only for its front
+// half. Served without replay_gop, keys on demand: with no viewer
 // joining, the frames follow the intra period; viewers joining before a set
 // make its frame a key, one however many join, the period following from it,
 // through the sender and through code, a set whose fusion is done again
@@ -347,7 +348,9 @@ struct SetCounts {
 // rows and publish say: published once; coded, with a stream, its frame of
 // the type the file records, its encode rows both halves' and in the set's
 // rows with the write's and the waits', and its decode rows; not coded,
-// without one.
+// without one. Of the front batch's device rows, the front half's are the
+// frame's, the set's holding them once, and the prep's and the fusion's the
+// set's alone.
 bool sent_as_logged(const sender::SetSender::Sent& sent,
                     const LoggedSet& logged, bool coded) {
   if (logged.publishes != 1 || sent.coded.has_value() != coded) return false;
@@ -360,7 +363,13 @@ bool sent_as_logged(const sender::SetSender::Sent& sent,
                           "write", "wait: frame"}) {
     if (vr_test::find_row(rows, row) == nullptr) return false;
   }
-  return vr_test::find_row(sent.coded->encode, "  ..forward") != nullptr &&
+  const vkc::StageRow* front =
+      vr_test::find_row(sent.coded->encode, "  ..forward");
+  const vkc::StageRow* in_set = vr_test::find_row(rows, "  ..forward");
+  return front != nullptr && front->device != vkc::DeviceTime::None &&
+         in_set->device == front->device && in_set->gpu_ms == front->gpu_ms &&
+         vr_test::find_row(sent.coded->encode, "frame prep") == nullptr &&
+         vr_test::find_row(sent.coded->encode, "integrate") == nullptr &&
          vr_test::find_row(sent.coded->encode, "  ..tables") != nullptr &&
          vr_test::find_row(sent.coded->decode, "codec decode") != nullptr &&
          sent.coded->bytes > 0 && sent.coded->blocks > 0;
