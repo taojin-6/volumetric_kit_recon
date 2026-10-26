@@ -491,8 +491,8 @@ int same_streams(const std::string& a, const std::string& b) {
 // batch (the 2026-10-24 entry); the back batch's are 4. A set fused again
 // adds its blocking allocation, a submit a round while lost races remain,
 // and its fuse, and a coded one its front half again, whose wait it times.
-// The first set is fused again whenever its round, into an empty grid,
-// loses a race, and its allocation then takes one round or more.
+// The first set's round, into an empty grid, can lose a race, and the set is
+// then fused again.
 int counts_case(const std::vector<SetCounts>& counts, bool coded,
                 const char* what) {
   std::uint64_t warm_staging = 0;
