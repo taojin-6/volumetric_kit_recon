@@ -4,10 +4,10 @@
 # --- recon_tsdf: Tier 3 -----------------------------------------------------
 # TSDF integration: fuses posed depth frames into a VoxelBlockGrid's per-voxel
 # tsdf/weight attributes via a GLSL compute kernel (classic projective
-# integration first; dynamic follows), and the Fuser that takes a set of frames
-# through the grid's growth, allocation and integration. Depends on recon_volume
-# (VoxelBlockGrid, grow_grid, DepthCameraParams, the BlockIndex/VoxelGridParams
-# ABI), per the strict left-to-right tier rule.
+# integration first; dynamic follows), the Fuser that takes a set of frames
+# through the grid's growth, allocation and integration, and the grid it starts
+# from. Depends on recon_volume (VoxelBlockGrid, grow_grid, DepthCameraParams,
+# the BlockIndex/VoxelGridParams ABI), per the strict left-to-right tier rule.
 include(GenerateExportHeader)
 
 set(_vr_tsdf_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
@@ -15,7 +15,7 @@ set(_vr_tsdf_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_tsdf)
 add_library(volumetric_kit::recon_tsdf ALIAS recon_tsdf)
 
-target_sources(recon_tsdf PRIVATE fuser.cpp mesh_integrator.cpp
+target_sources(recon_tsdf PRIVATE fuser.cpp fusion_grid.cpp mesh_integrator.cpp
                                   tsdf_integrator.cpp)
 
 # Per-tier export header (VR_TSDF_API / VR_TSDF_STATIC_DEFINE), isolated so the

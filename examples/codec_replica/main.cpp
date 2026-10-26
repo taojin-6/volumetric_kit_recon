@@ -40,6 +40,7 @@
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
+#include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -72,9 +73,9 @@ vkc::Status run(const Options& opt) {
 
   const float voxel = opt.fusion.voxel_size_m;
   const float trunc = opt.fusion.truncation_m;
-  VKC_ASSIGN(vr::volume::VoxelBlockGrid volume,
-             vr_example::create_fusion_grid(device, allocator, voxel, trunc,
-                                            kBuckets));
+  VKC_ASSIGN(
+      vr::volume::VoxelBlockGrid volume,
+      vr::tsdf::create_fusion_grid(device, allocator, voxel, trunc, kBuckets));
   VKC_ASSIGN(vr::tsdf::Fuser fuser, vr::tsdf::Fuser::create(device, allocator));
   VKC_ASSIGN(vr::sensor::GpuFramePrep prep,
              vr::sensor::GpuFramePrep::create(device, allocator));

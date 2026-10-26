@@ -21,6 +21,8 @@
 #include "grid_readback.hpp"
 #include "test_check.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
+#include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
+#include "volumetric_kit/recon/volume/voxel_grid.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -95,8 +97,8 @@ int check_retained(const vr_test::Gpu& gpu,
 // camera seeing it at 2 m, so the first wall's band is free space well ahead
 // of the second's. Classic leaves weight there; Dynamic clears all of it.
 int check_mode(vr_test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
-  auto volume = vr_example::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
-                                               0.15f, 256);
+  auto volume = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
+                                             0.15f, 256);
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
   auto prep = sensor::GpuFramePrep::create(gpu.device, gpu.allocator);
   CHECK(volume.ok() && fuser.ok() && prep.ok());
@@ -135,8 +137,8 @@ int check_mode(vr_test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
 }
 
 int gpu_main(vr_test::GpuContext& gpu) {
-  auto volume = vr_example::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
-                                               0.15f, 256);
+  auto volume = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
+                                             0.15f, 256);
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
   auto prep = sensor::GpuFramePrep::create(gpu.device, gpu.allocator);
   auto texturer =
@@ -176,7 +178,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
                                              {"weight", sizeof(float)}};
   auto depth_only = vr::volume::VoxelBlockGrid::create(
       gpu.device, gpu.allocator,
-      vr_example::example_grid_params(0.05f, 0.15f, 256), attrs, 2);
+      vr::volume::block_grid_params(0.05f, 0.15f, 256), attrs, 2);
   CHECK(depth_only.ok());
   std::fill(raw_depth.begin(), raw_depth.end(), 2000);
   std::fill(raw_color.begin(), raw_color.end(), 0x001122CCu);

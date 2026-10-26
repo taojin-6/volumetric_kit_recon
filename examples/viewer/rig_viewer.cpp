@@ -75,7 +75,7 @@
 #include <glm/glm.hpp>
 
 #include "config.hpp"
-#include "fuse_frame.hpp"  // fusion grid, fuse_set, free_stale_blocks_every
+#include "fuse_frame.hpp"  // fuse_set, free_stale_blocks_every
 #include "interrupt.hpp"
 #include "orbbec_config.hpp"
 #include "recon_gfx_bridge.hpp"  // to_live_mesh, and the vertex-layout asserts
@@ -105,6 +105,7 @@
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
+#include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
@@ -365,7 +366,7 @@ int run(GLFWwindow* window, const Options& opt) {
   }
 
   // --- recon: volume, fuser, extractor, texturer --------------------------
-  auto grid_result = vr_example::create_fusion_grid(
+  auto grid_result = rtsdf::create_fusion_grid(
       rdevice, rallocator, opt.fusion.voxel_size_m, opt.fusion.truncation_m);
   if (!grid_result) {
     std::fprintf(stderr, "grid: %s\n", grid_result.status().message().c_str());

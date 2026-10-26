@@ -4,29 +4,26 @@
 #pragma once
 
 /// @file examples/common/fuse_orbbec_sets.hpp
-/// @brief fuse_orbbec's cameras: opened and read as a sensor array, each set
-///        waited for and cut to the run's length, and the report of the
-///        array's counters and a rig's skew. Header-only, compiled only into
-///        the examples built with the Orbbec driver.
+/// @brief fuse_orbbec's cameras: opened and read as a sensor array, and the
+///        report of the array's counters and a rig's skew over its sets
+///        (`sensor::RigSets`). Header-only, compiled only into the examples
+///        built with the Orbbec driver.
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <cstdio>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "orbbec_config.hpp"
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/recon/camera/array_calibration.hpp"
+#include "volumetric_kit/recon/sensor/array/rig_sets.hpp"
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sensor.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_stream.hpp"
@@ -202,162 +199,53 @@ inline bool on_host_clock(vr::sensor::SensorArray& array) {
   return true;
 }
 
-/// @brief Keep @p set's first @p frames frames, in the array's order, and
-///        drop the rest: a run of N frames stops mid-set.
-/// @return The frames kept.
-inline std::size_t cut_set(vr::sensor::FrameSet& set, std::size_t frames) {
-  std::size_t kept = 0;
-  for (std::optional<vr::sensor::RgbdFrame>& frame : set.frames) {
-    if (!frame) continue;
-    if (kept == frames) {
-      frame.reset();
-    } else {
-      ++kept;
-    }
-  }
-  return kept;
+/// @brief Print a single camera's first set's age against the host's clock,
+///        once @p sets has handed out @p set, its first; nothing for a rig or
+///        a later set. The SDK's host clock is the system clock: on it
+///        (`source.host_clock`) the frame is milliseconds old; the camera's
+///        own is where it was last set.
+inline void print_first_frame_age(vr::sensor::SensorArray& array,
+                                  const vr::sensor::RigSets& sets,
+                                  const vr::sensor::FrameSet& set) {
+  if (sets.sets() != 1 || array.size() != 1) return;
+  const auto host = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::system_clock::now().time_since_epoch());
+  std::printf("  first frame %.1f ms before the host's clock\n",
+              (static_cast<double>(host.count()) -
+               static_cast<double>(set.timestamp_ns)) /
+                  1e6);
 }
 
-/// @brief A run's sets from a started array, each waited for and cut to the
-///        run's length, and what its report prints.
-///
-/// The array is borrowed: it must outlive every @ref next and
-/// @ref print_stats. Only @ref print_stats needs its sensors to be
-/// `OrbbecSensor`s.
-class RigSets {
- public:
-  /// How long @ref next waits for a set before calling the cameras silent.
-  /// A streaming camera delivers one every ~33 ms; a secondary with no
-  /// primary, or a camera that dropped off the network, delivers none.
-  static constexpr std::chrono::seconds kSilenceLimit{10};
-
-  /// @brief A secondary's frame's time less its set's, the primary's, over
-  ///        the sets @ref next handed out, before their cut.
-  struct Skew {
-    double sum_ms = 0.0;       ///< The sum, so the mean is over @ref frames.
-    double worst_ms = 0.0;     ///< The largest magnitude.
-    std::uint64_t frames = 0;  ///< The camera's frames among those sets.
-  };
-
-  /// @param array   Started.
-  /// @param frames  The frames the run takes.
-  RigSets(vr::sensor::SensorArray& array, std::size_t frames)
-      : array_(array),
-        limit_(frames),
-        skews_(array.size()),
-        last_set_(std::chrono::steady_clock::now()) {}
-
-  /// @return Whether the run has taken its frames.
-  bool done() const noexcept { return frames_ >= limit_; }
-  /// @return The sets @ref next has handed out.
-  std::size_t sets() const noexcept { return sets_; }
-  /// @return The frames those sets held, as cut.
-  std::size_t frames() const noexcept { return frames_; }
-  /// @return Camera @p camera's skew to the primary; the primary's is empty.
-  /// @pre @p camera is below the array's size.
-  const Skew& skew(std::size_t camera) const { return skews_[camera]; }
-
-  /// @brief Wait for the next set and cut it to the frames the run still
-  ///        takes (@ref cut_set).
-  ///
-  /// Blocked on the cameras' notifications (`SensorArray::wait_set`): the
-  /// time blocked is @p stages' `"wait: cameras"` row, the polls' host time
-  /// its `"poll"`. Each secondary's skew to the primary is kept for
-  /// @ref print_stats, and a single camera's first set prints its age against
-  /// the host's clock.
-  /// @param stages  Optional stage rows; null measures nothing.
-  /// @return The set; `Status::Code::IoError` after @ref kSilenceLimit with
-  ///         none, naming a sync secondary's cause; or the array's error.
-  vkc::Result<vr::sensor::FrameSet> next(vkc::StageMetrics* stages) {
-    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
-        kSilenceLimit - (std::chrono::steady_clock::now() - last_set_));
-    VKC_ASSIGN(
-        std::optional<vr::sensor::FrameSet> set,
-        array_.wait_set(std::max(left, std::chrono::milliseconds(0)), stages));
-    if (!set) return silence();
-    last_set_ = std::chrono::steady_clock::now();
-    keep(*set);
-    return std::move(*set);
-  }
-
-  /// @brief Print the array's sets, each camera's counters, `lost`
-  ///        included, and for a rig each secondary's mean and worst skew to
-  ///        the primary.
-  /// @pre The array's sensors are all `OrbbecSensor`s.
-  void print_stats() const {
-    const vr::sensor::SensorArrayStats st = array_.stats();
-    std::printf("%llu sets, %llu missing a camera, %llu frames unmatched\n",
-                static_cast<unsigned long long>(st.sets),
-                static_cast<unsigned long long>(st.incomplete),
-                static_cast<unsigned long long>(st.unmatched));
-    for (std::size_t i = 0; i < array_.size(); ++i) {
-      const auto& camera =
-          static_cast<const vr::sensor::OrbbecSensor&>(array_.sensor(i));
-      const vr::sensor::OrbbecStreamStats s = camera.orbbec_stats();
-      std::printf(
-          "  %s: %llu received, %llu delivered, %llu dropped, %llu failed, "
-          "%llu lost",
-          camera.info().id.c_str(), static_cast<unsigned long long>(s.received),
-          static_cast<unsigned long long>(s.delivered),
-          static_cast<unsigned long long>(s.dropped),
-          static_cast<unsigned long long>(s.failed),
-          static_cast<unsigned long long>(s.lost));
-      const Skew& lag = skews_[i];
-      if (lag.frames > 0) {
-        std::printf("; skew to the primary %+.2f ms mean, %.2f ms worst",
-                    lag.sum_ms / static_cast<double>(lag.frames), lag.worst_ms);
-      }
-      std::printf("\n");
+/// @brief Print @p array's sets, each camera's counters, `lost` included,
+///        and for a rig each secondary's mean and worst skew to the primary
+///        over @p sets.
+/// @pre The array's sensors are all `OrbbecSensor`s.
+inline void print_rig_stats(vr::sensor::SensorArray& array,
+                            const vr::sensor::RigSets& sets) {
+  const vr::sensor::SensorArrayStats st = array.stats();
+  std::printf("%llu sets, %llu missing a camera, %llu frames unmatched\n",
+              static_cast<unsigned long long>(st.sets),
+              static_cast<unsigned long long>(st.incomplete),
+              static_cast<unsigned long long>(st.unmatched));
+  for (std::size_t i = 0; i < array.size(); ++i) {
+    const auto& camera =
+        static_cast<const vr::sensor::OrbbecSensor&>(array.sensor(i));
+    const vr::sensor::OrbbecStreamStats s = camera.orbbec_stats();
+    std::printf(
+        "  %s: %llu received, %llu delivered, %llu dropped, %llu failed, "
+        "%llu lost",
+        camera.info().id.c_str(), static_cast<unsigned long long>(s.received),
+        static_cast<unsigned long long>(s.delivered),
+        static_cast<unsigned long long>(s.dropped),
+        static_cast<unsigned long long>(s.failed),
+        static_cast<unsigned long long>(s.lost));
+    const vr::sensor::RigSets::Skew lag = sets.skew(i);
+    if (lag.frames > 0) {
+      std::printf("; skew to the primary %+.2f ms mean, %.2f ms worst",
+                  lag.sum_ms / static_cast<double>(lag.frames), lag.worst_ms);
     }
+    std::printf("\n");
   }
-
- private:
-  // Count `set`, keep its skews, and cut it to the run's remaining frames.
-  void keep(vr::sensor::FrameSet& set) {
-    if (sets_ == 0 && array_.size() == 1) {
-      // The SDK's host clock is the system clock: on it (source.host_clock),
-      // the frame is milliseconds old; the camera's own is where it was last
-      // set.
-      const auto host = std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::system_clock::now().time_since_epoch());
-      std::printf("  first frame %.1f ms before the host's clock\n",
-                  (static_cast<double>(host.count()) -
-                   static_cast<double>(set.timestamp_ns)) /
-                      1e6);
-    }
-    for (std::size_t c = 0; c < set.frames.size(); ++c) {
-      const std::optional<std::int64_t> skew_ns = set.skew_ns(c);
-      if (c == array_.primary() || !skew_ns) continue;
-      const double ms = static_cast<double>(*skew_ns) / 1e6;
-      skews_[c].sum_ms += ms;
-      skews_[c].worst_ms = std::max(skews_[c].worst_ms, std::fabs(ms));
-      ++skews_[c].frames;
-    }
-    frames_ += cut_set(set, limit_ - frames_);
-    ++sets_;
-  }
-
-  vkc::Status silence() {
-    const bool one = array_.size() == 1;
-    const bool secondary =
-        one && array_.sensor(0).info().role == vr::sensor::SyncRole::Secondary;
-    return vkc::Status::io_error(
-        "no frame from " +
-        (one ? "camera " + array_.sensor(0).info().id
-             : std::string("the rig")) +
-        " in " + std::to_string(kSilenceLimit.count()) + " s" +
-        (secondary ? std::string(" -- it is a sync secondary, which captures "
-                                 "only on another camera's signal; start the "
-                                 "camera that drives it")
-                   : std::string()));
-  }
-
-  vr::sensor::SensorArray& array_;
-  std::size_t limit_;
-  std::size_t sets_ = 0;
-  std::size_t frames_ = 0;
-  std::vector<Skew> skews_;  // per camera; the primary's stays empty
-  std::chrono::steady_clock::time_point last_set_;
-};
+}
 
 }  // namespace vr_example
