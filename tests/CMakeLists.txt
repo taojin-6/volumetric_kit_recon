@@ -1533,7 +1533,7 @@ add_test(NAME recon_networking_server_oom
          COMMAND recon_networking_server_oom_test)
 
 # sender tier: the codec stream (sender/codec_stream.hpp) on a grid holding a
-# sphere -- outputs it cannot make and a session without a Geometry track 0
+# sphere -- outputs it cannot make and a session that is not one Geometry track
 # refused on create, none written without outputs, each frame as it went out,
 # the .vrst's records (every encoded frame, byte for byte, a frame the decoder
 # refuses included and counted, a key exactly when an I-frame, the same bytes on

@@ -3,8 +3,8 @@
 
 // A sender's codec stream (sender/codec_stream.hpp), on a grid holding a
 // sphere: outputs it cannot make refused on create, before the encoder, whose
-// refusal takes the stream's file back, a session whose track 0 is not a
-// Geometry track refused, and none written without outputs; each frame as it
+// refusal takes the stream's file back, a session that is not one Geometry
+// track refused, and none written without outputs; each frame as it
 // went out, its type, bytes and blocks the frame's and its encode and decode
 // rows its own; the .vrst's track as the session gave it, and every encoded
 // frame a record of it, a frame the decoder refuses included, counted by
@@ -100,8 +100,8 @@ bool rows_of(const sender::SentFrame& frame, bool decoded) {
 
 // Outputs that cannot be made are refused by create with the writer's code,
 // naming the path, before the encoder; outputs that can be made get the
-// encoder's refusal, and their file is taken back. A session whose track 0 is
-// not a Geometry track is refused before any output is made.
+// encoder's refusal, and their file is taken back. A session that is not one
+// Geometry track is refused before any output is made.
 int refused(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
   const auto refuses = [&gpu](const sender::CodecOutputs& outputs,
                               const stream::Session& s, vkc::Status::Code code,
@@ -128,12 +128,14 @@ int refused(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
   CHECK(refuses(made, session(), vkc::Status::Code::InvalidArgument,
                 "intra_period"));
   CHECK(!fs::exists(made.stream));
-  // No track, and a track 0 of another kind, before the file.
+  // No track, a track of another kind, and two tracks, before the file.
   stream::Session none = session();
   none.tracks.clear();
   stream::Session other = session();
   other.tracks[0].kind = static_cast<stream::TrackKind>(7);
-  for (const stream::Session* s : {&none, &other}) {
+  stream::Session two = session();
+  two.tracks.push_back(two.tracks[0]);
+  for (const stream::Session* s : {&none, &other, &two}) {
     CHECK(refuses(made, *s, vkc::Status::Code::InvalidArgument, "Geometry"));
     CHECK(!fs::exists(made.stream));
   }

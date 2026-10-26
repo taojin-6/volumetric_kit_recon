@@ -2074,17 +2074,16 @@ mode, has no socket, thread or clock, and is tested alone.
 `recon_sender` is what a sender does with a prepared set
 (`sender/set_sender.hpp`, `sender/codec_stream.hpp`, the 2026-10-26
 entry). `fuse_inputs` (`sender/fuse_inputs.hpp`) hands prepared frames to
-the fuser: nothing uploaded, depth and colour through their own cameras,
-the colour's coverage in its high byte.
+the fuser, nothing uploaded.
 
 **The stream** (`CodecStream`). `create` takes the encoder's settings, the
 session and `CodecOutputs`: a new `.vrst` file, the server's options, and
-whether to decode. It refuses a session whose track 0 is not a Geometry
-track, then makes the server, so a port in use leaves no file, then the
+whether to decode. It refuses a session that is not one Geometry track,
+then makes the server, so a port in use leaves no file, then the
 file, which must be new, then the encoder and, with `decode`, the decoder,
 so a refused output costs no kernel. A codec error removes the new file
 again, as does destroying the stream unfinished before its first frame. The
-file and the viewers get the session as given. `code(grid, set, pts_ns)`
+file and the viewers get that session. `code(grid, set, pts_ns)`
 encodes the grid, appends a record (a key exactly when an I-frame), serves
 it once it is in the file, so no viewer gets a frame the file lacks, then
 decodes it with `decode_growing` from the decoder's input buffer into a
@@ -2420,7 +2419,7 @@ filtered.
 **On `fuse_orbbec`'s stream** (the 2026-10-20 entry): a capture-volume
 crop (`fusion.max_depth_m` is the limit there is), raw RGBD recording and
 replay, colour, an upright world, and the session's host clock and
-calibration, which the examples' session (`codec_session`) leaves out. With
+calibration (`codec_session` leaves both out). With
 `output.csv` or `codec.sweep` the stream still decodes each frame inside the
 set loop: on
 the lab rig (4 Femtos, RTX 4090, Release; 1 cm, Dynamic, period 30; 303

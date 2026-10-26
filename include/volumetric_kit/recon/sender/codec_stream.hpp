@@ -67,16 +67,16 @@ struct SentFrame {
 ///        `.vrst` file and served live as @ref CodecOutputs says, then
 ///        decoded back into a player grid, as a viewer decodes it.
 ///
-/// The file and the viewers get one session, the frames records of its
-/// track 0. The player grid is built from the first frame's header and grows
-/// as later frames need (codec/decode_grid.hpp). The encoder codes its next
-/// P-frame against every frame it returns, so any failure after an encode
-/// makes the next frame an I-frame (@ref codec::Encoder::force_intra): a
-/// frame the file or the player lacks is never a reference. A viewer joining
-/// or falling back makes the next frame an I-frame too
-/// (@ref networking::StreamServer::key_wanted), as it waits for a key: the
-/// request stands until a frame is returned, and joins between two frames
-/// make one key.
+/// The file and the viewers get one session of one Geometry track, each
+/// frame a record of it. The player grid is built from the first frame's
+/// header and grows as later frames need (codec/decode_grid.hpp). The
+/// encoder codes its next P-frame against every frame it returns, so any
+/// failure after an encode makes the next frame an I-frame
+/// (@ref codec::Encoder::force_intra): a frame the file or the player lacks
+/// is never a reference. A viewer joining or falling back makes the next
+/// frame an I-frame too (@ref networking::StreamServer::key_wanted), as it
+/// waits for a key: the request stands until a frame is returned, and joins
+/// between two frames make one key.
 ///
 /// @code
 /// VKC_ASSIGN(sender::CodecStream stream,
@@ -102,12 +102,12 @@ class VR_SENDER_API CodecStream {
   ///                   stream).
   /// @param config     The encoder's settings.
   /// @param session    The file's and the viewers' session, written as given:
-  ///                   the frames are records of its track 0, a Geometry
-  ///                   track. With no id or start time, a rerun writes the
-  ///                   same bytes.
+  ///                   one Geometry track, whose records the frames are.
+  ///                   With no id or start time, a rerun writes the same
+  ///                   bytes.
   /// @param outputs    Where the frames go.
-  /// @return The stream; `Status::Code::InvalidArgument` for a session whose
-  ///         track 0 is not a Geometry track; what
+  /// @return The stream; `Status::Code::InvalidArgument` for a session that
+  ///         is not one Geometry track; what
   ///         @ref networking::StreamServer::start returns
   ///         (`Status::Code::IoError` for a port in use); what
   ///         @ref stream::StreamWriter::create returns

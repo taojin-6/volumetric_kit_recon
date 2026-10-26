@@ -15711,8 +15711,8 @@ comes after `networking`. It prints nothing: `SetSender::send` takes the
 set's rows and a `sent` callback, run once the set is published, and
 returns what the set did (`Sent`: the fusion's report, a free pass's
 refusal, the frame); `CodecStream::code` returns the frame (`SentFrame`).
-`create` takes the session, and refuses one whose track 0 is not a
-Geometry track. The examples keep their reports, built from what the calls
+`create` takes the session, and refuses one that is not one Geometry
+track. The examples keep their reports, built from what the calls
 return: the per-set table (`SetLog`), and the stream's rows, CSV and
 summary (`CodecReport`, `codec_report.hpp`).
 

@@ -54,10 +54,10 @@ core::Result<std::unique_ptr<StreamCoder>> StreamCoder::create(
     core::Device& device, core::Allocator& allocator,
     const codec::EncoderConfig& config, const stream::Session& session,
     const CodecOutputs& outputs) {
-  if (session.tracks.empty() ||
+  if (session.tracks.size() != 1 ||
       session.tracks[0].kind != stream::TrackKind::Geometry) {
     return core::Status::invalid_argument(
-        "CodecStream: the session's track 0 must be a Geometry track");
+        "CodecStream: the session must be one Geometry track");
   }
   std::unique_ptr<networking::StreamServer> server;
   if (outputs.serve) {

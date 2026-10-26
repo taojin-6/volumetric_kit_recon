@@ -20,7 +20,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the stream's rows, CSV and summary (`CodecReport`, `codec_report.hpp`),
   built from what the calls return, and write the same streams. Migration:
   `CodecStream::create` takes the session (the examples' `codec_session`)
-  and refuses one whose track 0 is not a Geometry track; the CSV is the
+  and refuses one that is not one Geometry track; the CSV is the
   report's, so a row it cannot write no longer makes the next frame an
   I-frame. Tests: `recon_sender_codec_stream` (from
   `recon_example_codec_stream`), `recon_sender_set_sender` (from
