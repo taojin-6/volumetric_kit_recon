@@ -23,20 +23,20 @@
 // free_after of 0 frees nothing. The grid holds the same near blocks with a
 // stream and without. A coded set is 2 submits and at most 2 host waits, a
 // set fused alone 1 and 1, a free pass's adding none, a set fused again 3
-// more or 2, warm sets no staging buffer but a payload slot's growth, at
-// most two, and the front batch's dispatches stay
-// below 80, at two cameras and at a rig's four; the blocking calls code the
-// same frames, and so do they on a grid of 32 buckets, whose first set's
-// fusion is done again and its front half, its wait timed. Served as
-// fuse_orbbec serves, keys on demand: with no viewer joining, the frames
-// follow the intra period; viewers joining before a set make its frame a key,
-// one however many join, the period following from it, through the sender
-// and through code, a set whose fusion is done again included, and each
-// viewer's first frame is that key. On the host, a
-// path that is the stream's or the CSV's
-// file through a link refused, one beside them taken, and one that cannot be
-// checked refused; and the stream decoding only with a CSV or a sweep, served
-// without replay_gop. The device part skips with no device.
+// more or 2 and one for each further round its allocation takes, warm sets
+// no staging buffer but a payload slot's growth, at most two, and the front
+// batch's dispatches stay below 80, at two cameras and at a rig's four; the
+// blocking calls code the same frames, and so do they on a grid of 32 buckets,
+// whose first set's fusion is done again and its front half, its wait timed.
+// Served as fuse_orbbec serves, keys on demand: with no viewer joining, the
+// frames follow the intra period; viewers joining before a set make its frame
+// a key, one however many join, the period following from it, through the
+// sender and through code, a set whose fusion is done again included, and
+// each viewer's first frame is that key. On the host, a path that is the
+// stream's or the CSV's file through a link refused, one beside them taken,
+// and one that cannot be checked refused; and the stream decoding only with a
+// CSV or a sweep, served without replay_gop. The device part skips with no
+// device.
 
 #include <algorithm>
 #include <array>
@@ -534,8 +534,10 @@ int same_streams(const std::string& a, const std::string& b) {
 // two over the run's warm sets, where a readback of every set's would place
 // six. The front batch's dispatches stay below the Apple step near 80 a
 // batch (the 2026-10-24 entry); the back batch's are 4. A set fused again
-// adds the blocking allocation and fuse, and a coded one its front half
-// again, whose wait it times.
+// adds its blocking allocation, a submit a round while lost races remain,
+// and its fuse, and a coded one its front half again, whose wait it times.
+// The first set's round, into an empty grid, can lose a race, and the set is
+// then fused again.
 int counts_case(const std::vector<SetCounts>& counts, bool coded,
                 const char* what) {
   std::uint64_t warm_staging = 0;
@@ -558,8 +560,12 @@ int counts_case(const std::vector<SetCounts>& counts, bool coded,
       warm_staging += c.staging;
     }
     if (c.redone) {
-      const std::uint64_t again = coded ? 3 : 2;
-      CHECK(c.submits == batches + again && c.host_waits <= c.submits);
+      // Its fuse and a coded set's front half again, and its allocation's
+      // rounds, a submit each while lost races remain: one to ten
+      // (VoxelHashMap::allocate_from_depth).
+      const std::uint64_t again = coded ? 2 : 1;
+      CHECK(c.submits > batches + again && c.submits <= batches + again + 10 &&
+            c.host_waits <= c.submits);
       continue;
     }
     CHECK(c.submits == batches && c.host_waits <= batches);

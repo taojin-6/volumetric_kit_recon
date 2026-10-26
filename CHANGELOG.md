@@ -583,6 +583,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `tests`: **`recon_example_set_codec` counts each allocation round of a set
+  fused again**, where it counted one. The blocking allocation runs a round,
+  a submit each, while lost lock races remain, up to ten. On NVIDIA the first
+  set is fused again in nearly every run, and a second round failed the
+  counts check in 3 runs of 300 on an RTX 5090.
 - `sensor`: **`PixelBufferImporter`'s plane images bind memory dedicated to
   them**, for which MoltenVK makes no heap. It backed each plane's memory
   with a heap of the plane's size that the imported texture never used:
