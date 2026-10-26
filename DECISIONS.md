@@ -15453,7 +15453,9 @@ read as before.
 
 **Why.** The copy cost 0.28-0.31 ms of GPU a 4K picture on the M5 Max (the
 2026-09-28 decoded-frame entry), every set, and a scratch buffer per camera.
-What it nets on a 4-camera set is PERF.md's L3 row.
+Sampling in place nets 0.80 ms of device time a 4-camera 4K set on the M4,
+though the pass reads images more slowly than the copied buffer (PERF.md's
+L3 row has both arms).
 
 **Tests.** Plane images larger than the picture, sampled in place, prepare
 to the words the same samples give from buffer rows, bit for bit
@@ -15464,6 +15466,20 @@ without `SAMPLED` usage, without a view or in a copy's layout are refused
 by frame prep, and a sampled-only image by readback. The claim-before-grow
 case no longer has the copy's buffer to catch a growth recorded before its
 claim; it catches it through the outputs.
+
+**Validation.** Apple M4 (Mac mini), macOS 27.0.1, Release with warnings
+as errors, under the validation layer: the 112 tests pass on VideoToolbox,
+the sensor tests under sync validation too, and the iOS check links; four
+4K surfaces' imported planes, views included, allocate in Metal exactly what
+bare textures do. RTX 4090, Release with warnings as errors: the 107 tests
+pass on the NVIDIA driver and on lavapipe under the validation layer, and
+the frame-prep, readback, array and set-codec tests under sync validation.
+Mutants, on every leg: growing the buffers before the claim (#282's
+mutation) fails the claim-before-grow case, the validation layer reporting
+the unresolved batch's outputs destroyed; Cb and Cr swapped, the luma read
+a column over and an image without a view taken each fail. The luma left
+unrounded (`v * 255`) passes on the M4 and the RTX 4090 and fails on
+lavapipe, which is why the entry rounds.
 
 ## Measured lessons
 
