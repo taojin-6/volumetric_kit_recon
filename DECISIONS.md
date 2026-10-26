@@ -15454,18 +15454,19 @@ read as before.
 **Why.** The copy cost 0.28-0.31 ms of GPU a 4K picture on the M5 Max (the
 2026-09-28 decoded-frame entry), every set, and a scratch buffer per camera.
 Sampling in place nets 0.80 ms of device time a 4-camera 4K set on the M4,
-though the pass reads images more slowly than the copied buffer (PERF.md's
-L3 row has both arms).
+back to back, though the pass reads images more slowly than the copied
+buffer (PERF.md's L3 row has both arms, and paced sets).
 
-**Tests.** Plane images larger than the picture, sampled in place, prepare
-to the words the same samples give from buffer rows, bit for bit
-(`recon_sensor_gpu_frame_prep`, every leg), and on a Mac so does a patterned
-picture on a real IOSurface, its rows longer than the picture, against its
-own bytes in a buffer (`recon_sensor_apple_pixel_buffer_importer`). Images
-without `SAMPLED` usage, without a view or in a copy's layout are refused
-by frame prep, and a sampled-only image by readback. The claim-before-grow
-case no longer has the copy's buffer to catch a growth recorded before its
-claim; it catches it through the outputs.
+**Tests.** Plane images larger than the picture, sampled in place in either
+layout, prepare to the words the same samples give from buffer rows, bit for
+bit (`recon_sensor_gpu_frame_prep`, every leg), and on a Mac so does a
+patterned picture on a real IOSurface, its rows longer than the picture,
+against its own bytes in a buffer
+(`recon_sensor_apple_pixel_buffer_importer`). Images without `SAMPLED`
+usage, without a view or in a copy's layout are refused by frame prep, and
+a sampled-only image by readback. The claim-before-grow case no longer has
+the copy's buffer to catch a growth recorded before its claim; it catches
+it through the outputs.
 
 **Validation.** Apple M4 (Mac mini), macOS 27.0.1, Release with warnings
 as errors, under the validation layer: the 112 tests pass on VideoToolbox,

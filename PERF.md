@@ -311,7 +311,7 @@ is measured.
   colour buffer, into packed buffers on every call
   (`projective_texturer.cpp:658-679`).
   - It needs only the colour's coverage byte, which depends on the lens
-    alone (`undistort_color.comp:7-9`), so it never changes between
+    alone (`undistort_color.glsl:10-13`), so it never changes between
     frames.
   - At 4K that is 33 MB a camera, ~133 MB a remesh, and gfx then copies the
     same bytes into the atlas.
@@ -642,10 +642,14 @@ After P6, the GPU could run set N while the host polls and decodes set N+1.
 > | record to done, paced | 9.670 ms [9.410–10.298] | 8.787 ms [8.639–9.083] |
 > | host busy, back to back / paced | 0.064 / 0.409 ms | 0.064 / 0.416 ms |
 >
-> The net is 0.80 ms of device time a set. The eight copies alone, timed
-> in batches of their own, take 1.382 ms a set on the M4 (0.35 ms a
-> picture), so sampling in place costs the colour pass some 0.58 ms a set
-> more than reading the copied buffer.
+> The net is 0.80 ms of device time a set, back to back. The eight copies
+> alone, timed in batches of their own, take 1.382 ms a set on the M4
+> (0.35 ms a picture), so sampling in place costs the colour pass some
+> 0.58 ms a set more than reading the copied buffer. A second run of the
+> same bench, four rounds an arm, repeated the back-to-back figures
+> (5.818 → 4.995 ms of device time) but not the paced gain: its paced arms
+> overlap (device 7.310 vs 7.374 ms, record to done 8.895 vs 8.885 ms), the
+> GPU's clock between sets deciding them.
 
 ### L4 — The atlas copy (kept)
 
