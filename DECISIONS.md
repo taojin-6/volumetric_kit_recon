@@ -753,11 +753,11 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-25**](#2026-10-25--a-live-sender-makes-keys-on-demand-a-joiner-waits-for-the-next-key-the-server-keeps-what-its-viewers-still-need-and-a-viewer-that-falls-max_gop_bytes-behind-waits-for-a-key-alone-amends-the-2026-10-21-networking-entry) —
   Keys on demand: without `ServerOptions::replay_gop`, a joiner waits for
   the next key, the server keeps only what its viewers still need, and a
-  viewer that falls `max_gop_bytes` behind waits for a key, alone;
-  `StreamServer::key_wanted()` counts both, and the codec examples'
-  `CodecStream` codes an I-frame at its next front half when it rises.
-  fuse_orbbec serves so; `serve_stream`, which cannot make a key, replays
-  the GOP.
+  viewer that falls `max_gop_bytes` behind waits for a key, alone; newest
+  key wins still. `StreamServer::key_wanted()` counts both, and the codec
+  examples' `CodecStream` codes an I-frame at its next front half when it
+  rises. fuse_orbbec serves so; `serve_stream`, which cannot make a key,
+  replays the GOP.
 
 ## Decision record
 
@@ -15426,32 +15426,39 @@ fails the test.
 ### 2026-10-25 — A live sender makes keys on demand: a joiner waits for the next key, the server keeps what its viewers still need, and a viewer that falls `max_gop_bytes` behind waits for a key, alone (amends the 2026-10-21 networking entry).
 
 **The rule.** `ServerOptions::replay_gop`, true by default, is the
-2026-10-21 server: a joiner gets the GOP since the newest key, and newest
-key wins. False, a viewer joins waiting for the next key and from it gets
-every record, in order. One that a record would leave more than
-`max_gop_bytes` behind the newest finishes its chunk under way and waits for
-the next key again, alone; a lost copy sends every viewer back so. The
-server keeps only the records a viewer still has to send.
-`StreamServer::key_wanted()` counts each join and each fall-back, 0 with
-`replay_gop`. The codec examples' `CodecStream` reads it before each frame's
-front half, in `code` and in `record` (so in `SetSender::send`), and calls
-`Encoder::force_intra()` when it rose since the last read. `codec_outputs`
-serves without `replay_gop`, so fuse_orbbec's viewers that join or fall
-behind get a key at the next set; `serve_stream` replays a file, cannot
-make a key, and keeps it.
+2026-10-21 server: a joiner gets the GOP since the newest key. False, a
+viewer joins waiting for the next key and from it gets every record, in
+order. One that a record would leave more than `max_gop_bytes` behind the
+newest finishes its chunk under way and waits for the next key again,
+alone; a lost copy sends every viewer back so. The server keeps only the
+records a viewer still has to send. Newest key wins in both modes.
+`StreamServer::key_wanted()` counts each join and each fall-back, and the
+viewers waiting for a key that is lost; a key within `max_gop_bytes` counts
+none, as every viewer goes on from it; 0 with `replay_gop`. A record past
+`max_gop_bytes` on its own, which no viewer can take, is logged at Warning
+in both modes. The codec examples' `CodecStream` reads the count before
+each frame's front half, in `code` and in `record` (so in
+`SetSender::send`), and calls `Encoder::force_intra()` when it rose since
+the last read. `codec_outputs` serves without `replay_gop`, so
+fuse_orbbec's viewers that join or fall behind get a key at the next set;
+`serve_stream` replays a file, cannot make a key, and keeps it.
 
 **Why.** The 2026-10-21 entry joined viewers at the cached GOP because
 waiting for the next key showed nothing for up to a second, and a replayed
 file cannot force one. A live sender can: the joiner waits one set, 33 ms
 at 30 fps, and is sent the key alone, not the GOP since the last one (up to
-1.3 MB). The server's memory no longer grows with the GOP, so a long one
-no longer meets `max_gop_bytes`, which froze every viewer to the next key:
-it holds what the slowest viewer still needs, and a viewer too slow for the
-stream falls back alone. No newest-key skip in this mode: a viewer misses a
-record only by a fall-back, which the count takes, so the sender answers
-every gap with a key. The cost is lag: a viewer that cannot keep up falls
-as far as `max_gop_bytes` behind before it waits for a key, so a caller
-bounds the lag through it.
+1.3 MB). A long GOP no longer meets `max_gop_bytes`, which froze every
+viewer to the next key: the server holds what the slowest viewer still
+needs, and a viewer that falls that far behind within a GOP waits for a
+key alone. Newest key wins still bounds the lag of one slower than the
+stream to about a GOP: simulated on the GOP log for 600 s at 30 fps, with
+0.78 MB keys every 30 records, 0.3 MB P-frames and the default limit, a
+viewer taking 95% of the stream fell 7 s behind before a fall-back without
+it, and stays within 2 records with it, as when replaying. So a key counts none: a viewer it
+would take past the limit goes on from it, and a second key made for that
+viewer would only add to its backlog (without the skip, at a 2 MiB limit,
+the simulated sender forced 239 keys in the 600 s, 189 with the viewer not
+waiting; with it, none).
 
 **Where the key is read.** The encoder picks I or P as the front half is
 recorded (`Encoder::record_front`), so the count is read there, before the
@@ -15468,45 +15475,59 @@ determined one.
 a joiner gets nothing until the next key, then every record; a viewer
 holding its key under way stays at exactly `max_gop_bytes` behind and falls
 back, counted, at the next record, the viewer keeping up getting every record;
-a record or key past the limit alone; a lost copy; and seeded runs of
-records and viewers joining, pulling, falling behind and leaving, the bytes
-held never past the limit and none with no viewer in, each viewer's records
-its key's run, each gap to a key after a counted fall-back. On loopback: a
-joiner counted, then the next key and every record after; a raw viewer that
-stops reading falls back, counted, once 512 KiB are behind it, then drains
-a run from the first key, the new key and the P-frames after it, while a
-client reading each record gets every one and is never counted; replaying,
-nothing counted. The stress run in both modes, its publisher keying on the
-count, under TSan on the Mac leg. On a device (`recon_example_set_codec`),
-served as fuse_orbbec serves, through `SetSender::send` and through `code`:
-keys at the intra period of 4 with no joiner; three joins before set 2 and
-one before set 7 key 0, 2, 6 and 7, each viewer's first record the key at
-its set; and, on 32 buckets with the cameras seeing a patch until set 3,
+a viewer behind skips to a newer key, which counts none though the viewer
+would be past the limit with it; a record or key past the limit alone; a
+lost copy, and a lost key counting a lone joiner again; and seeded runs of
+records, lost copies and keys, and viewers joining, pulling, falling behind
+and leaving, the bytes held never past the limit and none with no viewer in,
+the count exactly the joins, fall-backs and waits a lost key ends, and each
+viewer's records its key's run, broken only by the newest key. On loopback:
+a joiner counted, then the next key and every record after; a raw viewer
+that stops reading falls back, counted, once 512 KiB are behind it, then
+drains a run from the first key, the new key and the P-frames after it,
+while a client reading each record gets every one and is never counted; one
+that stops reading over 3 GOPs of 1 MiB gets the newest GOP, in both modes;
+a key past the limit alone logged at Warning, its joiner not counted again,
+and a P-frame past it sending the viewer back, counted, at Warning; a copy
+failing (an allocation failure injected, in `recon_networking_server_oom`,
+apart so the rest link under TSan on Linux too) counting the viewer it sends
+back, and a lost key the one waiting, before `publish` returns; replaying,
+nothing counted. The stress run in both modes, its publisher keying on the count,
+under TSan on the Mac leg. On a device (`recon_example_set_codec`), served
+as fuse_orbbec serves, through `SetSender::send` and through `code`, each
+viewer reading each set as it is published: keys at the intra period of 4
+with no joiner; three joins before set 2 and one before set 7 key 0, 2, 6
+and 7, each viewer's first record the key at its set; and, on 32 buckets
+with the cameras seeing a patch until set 3,
 set 3's fusion done again and its frame a key with a joiner, a P-frame with
 none. `recon_example_config` pins fuse_orbbec's serve options to
 `replay_gop` false.
 
 **Validation.** RTX 5090, Ubuntu 26.04, GCC 15.2, Release with warnings as
-errors and the ubuntu-26.04 leg's options, under the validation layer: the 107
-tests pass, and the two sender tests under sync validation too. RTX 4090,
-Ubuntu 26.04, Release with the ubuntu-24.04 leg's Orbbec, FFmpeg, CUDA and
-Assimp: the 126 tests pass, and the GOP log, socket, server and stress tests
-under ThreadSanitizer (clang, Debug). Apple M4
+errors and the ubuntu-26.04 leg's options, under the validation layer: the 108
+tests pass, and the sender, config and networking tests under sync
+validation too. RTX 4090, Ubuntu 26.04, Release with the ubuntu-24.04 leg's
+Orbbec, FFmpeg, CUDA and Assimp: the 127 tests pass; the keyed sender,
+server and stress tests 20 runs of 20 each; and the GOP log, socket,
+server, stress and stream container tests under ThreadSanitizer (clang,
+Debug). Apple M4
 (Mac mini), macOS 27.0.1, Release with Orbbec, Assimp and the viewers: the
-132 tests pass under the validation layer, the iOS check links, and the 11
+133 tests pass under the validation layer, the iOS check links, and the 12
 threaded tests pass under ThreadSanitizer (Debug). Built Debug with clang
 under ASan and UBSan on the RTX 5090, the networking tests and the three
 example tests pass. The raw viewer fell back
 after 10 records of 64 KiB on Linux, 2 of them sent, and after 15 on macOS,
-7 sent. The on-demand stress run published 121,616 records in 1.5 s and
-forced 148 keys for 164 joins and fall-backs, its viewers jumping 104
+7 sent. The on-demand stress run published 127,618 records in 1.5 s and
+forced 34 keys for 44 joins and fall-backs, its viewers jumping 403
 times. Mutations each fail a test: the count read only in `code` or only in
 `record`, or after the front half (a key one set late); a key forced while
 any viewer is counted, or one per join; `abandon` dropping the request (the
 fusion done again); a joiner let in at once rather than at the next key, and
 no fall-back (GOP log and server each); a fall-back or a join not counted;
-the count not published after `publish`; the log never trimmed; and
-fuse_orbbec's options replaying the GOP.
+the count not published after `publish`, or after a lost copy; the log never
+trimmed; no newest-key skip on demand (GOP log, server); a key counting the
+viewers it would take past the limit; a lost key counting no waiting viewer;
+no Warning on demand; and fuse_orbbec's options replaying the GOP.
 
 ## Measured lessons
 

@@ -667,9 +667,8 @@ int keyed_sets(vr_test::GpuContext& gpu, const Keyed& run,
                 .ok());
     }
     redone->push_back(fused_again);
-  }
-  for (const Viewer& viewer : viewers) {
-    for (std::size_t s = viewer.set; s < kSets; ++s) {
+    // Read as it is published, so no viewer is behind when a key comes.
+    for (const Viewer& viewer : viewers) {
       net::Got got;
       CHECK(net::next_within(*viewer.client, &got));
       CHECK(got.record.info.set == s && got.record.info.seq == s);
