@@ -1510,11 +1510,12 @@ colour camera can colour.
 **`sensor/utils`' `PictureReadback`** copies a set's colour pictures to the
 host, luma alone or every plane, for calib's detector: NV12 images from
 their corner, and planes in a buffer where they sit, after the batch takes
-the buffer over from `YuvImage::queue_family`; every copy in one batch, one
-submit and one wait. Both read overloads take mutable pictures/frames and,
-after a successful submit and wait, update each buffer picture's
-`queue_family` to the readback's family (EXCLUSIVE) or `kQueueFamilyIgnored`
-(CONCURRENT). Subsequent reads and preparation use the updated picture;
+either over from `YuvImage::queue_family`, images in the layout they are in;
+every copy in one batch, one submit and one wait. Both read overloads take
+mutable pictures/frames and, after a successful submit and wait, update each
+picture's `queue_family` to the readback's family (EXCLUSIVE) or
+`kQueueFamilyIgnored` (CONCURRENT, and images that needed no transfer).
+Subsequent reads and preparation use the updated picture;
 copies made before readback still carry the old ownership metadata.
 Creation, including the GPU timer, and reading return `OutOfMemory` for
 host allocation failure. The copies land in host memory it keeps (`Staging`,
