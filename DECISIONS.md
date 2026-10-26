@@ -15467,7 +15467,7 @@ determined one.
 **Tests.** The GOP log, with no socket: replaying counts no join; on demand,
 a joiner gets nothing until the next key, then every record; a viewer
 holding its key under way stays at exactly `max_gop_bytes` behind and falls
-back, counted, one byte past it, the viewer keeping up getting every record;
+back, counted, at the next record, the viewer keeping up getting every record;
 a record or key past the limit alone; a lost copy; and seeded runs of
 records and viewers joining, pulling, falling behind and leaving, the bytes
 held never past the limit and none with no viewer in, each viewer's records
@@ -15487,8 +15487,11 @@ none. `recon_example_config` pins fuse_orbbec's serve options to
 `replay_gop` false.
 
 **Validation.** RTX 5090, Ubuntu 26.04, GCC 15.2, Release with warnings as
-errors and the ubuntu leg's options, under the validation layer: the 107
-tests pass, and the two sender tests under sync validation too. Apple M4
+errors and the ubuntu-26.04 leg's options, under the validation layer: the 107
+tests pass, and the two sender tests under sync validation too. RTX 4090,
+Ubuntu 26.04, Release with the ubuntu-24.04 leg's Orbbec, FFmpeg, CUDA and
+Assimp: the 126 tests pass, and the GOP log, socket, server and stress tests
+under ThreadSanitizer (clang, Debug). Apple M4
 (Mac mini), macOS 27.0.1, Release with Orbbec, Assimp and the viewers: the
 132 tests pass under the validation layer, the iOS check links, and the 11
 threaded tests pass under ThreadSanitizer (Debug). Built Debug with clang
