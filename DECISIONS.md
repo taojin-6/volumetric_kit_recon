@@ -15872,18 +15872,21 @@ the images take `HevcDecoder::Options::queue_families`, which NVDEC ignored,
 by `PixelBufferImporter`'s rule, now one check for both
 (`sensor/sharing_families.hpp`).
 
-**Why.** One picture form on every platform: a renderer samples NVDEC's
-planes where they are, as it does VideoToolbox's, where a buffer would cost
-it a Vulkan copy into images every picture. Measured on the lab RTX 4090
-(driver 615.71.10), Release, a 3840x2160 picture from a device surface with
-padded rows, CUDA events, the median of each of three interleaved rounds of
-400 copies: the copy into the two images takes 0.030 ms, into the buffer
-0.016 ms. Frame prep of one 4K camera with a 640x576 depth frame, the same
-picture, device time, medians of 600 prepares over six interleaved rounds,
-other processes keeping the GPU busy throughout: 0.100 ms from the images,
-0.107 ms from the buffer, with words bit for bit the same. One multi-planar
-image with plane views was the alternative; it needs multi-planar formats in
-the core, and two images need none.
+**Why.** One picture form on every platform: frame prep and readback read
+NVDEC's planes through the image path they use for VideoToolbox's, and a
+viewer of the cameras gets image planes on Linux too, where a buffer would
+cost it a Vulkan copy into images every picture (calib's live mosaic copies
+a picture's planes only from images and refuses planes in a buffer).
+Measured on the lab RTX 4090 (driver 615.71.10), Release, a 3840x2160
+picture from a device surface with padded rows, CUDA events, the median of
+each of three interleaved rounds of 400 copies: the copy into the two images
+takes 0.030 ms, into the buffer 0.016 ms. Frame prep of one 4K camera with a
+640x576 depth frame, the same picture, device time, medians of 600 prepares
+over six interleaved rounds, other processes keeping the GPU busy
+throughout: 0.100 ms from the images, 0.107 ms from the buffer, with words
+bit for bit the same. One multi-planar image with plane views was the
+alternative; it needs multi-planar formats in the core, and two images
+need none.
 
 **Tests.** `recon_sensor_video_hevc`, on NVDEC and VideoToolbox both: the
 patch clip and its full-range copy decode to libavcodec's MD5 through
