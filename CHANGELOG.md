@@ -94,6 +94,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `sensor`: **frame prep samples NV12 plane images where they are** (the
+  2026-10-25 plane-image decision): `GpuFramePrep` reads a picture's
+  `YuvImage::image` planes through two combined image samplers, in a second
+  entry of the colour pass over the same body, rather than copying them into
+  a buffer of its own; its `sensor.raw_color` buffer goes. The words are the
+  buffer form's, bit for bit. `PixelBufferImporter`'s plane images gain
+  `SAMPLED` usage and a view, and keep `TRANSFER_SRC`. Migration: plane
+  images given to `GpuFramePrep` need `SAMPLED` usage and a view, in
+  `GENERAL` or `SHADER_READ_ONLY_OPTIMAL`, and must be 2D, of one layer and
+  one sample (an arrayed or 3D image's first layer is no longer taken), and
+  no longer need `TRANSFER_SRC`,
+  which `PictureReadback` still needs. Tests:
+  `recon_sensor_gpu_frame_prep`, `recon_sensor_gpu_frame_prep_submit`,
+  `recon_sensor_picture_readback`,
+  `recon_sensor_apple_pixel_buffer_importer`.
 - CI: **the sanitizer job runs on the owner's Linux GPU boxes**, on the
   host. On the lab box it takes 1 min 45 s (build 32 s, tests 64 s, 5 at a
   time), where a hosted 4-vCPU runner took 5-8 minutes and set every PR's

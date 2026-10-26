@@ -75,7 +75,7 @@ Bytes moved per set, four cameras (4K colour, 640 × 576 depth, 1 cm voxels):
 | bytes | from → to | how often | item |
 |---|---|---|---|
 | depth, 0.7 MB per camera | host → device | every set | unavoidable |
-| NV12, 12 MB per camera | on NVIDIA three device copies: NVDEC's map of its surface, FFmpeg's copy into a frame of its own, recon's CUDA copy into the Vulkan buffer; or VideoToolbox image → buffer | every set | required on NVIDIA; L3 on Apple |
+| NV12, 12 MB per camera | on NVIDIA three device copies: NVDEC's map of its surface, FFmpeg's copy into a frame of its own, recon's CUDA copy into the Vulkan buffer; none on Apple, where frame prep samples VideoToolbox's planes in place (L3) | every set | required on NVIDIA |
 | active block list, 16 B per block (~0.8 MB on the lab rig) | device → host → device | every remesh | P5 |
 | colour, 33 MB per camera | prep output → texturer's buffer | every remesh | P4 |
 | colour, 33 MB per camera | prep output → gfx atlas image | every remesh | L4 (kept) |
@@ -92,8 +92,8 @@ Measured, each from where it is recorded. Quote new figures the same way.
 | `prepare_set`, 4 × (640 × 576 depth, 3840 × 2160 colour) | 1.73 ms M5 Max, 4.8 ms RTX 5090 | DECISIONS.md, 2026-09-28 residency, step 5b |
 | `rig_viewer` per set, lab rig, 1 cm, M5 Max, Release | fuse 6.0–11.1 ms; remesh (extract + texture) 6.1–7.8 ms at 720p, 6.7–7.1 ms at 4K | DECISIONS.md, 2026-09-29 and its amendments |
 | atlas copy, GPU, 4 cameras at 720p | 0.23 ms | DECISIONS.md, 2026-09-29 |
-| VideoToolbox image → buffer copy, 4K | 0.28–0.31 ms GPU, M5 Max | `undistort_color.comp:21` |
-| one submit and fence wait | ~0.38 ms, RTX 5090 | `voxel_hash_map.cpp:658` |
+| VideoToolbox image → buffer copy, 4K (gone since L3) | 0.28–0.31 ms GPU, M5 Max; 1.38 ms a 4-camera set, M4 | DECISIONS.md, 2026-09-28 decoded-frame; L3 below |
+| one submit and its wait | 0.02–0.03 ms at full clock, RTX 4090 | P6 below (2026-10-25) |
 | one timed submit | ~0.13 ms extra, MoltenVK | [DESIGN.md, core](DESIGN.md#core) |
 
 With one camera, host time is about 2.2 times device time for allocate plus
@@ -158,7 +158,7 @@ kernels.
 | MESH3 | Ask for each block a mesh's band names once a workgroup | Rafa2 at 5 mm, the `allocate` row host / device, means of three interleaved runs: RTX 4090 8-voxel band 11.19 / 7.90 → 5.51 / 2.27 ms, 16-voxel 16.37 / 13.06 → 12.10 / 8.90; M5 Max 8-voxel 7.73 / 6.14 → 4.15 / 2.60, 16-voxel 10.45 / 8.87 → 8.92 / 7.35 | S | — | landed (#268), measured Release on RTX 4090 and M5 Max; mesh input only, outside the live rig |
 | L1 | Shared-vertex remesh for the rig | ~3.4× fewer vertices | L | gfx | blocked |
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
-| L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |
+| L3 | Read VideoToolbox's plane images directly | measured a 4-camera 4K set's frame prep 5.80 → 4.99 ms of device time on the M4, record to done 6.23 → 5.40 ms; Apple only | M | — | landed (2026-10-25), measured Release on the M4 Mac mini |
 | L4 | Sample the atlas in place rather than copy it | measure the copy at 4K first | L | gfx | kept |
 
 The suggested order: P8 first, so every later figure is honest; D1–D3
@@ -311,7 +311,7 @@ is measured.
   colour buffer, into packed buffers on every call
   (`projective_texturer.cpp:658-679`).
   - It needs only the colour's coverage byte, which depends on the lens
-    alone (`undistort_color.comp:7-9`), so it never changes between
+    alone (`undistort_color.glsl:10-13`), so it never changes between
     frames.
   - At 4K that is 33 MB a camera, ~133 MB a remesh, and gfx then copies the
     same bytes into the atlas.
@@ -622,8 +622,34 @@ After P6, the GPU could run set N while the host polls and decodes set N+1.
 
 ### L3 — Read VideoToolbox's plane images directly
 
-- The `TODO(sensor)` at `undistort_color.comp:21`.
-- Apple only, and 0.28–0.31 ms of GPU per 4K frame.
+> **Landed (2026-10-25).** The colour pass samples the plane images where
+> they are, through a second entry over the same body; the two plane copies
+> a picture and their 12.4 MB buffer a camera go (the 2026-10-25 plane-image
+> decision). A synthetic set of four cameras, each a 3840 × 2160 NV12
+> picture on an IOSurface (two a camera, alternating) through
+> `PixelBufferImporter` and a 640 × 576 depth frame, recorded by
+> `record_set` into one batch, submitted and waited; Apple M4 Mac mini,
+> macOS 27.0.1, Release, no validation; six interleaved runs an arm, the
+> order swapped each round, with no other build or test running; each
+> figure the median of the runs' p50s (spread across runs in brackets), over
+> 270 back-to-back sets and 120 sets paced at 33.3 ms after warm-up:
+>
+> | | before (`5c4aeb34`) | after |
+> |---|---|---|
+> | device, back to back | 5.798 ms [5.792–5.816] | 4.993 ms [4.990–4.997] |
+> | record to done, back to back | 6.228 ms [6.221–6.259] | 5.401 ms [5.397–5.406] |
+> | device, paced | 8.124 ms [7.804–8.838] | 7.290 ms [7.165–7.598] |
+> | record to done, paced | 9.670 ms [9.410–10.298] | 8.787 ms [8.639–9.083] |
+> | host busy, back to back / paced | 0.064 / 0.409 ms | 0.064 / 0.416 ms |
+>
+> The net is 0.80 ms of device time a set, back to back. The eight copies
+> alone, timed in batches of their own, take 1.382 ms a set on the M4
+> (0.35 ms a picture), so sampling in place costs the colour pass some
+> 0.58 ms a set more than reading the copied buffer. A second run of the
+> same bench, four rounds an arm, repeated the back-to-back figures
+> (5.818 → 4.995 ms of device time) but not the paced gain: its paced arms
+> overlap (device 7.310 vs 7.374 ms, record to done 8.895 vs 8.885 ms), the
+> GPU's clock between sets deciding them.
 
 ### L4 — The atlas copy (kept)
 
