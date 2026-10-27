@@ -8,6 +8,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `camera`, `sensor`: **a sensor's depth offset from the calibration** (the
+  2026-10-27 depth-offset decision): `SensorCalibration::depth_offset_m`
+  (metres, + where the depth reads too far, at most 0.05 m), the
+  calibration file's version 3, which the writer writes only for a
+  calibration that carries an offset; an uncorrected one is still written as
+  version 2, byte for byte. The reader takes versions 2 and 3 and refuses an
+  offset in a version-2 file. Frame prep subtracts
+  `GpuFramePrepConfig::depth_offset_m` from every return before the
+  within-colour mask, 0 staying no return for either sign, and
+  `GpuFramePrep::create` refuses a non-finite one. `SensorArray::open` sets
+  each sensor's pass's offset from the calibration and refuses one in
+  `Options::prep`. Migration: a reader before this refuses a corrected file
+  as a later version. Tests: `recon_camera_array_calibration`,
+  `recon_sensor_gpu_frame_prep`, `recon_sensor_array_process`.
 - `mesh`: **`MeshExchange`'s consumer may drop a mesh it took** (the
   2026-10-26 drop decision): `begin_frame`'s commit may return a
   `CommitDecision`, `kCommit`, `kPark` or `kDrop`, where a `bool` it may

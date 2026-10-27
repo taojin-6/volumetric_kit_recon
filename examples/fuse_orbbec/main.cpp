@@ -19,8 +19,9 @@
 // fuses every camera of a sync configuration (femto_mega_sync.json) as one rig
 // on the host's clock, refusing cameras whose sync settings differ from it
 // unless source.apply_sync writes it to them. source.calibration poses each
-// camera from a calibration file (camera/array_calibration.hpp); without it
-// every camera sits at the origin. source.host_clock puts one camera on the
+// camera, and offsets its depth, from a calibration file
+// (camera/array_calibration.hpp); without it every camera sits at the origin
+// with its depth as read. source.host_clock puts one camera on the
 // host's clock (OrbbecSensor::Options::sync_clock_to_host), which its first
 // frame's age checks; a rig is always on it. operation=stream only streams:
 // each set is polled, counted and released, with no GPU preparation, fusion or
