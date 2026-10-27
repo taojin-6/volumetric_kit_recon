@@ -9,8 +9,9 @@
 // viewers' render pass -- with the profiler's rows a window's loop gives, less
 // the present; FrameSaver saves the first frame with a mesh, the frame
 // `every` later and the last, each written when its slot's next frame begins
-// or after the device idles, and a path it cannot write is said once while
-// the frames go on. The draw runs on a device, which the test skips without.
+// or after the device idles, never one it was not told was ended, and a path
+// it cannot write is said once while the frames go on. The draw runs on a
+// device, which the test skips without.
 
 #include <algorithm>
 #include <chrono>
@@ -173,9 +174,12 @@ struct FrameDraw {
   fuse_viewer::AtlasCopyTimes& copy_times;
 
   // Returns 0, or 1 on a failed check; `saved` says whether it was saved.
+  // Without `tell_ended` the saver is not told the frame was ended, as when
+  // rig_viewer's end_frame fails.
   int operator()(fuse_viewer::FrameSaver& saver,
                  const fuse_viewer::AtlasJob* job, bool draws_mesh, bool last,
-                 Clock::time_point now, std::uint64_t number, bool* saved) {
+                 Clock::time_point now, std::uint64_t number, bool* saved,
+                 bool tell_ended = true) {
     auto begun = loop.begin_frame(kExtent);  // never skips offscreen
     CHECK(begun.ok() && begun.value().has_value());
     const win::Frame& frame = *begun.value();
@@ -213,7 +217,7 @@ struct FrameDraw {
     *saved = saver.record(frame, draws_mesh, last, now);
     CHECK(loop.end_frame(frame).ok());
     if (copied) copy_times.copied(frame.slot);
-    saver.ended(frame);
+    if (tell_ended) saver.ended(frame);
     return 0;
   }
 };
@@ -399,6 +403,23 @@ int draws_and_saves_offscreen(const std::filesystem::path& dir) {
          copies.find("; 0 untimed") != std::string::npos) ||
         copies == "atlas copy, device ms: n/a; 1 untimed\n");
 
+  // A saved frame the saver is not told was ended is never written: its
+  // readback may not have run. Frame 8 is saved; frame 10 recurs its slot.
+  fuse_viewer::FrameSaver unended((dir / "unended.bmp").string(),
+                                  std::chrono::seconds(30),
+                                  config.frames_in_flight);
+  for (std::uint64_t n = 8; n <= 10; ++n) {
+    bool saved = false;
+    if (const int rc = draw(unended, nullptr, n == 8, false, Clock::now(), n,
+                            &saved, n != 8)) {
+      return rc;
+    }
+    CHECK(saved == (n == 8));
+  }
+  CHECK(renderer.device().wait_idle().ok());
+  unended.flush();
+  CHECK(unended.saved().empty() && unended.failures() == 0);
+
   // A path that cannot be written: every saved frame fails, counted and said
   // once, and the frames go on.
   std::FILE* says = std::tmpfile();
@@ -406,10 +427,10 @@ int draws_and_saves_offscreen(const std::filesystem::path& dir) {
   fuse_viewer::FrameSaver unwritable((dir / "missing" / "rig.bmp").string(),
                                      std::chrono::nanoseconds(0),
                                      config.frames_in_flight, says);
-  for (std::uint64_t n = 8; n <= 10; ++n) {
+  for (std::uint64_t n = 11; n <= 13; ++n) {
     bool saved = false;
     if (const int rc =
-            draw(unwritable, nullptr, true, n == 10, Clock::now(), n, &saved)) {
+            draw(unwritable, nullptr, true, n == 13, Clock::now(), n, &saved)) {
       return rc;
     }
     CHECK(saved);
@@ -426,7 +447,7 @@ int draws_and_saves_offscreen(const std::filesystem::path& dir) {
   std::fclose(says);
   std::fputs(said.c_str(), stdout);
   CHECK(std::count(said.begin(), said.end(), '\n') == 1);
-  CHECK(said.find("frame 8 not saved") != std::string::npos);
+  CHECK(said.find("frame 11 not saved") != std::string::npos);
   return 0;
 }
 
