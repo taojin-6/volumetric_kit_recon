@@ -1241,8 +1241,9 @@ int run(GLFWwindow* window, const Options& opt) {
       exit_code = 1;
       break;
     }
-    // Submitted, so the profiler publishes its figures as the slot recurs.
-    if (present.ok() && copied) copy_times.copied(render_frame.slot);
+    // Submitted, a stale present's frame too, so the profiler publishes its
+    // figures as the slot recurs.
+    if (copied) copy_times.copied(render_frame.slot);
     if (drawn % 120 == 0) {
       fuse_viewer::print_rig_progress(drawn, panel, atlas_copies);
     }
