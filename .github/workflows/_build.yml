@@ -267,11 +267,10 @@ jobs:
       # brew upgrade builds on the new versions (the core's
       # tools/runners/README.md, "Upgrading Homebrew"). The action is at the
       # core pin in third_party/CMakeLists.txt.
-      # TODO: re-pin to the merge commit once core #62 merges.
       - name: Homebrew key
         id: brew
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
-        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@8e505b6202e97e277149685eea41160d53a22b05
+        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@effc4649acf4c418fe45143c6b728197f2bcbb58
         with:
           formulae: ${{ steps.formulae.outputs.formulae }}
 

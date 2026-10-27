@@ -175,7 +175,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `sensor`: **the Orbbec driver defaults to H.265 at 3840x2160 and 25 fps**
   (the 2026-10-27 colour-controls decision), depth 640x576 as before: the
   streams core 0.25.0's Orbbec scenarios default to, which recon now needs
-  (`VR_CORE_MIN_VERSION`; pinned at core #62's head until it merges).
+  (`VR_CORE_MIN_VERSION`, core #62).
   `Mjpeg` stays selectable. Migration: a caller that relied on the old
   default states `color_codec = Mjpeg`, 1280x720 and 30 fps; a scenario
   that names no rate runs at 25 fps. Tests: `recon_example_config`,
