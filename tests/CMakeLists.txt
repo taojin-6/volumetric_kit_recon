@@ -1324,6 +1324,26 @@ if(VR_WITH_ORBBEC)
   add_test(NAME recon_sensor_orbbec_sync_apply
            COMMAND recon_sensor_orbbec_sync_apply_test)
 
+  # The colour controls open() writes and reads back, against the same camera
+  # stub, whose properties go through the driver's own sequence
+  # (frame_conversion.cpp's write_color_controls).
+  add_executable(
+    recon_sensor_orbbec_color_controls_test
+    sensor_orbbec_color_controls_test.cpp
+    orbbec_camera_stub.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/orbbec_sensor.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/frame_conversion.cpp
+  )
+  target_link_libraries(recon_sensor_orbbec_color_controls_test
+                        PRIVATE volumetric_kit::recon_sensor_orbbec)
+  vr_link_orbbec_sdk(recon_sensor_orbbec_color_controls_test)
+  target_include_directories(
+    recon_sensor_orbbec_color_controls_test
+    PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
+  vr_target_warnings(recon_sensor_orbbec_color_controls_test)
+  add_test(NAME recon_sensor_orbbec_color_controls
+           COMMAND recon_sensor_orbbec_color_controls_test)
+
   # A rig opened from its sync file (open_orbbec_sensors) against the same
   # camera stub, with the fixture files in data/orbbec_sync.
   add_executable(
