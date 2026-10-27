@@ -113,12 +113,13 @@ endif()
 # dependencies that expose private include paths to the tiers below and never
 # become part of their link interface. The oldest core recon's libraries build
 # with is checked in the core that arrives (third_party/, which also checks the
-# config tier the examples and tests need): 0.25.0, whose Orbbec scenarios
-# default to the driver's own streams (H.265 3840x2160 at 25 fps), as the
-# example tests check. The libraries themselves need 0.24.0's exported images
-# NVDEC's pictures land in and their queue-family transfers
+# config tier the examples and tests need): 0.27.0, whose RigViewer scenarios
+# name the frames rig_viewer saves offscreen (output.screenshot); 0.25.0's
+# Orbbec scenarios default to the driver's own streams (H.265 3840x2160 at 25
+# fps), as the example tests check. The libraries themselves need 0.24.0's
+# exported images NVDEC's pictures land in and their queue-family transfers
 # (core::create_exported_image, CommandBatch::acquire for an image).
-set(VR_CORE_MIN_VERSION 0.25.0)
+set(VR_CORE_MIN_VERSION 0.27.0)
 add_subdirectory(third_party)
 
 add_subdirectory(src)

@@ -53,11 +53,17 @@ FetchContent_Declare(
   #
   # And at or past gfx #144, which shows ImGui's colours as authored on the
   # default _SRGB swapchain; before it the panels were encoded twice and drew
-  # washed out. A rendering floor, and the newest, so it covers the older ones;
+  # washed out. A rendering floor, so it covers the older ones;
   # recon_example_viewer_pass checks it.
   #
-  # It refuses a core older than 0.18.0 (gfx's VG_VKC_MIN_VERSION).
-  GIT_TAG f147e00e7fb45382da8874198684656496f09b7c # gfx main, after #152
+  # And at or past gfx #161, whose frame loop also drives offscreen targets:
+  # rig_viewer draws into one where there is no display. A compile floor, and
+  # the newest; recon_example_viewer_offscreen checks it.
+  #
+  # It refuses a core older than 0.20.0 (gfx's VG_VKC_MIN_VERSION).
+  #
+  # TODO: re-pin to the merge commit once gfx#161 merges.
+  GIT_TAG c83c22de315ae55c4a62b834758f9ac55eb72a98 # gfx #161's head
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
