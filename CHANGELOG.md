@@ -698,6 +698,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `mesh`: **a marching-cubes vertex on a corner whose distance is the
+  iso-value is that corner, bit for bit, on every device.** The edge ratio
+  there is x / x, which NVIDIA's and Apple's division round to 1 - 2^-24 for
+  some distances, and not the same ones, so the vertex stopped short of the
+  corner: an ulp off where the coordinate is small against the voxel (the
+  corner at 0 came out at -6e-10), and up to a voxel off where the inside
+  corner was within the near-tangent guard's 1e-6. The corners are also
+  `precise` now: NVIDIA's compiler fused each into the interpolation (an
+  FMA) where Apple's rounds it first, so an interpolated vertex could differ
+  between them by an ulp. NVIDIA's interpolated vertices change where the two
+  forms round differently; Apple's are unchanged. Test:
+  `recon_mesh_marching_cubes_corner` (new).
 - `mesh`: **`MarchingCubesConfig::slot_count` and
   `MeshExchangeConfig::frames_in_flight` size the ring with one frame in
   flight counted as two.** With one frame, the mesh a commit replaces keeps

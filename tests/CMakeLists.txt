@@ -664,6 +664,22 @@ vr_target_warnings(recon_mesh_marching_cubes_sparse_test)
 add_test(NAME recon_mesh_marching_cubes_sparse
          COMMAND recon_mesh_marching_cubes_sparse_test)
 
+# Marching cubes at corners whose distance is exactly the iso-value: lattice
+# planes at 1 cm (k = -248, -1, 0; both orientations; per-column slopes, and
+# slopes below the near-tangent guard) put every vertex on its corner, bit for
+# bit, with that corner's attribute, from both kernels, at iso 0 and 0.0025.
+# Planes 1e-8 off the iso-value keep their vertices off the lattice. Skips where
+# no device is present.
+add_executable(recon_mesh_marching_cubes_corner_test
+               marching_cubes_corner_test.cpp)
+target_link_libraries(
+  recon_mesh_marching_cubes_corner_test
+  PRIVATE volumetric_kit::recon_mesh Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_mesh_marching_cubes_corner_test)
+add_test(NAME recon_mesh_marching_cubes_corner
+         COMMAND recon_mesh_marching_cubes_corner_test)
+
 # mesh recorded extract: record_extract, finish and abandon against
 # extract_device, sharing on and off; the refit and its later ready value, the
 # closed gate, the empty set, abandoned and dropped tokens, the skipped signal,
