@@ -2,7 +2,8 @@
 # Copyright (c) 2026 Tao Jin
 
 # The recon -> gfx reconstruction viewer examples: fuse_render (headless colour
-# PNG) and fuse_viewer (live window). This directory is the ONE place recon's
+# PNG), fuse_viewer (live window) and rig_viewer (live rig, in a window or,
+# with no display, offscreen). This directory is the ONE place recon's
 # examples link the renderer sibling volumetric_kit_gfx -- pulled here (never in
 # the tiers) and only under VR_BUILD_VIEWER, so recon's library and default
 # build stay renderer-independent (the 2026-07-07 decision amendment in
@@ -165,6 +166,27 @@ if(VR_BUILD_TESTS)
   add_test(NAME recon_example_viewer_pass
            COMMAND recon_example_viewer_pass_test)
   set_tests_properties(recon_example_viewer_pass PROPERTIES SKIP_RETURN_CODE 77)
+
+  # rig_viewer where there is no display (viewer_offscreen.hpp): the device both
+  # libraries adopt with no surface, gfx's offscreen frame loop, the live atlas
+  # and the hybrid mesh drawn into it, and the frames it saves. Skips with no
+  # device under the core policy.
+  add_executable(recon_example_viewer_offscreen_test
+                 "${PROJECT_SOURCE_DIR}/tests/example_viewer_offscreen_test.cpp")
+  target_link_libraries(
+    recon_example_viewer_offscreen_test
+    PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_sensor_array
+            volumetric_kit::recon_texture volumetric_kit::gfx_glfw
+            volumetric_kit::gfx_pipelines Vulkan::Vulkan)
+  target_include_directories(
+    recon_example_viewer_offscreen_test PRIVATE ${_viewer_common_inc}
+                                                "${PROJECT_SOURCE_DIR}/tests")
+  vr_target_warnings(recon_example_viewer_offscreen_test)
+  add_test(NAME recon_example_viewer_offscreen
+           COMMAND recon_example_viewer_offscreen_test)
+  # Bound a regression that waits for a frame which was never submitted.
+  set_tests_properties(recon_example_viewer_offscreen
+                       PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 endif()
 
 # fuse_viewer: the live window -- fuses on a background thread, draws the
