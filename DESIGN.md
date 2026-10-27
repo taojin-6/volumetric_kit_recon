@@ -2282,11 +2282,7 @@ on the GPU, and the atlas filled by
 device copies recorded in gfx's frame (the 2026-09-29 decision), fusing
 depth only inside each colour camera's view unless given `fusion.depth_within_color: false`, and
 texturing a camera a set lacks from its last frame, a fallback view
-(`fusion.hold_ms`). The two viewers hand meshes over through `mesh::MeshExchange`,
-take their window glue (the GLFW surface, the shared device and ImGui's GLFW
-backend) from gfx's `gfx_glfw` (2026-10-12), and share `viewer_common.hpp`: the
-shared device's settings and gfx's adoption of it, the teardown guards and the
-render camera the fuse thread meshes (`SharedView`).
+(`fusion.hold_ms`).
 `rig_viewer`'s panels show the newest set; its fuse thread also records every
 set into a `SetLog`, the newest 15,000 kept, which it prints at the end with
 the sets fused and the meshes drawn a second (each from its first to its
@@ -2295,6 +2291,11 @@ time from gfx's profiler. A set's rows are its poll, its stages and, when it
 meshed, its remesh's, merged before the mesh's hand-over publishes it; a
 set it did not mesh is published at its last stage and tabled apart, and a
 remesh for a view change between sets is no set's.
+The two viewers hand meshes over through `mesh::MeshExchange`,
+take their window glue (the GLFW surface, the shared device and ImGui's GLFW
+backend) from gfx's `gfx_glfw` (2026-10-12), and share `viewer_common.hpp`: the
+shared device's settings and gfx's adoption of it, the teardown guards and the
+render camera the fuse thread meshes (`SharedView`).
 Both draw with gfx's `StreamedAtlas` through `viewer_atlas.hpp`'s `LiveAtlas`:
 a mesh's payload names the colour buffers of the cameras that textured it and
 their tiles, the frame that commits the mesh copies them into the atlas, and
