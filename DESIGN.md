@@ -1242,6 +1242,10 @@ decision): unprojection and rescaling come with their first caller.
   rotation that is not one), and Rodrigues both ways
   (`rotation_from_rodrigues`, `rodrigues_from_rotation`, accurate near 0 and
   pi). `RodriguesTransform` is OpenCV's `x' = R(rvec) x + tvec`.
+- **`camera/color_controls.hpp`** — `ColorControls`, a colour camera's
+  manual exposure (an exposure time and a gain in the camera's units, above
+  0; auto exposure off, auto white balance on), which a rig's calibration
+  records and a driver writes and reads back.
 - **`camera/array_calibration.hpp`** — the sensor array's calibration file,
   version 2 under version 1's `device_calibration` key: per sensor by serial,
   an optional colour-camera pose, colour and depth `CameraCalibration`s
@@ -1250,9 +1254,11 @@ decision): unprojection and rescaling come with their first caller.
   (`AprilTagWorld`, in OpenCV's marker axes, z up out of a floor tag).
   Version 3 adds a correction: a sensor's `depth_offset_m` (metres, + where
   its depth reads too far, at most 0.05 m), written only when it is not 0,
-  and the file is version 3 only then, so an uncorrected calibration is
-  written as version 2, byte for byte, and an older reader refuses a
-  corrected one; a correction in a file that says version 2 is refused.
+  or the array's `color_controls`, the colour cameras' manual exposure,
+  written only when present; the file is version 3 only then, so an
+  uncorrected calibration is written as version 2, byte for byte, and an
+  older reader refuses a corrected one; a correction in a file that says
+  version 2 is refused.
   `format_` / `write_array_calibration` write it
   through the core's `write_file`; version 1 is read for its poses.
 
@@ -1284,13 +1290,22 @@ SDK's `femto_mega_sync.json` layout) refuses a camera whose stored settings
 differ, unless `apply_sync` writes them, only where they differ, since they
 persist in its flash. The SDK's effective settings are compared again after
 the write: normalization that still differs is refused, `Unsupported`;
-its cached response does not verify persistence on the camera.
+its cached response does not verify persistence on the camera. At every
+open it then sets the colour camera's exposure,
+`OrbbecStreamOptions::color_controls` (a manual one, or auto exposure when
+empty; auto white balance on either way, never off): checked against the
+camera's controls and ranges before any write, written only where the
+camera differs, and read back into `SensorInfo::color_controls`, a
+difference refused naming the field (`write_color_controls`, internal; the
+2026-10-27 colour-controls decision).
 The lab rig's is `config/femto_mega_sync.json`, which
 only the examples and tests name. No test opens a camera (the 2026-10-06
 no-hardware decision); `fuse_orbbec` is how one is checked. Behind it is the
 internal `CameraStream`, and the types of `orbbec_stream.hpp`: the stream
 options, the camera's report, and its counters (`OrbbecStreamStats`).
-`color_codec = Hevc` puts H.265 on the wire: each camera's
+H.265 at 3840x2160 and 25 fps, depth 640x576, is the default
+(`color_codec = Hevc`; `Mjpeg` stays selectable, for calibration captures
+and diagnostics): each camera's
 `HevcColorDecoder` decodes every colour frame, in order, ahead of the
 mailbox, as BT.601 full range unless the stream names its matrix, and posts
 the picture with its depth, so everything after is MJPEG's path. A frame's
@@ -1427,7 +1442,8 @@ pictures, such as ARKit's `capturedImage`, can come through it with no
 conversion on the host.
 **`IRgbdSensor`** (`sensor/rgbd_sensor.hpp`) is one sensor: its
 `SensorInfo` from when it opens (id, the cameras' factory models at the
-opened modes, `depth_to_color`, rig role, clock, pose source, rate), and
+opened modes, `depth_to_color`, rig role, clock, pose source, rate, the
+colour exposure as read back), and
 frames held up to `set_queue_depth`, the newest taken by `poll` or all,
 oldest first, by `drain`. **`OrbbecSensor`** implements it: `open` refuses
 a `min_depth` of 0, which the GPU pass would, a camera in a sync mode the
@@ -1445,7 +1461,9 @@ drains every sensor each `poll_set`, groups the frames into a `FrameSet` by
 its internal `TriggerGrouper`, around the primary's frames on the host
 clock within `tolerance_us` (by default 0.4 of the fastest member's frame
 period, 13.3 ms at 30 fps), and stamps each frame with its sensor's pose
-from the `ArrayCalibration`, which must pose every sensor. `wait_set`
+from the `ArrayCalibration`, which must pose every sensor and, where it
+names `color_controls`, find every sensor opened at them
+(`SensorInfo::color_controls`), or the open is refused. `wait_set`
 blocks for a set on one condition variable that every sensor's
 notification wakes (`IRgbdSensor::set_frame_notify`, which `open` asks of
 each; the Orbbec driver notifies from its mailbox as a pair lands, the camera
@@ -2253,7 +2271,9 @@ The directory must not exist: it is checked before the cameras open and made
 with the first set. The run reports the cameras' open time and, at the end
 or when it fails, the array's counters, each camera's `lost` frames and, for
 a rig, each secondary's mean and worst skew to the primary. Colour is H.265
-unless `source.color_codec: "mjpeg"`.
+at 3840x2160 and 25 fps unless the scenario names another mode, and every
+camera opens at `source.calibration`'s colour controls, or at auto
+exposure.
 With `output.stream`, `output.csv` or `output.serve` it also codes each
 fused set as one frame of a `sender::CodecStream` (the 2026-10-20
 decision), decoding it too only with `output.csv` or `codec.sweep`
@@ -2276,7 +2296,9 @@ stream is finished, its viewers closed, the cameras released and the PLY
 written. A second signal of the same kind ends the process.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC`, and
 `VR_WITH_FFMPEG` off Apple; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
-sibling: an `OrbbecSensor` per camera of the sync file read as a
+sibling: an `OrbbecSensor` per camera of the sync file, opened as
+fuse_orbbec opens a rig (`open_orbbec_cameras`, at the calibration's colour
+controls), read as a
 `SensorArray`, its raw sets prepared, fused and textured from every camera
 on the GPU, and the atlas filled by
 device copies recorded in gfx's frame (the 2026-09-29 decision), fusing

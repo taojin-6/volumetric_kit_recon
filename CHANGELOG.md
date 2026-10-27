@@ -8,6 +8,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `camera`, `sensor`, examples: **every colour camera opens at the
+  calibration's exposure** (the 2026-10-27 colour-controls decision):
+  `camera::ColorControls` (`camera/color_controls.hpp`), a manual exposure,
+  an exposure time and a gain above 0, with auto white balance on;
+  `ArrayCalibration::color_controls`, a calibration-file version-3 field
+  (`"color_controls": {"exposure": 167, "gain": 60}`), refused in a
+  version-2 file and at 0. `OrbbecStreamOptions::color_controls`, empty for
+  auto exposure, is written by `OrbbecSensor::open` at every open, only
+  where the camera differs, after checking the camera's controls and ranges,
+  auto white balance switched on and never off, and read back into
+  `SensorInfo::color_controls`; a difference is refused naming the field.
+  `SensorArray::open` refuses a sensor whose controls differ from a
+  calibration that names them. `open_orbbec_cameras` gives every camera the
+  calibration's controls, and `rig_viewer` now opens through it; the camera
+  report prints the exposure read back. Migration: an open writes the
+  camera's auto exposure and auto white balance, where before it wrote no
+  colour property. Tests: `recon_sensor_orbbec_color_controls` (new),
+  `recon_sensor_orbbec_open_sensors`, `recon_camera_array_calibration`,
+  `recon_sensor_orbbec_conversion`, `recon_sensor_array`,
+  `recon_example_fuse_orbbec_sets`.
 - `camera`, `sensor`: **a sensor's depth offset from the calibration** (the
   2026-10-27 depth-offset decision): `SensorCalibration::depth_offset_m`
   (metres, + where the depth reads too far, at most 0.05 m), the
@@ -167,6 +187,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `sensor`: **the Orbbec driver defaults to H.265 at 3840x2160 and 25 fps**
+  (the 2026-10-27 colour-controls decision), depth 640x576 as before: the
+  streams core 0.25.0's Orbbec scenarios default to, which recon now needs
+  (`VR_CORE_MIN_VERSION`, core #62).
+  `Mjpeg` stays selectable. Migration: a caller that relied on the old
+  default states `color_codec = Mjpeg`, 1280x720 and 30 fps; a scenario
+  that names no rate runs at 25 fps. Tests: `recon_example_config`,
+  `recon_sensor_orbbec_conversion`.
 - `volume`, `codec`: **a compaction records from a const map** (the
   2026-10-26 const compaction decision): `VoxelHashMap::record_compaction`
   is `const`, so a caller holding a grid read-only records the active

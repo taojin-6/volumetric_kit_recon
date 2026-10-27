@@ -86,7 +86,6 @@
 #include "fuse_frame.hpp"        // fuse_set, free_stale_blocks_every
 #include "fuse_orbbec_sets.hpp"  // on_host_clock, print_rig_stats
 #include "interrupt.hpp"
-#include "orbbec_config.hpp"
 #include "recon_gfx_bridge.hpp"  // to_live_mesh, and the vertex-layout asserts
 #include "rig_report.hpp"
 #include "set_log.hpp"
@@ -108,8 +107,6 @@
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh_exchange.hpp"
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
-#include "volumetric_kit/recon/sensor/orbbec/orbbec_sensor.hpp"
-#include "volumetric_kit/recon/sensor/orbbec/orbbec_stream.hpp"
 #include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
@@ -326,12 +323,10 @@ int run(GLFWwindow* window, const Options& opt) {
   array_options.prep.color_queue_families[1] = shared->graphics_family();
   array_options.prep.color_queue_family_count = 2;
   array_options.prep.depth_within_color = opt.fusion.depth_within_color;
-  // The streams, the same for every camera.
-  rsensor::OrbbecSensor::Options sensor_options;
-  vr_example::apply_orbbec_config(opt, rdevice, rallocator, sensor_options);
-  sensor_options.apply_sync = opt.source.apply_sync;
-  auto sensors =
-      rsensor::open_orbbec_sensors(opt.source.sync_config, sensor_options);
+  // The streams, the same for every camera, at the calibration's colour
+  // exposure, opened and printed as fuse_orbbec opens them.
+  auto sensors = vr_example::open_orbbec_cameras(opt, array_options.calibration,
+                                                 rdevice, rallocator);
   if (!sensors) {  // the message names the file or the camera
     std::fprintf(stderr, "rig_viewer: %s\n",
                  sensors.status().message().c_str());
@@ -572,7 +567,7 @@ int run(GLFWwindow* window, const Options& opt) {
     home.up = -glm::normalize(glm::vec3(c2w[1]));  // image up is -cameraY
     home.right = glm::normalize(glm::cross(home.forward, home.up));
     const float depth_mid =
-        0.5f * (sensor_options.min_depth + sensor_options.max_depth);
+        0.5f * (opt.fusion.min_depth_m + opt.fusion.max_depth_m);
     home.target = axes_meet(camera_poses, eye + home.forward * depth_mid);
     home.distance = std::max(0.3f, glm::length(home.target - eye));
     const rcamera::CameraModel& cam = color_cameras[array.primary()];
@@ -1125,7 +1120,7 @@ int run(GLFWwindow* window, const Options& opt) {
     const float aspect = static_cast<float>(extent.width) /
                          static_cast<float>(std::max(1u, extent.height));
     const float far_plane =
-        2.0f * (view.distance + std::max(sensor_options.max_depth, 1.0f));
+        2.0f * (view.distance + std::max(opt.fusion.max_depth_m, 1.0f));
     glm::mat4 view_proj(1.0f);
     if (from_camera) {
       const glm::mat4& c2w = camera_poses[*from_camera];

@@ -4,10 +4,10 @@
 #pragma once
 
 /// @file examples/common/fuse_orbbec_sets.hpp
-/// @brief fuse_orbbec's cameras: opened and read as a sensor array, and the
-///        report of the array's counters and a rig's skew over its sets
-///        (`sensor::RigSets`). Header-only, compiled only into the examples
-///        built with the Orbbec driver.
+/// @brief The live examples' cameras: opened (fuse_orbbec's and rig_viewer's)
+///        and read as a sensor array, and the report of the array's counters
+///        and a rig's skew over its sets (`sensor::RigSets`). Header-only,
+///        compiled only into the examples built with the Orbbec driver.
 
 #include <algorithm>
 #include <chrono>
@@ -36,8 +36,9 @@ namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 
 /// @return An opened camera's report: what it reports, its cameras' factory
-///         models and lens models at the opened modes, its clock, and where
-///         @p calibration puts it. Three lines, each ending in a newline.
+///         models and lens models at the opened modes, its colour exposure as
+///         read back, its clock, and where @p calibration puts it. Three
+///         lines, each ending in a newline.
 /// @param info         The camera's `OrbbecSensor::device_info()`.
 /// @param sensor       Its `IRgbdSensor::info()`, with both camera models.
 /// @param calibration  The run's calibration; a camera it does not pose sits
@@ -64,6 +65,11 @@ inline std::string orbbec_camera_report(
                   model.intrinsics.cy);
     return size + lens + intrinsics;
   };
+  const std::string exposure =
+      sensor.color_controls
+          ? ", exposure " + std::to_string(sensor.color_controls->exposure) +
+                " gain " + std::to_string(sensor.color_controls->gain)
+          : std::string(", auto exposure");
   char at[96];
   std::snprintf(at, sizeof at, ", at (%.3f, %.3f, %.3f) m\n", pose[3].x,
                 pose[3].y, pose[3].z);
@@ -71,8 +77,8 @@ inline std::string orbbec_camera_report(
          info.firmware_version + ", " + info.connection_type + " " +
          info.ip_address + ", sync " + vr::sensor::to_string(info.sync_mode) +
          ", " + vr::sensor::to_string(sensor.clock) + " clock\n" + "  colour" +
-         camera(*sensor.color, info.color_lens_model) + at + "  depth" +
-         camera(*sensor.depth, info.depth_lens_model) + "\n";
+         camera(*sensor.color, info.color_lens_model) + exposure + at +
+         "  depth" + camera(*sensor.depth, info.depth_lens_model) + "\n";
 }
 
 /// @brief Print an opened camera's @ref orbbec_camera_report.
@@ -119,12 +125,12 @@ inline vkc::Result<std::string> posed_camera(
   return sensor->id;
 }
 
-/// @brief Open fuse_orbbec's cameras, each printed: one, or every camera of
+/// @brief Open a live run's cameras, each printed: one, or every camera of
 ///        the `source.sync_config` file (`open_orbbec_sensors`), the colour
-///        decoded onto
-///        @p device. A single camera is @ref posed_camera's. The depth gate
-///        is validated by the driver, which names both values when it
-///        refuses one.
+///        decoded onto @p device, each at @p calibration's colour exposure
+///        (`ArrayCalibration::color_controls`; auto exposure without it). A
+///        single camera is @ref posed_camera's. The depth gate is validated
+///        by the driver, which names both values when it refuses one.
 /// @return The cameras; @ref posed_camera's refusal; or the driver's
 ///         error.
 inline vkc::Result<std::vector<std::unique_ptr<vr::sensor::IRgbdSensor>>>
@@ -133,6 +139,7 @@ open_orbbec_cameras(const config::Config& opt,
                     const vkc::Device& device, vkc::Allocator& allocator) {
   vr::sensor::OrbbecSensor::Options o;
   apply_orbbec_config(opt, device, allocator, o);
+  o.color_controls = calibration.color_controls;
   std::vector<std::unique_ptr<vr::sensor::IRgbdSensor>> sensors;
   const auto t_open = std::chrono::steady_clock::now();
   if (!opt.source.sync_config.empty()) {

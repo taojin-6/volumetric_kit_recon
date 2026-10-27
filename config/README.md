@@ -86,7 +86,7 @@ frees stale blocks every `fusion.free_after` sets (default 30).
 coded in every frame. `codec_orbbec.json` codes 150 sets of a four-camera
 rig at 1 cm, at period 30: add `source.calibration`, or every camera sits at
 the origin. `serve_orbbec.json` codes the same way and serves on 47801 for
-up to 216000 frames, 30 minutes of four cameras at 30 fps, or until Ctrl+C;
+up to 216000 frames, 36 minutes of four cameras at 25 fps, or until Ctrl+C;
 move or delete its `.vrst` before a rerun.
 
 `fuse_orbbec` accepts `diagnostics.readback: true` in either a stream or fusion
@@ -109,7 +109,10 @@ sections out.
 `source.serial` and `source.sync_config` are mutually exclusive;
 `source.apply_sync` needs the sync file, and `source.host_clock` is a
 single-camera option. Loading or validating a scenario never changes camera
-settings; camera setup performs that action only when requested.
+settings. Opening the cameras writes their sync settings only when
+`source.apply_sync` asks, and sets each camera's exposure every time: the
+`color_controls` of `source.calibration`, or auto exposure, with auto white
+balance on.
 
 For mesh inspection, set only `codec.inspect_only: true` in the `codec` section
 and omit `fusion`, `source.sdf_mode`, `source.shell_voxels` and
