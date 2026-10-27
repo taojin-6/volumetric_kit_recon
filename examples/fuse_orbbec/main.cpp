@@ -13,15 +13,16 @@
 //   fuse_orbbec --help
 //
 // Depth and colour are fused with their own cameras, the colour decoded onto
-// the GPU: H.265 unless source.color_codec=mjpeg says otherwise, since MJPEG
-// needs about nine times the bandwidth at 4K. The source dimensions and fps
-// pick the colour mode, 4K H.265 running at 25 fps at most. source.sync_config
+// the GPU: H.265 at 3840x2160 and 25 fps unless the scenario names another
+// mode (source.color_codec, the dimensions and fps), since MJPEG needs about
+// nine times the bandwidth at 4K. source.sync_config
 // fuses every camera of a sync configuration (femto_mega_sync.json) as one rig
 // on the host's clock, refusing cameras whose sync settings differ from it
 // unless source.apply_sync writes it to them. source.calibration poses each
-// camera, and offsets its depth, from a calibration file
-// (camera/array_calibration.hpp); without it every camera sits at the origin
-// with its depth as read. source.host_clock puts one camera on the
+// camera, offsets its depth and sets every camera's colour exposure
+// (color_controls) from a calibration file (camera/array_calibration.hpp);
+// without it every camera sits at the origin with its depth as read, at auto
+// exposure. source.host_clock puts one camera on the
 // host's clock (OrbbecSensor::Options::sync_clock_to_host), which its first
 // frame's age checks; a rig is always on it. operation=stream only streams:
 // each set is polled, counted and released, with no GPU preparation, fusion or

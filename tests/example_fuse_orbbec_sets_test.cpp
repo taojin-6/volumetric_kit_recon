@@ -4,8 +4,8 @@
 // fuse_orbbec's cameras (examples/common/fuse_orbbec_sets.hpp). The single
 // camera a calibration file names: the one asked for if posed, or the file's
 // only posed one, past a camera listed for its lenses alone. A camera's
-// report, its lens models included. Host only; the run's sets are the
-// library's (sensor_array_rig_sets_test.cpp).
+// report, its lens models and its colour exposure included. Host only; the
+// run's sets are the library's (sensor_array_rig_sets_test.cpp).
 
 #include <cstdio>
 #include <string>
@@ -16,6 +16,7 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/camera/array_calibration.hpp"
 #include "volumetric_kit/recon/camera/camera_model.hpp"
+#include "volumetric_kit/recon/camera/color_controls.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_stream.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
 #include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
@@ -63,8 +64,8 @@ int posed() {
   return 0;
 }
 
-// A camera's report: each camera's size, lens model and intrinsics, and the
-// colour camera where the calibration poses it.
+// A camera's report: each camera's size, lens model and intrinsics, the
+// colour camera's exposure as read back, and where the calibration poses it.
 int report() {
   sensor::OrbbecDeviceInfo info;
   info.name = "Orbbec Femto Mega";
@@ -100,13 +101,20 @@ int report() {
   };
   CHECK(
       has("  colour 3840x2160 brown-conrady-k6 @ fx=2240.5 fy=2241.4 "
-          "cx=1920.0 cy=1080.6, at (1.000, -0.500, 2.250) m\n"));
+          "cx=1920.0 cy=1080.6, auto exposure, at (1.000, -0.500, 2.250) m\n"));
   CHECK(
       has("  depth 640x576 brown-conrady @ fx=504.0 fy=504.5 cx=320.3 "
           "cy=288.0\n"));
   CHECK(text.rfind("camera: Orbbec Femto Mega CL2A141000N, firmware 1.2.9, "
                    "Ethernet 192.168.1.10, sync ",
                    0) == 0);
+
+  // A manual exposure, as the camera read it back.
+  cameras.color_controls = camera::ColorControls{167, 60};
+  CHECK(vr_example::orbbec_camera_report(info, cameras, calibration)
+            .find("cy=1080.6, exposure 167 gain 60, at (1.000, -0.500, "
+                  "2.250) m\n") != std::string::npos);
+  cameras.color_controls.reset();
 
   // Not in the calibration: at the origin.
   const std::string origin =
