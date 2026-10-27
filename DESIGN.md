@@ -325,6 +325,12 @@ the geometry buffers directly.
   touch — or serializes both libraries onto one queue behind a mutex. Do not
   assume a single-family two-queue carve-out is available; check `queueCount`
   and plan the fallback (see the 2026-08-02 bootstrap decision, which does).
+- **MoltenVK drops `precise` on a vector times a scalar.** Its Metal
+  translation (1.4.2) keeps NoContraction on `OpFMul`, `OpFAdd` and `OpFSub`
+  (as `spvFMul`, `spvFAdd`, `spvFSub`) but not on `OpVectorTimesScalar`, so
+  `precise vec3 p = v * s;` reaches Metal as a plain product that fast math
+  may fuse into what follows. Splat the scalar, `v * vec3(s)`, as the
+  marching-cubes corners do.
 - **Vulkan via the link-time loader through one umbrella header**
   (the core's `core/vulkan/vulkan.hpp`) — never `#include <vulkan/...>` directly,
   so adopting volk later for the iOS/Android loader stays a one-header change.
@@ -1159,6 +1165,16 @@ verdict (2026-08-11). `DeviceMesh::shares_vertices` still publishes it,
 because `v = 3t` no longer holds and a consumer sizing an arena cannot derive
 that from the buffers, and because the `texture` tier's several-view atlas
 chooses per triangle and so refuses a shared mesh (2026-09-28).
+A vertex on a corner whose distance is the iso-value is that corner,
+`fl(k · voxel_size)` on each axis: it is selected, not interpolated, so it
+is the same bits on every device and from both kernels. Every corner is that
+rounded product before anything interpolates from it (`precise`, with the
+voxel size splatted for MoltenVK; NVIDIA's compiler otherwise fuses it into
+the interpolation). The edge ratio and `mix()` are still the device's, so an
+interpolated vertex may differ across devices: on NVIDIA and Apple by an ulp
+of the ratio times the voxel along its edge (an ulp of a coordinate, unless
+the coordinate is small against the voxel), and in every coordinate on a
+device whose `mix()` rounds all three, as lavapipe's does.
 `MeshExchange<Payload>` (`mesh/mesh_exchange.hpp`) hands `extract_device`'s
 meshes from the extracting thread to a renderer drawing them in place, each
 with a payload that stays with it (its atlas), and owns the ring's release
