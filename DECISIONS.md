@@ -16189,8 +16189,9 @@ exposure, recorded with the calibration.
   exposure has both values written.
 - **Checked before the first write, read back after the last.** A manual
   exposure needs auto exposure, exposure, gain and auto white balance to
-  read and write, and both values within the camera's ranges, or the open
-  is refused (`Unsupported`, the control named) with nothing written; auto
+  read and write, and both values within the camera's ranges and on their
+  steps, or the open is refused (`Unsupported`, the control named) with
+  nothing written; auto
   exposure leaves a control the camera lacks alone, so another model still
   opens. The flags, and under a manual exposure both values, are read back,
   and a camera that differs is refused naming each field, as the sync check
@@ -16202,7 +16203,8 @@ exposure, recorded with the calibration.
 - **An array checks it** (`SensorArray::open`): with a calibration that
   names colour controls, a sensor whose `SensorInfo::color_controls` differ,
   as one opened without them, is refused rather than coloured at another
-  exposure. A calibration without them checks nothing.
+  exposure, whether the calibration lists sensors or not. A calibration
+  without them checks nothing.
 - **One place sets them.** The examples' `open_orbbec_cameras` gives every
   camera its calibration's controls; `rig_viewer` opens through it too, so
   it has no open of its own. A capture with no calibration runs at auto
@@ -16216,19 +16218,21 @@ already) and auto white balance on, in that order, and over a manual one
 only the value that differs; auto exposure over a stored manual exposure
 writes auto exposure on alone, neither value written nor compared; auto
 white balance off is switched on in either mode, and the temperature is
-never written; an exposure or a gain past the camera's range, or a control
-the camera lacks, is refused with nothing written, while auto exposure
-opens a camera that lacks any of them and touches none of those; a write
-the SDK fails is `IoError` with its message; a gain or a flag read back
-otherwise is refused naming it; and a camera its sync check refuses gets no
-colour write. `recon_camera_array_calibration` reads the controls, refuses
-them in a version-2 file, at 0, as a non-number and as a non-object, writes
-them byte for byte, version 3 only with them, and round-trips them beside
-depth offsets, the text otherwise unchanged. `recon_sensor_orbbec_conversion`
-refuses a 0 before the camera is looked for; `recon_sensor_array` refuses a
-sensor at auto exposure or at another gain under a calibration's controls,
-naming both, and checks nothing without them; `recon_example_config` maps a
-live scenario that names no colour mode to exactly the driver's defaults;
+never written; an exposure or a gain past the camera's range or off its
+steps, or a control the camera lacks, is refused with nothing written, while
+auto exposure opens a camera that lacks any of them and touches none of
+those; a write the SDK fails is `IoError` with its message; a gain or a flag
+read back otherwise is refused naming it; and a camera its sync check
+refuses gets no colour write. `recon_sensor_orbbec_open_sensors` opens every
+camera of a rig at the options' controls. `recon_camera_array_calibration`
+reads the controls, refuses them in a version-2 file, at 0, as a non-number
+and as a non-object, writes them byte for byte, version 3 only with them,
+and round-trips them beside depth offsets, the text otherwise unchanged.
+`recon_sensor_orbbec_conversion` refuses a 0 before the camera is looked
+for; `recon_sensor_array` refuses a sensor at auto exposure or at another
+gain under a calibration's controls, naming both, listed sensors or not, and
+checks nothing without them; `recon_example_config` maps a live scenario
+that names no colour mode to exactly the driver's defaults;
 `recon_example_fuse_orbbec_sets` checks the report's exposure.
 
 **Validation.** Release with warnings as errors, under the validation layer.
@@ -16236,7 +16240,7 @@ RTX 4090, Ubuntu 26.04.1, GCC 15.2, CUDA 13.4, with the Orbbec SDK 2.10.6,
 FFmpeg and Assimp, and synchronization validation: 128 of the 130 tests
 pass, and the two JPEG tests skip, with no JPEG engine; the camera tier
 alone builds and passes. Apple M4 (Mac mini), macOS 27.2, with the Orbbec
-SDK 2.10.6, the viewers and Assimp: the 136 tests pass. Of twenty planted
+SDK 2.10.6, the viewers and Assimp: the 137 tests pass. Of twenty planted
 bugs, nineteen each failed a test: the range check, the control check, the
 values written only where they differ or always, auto white balance
 following the mode, auto exposure touching a control the camera lacks, the
@@ -16246,8 +16250,10 @@ reader taking the controls from a version-2 file, validate taking a 0, the
 array not checking them, the driver defaulting to MJPEG or 30 fps, and the
 report leaving out the exposure. The twentieth, `open_orbbec_cameras`
 dropping the controls, no host test catches, since opening cameras needs a
-device; on a rig, `SensorArray::open` then refuses every camera. No camera
-was opened.
+device; on a rig, `SensorArray::open` then refuses every camera. Three more
+each failed a test: the array checking the controls only where the
+calibration lists sensors, the step check dropped, and a rig's cameras
+opened without the options' controls. No camera was opened.
 
 ## Measured lessons
 

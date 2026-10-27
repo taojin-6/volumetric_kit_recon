@@ -25,8 +25,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   report prints the exposure read back. Migration: an open writes the
   camera's auto exposure and auto white balance, where before it wrote no
   colour property. Tests: `recon_sensor_orbbec_color_controls` (new),
-  `recon_camera_array_calibration`, `recon_sensor_orbbec_conversion`,
-  `recon_sensor_array`, `recon_example_fuse_orbbec_sets`.
+  `recon_sensor_orbbec_open_sensors`, `recon_camera_array_calibration`,
+  `recon_sensor_orbbec_conversion`, `recon_sensor_array`,
+  `recon_example_fuse_orbbec_sets`.
 - `camera`, `sensor`: **a sensor's depth offset from the calibration** (the
   2026-10-27 depth-offset decision): `SensorCalibration::depth_offset_m`
   (metres, + where the depth reads too far, at most 0.05 m), the
