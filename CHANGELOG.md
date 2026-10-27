@@ -22,6 +22,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Options::prep`. Migration: a reader before this refuses a corrected file
   as a later version. Tests: `recon_camera_array_calibration`,
   `recon_sensor_gpu_frame_prep`, `recon_sensor_array_process`.
+- `examples`: **`rig_viewer` prints a table per set at the end**
+  (`vr_example::SetLog`, as `fuse_orbbec` does), recorded by its fuse
+  thread: each set's rows, the device's counters across it, and arrival →
+  published and capture → published. A set is published at its mesh's
+  hand-over, its remesh's rows merged into it once, or, when it was not
+  meshed, at its last stage; the two are tabled apart
+  (`SetLog::Set::kind`). The newest 15,000 sets are kept (`SetLog`'s
+  `keep` and `dropped()`). Beside it: the sets fused and the meshes drawn a
+  second, each from its first to its last (`CountRate`), the array's and
+  each camera's counters (`print_rig_stats`, whose `RigSets` is now a
+  pointer, null for no skew), and the atlas copies' device time from gfx's
+  profiler (`AtlasCopyTimes`). The panels are unchanged. Tests:
+  `recon_example_set_log`, `recon_example_stage_table` (`format_stats`, once
+  `SetLog`'s own), `recon_example_viewer_rig_report` (new).
 - `mesh`: **`MeshExchange`'s consumer may drop a mesh it took** (the
   2026-10-26 drop decision): `begin_frame`'s commit may return a
   `CommitDecision`, `kCommit`, `kPark` or `kDrop`, where a `bool` it may

@@ -6,7 +6,7 @@
 /// @file examples/common/set_log.hpp
 /// @brief A sender's figures per set -- each set's stage rows, the device's
 ///        counters across it and its latency -- and the run's table of them,
-///        which fuse_orbbec and codec_replica print at the end.
+///        which fuse_orbbec, codec_replica and rig_viewer print at the end.
 
 #include <algorithm>
 #include <chrono>
@@ -74,6 +74,10 @@ class SetLog {
     /// Its coded frame's type, as the encoder finished it; none for a set
     /// not coded.
     std::optional<vr::codec::FrameType> type;
+    /// For a set not coded, the name of the sets it is tabled with -- a
+    /// viewer's sets that published a mesh apart from those that only
+    /// fused -- with string-literal lifetime; null reads "uncoded".
+    const char* kind = nullptr;
     /// Its fusion was done again on the host (`tsdf::FuseReport::redone`).
     bool redone = false;
     /// Its frame's payload outgrew what its batch copied and took a tail.
@@ -156,57 +160,70 @@ class SetLog {
 
   /// @param counters  Reads the device's counters at each set's begin and
   ///                  publish; empty counts nothing.
-  explicit SetLog(Counters counters) : counters_(std::move(counters)) {}
+  /// @param keep      The sets kept, the newest: a run with no end of its own,
+  ///                  a viewer's, is bounded by it. 0 keeps every set.
+  explicit SetLog(Counters counters, std::size_t keep = 0)
+      : counters_(std::move(counters)), keep_(keep) {}
 
   /// @brief Start a set: its counters count from here. The reference holds
-  ///        for as long as the log does.
+  ///        for as long as the log does, or, with a `keep`, until the set is
+  ///        let go, `keep` sets later.
   Set& begin() {
+    if (keep_ != 0 && sets_.size() == keep_) {
+      sets_.pop_front();  // a deque: the other sets' references hold
+      ++dropped_;
+    }
     sets_.emplace_back(counters_);
     return sets_.back();
   }
 
-  /// @return The sets begun, a set never published among them.
+  /// @return The sets kept, a set never published among them.
   const std::deque<Set>& sets() const noexcept { return sets_; }
 
-  /// @return The table, P-frame, I-frame and uncoded sets apart, of the sets
-  ///         published (see the file's notes): for each row, the sets that
-  ///         ran it and the mean, p50, p95 and max of its host busy, wait
-  ///         and device milliseconds over them (n/t or n/a for device time
-  ///         some set did not measure, a dash for a host-only row); per set,
-  ///         the submits, host waits, blocked milliseconds, staging buffers,
-  ///         dispatches and barriers; the latencies arrival -> published and
-  ///         capture -> published (n/a where unknown); and the sets fused
-  ///         again and the payload tails. Empty when no set was published.
+  /// @return The sets let go for the `keep` bound, the oldest.
+  std::uint64_t dropped() const noexcept { return dropped_; }
+
+  /// @return The table of the sets kept and published (see the file's
+  ///         notes): P-frame and I-frame sets, then the sets not coded, by
+  ///         @ref Set::kind in the order first seen, each group apart. For
+  ///         each row, the sets that ran it and the mean, p50, p95 and max of
+  ///         its host busy, wait and device milliseconds over them (n/t or
+  ///         n/a for device time some set did not measure, a dash for a
+  ///         host-only row); per set, the submits, host waits, blocked
+  ///         milliseconds, staging buffers, dispatches and barriers; the
+  ///         latencies arrival -> published and capture -> published (n/a
+  ///         where unknown); and the sets fused again and the payload tails.
+  ///         Empty when no set was published.
   std::string table(const std::string& title) const {
+    std::vector<const char*> names = {"P-frame", "I-frame"};
+    for (const Set& s : sets_) {
+      const char* name = group_of(s);
+      if (std::none_of(names.begin(), names.end(), [name](const char* n) {
+            return std::strcmp(n, name) == 0;
+          })) {
+        names.push_back(name);
+      }
+    }
     std::string out;
-    const char* names[] = {"P-frame", "I-frame", "uncoded"};
-    for (int group = 0; group < 3; ++group) {
+    for (const char* name : names) {
       std::vector<const Set*> sets;
       for (const Set& s : sets_) {
-        if (s.is_published() && group_of(s) == group) sets.push_back(&s);
+        if (s.is_published() && std::strcmp(group_of(s), name) == 0) {
+          sets.push_back(&s);
+        }
       }
-      if (!sets.empty()) out += group_table(title, names[group], sets);
+      if (!sets.empty()) out += group_table(title, name, sets);
     }
     return out;
   }
 
  private:
-  // P-frames, I-frames, then sets not coded.
-  static int group_of(const Set& s) {
-    if (!s.type) return 2;
-    return *s.type == vr::codec::FrameType::kInter ? 0 : 1;
-  }
-
-  // "mean p50 p95 max" of `values`, each %8.3f.
-  static std::string stats(std::vector<double> values) {
-    std::sort(values.begin(), values.end());
-    double sum = 0.0;
-    for (const double v : values) sum += v;
-    char text[64];
-    std::snprintf(text, sizeof text, "%8.3f %8.3f %8.3f %8.3f",
-                  sum / double(values.size()), nearest_rank(values, 50),
-                  nearest_rank(values, 95), values.back());
-    return text;
+  // A set's group: its frame's type, or, not coded, its kind.
+  static const char* group_of(const Set& s) {
+    if (s.type) {
+      return *s.type == vr::codec::FrameType::kInter ? "P-frame" : "I-frame";
+    }
+    return s.kind != nullptr ? s.kind : "uncoded";
   }
 
   // Every row any of `sets` ran, each set's in its order: a row first seen in
@@ -243,7 +260,7 @@ class SetLog {
     return rows;
   }
 
-  // Four cells of `what`, as wide as stats()'s.
+  // Four cells of `what`, as wide as format_stats()'s.
   static std::string cells(const char* what) {
     char text[64];
     std::snprintf(text, sizeof text, "%8s %8s %8s %8s", what, what, what, what);
@@ -278,15 +295,15 @@ class SetLog {
       }
       std::string device_cells = cells("-");
       if (worst == vkc::DeviceTime::Measured) {
-        device_cells = stats(device);
+        device_cells = format_stats(device);
       } else if (worst == vkc::DeviceTime::NotTimed) {
         device_cells = cells("n/t");
       } else if (worst == vkc::DeviceTime::Unavailable) {
         device_cells = cells("n/a");
       }
       std::snprintf(line, sizeof line, "  %-20s %5zu  %s  %s  %s\n", row_name,
-                    busy.size(), stats(busy).c_str(), stats(wait).c_str(),
-                    device_cells.c_str());
+                    busy.size(), format_stats(busy).c_str(),
+                    format_stats(wait).c_str(), device_cells.c_str());
       out += line;
     }
     // The device's counters per set.
@@ -316,7 +333,7 @@ class SetLog {
       std::vector<double> values;
       for (const Set* s : sets) values.push_back(count.of(s->counted()));
       std::snprintf(line, sizeof line, "    %-18s %s\n", count.name,
-                    stats(values).c_str());
+                    format_stats(values).c_str());
       out += line;
     }
     // The latencies, where the stamps are known.
@@ -334,7 +351,7 @@ class SetLog {
       }
       std::snprintf(
           line, sizeof line, "    %-18s %s\n", latency.name,
-          values.empty() ? cells("n/a").c_str() : stats(values).c_str());
+          values.empty() ? cells("n/a").c_str() : format_stats(values).c_str());
       out += line;
     }
     std::size_t redone = 0;
@@ -350,6 +367,8 @@ class SetLog {
   }
 
   Counters counters_;
+  std::size_t keep_ = 0;  // 0: every set
+  std::uint64_t dropped_ = 0;
   std::deque<Set> sets_;  // a deque: begin() keeps earlier references
 };
 

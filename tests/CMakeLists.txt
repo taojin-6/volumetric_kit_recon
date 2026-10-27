@@ -399,7 +399,8 @@ add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 # A sender's per-set log (examples/common/set_log.hpp): counters across each
 # set, P-frame, I-frame and uncoded sets apart, nearest-rank percentiles over
 # the sets that ran a row, n/t, n/a and dash cells, latencies and redo and tail
-# counts. Host only.
+# counts; a viewer's remesh rows in their set, its sets by kind, the newest
+# kept. Host only.
 add_executable(recon_example_set_log_test example_set_log_test.cpp)
 target_include_directories(recon_example_set_log_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
