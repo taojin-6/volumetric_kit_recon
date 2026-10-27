@@ -2,12 +2,11 @@
 # Copyright (c) 2026 Tao Jin
 
 # The recon -> gfx reconstruction viewer examples: fuse_render (headless colour
-# PNG), fuse_viewer (live window) and rig_viewer (live rig, in a window or,
-# with no display, offscreen). This directory is the ONE place recon's
-# examples link the renderer sibling volumetric_kit_gfx -- pulled here (never in
-# the tiers) and only under VR_BUILD_VIEWER, so recon's library and default
-# build stay renderer-independent (the 2026-07-07 decision amendment in
-# DECISIONS.md).
+# PNG), fuse_viewer (live window) and rig_viewer (live rig, in a window or, with
+# no display, offscreen). This directory is the ONE place recon's examples link
+# the renderer sibling volumetric_kit_gfx -- pulled here (never in the tiers)
+# and only under VR_BUILD_VIEWER, so recon's library and default build stay
+# renderer-independent (the 2026-07-07 decision amendment in DECISIONS.md).
 #
 # Because it is that seam, it is also the thing most likely to drift out of
 # build unnoticed -- and did, until a dedicated build-only macOS CI leg
@@ -171,8 +170,9 @@ if(VR_BUILD_TESTS)
   # libraries adopt with no surface, gfx's offscreen frame loop, the live atlas
   # and the hybrid mesh drawn into it, and the frames it saves. Skips with no
   # device under the core policy.
-  add_executable(recon_example_viewer_offscreen_test
-                 "${PROJECT_SOURCE_DIR}/tests/example_viewer_offscreen_test.cpp")
+  add_executable(
+    recon_example_viewer_offscreen_test
+    "${PROJECT_SOURCE_DIR}/tests/example_viewer_offscreen_test.cpp")
   target_link_libraries(
     recon_example_viewer_offscreen_test
     PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_sensor_array
