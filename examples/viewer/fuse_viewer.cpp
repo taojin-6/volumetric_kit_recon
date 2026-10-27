@@ -348,7 +348,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // which set_memory_source requires.
   profiler.set_memory_source(&app.allocator());
   app.set_profiler(&profiler);
-  const fuse_viewer::ProfilerDetach profiler_guard{app};
+  const fuse_viewer::ProfilerDetach profiler_guard{app.frame_loop()};
 
   // --- gfx ui: the Dear ImGui performance overlay ----------------------------
   // Optional: window.overlay=false skips both the context and the platform

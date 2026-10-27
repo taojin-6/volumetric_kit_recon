@@ -29,6 +29,7 @@
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/glfw/shared_device.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
+#include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
@@ -118,11 +119,12 @@ struct QuitJoin {
   }
 };
 
-/// Detaches the profiler from the app's frame loop at scope exit, before the
-/// profiler itself is destroyed -- the loop holds a bare pointer to it.
+/// Detaches the profiler from the frame loop at scope exit, before the
+/// profiler itself is destroyed -- the loop holds a bare pointer to it. A
+/// window's loop (`WindowedApp::frame_loop`) or an offscreen one.
 struct ProfilerDetach {
-  vg::app::WindowedApp& app;
-  ~ProfilerDetach() { app.set_profiler(nullptr); }
+  vg::windowing::FrameLoop& loop;
+  ~ProfilerDetach() { loop.set_profiler(nullptr); }
 };
 
 /// @brief Records a frame's one render pass into @p target: the clear,
