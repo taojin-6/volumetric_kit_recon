@@ -29,7 +29,7 @@ directory are escaped automatically when resolving a relative mesh path.
 | `fuse_orbbec` | [dump_orbbec.json](examples/dump_orbbec.json) | Live stream with readback, first sets' JPEGs and luma written |
 | `fuse_render` | [fuse_render.json](examples/fuse_render.json) | Dataset to image |
 | `fuse_viewer` | [fuse_viewer.json](examples/fuse_viewer.json) | Dataset in a window |
-| `rig_viewer` | [rig_viewer.json](examples/rig_viewer.json) | Live rig in a window |
+| `rig_viewer` | [rig_viewer.json](examples/rig_viewer.json) | Live rig in a window, or offscreen with no display |
 
 A scenario requires `version: 1`, an explicit `operation`, and a `source`
 object with an explicit `kind`. Settings are grouped into `source`, `fusion`, `codec`,
@@ -64,6 +64,14 @@ per-example defaults; `rig_viewer` uses zero for no frame/set limit. Counts
 remain distinct: `fuse_orbbec` counts camera frames, while `rig_viewer` can
 limit both acquired sets and drawn frames. `codec_mesh` counts exactly:
 `run.frames` meshes, numbered from `run.first`, one by default.
+
+Where there is no display (no window system to connect to, as over ssh on a
+machine with no desktop), `rig_viewer` draws offscreen: from its home view,
+with no panels, until fusion ends (`run.sets`), `run.frames` or Ctrl+C. Its
+`output.screenshot`, a name ending in `.bmp` in a directory that exists,
+saves frames as `<stem>_<frame number>.bmp`: the first with a mesh, one every
+30 seconds and the last, each the bytes read back behind a BMP header. A run
+in a window saves none.
 
 `codec.intra_period` N codes an I-frame and then up to N − 1 P-frames,
 counted in coded frames. A frame with no block to code, and the frame after

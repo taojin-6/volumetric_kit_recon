@@ -8,6 +8,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **`rig_viewer` draws offscreen where there is no display**
+  (the 2026-10-27 offscreen decision): where `glfwInit` finds no window
+  system it draws the same frames into gfx's offscreen frame loop, paced
+  at 60 Hz, from the home view with no panels, and ends with fusion,
+  `run.frames` or Ctrl+C; `output.screenshot` saves the first frame with a
+  mesh, one every 30 s and the last as `<stem>_<frame number>.bmp`, the
+  readback's bytes behind a BMP header. `viewer_offscreen.hpp`:
+  `make_offscreen_viewer_device`, `offscreen_frames`, `OffscreenRenderer`,
+  `bmp_bytes`, `write_bmp` and `FrameSaver`; `ProfilerDetach` holds a frame
+  loop. The gfx pin moves from #152's main to #161's head, crossing
+  #153-#160 with no change to recon's draws, and the core pin to 0.27.0
+  (#64's head), `VR_CORE_MIN_VERSION` with it; `to_gfx_mesh` builds under
+  GCC's `-Wclass-memaccess`. Tests: `recon_example_viewer_offscreen`
+  (new), built and run by the viewer CI leg.
 - `camera`, `sensor`, examples: **every colour camera opens at the
   calibration's exposure** (the 2026-10-27 colour-controls decision):
   `camera::ColorControls` (`camera/color_controls.hpp`), a manual exposure,
