@@ -541,7 +541,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   version 1's `device_calibration` key, its writer and
   `rodrigues_from_rotation` return with calib; `SensorArray::open` refuses an
   unposed sensor, and the file I/O is the core's. *Amended 2026-10-18:* the
-  world may be a printed AprilTag.
+  world may be a printed AprilTag. *Amended 2026-10-27:* version 3, a
+  sensor's depth offset, written only for a corrected calibration.
 - [**2026-10-12**](#2026-10-12--recordings-are-vrst-files-of-our-own-verbatim-records-in-crc-framed-chunks-readable-from-a-killed-writer-in-recon_stream-on-the-cores-base-tier-alone-amends-the-2026-09-27-v1-frame-entry) —
   Recordings are `.vrst` files of our own: verbatim records in CRC-framed,
   8-byte-aligned chunks, readable from a killed writer, in `recon_stream` on
@@ -812,6 +813,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   at a time, const or not, and no resize or frusta grow until the batch has
   resolved; broken, a resize refuses the batch and a frusta grow is
   undefined behaviour.
+- [**2026-10-27**](#2026-10-27--a-sensors-depth-offset-lives-in-the-calibration-file-version-3-and-frame-prep-subtracts-it-the-calibration-its-one-source-amends-the-2026-10-12-calibration-file-entry) —
+  A sensor's depth offset (`SensorCalibration::depth_offset_m`, + where it
+  reads too far) lives in the calibration file, version 3, which the writer
+  writes only for a corrected calibration; frame prep's depth pass
+  subtracts it, 0 staying no return for either sign, before the
+  within-colour mask. `SensorArray` sets each pass's offset from the
+  calibration, its one source, and refuses one in `Options::prep`.
 
 ## Decision record
 
@@ -12435,6 +12443,10 @@ settings (recon's `device_requirements()`, the app's graphics requirements and
 *Amended 2026-10-18 (the AprilTag-world entry, below):* the world may also
 be a printed AprilTag, in OpenCV's marker axes.
 
+*Amended 2026-10-27 (the depth-offset entry, below):* version 3 adds a
+sensor's depth offset; the writer writes it only for a calibration that
+carries one, and version 2 otherwise.
+
 calib's rig app is the caller the 2026-10-06 cut-back waited for. Each
 session records every camera's factory colour and depth models, unposed, and
 each solve writes the posed rig with the lenses it solved with; both are
@@ -16032,6 +16044,85 @@ system and options: the 120 tests pass (`recon_sensor_video_jpeg` skips,
 with no JPEG engine). Apple M4 (Mac mini), macOS 27.0.1, with Orbbec,
 Assimp and the viewers: the 135 tests pass, the two changed tests pass
 under synchronization validation too, and the iOS check links.
+
+### 2026-10-27 — A sensor's depth offset lives in the calibration file, version 3, and frame prep subtracts it, the calibration its one source (amends the 2026-10-12 calibration-file entry).
+
+A depth sensor can read a few millimetres too far or too near along its
+axis, a constant of the unit, so its fused surface sits off the other
+sensors' and off its own colour. The offset is measured with the poses, so
+it belongs in the rig's calibration beside them, and it is applied where
+depth becomes metres, so every reader of prepared depth sees the same
+corrected value.
+
+- **`SensorCalibration::depth_offset_m`**, in metres, + where the depth
+  reads too far. Optional, 0 when absent; finite and at most 0.05 m either
+  way, since a sensor's error is millimetres and more is a unit or sign
+  mistake. A double, as every other number of the file, so the file shows
+  what its writer computed and reads it back exactly; the array narrows it
+  to float once for the pass, as the pass narrows the models.
+- **Version 3, only for a corrected calibration.** A version-2 reader
+  ignores keys it does not know, so a corrected file written as version 2
+  would run uncorrected there; written as version 3 it is refused
+  (`Unsupported`), refusing rather than misreading as the 2026-10-18 entry
+  does. A calibration without a correction is written as version 2, byte
+  for byte as before, so nothing that needs no correction changes. The
+  reader takes versions 2 and 3, and refuses a `depth_offset_m` in a file
+  that says version 2, even a 0: a file edited by hand would otherwise run
+  uncorrected on an older reader. A later correction joins version 3 the
+  same way.
+- **Frame prep subtracts it in the depth pass it already runs:**
+  `z = raw * scale`, then for `z > 0`, `z = max(z - offset, 0)`. 0 stays no
+  return whatever the sign, so a negative offset never makes a hole a
+  surface, and a return the offset takes to 0 or below is no return. It
+  runs before the within-colour mask, which tests the corrected point.
+  `GpuFramePrepConfig::depth_offset_m` carries it; the depth push constants
+  grow from 64 to 68 bytes, and `GpuFramePrep::create` refuses a non-finite
+  offset, whose `max` the shader leaves undefined. No pass, buffer, copy or
+  host step is added.
+- **The calibration is the one source.** `SensorArray::open` copies
+  `Options::prep` for each sensor and sets the copy's offset from the
+  calibration it already reads for the poses. An offset in `Options::prep`
+  is refused: it would be a second source, and one for every sensor alike.
+  Callers without a calibration (datasets, an array opened to measure raw
+  depth) keep raw depth, and a frame's `RgbdFrame::depth` stays raw.
+- **Who sees it:** every reader of the prepared depth: fusion, the
+  texturer's occlusion test and a renderer drawing the depth in place.
+
+**Tests.** `recon_camera_array_calibration` reads a version-3 file (+4.17
+and -0.96 mm, and a sensor with none), takes the bound at ±0.05 m and
+refuses past it, a non-number, an offset in a version-2 file (even 0) and
+version 4; validate and the writer refuse NaN, ±infinity and an offset past
+the bound; a bare sensor is written byte for byte as before, -0.0 and 0
+alike, and with an offset as version 3; and every field of every sensor
+round-trips, the text being the uncorrected one's but for the version and
+the offsets' lines. `recon_sensor_gpu_frame_prep` checks depth to be
+exactly `raw * scale - offset` for +4.17 mm, -0.96 mm and an offset equal to
+a return (a power-of-two scale, so whether the compiler fuses the multiply
+and the subtract does not matter), 0 where the offset leaves no return and
+a hole a hole for either sign; the within-colour mask keeping exactly the
+pixels whose corrected point the colour camera records, where a mask on
+the raw depth would get a column or two wrong at each side of every row;
+and a non-finite offset refused at create. `recon_sensor_array_process`
+gives three sensors offsets of 0, +4 and -2 mm: each prepared frame equals
+a pass made alone with its sensor's offset, and differs from one with none
+exactly where the offset is not 0; an offset in `Options::prep` is refused,
+with a device and without, NaN included.
+
+**Validation.** Release with warnings as errors, under the validation
+layer. RTX 4090, Ubuntu 26.04.1, GCC 15.2, CUDA 13.4, with the Orbbec SDK
+2.10.6, FFmpeg and Assimp, and synchronization validation: 127 of the 129
+tests pass, and the two JPEG tests skip, with no JPEG engine; the camera
+tier alone, with no Vulkan, builds and passes. Apple M4 (Mac mini), macOS
+27.2, with Assimp and the viewers (no Orbbec SDK there): the 125 tests
+pass, and the three changed ones under synchronization validation too.
+Thirteen planted bugs each failed a test: the offset added, not
+subtracted; a hole made a return by a negative offset; the offset
+subtracted after the within-colour mask; the pass ignoring its config's
+offset; a NaN offset taken at create; the writer always writing version 2;
+a 0 offset written; an offset read from a version-2 file; version 3
+refused; the 0.05 m bound unchecked; and the array dropping each sensor's
+offset, giving it a neighbour's, or taking one from its options. No camera
+was opened.
 
 ## Measured lessons
 

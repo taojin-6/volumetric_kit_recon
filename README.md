@@ -181,7 +181,8 @@ sync file, the example opens the only camera answering in the discovery window
 (8 s).
 
 The sync file stays in the Orbbec SDK's format (`config/femto_mega_sync.json`),
-and `source.calibration` references the family's calibration file for poses.
+and `source.calibration` references the family's calibration file for poses
+and each camera's depth offset.
 A camera whose sync settings differ is refused; `source.apply_sync: true`
 explicitly writes those settings. The stream operation refuses fusion, codec
 and output settings before opening any resource. Relative paths are resolved

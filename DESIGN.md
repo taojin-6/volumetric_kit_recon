@@ -1248,6 +1248,11 @@ decision): unprojection and rescaling come with their first caller.
   (model and `factory` / `calibrated` source) and `depth_to_color`, and an
   optional world: a sensor at the origin, or a printed tag
   (`AprilTagWorld`, in OpenCV's marker axes, z up out of a floor tag).
+  Version 3 adds a correction: a sensor's `depth_offset_m` (metres, + where
+  its depth reads too far, at most 0.05 m), written only when it is not 0,
+  and the file is version 3 only then, so an uncorrected calibration is
+  written as version 2, byte for byte, and an older reader refuses a
+  corrected one; a correction in a file that says version 2 is refused.
   `format_` / `write_array_calibration` write it
   through the core's `write_file`; version 1 is read for its poses.
 
@@ -1448,7 +1453,10 @@ goes or the decoder fails), and on the grouping's next deadline, when a
 trigger stops waiting for a late sensor; it never sleeps a fixed time. A
 set's `arrival_ns` is its latest frame's (`RgbdFrame::arrival_ns`, the
 system clock at the driver's frame callback). Opened with a
-device, its `record_process(batch, set)` records a set's preparation into a
+device, it makes a pass per sensor from `Options::prep`, each with its
+sensor's `depth_offset_m` from the calibration, the offset's one source (an
+offset in `Options::prep` is refused); its `record_process(batch, set)`
+records a set's preparation into a
 caller's batch through `GpuFramePrep::record_set`: every frame checked, then
 every pass's copies and every pass's kernels; `process(set)` is that, one
 submit and its wait. A `FrameSet`'s
@@ -1514,7 +1522,10 @@ preserving previously returned frames.
 `depth_within_color` (off by
 default; `rig_viewer` turns it on) zeroes depth outside the colour camera's
 view, by the colour pass's own coverage test, so nothing is fused that no
-colour camera can colour.
+colour camera can colour. `depth_offset_m` (0 by default) is subtracted
+from every return in the depth pass, before that test: for `z > 0`,
+`z = max(z - offset, 0)`, so 0 stays no return whatever the sign; a
+`SensorArray` sets it per sensor from the calibration.
 **`sensor/utils`' `PictureReadback`** copies a set's colour pictures to the
 host, luma alone or every plane, for calib's detector: NV12 images from
 their corner, and planes in a buffer where they sit, after the batch takes
