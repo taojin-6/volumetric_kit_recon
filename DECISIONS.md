@@ -16108,6 +16108,22 @@ a pass made alone with its sensor's offset, and differs from one with none
 exactly where the offset is not 0; an offset in `Options::prep` is refused,
 with a device and without, NaN included.
 
+**Validation.** Release with warnings as errors, under the validation
+layer. RTX 4090, Ubuntu 26.04.1, GCC 15.2, CUDA 13.4, with the Orbbec SDK
+2.10.6, FFmpeg and Assimp, and synchronization validation: 127 of the 129
+tests pass, and the two JPEG tests skip, with no JPEG engine; the camera
+tier alone, with no Vulkan, builds and passes. Apple M4 (Mac mini), macOS
+27.2, with Assimp and the viewers (no Orbbec SDK there): the 125 tests
+pass, and the three changed ones under synchronization validation too.
+Thirteen planted bugs each failed a test: the offset added, not
+subtracted; a hole made a return by a negative offset; the offset
+subtracted after the within-colour mask; the pass ignoring its config's
+offset; a NaN offset taken at create; the writer always writing version 2;
+a 0 offset written; an offset read from a version-2 file; version 3
+refused; the 0.05 m bound unchecked; and the array dropping each sensor's
+offset, giving it a neighbour's, or taking one from its options. No camera
+was opened.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
