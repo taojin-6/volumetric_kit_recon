@@ -181,8 +181,11 @@ sync file, the example opens the only camera answering in the discovery window
 (8 s).
 
 The sync file stays in the Orbbec SDK's format (`config/femto_mega_sync.json`),
-and `source.calibration` references the family's calibration file for poses
-and each camera's depth offset.
+and `source.calibration` references the family's calibration file for poses,
+each camera's depth offset and the colour cameras' exposure
+(`color_controls`), which every camera is opened at; without it they run at
+auto exposure. Auto white balance is on either way. Colour is H.265 at
+3840x2160 and 25 fps unless the scenario names another mode.
 A camera whose sync settings differ is refused; `source.apply_sync: true`
 explicitly writes those settings. The stream operation refuses fusion, codec
 and output settings before opening any resource. Relative paths are resolved

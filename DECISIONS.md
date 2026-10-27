@@ -229,7 +229,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   is read off the frame index, not the clock; and the Femto Mega's stream is
   decoded as BT.601 full range, which it codes and does not say. Its RGB
   output, and the RGB mode its calibration was read from, went on
-  2026-10-06, and its host decoding the same day.
+  2026-10-06, and its host decoding the same day. *Amended 2026-10-27:*
+  H.265 at 3840x2160 and 25 fps is the default.
 - [**2026-09-28**](#2026-09-28--projective-texturing-from-several-views-chooses-a-view-per-triangle-on-an-unshared-mesh-into-an-atlas-of-the-views-images-side-by-side-the-single-camera-pass-stays-per-vertex) —
   Projective texturing from several views chooses a view per triangle, on an
   unshared mesh, into an atlas of the views' images side by side, in
@@ -542,7 +543,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   `rodrigues_from_rotation` return with calib; `SensorArray::open` refuses an
   unposed sensor, and the file I/O is the core's. *Amended 2026-10-18:* the
   world may be a printed AprilTag. *Amended 2026-10-27:* version 3, a
-  sensor's depth offset, written only for a corrected calibration.
+  sensor's depth offset or the colour cameras' exposure, written only for a
+  corrected calibration.
 - [**2026-10-12**](#2026-10-12--recordings-are-vrst-files-of-our-own-verbatim-records-in-crc-framed-chunks-readable-from-a-killed-writer-in-recon_stream-on-the-cores-base-tier-alone-amends-the-2026-09-27-v1-frame-entry) —
   Recordings are `.vrst` files of our own: verbatim records in CRC-framed,
   8-byte-aligned chunks, readable from a killed writer, in `recon_stream` on
@@ -820,6 +822,15 @@ entries relevant to your task; later amendments supersede earlier rules.
   subtracts it, 0 staying no return for either sign, before the
   within-colour mask. `SensorArray` sets each pass's offset from the
   calibration, its one source, and refuses one in `Options::prep`.
+  *Amended the same day:* the colour cameras' exposure joins version 3.
+- [**2026-10-27**](#2026-10-27--the-orbbec-driver-defaults-to-h265-at-3840x2160-and-25-fps-and-opens-each-colour-camera-at-the-calibrations-exposure-written-where-the-camera-differs-auto-white-balance-on-and-read-back-an-array-refuses-a-sensor-opened-at-another-amends-the-2026-09-28-h265-entry-and-the-depth-offset-entry-above) —
+  The Orbbec driver defaults to H.265 at 3840x2160 and 25 fps, as core
+  0.25.0's scenarios do; MJPEG stays for calibration captures and
+  diagnostics. Every colour camera opens at the calibration's exposure
+  (`ArrayCalibration::color_controls`, a version-3 field; empty is auto
+  exposure), written at each open where the camera differs, auto white
+  balance always on, checked before the first write and read back after the
+  last; an array refuses a sensor opened at another.
 
 ## Decision record
 
@@ -6319,6 +6330,8 @@ byte comparison under "The calibration" went with the RGB mode.
 *Amended again the same day (the device-only decoder entry, below):* it
 decodes on NVDEC or VideoToolbox only, hands on the picture on the device
 only, and a stream the hardware refuses stops it.
+*Amended 2026-10-27 (the colour-controls entry, below):* `Hevc` at
+3840x2160 and 25 fps is the default; `Mjpeg` stays selectable.
 
 **The rule.** `OrbbecStreamOptions::color_codec` is `Mjpeg` (the default)
 or `Hevc`. With `Hevc` the camera sends H.265, and each camera's
@@ -12445,7 +12458,9 @@ be a printed AprilTag, in OpenCV's marker axes.
 
 *Amended 2026-10-27 (the depth-offset entry, below):* version 3 adds a
 sensor's depth offset; the writer writes it only for a calibration that
-carries one, and version 2 otherwise.
+carries one, and version 2 otherwise. *Amended again the same day (the
+colour-controls entry, below):* version 3 also carries the colour cameras'
+exposure, `color_controls`.
 
 calib's rig app is the caller the 2026-10-06 cut-back waited for. Each
 session records every camera's factory colour and depth models, unposed, and
@@ -16047,6 +16062,10 @@ under synchronization validation too, and the iOS check links.
 
 ### 2026-10-27 — A sensor's depth offset lives in the calibration file, version 3, and frame prep subtracts it, the calibration its one source (amends the 2026-10-12 calibration-file entry).
 
+*Amended the same day (the colour-controls entry, below):* the colour
+cameras' exposure, `ArrayCalibration::color_controls`, joins version 3 the
+same way, rig-wide.
+
 A depth sensor can read a few millimetres too far or too near along its
 axis, a constant of the unit, so its fused surface sits off the other
 sensors' and off its own colour. The offset is measured with the poses, so
@@ -16122,6 +16141,112 @@ offset; a NaN offset taken at create; the writer always writing version 2;
 a 0 offset written; an offset read from a version-2 file; version 3
 refused; the 0.05 m bound unchecked; and the array dropping each sensor's
 offset, giving it a neighbour's, or taking one from its options. No camera
+was opened.
+
+### 2026-10-27 — The Orbbec driver defaults to H.265 at 3840x2160 and 25 fps, and opens each colour camera at the calibration's exposure: written where the camera differs, auto white balance on, and read back; an array refuses a sensor opened at another (amends the 2026-09-28 H.265 entry and the depth-offset entry above).
+
+Reconstruction textures from each camera's colour at the camera's own size,
+so the rig streams the colour cameras' 4K mode, in the codec the GPU
+decoders take at the least bandwidth. A rig's cameras under auto exposure
+each meter their own view, so one surface comes out brighter in one camera
+than in another, and anything fitted to the colour at one exposure does not
+hold at the next; so every camera of a calibrated rig runs at one manual
+exposure, recorded with the calibration.
+
+- **H.265 at 3840x2160 and 25 fps is the driver's default**
+  (`OrbbecStreamOptions`), depth 640x576 as before: the streams core
+  0.25.0's Orbbec scenarios default to, so the driver and the scenarios
+  agree. The Femto Mega offers 3840x2160 at 25 fps at most, and both
+  streams run at one rate, so a set has 40 ms. H.265 takes about 21 Mbit/s
+  per camera at 4K against MJPEG's 185, and decodes to the camera's MJPEG
+  colour (the 2026-09-28 entry). `Mjpeg` stays selectable: for calibration
+  captures, whose frames are each coded on their own at nine times the
+  rate, and for diagnostics such as fuse_orbbec's set dump. The 1280x720
+  mode stays selectable and uncorrected: its content sits 1.17 px lower
+  than its profile's `cy` (the 4K value / 3) says, about 1.6 mrad, measured
+  against 4K frames on MJPEG. Recorded here; nothing defaults to it.
+- **`camera::ColorControls`**, an exposure time and a gain in the camera's
+  units, both above 0, is a manual exposure: auto exposure off, auto white
+  balance on. **`ArrayCalibration::color_controls`** holds the one for every
+  camera of the array, a version-3 field beside the world, written only
+  when present, as the depth offset is; empty is auto exposure. No value is
+  a public default: the right exposure depends on the room's light and its
+  mains frequency, so the rig's calibration names it.
+- **Auto white balance stays on.** Switched off, the camera returns to its
+  stored temperature (6500 K as shipped) within 0.8 s (measured), a warm
+  cast under a room's warmer light; a fixed white balance would need a
+  temperature chosen per room. Auto white balance off and the temperature
+  are never written.
+- **Written at every open** (`OrbbecStreamOptions::color_controls`, by
+  `OrbbecSensor::open` after the sync and role checks), unlike the sync
+  settings, which are written only when asked: a camera keeps the last
+  exposure written to it, in another process too (measured), so a camera
+  left as it was would keep an earlier run's. Auto exposure is written the
+  same way. Only what differs is written: auto exposure off, then the
+  exposure and the gain, then auto white balance on; or auto exposure on,
+  the stored values untouched. A camera under auto exposure reads its stored
+  values, not the ones it runs at (measured), so one switched from auto
+  exposure has both values written.
+- **Checked before the first write, read back after the last.** A manual
+  exposure needs auto exposure, exposure, gain and auto white balance to
+  read and write, and both values within the camera's ranges, or the open
+  is refused (`Unsupported`, the control named) with nothing written; auto
+  exposure leaves a control the camera lacks alone, so another model still
+  opens. The flags, and under a manual exposure both values, are read back,
+  and a camera that differs is refused naming each field, as the sync check
+  is. `SensorInfo::color_controls` holds the manual exposure as read back,
+  empty under auto exposure. Reading five colour properties takes a median
+  6.1 ms per camera, at most 13.8 ms (measured), so this adds tens of
+  milliseconds once per camera to an open that takes seconds, and nothing
+  per set.
+- **An array checks it** (`SensorArray::open`): with a calibration that
+  names colour controls, a sensor whose `SensorInfo::color_controls` differ,
+  as one opened without them, is refused rather than coloured at another
+  exposure. A calibration without them checks nothing.
+- **One place sets them.** The examples' `open_orbbec_cameras` gives every
+  camera its calibration's controls; `rig_viewer` opens through it too, so
+  it has no open of its own. A capture with no calibration runs at auto
+  exposure, written.
+
+**Tests.** `recon_sensor_orbbec_color_controls` opens a stub camera whose
+colour properties go through the driver's own sequence: a camera that
+matches gets no write, in either mode; a manual exposure over auto exposure
+writes auto exposure off, the exposure, the gain (though it reads the same
+already) and auto white balance on, in that order, and over a manual one
+only the value that differs; auto exposure over a stored manual exposure
+writes auto exposure on alone, neither value written nor compared; auto
+white balance off is switched on in either mode, and the temperature is
+never written; an exposure or a gain past the camera's range, or a control
+the camera lacks, is refused with nothing written, while auto exposure
+opens a camera that lacks any of them and touches none of those; a write
+the SDK fails is `IoError` with its message; a gain or a flag read back
+otherwise is refused naming it; and a camera its sync check refuses gets no
+colour write. `recon_camera_array_calibration` reads the controls, refuses
+them in a version-2 file, at 0, as a non-number and as a non-object, writes
+them byte for byte, version 3 only with them, and round-trips them beside
+depth offsets, the text otherwise unchanged. `recon_sensor_orbbec_conversion`
+refuses a 0 before the camera is looked for; `recon_sensor_array` refuses a
+sensor at auto exposure or at another gain under a calibration's controls,
+naming both, and checks nothing without them; `recon_example_config` maps a
+live scenario that names no colour mode to exactly the driver's defaults;
+`recon_example_fuse_orbbec_sets` checks the report's exposure.
+
+**Validation.** Release with warnings as errors, under the validation layer.
+RTX 4090, Ubuntu 26.04.1, GCC 15.2, CUDA 13.4, with the Orbbec SDK 2.10.6,
+FFmpeg and Assimp, and synchronization validation: 128 of the 130 tests
+pass, and the two JPEG tests skip, with no JPEG engine; the camera tier
+alone builds and passes. Apple M4 (Mac mini), macOS 27.2, with the Orbbec
+SDK 2.10.6, the viewers and Assimp: the 136 tests pass. Of twenty planted
+bugs, nineteen each failed a test: the range check, the control check, the
+values written only where they differ or always, auto white balance
+following the mode, auto exposure touching a control the camera lacks, the
+gain or a flag not read back, a 0 taken, the controls written before the
+sync check or not reported, the writer's version and its controls line, the
+reader taking the controls from a version-2 file, validate taking a 0, the
+array not checking them, the driver defaulting to MJPEG or 30 fps, and the
+report leaving out the exposure. The twentieth, `open_orbbec_cameras`
+dropping the controls, no host test catches, since opening cameras needs a
+device; on a rig, `SensorArray::open` then refuses every camera. No camera
 was opened.
 
 ## Measured lessons
