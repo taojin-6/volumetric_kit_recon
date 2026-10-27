@@ -37,6 +37,7 @@ include(FetchContent)
 # which core each part needs.
 #
 # TODO: pin a core release tag once the core tags its releases.
+#
 # TODO: re-pin to the merge commit once core #62 merges.
 FetchContent_Declare(
   volumetric_kit_core
