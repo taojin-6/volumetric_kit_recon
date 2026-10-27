@@ -286,7 +286,7 @@ vkc::Status run(const Options& opt) {
       static_cast<double>(sets.frames()) / (secs > 0.0 ? secs : 1.0);
   // Before any error: a run that stalls still reports what it counted, and
   // finishes the stream it recorded and reports the frames it coded.
-  vr_example::print_rig_stats(*array, sets);
+  vr_example::print_rig_stats(*array, &sets);
   std::fputs(dump.report().c_str(), stdout);
   vkc::Status finished;
   if (stream && stream->coded() > 0) {
