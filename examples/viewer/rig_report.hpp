@@ -158,15 +158,20 @@ inline void print_rig_progress(int drawn, const RigPanel& panel,
 }
 
 /// @brief The line printed when the window closes.
+/// @param sets_per_s    The sets fused a second (@ref CountRate).
+/// @param meshes_per_s  The meshes drawn a second while the rig fused
+///                      (@ref CountRate).
 inline void print_rig_summary(int drawn, const RigPanel& panel,
-                              std::uint64_t atlas_copies) {
+                              std::uint64_t atlas_copies, double sets_per_s,
+                              double meshes_per_s) {
   std::printf(
-      "rig_viewer: drew %d frames; %llu sets (%llu frames) fused, "
-      "mesh v%llu with %zu triangles, %llu atlas copies\n",
+      "rig_viewer: drew %d frames; %llu sets (%llu frames) fused, %.2f "
+      "sets/s; mesh v%llu with %zu triangles, %.2f updates/s; %llu atlas "
+      "copies\n",
       drawn, static_cast<unsigned long long>(panel.sets_fused),
-      static_cast<unsigned long long>(panel.frames_fused),
+      static_cast<unsigned long long>(panel.frames_fused), sets_per_s,
       static_cast<unsigned long long>(panel.mesh_version), panel.triangles,
-      static_cast<unsigned long long>(atlas_copies));
+      meshes_per_s, static_cast<unsigned long long>(atlas_copies));
 }
 
 /// @brief A running count's rate from the first time it is seen above zero

@@ -52,6 +52,13 @@
 // panel switches shading, texturing and the viewpoint, and tunes the fusion
 // and texturing knobs below live. Closing the window, or Ctrl+C in the
 // terminal, stops the rig before the process ends.
+//
+// The panels show the newest set. At the end the run prints its rates, the
+// array's and each camera's counters, the atlas copies' device time and a
+// table per set (vr_example::SetLog, as fuse_orbbec's): each set's rows, the
+// device's counters across it and its latency, to the hand-over of its mesh
+// or, for a set the viewer did not mesh, to its last stage, the two tabled
+// apart.
 
 #include <algorithm>
 #include <array>
@@ -61,6 +68,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -75,11 +83,13 @@
 #include <glm/glm.hpp>
 
 #include "config.hpp"
-#include "fuse_frame.hpp"  // fuse_set, free_stale_blocks_every
+#include "fuse_frame.hpp"        // fuse_set, free_stale_blocks_every
+#include "fuse_orbbec_sets.hpp"  // on_host_clock, print_rig_stats
 #include "interrupt.hpp"
 #include "orbbec_config.hpp"
 #include "recon_gfx_bridge.hpp"  // to_live_mesh, and the vertex-layout asserts
 #include "rig_report.hpp"
+#include "set_log.hpp"
 #include "viewer_atlas.hpp"
 #include "viewer_common.hpp"
 
@@ -142,6 +152,11 @@ namespace {
 // keeps waiting after saying so: a window is not a batch run, and a camera
 // coming back is worth drawing.
 constexpr auto kSilenceLimit = std::chrono::seconds(10);
+
+// The sets the table at the end covers, the newest, and as many atlas copies:
+// 10 minutes at 25 Hz, about 15 MB of rows, so a window left open does not
+// grow without bound.
+constexpr std::size_t kLoggedSets = 15000;
 
 // The three ways the hybrid pipeline shades, as the View panel offers them.
 using Shading = vr_example::config::Shading;
@@ -598,6 +613,13 @@ int run(GLFWwindow* window, const Options& opt) {
   // Set by whatever ended fusion early, so a scripted run exits non-zero.
   std::atomic<bool> fuse_failed{false};
   std::atomic<bool> quit{false};
+  // Each set's figures and the sets' rate, recorded by the fuse thread alone
+  // and printed once it has joined. A set's trigger is on the system clock
+  // only where every camera stamps on the host's, as a rig's do.
+  vr_example::SetLog log([&rdevice] { return rdevice.counters(); },
+                         kLoggedSets);
+  fuse_viewer::CountRate set_rate;
+  const bool host_clock = vr_example::on_host_clock(array);
 
   std::thread fuse_thread([&]() {
     try {
@@ -720,7 +742,10 @@ int run(GLFWwindow* window, const Options& opt) {
                 std::chrono::steady_clock::now() - start)
                 .count());
       };
-      auto remesh = [&](const std::vector<TextureSource>& sources) {
+      // `published`, when given, runs once the mesh is handed over, before
+      // render.texture_stats' readback, which so counts in no set.
+      auto remesh = [&](const std::vector<TextureSource>& sources,
+                        const std::function<void()>& published) {
         remesh_stages.clear();
         vkc::Result<rmesh::DeviceMesh> extracted = [&]() {
           vkc::StageScope scope(remesh_stages, "extract");
@@ -729,6 +754,7 @@ int run(GLFWwindow* window, const Options& opt) {
         // Published even when empty: it holds a ring slot all the same.
         if (extracted) {
           publish(extracted.value(), sources);
+          if (published) published();
           // Before the next extract, which retires this mesh.
           if (opt.render.texture_stats && remeshes++ % 30 == 0) {
             print_texture_stats(extracted.value(), sources);
@@ -755,13 +781,14 @@ int run(GLFWwindow* window, const Options& opt) {
       std::uint64_t last_set_ns = 0;
       bool said_silent = false;
       // Re-mesh when the view moved while no set fused, from the last set's
-      // frames: an idle rig, or one a run.sets run has stopped.
+      // frames: an idle rig, or one a run.sets run has stopped. Such a remesh
+      // is no set's.
       auto remesh_if_view_moved = [&]() {
         if (!shared_view.moved() ||
             !exchange.release_and_may_publish(extractor)) {
           return false;
         }
-        remesh(texture_sources(newest, sets, last_set_ns, hold_ns));
+        remesh(texture_sources(newest, sets, last_set_ns, hold_ns), {});
         return true;
       };
       while (started.ok() && !quit.load()) {
@@ -793,16 +820,14 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         last_set = std::chrono::steady_clock::now();
         said_silent = false;
-        // The table shows the newest set's rows, seeded in display order so the
-        // remesh rows read 0 between remeshes rather than drop out.
-        fuse_stages.clear();
-        for (const char* stage : {"poll", "frame prep", "allocate", "resize",
-                                  "integrate", "  ..active set", "  ..allocate",
-                                  "block stamps", "extract", "texture"}) {
-          fuse_stages.seed(stage);
-        }
-        fuse_stages.add_cpu("poll", poll_ms);
+        // The set's figures in the log: its poll, then, from its arrival, its
+        // stages and, when it ran one, its remesh's; and its latency, to the
+        // mesh's hand-over or, unmeshed, to its last stage.
+        vr_example::SetLog::Set& s = log.begin();
+        s.kind = "unmeshed";
+        s.rows.add_cpu("poll", poll_ms);
         const rsensor::FrameSet& set = *polled.value();
+        s.arrived(set.arrival_ns, host_clock ? set.timestamp_ns : 0);
         const std::uint64_t set_ns = set.timestamp_ns;
         last_set_ns = set_ns;
         // Released before this set's prep when no later set may texture from
@@ -812,7 +837,7 @@ int run(GLFWwindow* window, const Options& opt) {
           newest.assign(cameras, std::nullopt);
         }
         // One "frame prep" row for the set: the cameras prepare in one batch.
-        auto prepared = array.process(set, &fuse_stages);
+        auto prepared = array.process(set, &s.rows);
         if (!prepared) {
           std::fprintf(stderr, "rig_viewer: frame prep: %s\n",
                        prepared.status().message().c_str());
@@ -824,7 +849,7 @@ int run(GLFWwindow* window, const Options& opt) {
             prepared.value().frames;
         const vkc::Status fused = vr_example::fuse_set(
             fuser, volume, frames, max_weight.load(),
-            vr_example::integration_mode(dynamic_on.load()), &fuse_stages);
+            vr_example::integration_mode(dynamic_on.load()), &s.rows);
         if (!fused.ok()) {
           std::fprintf(stderr, "rig_viewer: fuse: %s\n",
                        fused.message().c_str());
@@ -836,14 +861,35 @@ int run(GLFWwindow* window, const Options& opt) {
           frames_fused += frame ? 1 : 0;
         }
         ++sets;
+        set_rate.at(sets, last_set);
         // Ahead of the remesh, so it meshes the smaller set.
         vr_example::free_stale_blocks_every(volume, sets, opt.fusion.free_after,
-                                            "rig_viewer", &fuse_stages);
+                                            "rig_viewer", &s.rows);
         for (std::size_t c = 0; c < frames.size() && c < cameras; ++c) {
           if (frames[c] && frames[c]->has_color()) {
             newest[c] = NewestFrame{*frames[c], sets};
           }
         }
+        // Fusion alone, before the remesh rows go in: those describe the
+        // newest remesh, not this set, and are reported beside it.
+        const double fuse_ms = s.rows.total_cpu_ms(/*exclude=*/"poll");
+        // The panel shows the newest set's rows, seeded in display order so
+        // the remesh rows read 0 until the first remesh rather than drop out,
+        // and the newest remesh's beside them.
+        fuse_stages.clear();
+        for (const char* stage : {"poll", "frame prep", "allocate", "resize",
+                                  "integrate", "  ..active set", "  ..allocate",
+                                  "block stamps", "extract", "texture"}) {
+          fuse_stages.seed(stage);
+        }
+        fuse_stages.merge(s.rows);
+        // A remesh's rows join the set that ran it, once, before its hand-over
+        // ends the set, so their waits count in its "set".
+        const auto meshed = [&s, &remesh_stages] {
+          s.rows.merge(remesh_stages);
+          s.kind = "meshed";
+          s.published();
+        };
 
         // The last set of a run.sets run is always meshed: it meshes the last
         // sets fused, and only a view change supersedes it. So it waits a
@@ -859,19 +905,17 @@ int run(GLFWwindow* window, const Options& opt) {
             (last ||
              sets % static_cast<std::uint64_t>(opt.fusion.remesh_every) == 0)) {
           if (exchange.release_and_may_publish(extractor)) {
-            remesh(texture_sources(newest, sets, set_ns, hold_ns));
+            remesh(texture_sources(newest, sets, set_ns, hold_ns), meshed);
           } else if (last) {
             std::fprintf(stderr,
                          "rig_viewer: the renderer never collected the last "
                          "mesh (window hidden, or drawing stopped); meshing "
                          "the last set anyway\n");
-            remesh(texture_sources(newest, sets, set_ns, hold_ns));
+            remesh(texture_sources(newest, sets, set_ns, hold_ns), meshed);
           }
         }
-        // Fusion alone, before the remesh rows go in: those describe the
-        // newest remesh, not this set, and are reported beside it.
-        const double fuse_ms = fuse_stages.total_cpu_ms(/*exclude=*/"poll");
-        fuse_stages.merge(remesh_stages);
+        fuse_stages.merge(remesh_stages);  // this set's, or the one held
+        s.published();  // unmeshed, its fusion was its last stage; else no-op
         {
           const vkc::MemoryStats memory = rallocator.memory_stats();
           const vkc::Result<float> lf = volume.map().load_factor();
@@ -936,6 +980,10 @@ int run(GLFWwindow* window, const Options& opt) {
   auto rate_start = std::chrono::steady_clock::now();
   std::uint64_t rate_generation = 0;
   double mesh_rate = 0.0;
+  // For the end: the meshes drawn a second while the rig fuses, and the
+  // atlas copies' device time.
+  fuse_viewer::CountRate mesh_updates;
+  fuse_viewer::AtlasCopyTimes copy_times(config.frames_in_flight, kLoggedSets);
   while (glfwWindowShouldClose(window) == GLFW_FALSE &&
          (opt.run.frames == 0 || drawn < opt.run.frames)) {
     glfwPollEvents();
@@ -958,6 +1006,9 @@ int run(GLFWwindow* window, const Options& opt) {
       continue;
     }
     const win::Frame& render_frame = *frame.value();
+    // The frame loop has begun the profiler's frame, which published the
+    // frame this slot carried before.
+    copy_times.begun(render_frame.slot, profiler.metrics().sections);
     atlas.poll();
 
     // Retire this slot's last frame, take the newest mesh, and commit it
@@ -965,9 +1016,10 @@ int run(GLFWwindow* window, const Options& opt) {
     // rendering begins, since a copy may not sit inside it. A copy refused,
     // or an atlas that could not be made, keeps the mesh parked for the next
     // frame.
+    bool copied = false;
     {
       vg::Profiler::Scope copy_scope =
-          profiler.gpu_scope(render_frame.cmd, "atlas copy");
+          profiler.gpu_scope(render_frame.cmd, fuse_viewer::kAtlasCopyRow);
       const rmesh::ExchangeOutcome outcome = exchange.begin_frame(
           render_frame.slot,
           [&](const rmesh::DeviceMesh&, const fuse_viewer::AtlasJob& job) {
@@ -990,6 +1042,7 @@ int run(GLFWwindow* window, const Options& opt) {
             }
             atlas_error_said = false;
             atlas_copies += job.empty() ? 0 : 1;
+            copied = !job.empty();
             return true;
           });
       if (outcome == rmesh::ExchangeOutcome::kRefused) {
@@ -1023,6 +1076,12 @@ int run(GLFWwindow* window, const Options& opt) {
         rate_start = now;
       }
       panel.mesh_rate = mesh_rate;
+      // Once a set has fused and until fusion stops, so neither a mesh of
+      // the empty map before the first set nor a remesh for a view change
+      // after the last stretches the span.
+      if (panel.sets_fused > 0 && !fusing_done.load()) {
+        mesh_updates.at(live_view.generation, now);
+      }
     }
 
     // --- Input: orbit, pan, zoom, unless a panel has the mouse -------------
@@ -1182,6 +1241,8 @@ int run(GLFWwindow* window, const Options& opt) {
       exit_code = 1;
       break;
     }
+    // Submitted, so the profiler publishes its figures as the slot recurs.
+    if (present.ok() && copied) copy_times.copied(render_frame.slot);
     if (drawn % 120 == 0) {
       fuse_viewer::print_rig_progress(drawn, panel, atlas_copies);
     }
@@ -1197,7 +1258,19 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   // The fuse thread said why on stderr; the exit code is for a script.
   if (fuse_failed.load()) exit_code = 1;
-  fuse_viewer::print_rig_summary(drawn, panel, atlas_copies);
+  // The fuse thread has joined, so what it recorded is final.
+  fuse_viewer::print_rig_summary(drawn, panel, atlas_copies,
+                                 set_rate.per_second(),
+                                 mesh_updates.per_second());
+  vr_example::print_rig_stats(array, nullptr);
+  std::fputs(copy_times.report().c_str(), stdout);
+  const std::string title =
+      log.dropped() == 0
+          ? std::string("per set")
+          : "per set (the newest " + std::to_string(log.sets().size()) +
+                " of " + std::to_string(log.sets().size() + log.dropped()) +
+                ")";
+  std::fputs(log.table(title).c_str(), stdout);
   return exit_code;
 }
 
