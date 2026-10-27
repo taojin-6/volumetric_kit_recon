@@ -86,7 +86,7 @@ frees stale blocks every `fusion.free_after` sets (default 30).
 coded in every frame. `codec_orbbec.json` codes 150 sets of a four-camera
 rig at 1 cm, at period 30: add `source.calibration`, or every camera sits at
 the origin. `serve_orbbec.json` codes the same way and serves on 47801 for
-up to 216000 frames, 30 minutes of four cameras at 30 fps, or until Ctrl+C;
+up to 216000 frames, 36 minutes of four cameras at 25 fps, or until Ctrl+C;
 move or delete its `.vrst` before a rerun.
 
 `fuse_orbbec` accepts `diagnostics.readback: true` in either a stream or fusion
