@@ -127,6 +127,23 @@ if(VR_BUILD_TESTS)
   add_test(NAME recon_example_viewer_device
            COMMAND recon_example_viewer_device_test)
 
+  # What rig_viewer prints at the end (rig_report.hpp): the atlas copies' device
+  # time from the profiler's late snapshots, and a count's rate. Host only;
+  # gfx_glfw for ImGui's headers, which the report's panel includes.
+  add_executable(
+    recon_example_viewer_rig_report_test
+    "${PROJECT_SOURCE_DIR}/tests/example_viewer_rig_report_test.cpp")
+  target_link_libraries(
+    recon_example_viewer_rig_report_test
+    PRIVATE volumetric_kit::recon_sensor_array volumetric_kit::recon_texture
+            volumetric_kit::gfx_glfw Vulkan::Vulkan)
+  target_include_directories(
+    recon_example_viewer_rig_report_test PRIVATE ${_viewer_common_inc}
+                                                 "${PROJECT_SOURCE_DIR}/tests")
+  vr_target_warnings(recon_example_viewer_rig_report_test)
+  add_test(NAME recon_example_viewer_rig_report
+           COMMAND recon_example_viewer_rig_report_test)
+
   # The render pass both live viewers record (viewer_common.hpp), on a headless
   # gfx device. Skips with no device under the core policy.
   add_executable(recon_example_viewer_pass_test
