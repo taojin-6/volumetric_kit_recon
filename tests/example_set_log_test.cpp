@@ -8,7 +8,9 @@
 // device half and a dash for a host-only row; a row first seen in a later set
 // placed after the row before it there, a breakdown inside its stage; "set"
 // waiting its rows' waits since arrival; the latencies, n/a where no stamp is
-// known; and the sets fused again and the payload tails. Host only.
+// known; and the sets fused again and the payload tails. A viewer's sets: a
+// remesh's rows merged into the set that ran it, counted once, its wait in
+// "set"; uncoded sets tabled by kind; and the newest sets kept. Host only.
 
 #include <chrono>
 #include <cstdio>
@@ -128,6 +130,72 @@ int main() {
   const vr_example::SetLog::Set& first = log.sets().front();
   CHECK(first.is_published() && first.arrival_ms().has_value() &&
         !first.capture_ms().has_value() && first.counted().submits == 2);
+  CHECK(log.dropped() == 0 && log.sets().size() == 6);
+
+  // A viewer's sets, as rig_viewer records them: each set's own rows, and on
+  // a set that meshed, the remesh's rows -- timed into rows the viewer holds
+  // between remeshes -- merged after them, before the mesh's hand-over
+  // publishes the set. A remesh's rows land in their set, after its fuse
+  // rows, counted once; their wait counts in its "set"; the meshed and
+  // unmeshed sets are tabled apart, in the order first seen; and the log
+  // keeps the newest sets.
+  vr_example::SetLog viewer(nullptr, 4);
+  vkc::StageMetrics remesh;  // the newest remesh's rows
+  for (int i = 0; i < 6; ++i) {
+    vr_example::SetLog::Set& s = viewer.begin();
+    s.kind = "unmeshed";
+    s.rows.add_cpu("poll", 0.1);
+    s.arrived(vr_example::system_now_ns(), 0);
+    s.rows.add_cpu("integrate", 1.0);
+    if (i % 2 == 1) {  // sets 1, 3 and 5 mesh
+      remesh.clear();
+      remesh.add_cpu("extract", 2.0 + i);
+      remesh.add_cpu("texture", 1.0);
+      remesh.add_wait("texture", 0.75);
+      // Longer than the rows' waits, so "set" holds them whole.
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      s.rows.merge(remesh);
+      s.kind = "meshed";
+      s.published();
+    }
+    s.published();  // an unmeshed set's last stage; a meshed one's no-op
+  }
+  CHECK(viewer.dropped() == 2 && viewer.sets().size() == 4);
+  const std::string sets = viewer.table("per set");
+  std::fputs(sets.c_str(), stdout);
+  // Sets 2 to 5 kept: 2 and 4 unmeshed, first seen, then 3 and 5.
+  const std::size_t unmeshed_at = sets.find("per set: 2 unmeshed sets");
+  const std::size_t meshed_at = sets.find("per set: 2 meshed sets");
+  CHECK(unmeshed_at == 0 && meshed_at != std::string::npos);
+  CHECK(sets.find("uncoded") == std::string::npos);
+  const std::string unmeshed = sets.substr(0, meshed_at);
+  const std::string meshed = sets.substr(meshed_at);
+  CHECK(unmeshed.find("extract") == std::string::npos &&
+        unmeshed.find("texture") == std::string::npos);
+  // Sets 3 and 5's extracts, 5 and 7 ms, once each.
+  CHECK(has_line(meshed,
+                 "  extract                  2     6.000    5.000    7.000    "
+                 "7.000     0.000    0.000    0.000    0.000         -        "
+                 "-        -        -"));
+  CHECK(has_line(meshed,
+                 "  texture                  2     0.250    0.250    0.250    "
+                 "0.250     0.750    0.750    0.750    0.750         -        "
+                 "-        -        -"));
+  const std::size_t integrate_at = meshed.find("\n  integrate ");
+  const std::size_t extract_at = meshed.find("\n  extract ");
+  const std::size_t meshed_set_at = meshed.find("\n  set ");
+  CHECK(meshed.find("\n  poll ") < integrate_at && integrate_at < extract_at &&
+        extract_at < meshed_set_at && meshed_set_at != std::string::npos);
+  const std::string meshed_set =
+      meshed.substr(meshed_set_at + 1,
+                    meshed.find('\n', meshed_set_at + 1) - meshed_set_at - 1);
+  const std::string remesh_wait =
+      "     0.750    0.750    0.750    0.750         -        -        -  "
+      "      -";
+  CHECK(meshed_set.size() > remesh_wait.size() &&
+        meshed_set.compare(meshed_set.size() - remesh_wait.size(),
+                           remesh_wait.size(), remesh_wait) == 0);
+  CHECK(meshed.find("    arrival->published      n/a") == std::string::npos);
   std::puts("example_set_log: OK");
   return 0;
 }

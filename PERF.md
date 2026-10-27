@@ -656,6 +656,6 @@ After P6, the GPU could run set N while the host polls and decodes set N+1.
 - The 2026-09-29 decision keeps the copy into gfx's image, which gets
   hardware filtering and the sRGB decode.
 - Measured 0.23 ms at 720p. At 4K (~133 MB a remesh) it has not been
-  measured.
+  measured; `rig_viewer` prints its device time at the end of a run.
 - Measure before revisiting. Sampling the buffers in place needs a gfx
   pipeline variant.

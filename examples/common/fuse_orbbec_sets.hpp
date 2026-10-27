@@ -226,9 +226,11 @@ inline void print_first_frame_age(vr::sensor::SensorArray& array,
 /// @brief Print @p array's sets, each camera's counters, `lost` included,
 ///        and for a rig each secondary's mean and worst skew to the primary
 ///        over @p sets.
+/// @param sets  The run's sets; null, for a run that polls the array itself
+///              (rig_viewer's), prints no skew.
 /// @pre The array's sensors are all `OrbbecSensor`s.
 inline void print_rig_stats(vr::sensor::SensorArray& array,
-                            const vr::sensor::RigSets& sets) {
+                            const vr::sensor::RigSets* sets) {
   const vr::sensor::SensorArrayStats st = array.stats();
   std::printf("%llu sets, %llu missing a camera, %llu frames unmatched\n",
               static_cast<unsigned long long>(st.sets),
@@ -246,7 +248,8 @@ inline void print_rig_stats(vr::sensor::SensorArray& array,
         static_cast<unsigned long long>(s.dropped),
         static_cast<unsigned long long>(s.failed),
         static_cast<unsigned long long>(s.lost));
-    const vr::sensor::RigSets::Skew lag = sets.skew(i);
+    const vr::sensor::RigSets::Skew lag =
+        sets != nullptr ? sets->skew(i) : vr::sensor::RigSets::Skew{};
     if (lag.frames > 0) {
       std::printf("; skew to the primary %+.2f ms mean, %.2f ms worst",
                   lag.sum_ms / static_cast<double>(lag.frames), lag.worst_ms);

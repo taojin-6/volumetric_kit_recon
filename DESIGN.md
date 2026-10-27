@@ -2232,8 +2232,11 @@ APIs. Stage rows print through one table,
 `stage_table.hpp`. Reports live beside the helpers rather than in a `main`:
 `fuse_replica`'s extract reports and `fusion.dirty_every` survey in
 `remesh_report.hpp`, the viewers' panels in `viewer_panels.hpp`,
-`rig_viewer`'s panel, progress line and `render.texture_stats` in `rig_report.hpp`,
+`rig_viewer`'s panel, progress line, `render.texture_stats` and end-of-run
+rates and atlas-copy times in `rig_report.hpp`,
 and `fuse_orbbec`'s camera lines and counters in `fuse_orbbec_sets.hpp`.
+The per-set table of `fuse_orbbec`, `codec_replica` and `rig_viewer` is
+`set_log.hpp`'s.
 A `main.cpp` is the example's story: options, setup, the loop, the report.
 
 `fuse_replica` runs the spine on a posed Replica-SLAM RGB-D sequence and
@@ -2301,7 +2304,16 @@ on the GPU, and the atlas filled by
 device copies recorded in gfx's frame (the 2026-09-29 decision), fusing
 depth only inside each colour camera's view unless given `fusion.depth_within_color: false`, and
 texturing a camera a set lacks from its last frame, a fallback view
-(`fusion.hold_ms`). The two viewers hand meshes over through `mesh::MeshExchange`,
+(`fusion.hold_ms`).
+`rig_viewer`'s panels show the newest set; its fuse thread also records every
+set into a `SetLog`, the newest 15,000 kept, which it prints at the end with
+the sets fused and the meshes drawn a second (each from its first to its
+last), the array's and each camera's counters, and the atlas copies' device
+time from gfx's profiler. A set's rows are its poll, its stages and, when it
+meshed, its remesh's, merged before the mesh's hand-over publishes it; a
+set it did not mesh is published at its last stage and tabled apart, and a
+remesh for a view change between sets is no set's.
+The two viewers hand meshes over through `mesh::MeshExchange`,
 take their window glue (the GLFW surface, the shared device and ImGui's GLFW
 backend) from gfx's `gfx_glfw` (2026-10-12), and share `viewer_common.hpp`: the
 shared device's settings and gfx's adoption of it, the teardown guards and the
