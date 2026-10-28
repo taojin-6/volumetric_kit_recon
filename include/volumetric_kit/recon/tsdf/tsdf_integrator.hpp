@@ -83,15 +83,25 @@ struct ColorFrame {
 ///        cameras at once: the depth frame its band was allocated from, plus
 ///        its colour.
 ///
-/// A host depth array is staged in the call's batch, a storage buffer bound
-/// in place. A list of these slices into the list
-/// @ref volume::VoxelHashMap::allocate_from_depth takes, so one list feeds
-/// both.
-struct FrameInput : volume::DepthInput {
+/// Its depth and camera, the camera through @ref to_depth_pinhole, are the
+/// `volume::DepthInput` @ref volume::VoxelHashMap::allocate_from_depth
+/// allocates the frame's band from.
+struct FrameInput {
+  /// Row-major depth in **metres**, `camera.width * camera.height` samples:
+  /// a host array, staged in the call's batch, or a storage buffer, bound in
+  /// place.
+  core::StorageInput depth;
+  DepthCameraParams camera;  ///< Intrinsics, depth range, size and pose.
   /// Optional colour, as @ref TsdfIntegrator::integrate takes it; borrowed
   /// for the call.
   const ColorFrame* color = nullptr;
 };
+
+/// @brief @p camera as the voxel layer's depth camera, for
+///        @ref volume::VoxelHashMap::allocate_from_depth: every field copied
+///        into the same field, the two types' layouts asserted identical.
+VR_TSDF_API volume::DepthPinhole to_depth_pinhole(
+    const DepthCameraParams& camera) noexcept;
 
 /// @brief Fuses posed depth frames into a @ref VoxelBlockGrid's `tsdf` +
 ///        `weight` attributes by projective TSDF integration (classic or

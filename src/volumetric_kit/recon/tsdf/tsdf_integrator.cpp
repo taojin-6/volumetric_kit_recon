@@ -152,6 +152,41 @@ std::optional<volume::FrustumPlanes> fusion_reach(const DepthCameraParams& cam,
 
 }  // namespace
 
+// The voxel layer's depth camera is a copy of the camera vocabulary's: the same
+// fields at the same offsets, so the kernel reads the bytes it read before.
+static_assert(
+    sizeof(volume::DepthPinhole) == sizeof(DepthCameraParams) &&
+        offsetof(volume::DepthPinhole, fx) == offsetof(DepthCameraParams, fx) &&
+        offsetof(volume::DepthPinhole, fy) == offsetof(DepthCameraParams, fy) &&
+        offsetof(volume::DepthPinhole, cx) == offsetof(DepthCameraParams, cx) &&
+        offsetof(volume::DepthPinhole, cy) == offsetof(DepthCameraParams, cy) &&
+        offsetof(volume::DepthPinhole, min_depth) ==
+            offsetof(DepthCameraParams, min_depth) &&
+        offsetof(volume::DepthPinhole, max_depth) ==
+            offsetof(DepthCameraParams, max_depth) &&
+        offsetof(volume::DepthPinhole, width) ==
+            offsetof(DepthCameraParams, width) &&
+        offsetof(volume::DepthPinhole, height) ==
+            offsetof(DepthCameraParams, height) &&
+        offsetof(volume::DepthPinhole, cam_to_world) ==
+            offsetof(DepthCameraParams, cam_to_world),
+    "volume::DepthPinhole must keep DepthCameraParams' layout");
+
+volume::DepthPinhole to_depth_pinhole(
+    const DepthCameraParams& camera) noexcept {
+  volume::DepthPinhole out;
+  out.fx = camera.fx;
+  out.fy = camera.fy;
+  out.cx = camera.cx;
+  out.cy = camera.cy;
+  out.min_depth = camera.min_depth;
+  out.max_depth = camera.max_depth;
+  out.width = camera.width;
+  out.height = camera.height;
+  out.cam_to_world = camera.cam_to_world;
+  return out;
+}
+
 core::Result<TsdfIntegrator> TsdfIntegrator::create(
     core::Device& device, core::Allocator& allocator) {
   VKC_TRY(check_device_requirements(device, "TsdfIntegrator::create"));
@@ -238,7 +273,7 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
                                        float max_weight, IntegrationMode mode,
                                        const ColorFrame* color,
                                        core::StageMetrics* metrics) {
-  return integrate(grid, {FrameInput{{core::StorageInput(depth), cam}, color}},
+  return integrate(grid, {FrameInput{core::StorageInput(depth), cam, color}},
                    max_weight, mode, metrics);
 }
 
@@ -248,7 +283,7 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                                        float max_weight, IntegrationMode mode,
                                        const ColorFrame* color,
                                        core::StageMetrics* metrics) {
-  return integrate(grid, {FrameInput{{core::StorageInput(depth), cam}, color}},
+  return integrate(grid, {FrameInput{core::StorageInput(depth), cam, color}},
                    max_weight, mode, metrics);
 }
 
