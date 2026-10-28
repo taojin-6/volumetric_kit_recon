@@ -3,11 +3,10 @@
 
 // Closest-point-on-triangle, the one geometric primitive the mesh-driven
 // passes share: `volume`'s triangle_candidates.glsl prunes candidate blocks
-// with it, and tsdf's mesh_integrate.comp evaluates the distance field itself
-// with it. It lives in `core` for the same reason core/math/vector_types.hpp
-// does -- it is math vocabulary with no tier's concepts in it (no hash table,
-// no grid, no camera) -- and a second copy would compile clean, pass spirv-val,
-// and disagree about a voxel's sign only on the creases.
+// with it, and voxelize's mesh_integrate.comp evaluates the distance field
+// itself with it. It lives in `volume`, the lowest tier either is in, and a
+// second copy would compile clean, pass spirv-val, and disagree about a
+// voxel's sign only on the creases.
 //
 // Ported from pointTriangleDistance in the prior engine's core/math/math_ops.hpp
 // (Ericson, Real-Time Collision Detection): the barycentric region test, which

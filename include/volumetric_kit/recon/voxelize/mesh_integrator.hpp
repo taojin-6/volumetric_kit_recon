@@ -3,7 +3,7 @@
 
 #pragma once
 
-/// @file tsdf/mesh_integrator.hpp
+/// @file voxelize/mesh_integrator.hpp
 /// @brief Write a triangle mesh's truncated distance field into a
 ///        @ref VoxelBlockGrid's `tsdf` + `weight` attributes, signed or as a
 ///        shell.
@@ -19,10 +19,10 @@
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/fwd.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/recon/voxelize/export.hpp"
 
-namespace volumetric_kit::recon::tsdf {
+namespace volumetric_kit::recon::voxelize {
 
 /// @brief How @ref MeshIntegrator::integrate turns distance to the mesh into a
 ///        signed field.
@@ -78,7 +78,8 @@ struct MeshSdfParams {
   /// @return OK, or `Status::invalid_argument` for an unknown mode, or in
   ///         shell mode a @ref shell_voxels below `sqrt(3) / 2` or a shell
   ///         not thinner than `trunc_dist`.
-  VR_TSDF_API core::Status validate(const volume::VoxelGridParams& grid) const;
+  VR_VOXELIZE_API core::Status validate(
+      const volume::VoxelGridParams& grid) const;
 };
 
 /// @brief What one @ref MeshIntegrator::integrate wrote.
@@ -149,7 +150,7 @@ struct MeshIntegrateStats {
 ///
 /// @note Every block this writes is stamped changed (@ref integrate), as a
 ///       fuse stamps one.
-class VR_TSDF_API MeshIntegrator {
+class VR_VOXELIZE_API MeshIntegrator {
  public:
   /// The most triangles one block's bin may hold. A voxel of the block may
   /// measure all of them, so this and @ref kMaxVoxelsPerBlock bound how long a
@@ -272,4 +273,4 @@ class VR_TSDF_API MeshIntegrator {
   std::array<core::Buffer, 4> scan_levels_;
 };
 
-}  // namespace volumetric_kit::recon::tsdf
+}  // namespace volumetric_kit::recon::voxelize

@@ -45,12 +45,12 @@
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/dispatch.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/tsdf/mesh_integrator.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_coords.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
+#include "volumetric_kit/recon/voxelize/mesh_integrator.hpp"
 
 #include "gpu_test.hpp"
 #include "grid_readback.hpp"
@@ -58,7 +58,7 @@
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
-namespace ts = volumetric_kit::recon::tsdf;
+namespace vx = volumetric_kit::recon::voxelize;
 
 namespace {
 
@@ -354,15 +354,15 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(grid_r.ok());
   vol::VoxelBlockGrid grid = std::move(grid_r).value();
 
-  vkc::Result<ts::MeshIntegrator> integ_r =
-      ts::MeshIntegrator::create(gpu.device, gpu.allocator);
+  vkc::Result<vx::MeshIntegrator> integ_r =
+      vx::MeshIntegrator::create(gpu.device, gpu.allocator);
   CHECK(integ_r.ok());
-  ts::MeshIntegrator integ = std::move(integ_r).value();
+  vx::MeshIntegrator integ = std::move(integ_r).value();
   CHECK(integ.valid());
 
   // Allocate `m`'s band into a cleared grid, then write it.
-  auto convert = [&](const Mesh& m, const ts::MeshSdfParams& params)
-      -> vkc::Result<ts::MeshIntegrateStats> {
+  auto convert = [&](const Mesh& m, const vx::MeshSdfParams& params)
+      -> vkc::Result<vx::MeshIntegrateStats> {
     VKC_TRY(grid.clear());
     VKC_ASSIGN(std::uint32_t failed, grid.map().allocate_from_triangles(
                                          m.v.data(), m.vertex_count(),
@@ -373,13 +373,13 @@ int gpu_main(vr_test::GpuContext& gpu) {
     return integ.integrate(grid, m.v.data(), m.vertex_count(), m.i.data(),
                            m.triangle_count(), params);
   };
-  const ts::MeshSdfParams kSigned{ts::MeshSdfMode::Signed, 1.5f};
-  const ts::MeshSdfParams kShell{ts::MeshSdfMode::Shell, 1.5f};
+  const vx::MeshSdfParams kSigned{vx::MeshSdfMode::Signed, 1.5f};
+  const vx::MeshSdfParams kShell{vx::MeshSdfMode::Shell, 1.5f};
   const float shell = 1.5f * gp.voxel_size;
 
   // ---- 1. Signed tetrahedron: the sharp-edge case -------------------------
   const Mesh tet = tetrahedron(vr::Vec3f(0.203f, 0.117f, -0.089f), 0.1f);
-  vkc::Result<ts::MeshIntegrateStats> tet_stats = convert(tet, kSigned);
+  vkc::Result<vx::MeshIntegrateStats> tet_stats = convert(tet, kSigned);
   if (!tet_stats.ok()) {
     std::fprintf(stderr, "tetrahedron: %s\n",
                  tet_stats.status().message().c_str());
@@ -411,7 +411,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // And every block written stamped changed, at a tick of the call's own.
   const std::map<Coord, std::vector<float>> tet_bytes = by_coord(gpu, grid);
   const std::uint32_t tick_before = grid.map().tick();
-  vkc::Result<ts::MeshIntegrateStats> again =
+  vkc::Result<vx::MeshIntegrateStats> again =
       integ.integrate(grid, tet.v.data(), tet.vertex_count(), tet.i.data(),
                       tet.triangle_count(), kSigned);
   CHECK(again.ok());
@@ -458,7 +458,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
   // ---- 4. Signed dented cube: concave edges and a concave vertex ---------
   const Mesh cube = dented_cube(vr::Vec3f(0.013f, -0.021f, 0.017f), 0.3f);
-  vkc::Result<ts::MeshIntegrateStats> cube_stats = convert(cube, kSigned);
+  vkc::Result<vx::MeshIntegrateStats> cube_stats = convert(cube, kSigned);
   CHECK(cube_stats.ok());
   CHECK(cube_stats.value().triangles == 12);
   if (verify(gpu, grid, "signed dented cube",
@@ -560,16 +560,16 @@ int gpu_main(vr_test::GpuContext& gpu) {
   {
     const float sx0 = -0.487f, sx1 = 0.513f, sy0 = -0.493f, sy1 = 0.507f;
     const Mesh sheet = divided_quad(sx0, sx1, sy0, sy1, z0, 400);
-    vkc::Result<ts::MeshIntegrateStats> sheet_stats = convert(sheet, kSigned);
+    vkc::Result<vx::MeshIntegrateStats> sheet_stats = convert(sheet, kSigned);
     if (!sheet_stats.ok()) {
       std::fprintf(stderr, "divided sheet: %s\n",
                    sheet_stats.status().message().c_str());
       return 1;
     }
     CHECK(sheet_stats.value().bin_entries >
-          ts::MeshIntegrator::kMaxDispatchBinEntries);
+          vx::MeshIntegrator::kMaxDispatchBinEntries);
     CHECK(std::uint64_t{sheet_stats.value().dispatches} *
-              ts::MeshIntegrator::kMaxDispatchBinEntries >=
+              vx::MeshIntegrator::kMaxDispatchBinEntries >=
           sheet_stats.value().bin_entries);
     CHECK(sheet_stats.value().dispatches > 1);
     CHECK(sheet_stats.value().blocks == active_blocks(grid).size());
@@ -605,7 +605,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
             .allocate_from_triangles(tet.v.data(), tet.vertex_count(),
                                      tet.i.data(), tet.triangle_count())
             .ok());
-  vkc::Result<ts::MeshIntegrateStats> beside =
+  vkc::Result<vx::MeshIntegrateStats> beside =
       integ.integrate(grid, tet.v.data(), tet.vertex_count(), tet.i.data(),
                       tet.triangle_count(), kSigned);
   CHECK(beside.ok());
@@ -620,10 +620,10 @@ int gpu_main(vr_test::GpuContext& gpu) {
   }
 
   // ---- 9. Refusals, each before the grid is written ---------------------
-  auto refused = [&](const Mesh& m, const ts::MeshSdfParams& params,
+  auto refused = [&](const Mesh& m, const vx::MeshSdfParams& params,
                      const char* needle) -> bool {
     const std::vector<float> before = snapshot(gpu, grid);
-    vkc::Result<ts::MeshIntegrateStats> r =
+    vkc::Result<vx::MeshIntegrateStats> r =
         integ.integrate(grid, m.v.data(), m.vertex_count(), m.i.data(),
                         m.triangle_count(), params);
     if (r.ok()) {
@@ -685,37 +685,37 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
   // Parameters and inputs.
   CHECK(convert(tet, kSigned).ok());
-  CHECK(refused(tet, {ts::MeshSdfMode::Shell, 0.5f}, "shell_voxels"));
-  CHECK(refused(tet, {ts::MeshSdfMode::Shell, 4.0f}, "shell_voxels"));
-  CHECK(refused(tet, {static_cast<ts::MeshSdfMode>(7), 1.5f}, "unknown mode"));
+  CHECK(refused(tet, {vx::MeshSdfMode::Shell, 0.5f}, "shell_voxels"));
+  CHECK(refused(tet, {vx::MeshSdfMode::Shell, 4.0f}, "shell_voxels"));
+  CHECK(refused(tet, {static_cast<vx::MeshSdfMode>(7), 1.5f}, "unknown mode"));
   // MeshSdfParams::validate is integrate's rule, refusal for refusal and
   // message for message, against the grid's own truncation: a shell of 4
   // voxels is refused in this 4-voxel band and taken in an 8-voxel one.
-  for (const ts::MeshSdfParams& bad :
-       {ts::MeshSdfParams{ts::MeshSdfMode::Shell, 0.5f},
-        ts::MeshSdfParams{ts::MeshSdfMode::Shell, 0.866f},
-        ts::MeshSdfParams{ts::MeshSdfMode::Shell, 4.0f},
-        ts::MeshSdfParams{ts::MeshSdfMode::Shell,
+  for (const vx::MeshSdfParams& bad :
+       {vx::MeshSdfParams{vx::MeshSdfMode::Shell, 0.5f},
+        vx::MeshSdfParams{vx::MeshSdfMode::Shell, 0.866f},
+        vx::MeshSdfParams{vx::MeshSdfMode::Shell, 4.0f},
+        vx::MeshSdfParams{vx::MeshSdfMode::Shell,
                           std::numeric_limits<float>::quiet_NaN()},
-        ts::MeshSdfParams{static_cast<ts::MeshSdfMode>(7), 1.5f}}) {
+        vx::MeshSdfParams{static_cast<vx::MeshSdfMode>(7), 1.5f}}) {
     const vkc::Status checked = bad.validate(gp);
     CHECK(checked.domain() == vkc::Status::Code::InvalidArgument);
-    vkc::Result<ts::MeshIntegrateStats> r =
+    vkc::Result<vx::MeshIntegrateStats> r =
         integ.integrate(grid, tet.v.data(), tet.vertex_count(), tet.i.data(),
                         tet.triangle_count(), bad);
     CHECK(!r.ok() && r.status().message() == checked.message());
   }
-  const auto takes = [](ts::MeshSdfMode mode, float shell,
+  const auto takes = [](vx::MeshSdfMode mode, float shell,
                         const vol::VoxelGridParams& g) {
-    return ts::MeshSdfParams{mode, shell}.validate(g).ok();
+    return vx::MeshSdfParams{mode, shell}.validate(g).ok();
   };
-  CHECK(takes(ts::MeshSdfMode::Shell, 0.8660254f, gp));
-  CHECK(takes(ts::MeshSdfMode::Shell, 3.99f, gp));
-  CHECK(takes(ts::MeshSdfMode::Signed, 0.0f, gp));
+  CHECK(takes(vx::MeshSdfMode::Shell, 0.8660254f, gp));
+  CHECK(takes(vx::MeshSdfMode::Shell, 3.99f, gp));
+  CHECK(takes(vx::MeshSdfMode::Signed, 0.0f, gp));
   {
     vol::VoxelGridParams wide = gp;
     wide.trunc_dist = 2.0f * gp.trunc_dist;
-    CHECK(takes(ts::MeshSdfMode::Shell, 4.0f, wide));
+    CHECK(takes(vx::MeshSdfMode::Shell, 4.0f, wide));
   }
   {
     const std::vector<float> before = snapshot(gpu, grid);
@@ -724,7 +724,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     const std::uint32_t bad[3] = {0, 1, 4};
     CHECK(!integ.integrate(grid, tet.v.data(), 4, bad, 1, kSigned).ok());
     // No triangles: nothing to write, and not an error.
-    vkc::Result<ts::MeshIntegrateStats> none =
+    vkc::Result<vx::MeshIntegrateStats> none =
         integ.integrate(grid, tet.v.data(), 4, tet.i.data(), 0, kSigned);
     CHECK(none.ok());
     CHECK(none.value().blocks == 0);
@@ -752,7 +752,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
         vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, big, attrs, 2);
     CHECK(big_grid.ok());
     const std::vector<float> before = snapshot(gpu, big_grid.value());
-    vkc::Result<ts::MeshIntegrateStats> r =
+    vkc::Result<vx::MeshIntegrateStats> r =
         integ.integrate(big_grid.value(), tet.v.data(), tet.vertex_count(),
                         tet.i.data(), tet.triangle_count(), kSigned);
     CHECK(!r.ok() &&
@@ -776,7 +776,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(wide_r.ok());
     vol::VoxelBlockGrid wide = std::move(wide_r).value();
     Mesh moving = divided_quad(-0.487f, 0.513f, -0.493f, 0.507f, z0, 1);
-    auto write = [&]() -> vkc::Result<ts::MeshIntegrateStats> {
+    auto write = [&]() -> vkc::Result<vx::MeshIntegrateStats> {
       VKC_TRY(wide.clear());
       VKC_ASSIGN(auto failed, wide.map().allocate_from_triangles(
                                   moving.v.data(), moving.vertex_count(),
@@ -813,21 +813,21 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
   // ---- 10. Move semantics ------------------------------------------------
   {
-    ts::MeshIntegrator moved(std::move(integ));
+    vx::MeshIntegrator moved(std::move(integ));
     CHECK(moved.valid());
     CHECK(!integ.valid());  // NOLINT(bugprone-use-after-move): the point
     CHECK(!integ
                .integrate(grid, tet.v.data(), tet.vertex_count(), tet.i.data(),
                           tet.triangle_count(), kSigned)
                .ok());
-    vkc::Result<ts::MeshIntegrator> other_r =
-        ts::MeshIntegrator::create(gpu.device, gpu.allocator);
+    vkc::Result<vx::MeshIntegrator> other_r =
+        vx::MeshIntegrator::create(gpu.device, gpu.allocator);
     CHECK(other_r.ok());
-    ts::MeshIntegrator other = std::move(other_r).value();
+    vx::MeshIntegrator other = std::move(other_r).value();
     other = std::move(moved);  // over a live object
     CHECK(other.valid());
     CHECK(!moved.valid());  // NOLINT(bugprone-use-after-move)
-    ts::MeshIntegrator* self = &other;
+    vx::MeshIntegrator* self = &other;
     other = std::move(*self);  // self-move, laundered past -Wself-move
     CHECK(other.valid());
     CHECK(other
@@ -836,7 +836,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
               .ok());
   }
 
-  std::printf("tsdf_mesh_integrate: OK\n");
+  std::printf("voxelize_mesh_integrate: OK\n");
   return 0;
 }
 

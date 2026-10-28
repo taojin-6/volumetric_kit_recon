@@ -190,40 +190,42 @@ vr_embed_shaders(recon_tsdf_integrate_test SHADERS
 vr_target_warnings(recon_tsdf_integrate_test)
 add_test(NAME recon_tsdf_integrate COMMAND recon_tsdf_integrate_test)
 
-# tsdf mesh integrate: write a mesh's truncated distance field (signed through
-# pseudonormals, or as a shell) and check every voxel of every written block
-# against a brute-force host reference -- an independent closest point, and the
-# winding number for inside/outside -- on a sharp tetrahedron, a dented cube, an
-# open quad and a triangle soup, plus determinism (a split binning among it) and
-# every refusal. Skips with no device.
-add_executable(recon_tsdf_mesh_integrate_test tsdf_mesh_integrate_test.cpp)
+# voxelize mesh integrate: write a mesh's truncated distance field (signed
+# through pseudonormals, or as a shell) and check every voxel of every written
+# block against a brute-force host reference -- an independent closest point,
+# and the winding number for inside/outside -- on a sharp tetrahedron, a dented
+# cube, an open quad and a triangle soup, plus determinism (a split binning
+# among it) and every refusal. Skips with no device.
+add_executable(recon_voxelize_mesh_integrate_test
+               voxelize_mesh_integrate_test.cpp)
 target_link_libraries(
-  recon_tsdf_mesh_integrate_test
-  PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
+  recon_voxelize_mesh_integrate_test
+  PRIVATE volumetric_kit::recon_voxelize Vulkan::Vulkan
           volumetric_kit::core_test_policy)
-target_include_directories(recon_tsdf_mesh_integrate_test
+target_include_directories(recon_voxelize_mesh_integrate_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/src)
-vr_target_warnings(recon_tsdf_mesh_integrate_test)
-add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
+vr_target_warnings(recon_voxelize_mesh_integrate_test)
+add_test(NAME recon_voxelize_mesh_integrate
+         COMMAND recon_voxelize_mesh_integrate_test)
 
-# tsdf mesh integrate, exactly: the kernel's early exit writes, bit for bit,
+# voxelize mesh integrate, exactly: the kernel's early exit writes, bit for bit,
 # what a brute force (shaders/mesh_integrate_reference.comp) writes measuring
 # every triangle of each voxel's bin -- on shared vertices with opposite
 # windings, duplicates, near-coincident sheets, slivers, metre-long triangles, a
 # far sphere, bins past the kernel's sort, three block sizes, both modes. Skips
 # with no device.
-add_executable(recon_tsdf_mesh_integrate_exact_test
-               tsdf_mesh_integrate_exact_test.cpp)
+add_executable(recon_voxelize_mesh_integrate_exact_test
+               voxelize_mesh_integrate_exact_test.cpp)
 target_link_libraries(
-  recon_tsdf_mesh_integrate_exact_test
-  PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
+  recon_voxelize_mesh_integrate_exact_test
+  PRIVATE volumetric_kit::recon_voxelize Vulkan::Vulkan
           volumetric_kit::core_test_policy)
 vr_embed_shaders(
-  recon_tsdf_mesh_integrate_exact_test SHADERS
+  recon_voxelize_mesh_integrate_exact_test SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_integrate_reference.comp")
-vr_target_warnings(recon_tsdf_mesh_integrate_exact_test)
-add_test(NAME recon_tsdf_mesh_integrate_exact
-         COMMAND recon_tsdf_mesh_integrate_exact_test)
+vr_target_warnings(recon_voxelize_mesh_integrate_exact_test)
+add_test(NAME recon_voxelize_mesh_integrate_exact
+         COMMAND recon_voxelize_mesh_integrate_exact_test)
 # GPU pre-processing (recon_sensor_utils) on synthetic frames: undistortion in
 # the right direction, the colour matrix, a host reference of the sampling, the
 # refusals, the outputs' sharing, read on another queue family, and fusing the
@@ -312,13 +314,14 @@ if(TARGET volumetric_kit::recon_sensor_orbbec)
   target_compile_definitions(recon_example_config_test
                              PRIVATE VR_TEST_ORBBEC_CONFIG=1)
 endif()
-# codec_config.hpp maps the outputs into the sender tier's CodecOutputs, and the
-# sweep's report compares with eval's. recon_sender brings the codec and the
-# sensor tiers: naming them too would repeat their archives on the link line.
+# codec_config.hpp maps the outputs into the sender tier's CodecOutputs and a
+# mesh source into voxelize's MeshSdfParams, and the sweep's report compares
+# with eval's. recon_sender brings the codec and the sensor tiers: naming them
+# too would repeat their archives on the link line.
 target_link_libraries(
   recon_example_config_test
   PRIVATE volumetric_kit::core_config volumetric_kit::recon_eval
-          volumetric_kit::recon_sender)
+          volumetric_kit::recon_sender volumetric_kit::recon_voxelize)
 target_compile_definitions(
   recon_example_config_test
   PRIVATE VR_CONFIG_FIXTURES="${PROJECT_SOURCE_DIR}/config/examples")
@@ -425,7 +428,7 @@ target_link_libraries(
   recon_example_codec_report_test
   PRIVATE volumetric_kit::core_config volumetric_kit::core_test_policy
           volumetric_kit::recon_eval volumetric_kit::recon_sender
-          Vulkan::Vulkan)
+          volumetric_kit::recon_voxelize Vulkan::Vulkan)
 vr_target_warnings(recon_example_codec_report_test)
 add_test(NAME recon_example_codec_report
          COMMAND recon_example_codec_report_test)
@@ -1723,11 +1726,11 @@ endif()
 # only the order matters.
 set_tests_properties(recon_codec_inter PROPERTIES COST 115)
 set_tests_properties(recon_codec_decoder PROPERTIES COST 96)
-set_tests_properties(recon_tsdf_mesh_integrate_exact PROPERTIES COST 56)
+set_tests_properties(recon_voxelize_mesh_integrate_exact PROPERTIES COST 56)
 set_tests_properties(recon_eval_mesh_distance PROPERTIES COST 55)
 set_tests_properties(recon_codec_device_frame PROPERTIES COST 52)
 set_tests_properties(recon_sender_codec_stream PROPERTIES COST 49)
-set_tests_properties(recon_tsdf_mesh_integrate PROPERTIES COST 36)
+set_tests_properties(recon_voxelize_mesh_integrate PROPERTIES COST 36)
 set_tests_properties(recon_codec_encoder PROPERTIES COST 30)
 set_tests_properties(recon_sender_set_sender PROPERTIES COST 29)
 # Waits out RigSets' 10-s silence limit, under any build.
