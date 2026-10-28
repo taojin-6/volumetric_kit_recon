@@ -363,7 +363,7 @@ target_include_directories(recon_example_set_dump_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
 target_link_libraries(
   recon_example_set_dump_test PRIVATE volumetric_kit::recon_sensor_array
-                                      volumetric_kit::recon_io)
+                                      volumetric_kit::recon_image_io)
 vr_target_warnings(recon_example_set_dump_test)
 add_test(NAME recon_example_set_dump COMMAND recon_example_set_dump_test)
 
@@ -437,7 +437,7 @@ add_test(NAME recon_example_codec_report
 # cleared grid, and code_frame's records and the transform in the stream.
 # examples/ defines vr_example_mesh after this directory. The device part skips
 # with no device.
-if(VR_BUILD_EXAMPLES AND TARGET recon_io_assimp)
+if(VR_BUILD_EXAMPLES AND TARGET recon_mesh_io_assimp)
   add_executable(recon_example_mesh_sequence_test
                  example_mesh_sequence_test.cpp)
   target_link_libraries(
@@ -1431,15 +1431,18 @@ if(VR_WITH_ORBBEC)
   add_test(NAME recon_sensor_orbbec_jpeg COMMAND recon_sensor_orbbec_jpeg_test)
 endif()
 
-# Host asset I/O remains testable without creating a Vulkan device.
+# Host asset I/O remains testable without creating a Vulkan device. Each test
+# links its own target alone: image I/O, on the family core's base tier, with no
+# mesh tier and no Vulkan (subproject/ checks its links).
 add_executable(recon_io_image_test io_image_test.cpp
                                    test_allocation_failure.cpp)
-target_link_libraries(recon_io_image_test PRIVATE volumetric_kit::recon_io)
+target_link_libraries(recon_io_image_test
+                      PRIVATE volumetric_kit::recon_image_io)
 vr_target_warnings(recon_io_image_test)
 add_test(NAME recon_io_image COMMAND recon_io_image_test)
 
 add_executable(recon_io_ply_test io_ply_test.cpp)
-target_link_libraries(recon_io_ply_test PRIVATE volumetric_kit::recon_io)
+target_link_libraries(recon_io_ply_test PRIVATE volumetric_kit::recon_mesh_io)
 vr_target_warnings(recon_io_ply_test)
 add_test(NAME recon_io_ply COMMAND recon_io_ply_test)
 
@@ -1447,24 +1450,26 @@ add_test(NAME recon_io_ply COMMAND recon_io_ply_test)
 add_executable(recon_io_mesh_normalization_test io_mesh_normalization_test.cpp
                                                 test_allocation_failure.cpp)
 target_link_libraries(recon_io_mesh_normalization_test
-                      PRIVATE volumetric_kit::recon_io)
+                      PRIVATE volumetric_kit::recon_mesh_io)
 vr_target_warnings(recon_io_mesh_normalization_test)
 add_test(NAME recon_io_mesh_normalization
          COMMAND recon_io_mesh_normalization_test)
 
 # io::check_mesh_file, the one home of a mesh path's checks, and load_mesh
 # answering through it. Host only; built with the Assimp backend.
-if(TARGET recon_io_assimp)
+if(TARGET recon_mesh_io_assimp)
   add_executable(recon_io_mesh_file_test io_mesh_file_test.cpp)
   target_link_libraries(recon_io_mesh_file_test
-                        PRIVATE volumetric_kit::recon_io_assimp)
+                        PRIVATE volumetric_kit::recon_mesh_io_assimp)
   vr_target_warnings(recon_io_mesh_file_test)
   add_test(NAME recon_io_mesh_file COMMAND recon_io_mesh_file_test)
 
-  # io::load_textured_mesh on a procedural OBJ + MTL + PNG cube it writes.
+  # io::load_textured_mesh on a procedural OBJ + MTL + PNG cube it writes, the
+  # PNG with image I/O.
   add_executable(recon_io_textured_mesh_test io_textured_mesh_test.cpp)
-  target_link_libraries(recon_io_textured_mesh_test
-                        PRIVATE volumetric_kit::recon_io_assimp)
+  target_link_libraries(
+    recon_io_textured_mesh_test PRIVATE volumetric_kit::recon_mesh_io_assimp
+                                        volumetric_kit::recon_image_io)
   vr_target_warnings(recon_io_textured_mesh_test)
   add_test(NAME recon_io_textured_mesh COMMAND recon_io_textured_mesh_test)
 endif()
@@ -1644,10 +1649,11 @@ endif()
 
 # What a sibling that fetches recon gets (subproject/): its configure, from a
 # clean tree, with each dependency this build fetched as a local source, so it
-# needs no network. The defaults hold, and recon refuses a core the sibling made
-# available first that is older than VR_CORE_MIN_VERSION or lacks the vulkan
-# tier. The old core is this one stamped 0.0.1, standing in for one below a
-# later floor: a real core older than 0.1.0 has no vkc_require_core at all.
+# needs no network. The defaults hold, image I/O links the core's base tier
+# alone, and recon refuses a core the sibling made available first that is older
+# than VR_CORE_MIN_VERSION or lacks the vulkan tier. The old core is this one
+# stamped 0.0.1, standing in for one below a later floor: a real core older than
+# 0.1.0 has no vkc_require_core at all.
 #
 # TODO: move this core-requirement harness -- the message helper and
 # subproject/'s version stamp, which gfx and calib repeat -- into the core's

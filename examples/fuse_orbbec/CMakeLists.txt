@@ -10,7 +10,11 @@ add_executable(fuse_orbbec main.cpp)
 
 target_link_libraries(
   fuse_orbbec
-  PRIVATE vr_example_common volumetric_kit::recon_eval
-          volumetric_kit::recon_sender volumetric_kit::recon_sensor_orbbec
-          volumetric_kit::recon_sensor_array Vulkan::Vulkan)
+  PRIVATE vr_example_common
+          volumetric_kit::recon_eval
+          volumetric_kit::recon_mesh_io
+          volumetric_kit::recon_sender
+          volumetric_kit::recon_sensor_orbbec
+          volumetric_kit::recon_sensor_array
+          Vulkan::Vulkan)
 vr_target_warnings(fuse_orbbec)
