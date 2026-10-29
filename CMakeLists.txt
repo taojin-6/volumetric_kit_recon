@@ -75,11 +75,11 @@ find_package(Vulkan REQUIRED)
 # output.max_viewers fuse_orbbec serves by; 0.29.0 brought the vulkan/fwd.hpp
 # the public headers include, and 0.28.0 the test support the tests run on. The
 # oldest sensor package is 0.1.0, its first, whose sensor_frame recon's
-# libraries link; the oldest grid is VR_GRID_MIN_VERSION: 0.2.1, whose
+# libraries link; the oldest grid is VR_GRID_MIN_VERSION: 0.3.0, whose
 # codec_outputs passes output.max_viewers to the server.
 set(VR_CORE_MIN_VERSION 0.30.0)
 set(VR_SENSOR_MIN_VERSION 0.1.0)
-set(VR_GRID_MIN_VERSION 0.2.1)
+set(VR_GRID_MIN_VERSION 0.3.0)
 # Testing is on before third_party/ adds the sensor package, so its tests join
 # this build's CTest tree.
 if(VR_BUILD_TESTS)
