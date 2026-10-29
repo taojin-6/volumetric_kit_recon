@@ -30,6 +30,7 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
+#include "depth_inputs.hpp"
 #include "gpu_test.hpp"
 #include "grid_readback.hpp"
 #include "sphere_scene.hpp"
@@ -42,6 +43,8 @@ namespace tsdf = volumetric_kit::recon::tsdf;
 namespace {
 
 constexpr int kCameras = 3;
+
+using View = vr_test::SphereView<vr::DepthCameraParams>;
 
 vol::VoxelGridParams params(std::int32_t num_buckets) {
   vol::VoxelGridParams grid{};
@@ -142,10 +145,12 @@ int gpu_main(vr_test::GpuContext& gpu) {
   const vr_test::Gpu ctx{dev, alloc};
 
   // The set: three cameras, depth and colour on the host.
-  std::vector<vr_test::SphereView> views;
-  for (int c = 0; c < kCameras; ++c) views.push_back(vr_test::sphere_view(c));
+  std::vector<View> views;
+  for (int c = 0; c < kCameras; ++c) {
+    views.push_back(vr_test::sphere_view<vr::DepthCameraParams>(c));
+  }
   std::vector<tsdf::ColorFrame> colors;
-  for (const vr_test::SphereView& v : views) {
+  for (const View& v : views) {
     colors.push_back({v.color.data(),
                       {v.cam.fx, v.cam.fy, v.cam.cx, v.cam.cy, v.cam.width,
                        v.cam.height, v.cam.cam_to_world},
@@ -153,7 +158,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   }
   std::vector<tsdf::FrameInput> set;
   for (int c = 0; c < kCameras; ++c) {
-    set.push_back({{vkc::StorageInput(views[c].depth.data()), views[c].cam},
+    set.push_back({vkc::StorageInput(views[c].depth.data()), views[c].cam,
                    &colors[std::size_t(c)]});
   }
 
@@ -162,7 +167,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
   auto reference = make_grid(dev, alloc, params(256));
   CHECK(integrator.ok() && reference.ok());
-  const std::vector<vol::DepthInput> depths(set.begin(), set.end());
+  const std::vector<vol::DepthInput> depths = vr_test::depth_inputs(set);
   for (int pass = 0; pass < 2; ++pass) {
     auto failed = reference->map().allocate_from_depth(depths);
     CHECK(failed.ok() && failed.value() == 0);
@@ -286,7 +291,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       for (const std::size_t cameras : {std::size_t{1}, set.size()}) {
         const std::vector<tsdf::FrameInput> frames(set.begin(),
                                                    set.begin() + cameras);
-        const std::vector<vol::DepthInput> band(frames.begin(), frames.end());
+        const std::vector<vol::DepthInput> band = vr_test::depth_inputs(frames);
         tsdf::FuserConfig config;
         config.allow_partial = partial;
         auto fuser = make_fuser(dev, alloc, config);
@@ -378,9 +383,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
     for (int c = 0; c < kCameras; ++c) {
       device_colors[std::size_t(c)].pixels = nullptr;
       device_colors[std::size_t(c)].buffer = &color_buffers[std::size_t(c)];
-      device_set.push_back(
-          {{vkc::StorageInput(depth_buffers[std::size_t(c)]), views[c].cam},
-           &device_colors[std::size_t(c)]});
+      device_set.push_back({vkc::StorageInput(depth_buffers[std::size_t(c)]),
+                            views[c].cam, &device_colors[std::size_t(c)]});
     }
     auto fuser = make_fuser(dev, alloc);
     auto grid = make_grid(dev, alloc, params(1024));
@@ -409,7 +413,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     std::vector<tsdf::FrameInput> first{set[0]};
     std::uint32_t first_blocks = 0;
     for (const std::vector<tsdf::FrameInput>* frames : {&first, &set}) {
-      const std::vector<vol::DepthInput> band(frames->begin(), frames->end());
+      const std::vector<vol::DepthInput> band = vr_test::depth_inputs(*frames);
       auto failed = expected->map().allocate_from_depth(band);
       CHECK(failed.ok() && failed.value() == 0);
       CHECK(integrator->integrate(*expected, *frames).ok());

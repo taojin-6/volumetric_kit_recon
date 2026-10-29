@@ -33,6 +33,18 @@ std::uint64_t next_serial() noexcept {
   return counter.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
+// The frames' depth, as allocation takes it. Throws std::bad_alloc, which the
+// callers' entry points turn into a status.
+std::vector<volume::DepthInput> depth_inputs(
+    const std::vector<FrameInput>& frames) {
+  std::vector<volume::DepthInput> out;
+  out.reserve(frames.size());
+  for (const FrameInput& f : frames) {
+    out.push_back({f.depth, to_depth_pinhole(f.camera)});
+  }
+  return out;
+}
+
 }  // namespace
 
 // What finish needs of a recorded set: its frames and fusion, to fuse again;
@@ -107,7 +119,7 @@ core::Status Fuser::fuse_blocking(volume::VoxelBlockGrid& grid,
                                   float max_weight, IntegrationMode mode,
                                   FuseReport& report, bool& may_grow,
                                   core::StageMetrics* metrics) {
-  const std::vector<volume::DepthInput> depths(frames.begin(), frames.end());
+  const std::vector<volume::DepthInput> depths = depth_inputs(frames);
   int lock_retries = 0;
   for (;;) {
     VKC_ASSIGN(report.dropped, grid.map().allocate_from_depth(
@@ -188,7 +200,7 @@ core::Result<PendingFuse> Fuser::record_fuse(
         !config_.allow_partial || grid.map().allocated_blocks() == 0;
     const volume::DeviceCount gate{&gate_, 0, 1};
     const volume::DeviceCount* gated = recorded->gated ? &gate : nullptr;
-    const std::vector<volume::DepthInput> depths(frames.begin(), frames.end());
+    const std::vector<volume::DepthInput> depths = depth_inputs(frames);
     // One row for the set, the round and the compaction its breakdowns with
     // their device halves alone, as its host time holds theirs. The rows are
     // placed now, the stage's first, so a batch's later stages, whose device

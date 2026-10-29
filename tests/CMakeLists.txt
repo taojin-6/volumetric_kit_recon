@@ -132,6 +132,28 @@ target_link_libraries(recon_volume_hash_test
 vr_target_warnings(recon_volume_hash_test)
 add_test(NAME recon_volume_hash COMMAND recon_volume_hash_test)
 
+# The volume tier is camera-free: no header, source or shader of it includes the
+# camera vocabulary, core/camera_params.hpp or core/shaders/pinhole.glsl
+# (volume_camera_free.cmake).
+add_test(NAME recon_volume_camera_free
+         COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}" -P
+                 "${CMAKE_CURRENT_SOURCE_DIR}/volume_camera_free.cmake")
+
+# Volume's depth unprojection (volume/shaders/depth_pinhole.glsl) on the device
+# against core/shaders/pinhole.glsl's, bit for bit, and the host's pinhole in
+# double (shaders/depth_unproject_cases.comp). Skips where no device is present.
+add_executable(recon_volume_depth_unproject_test
+               volume_depth_unproject_test.cpp)
+vr_embed_shaders(recon_volume_depth_unproject_test SHADERS
+                 shaders/depth_unproject_cases.comp)
+target_link_libraries(
+  recon_volume_depth_unproject_test
+  PRIVATE volumetric_kit::recon_core Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_volume_depth_unproject_test)
+add_test(NAME recon_volume_depth_unproject
+         COMMAND recon_volume_depth_unproject_test)
+
 # volume GPU hash map: build a VoxelHashMap, allocate a cube of block coords,
 # compact, and verify the active set round-trips on the real driver (MoltenVK /
 # NVIDIA). The table's entry layout is internal (hash.hpp), reached by include
@@ -172,6 +194,15 @@ target_include_directories(recon_volume_block_stamps_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_volume_block_stamps_test)
 add_test(NAME recon_volume_block_stamps COMMAND recon_volume_block_stamps_test)
+
+# tsdf::to_depth_pinhole: fusion's DepthCameraParams becomes volume's
+# DepthPinhole field for field, byte for byte, the two layouts asserted equal.
+# Host-only, so it always runs.
+add_executable(recon_tsdf_depth_pinhole_test tsdf_depth_pinhole_test.cpp)
+target_link_libraries(recon_tsdf_depth_pinhole_test
+                      PRIVATE volumetric_kit::recon_tsdf)
+vr_target_warnings(recon_tsdf_depth_pinhole_test)
+add_test(NAME recon_tsdf_depth_pinhole COMMAND recon_tsdf_depth_pinhole_test)
 
 # tsdf integrate: fuse a synthetic constant-depth plane into a VoxelBlockGrid
 # and verify the classic projective TSDF math per voxel (sdf, truncation, weight
@@ -633,7 +664,8 @@ add_test(NAME recon_volume_grid_growth COMMAND recon_volume_grid_growth_test)
 # volume allocate-from-depth: unproject a synthetic one-pixel depth frame and
 # verify exactly the expected (2*tb+1)^3 truncation-band block cube is allocated
 # on the real driver -- the camera unprojection + band dilation, plus the
-# DepthCameraParams scalar-layout upload. Skips where no device is present.
+# DepthPinhole scalar-layout upload -- and pin the blocks, heap count and stamps
+# three posed frames allocate. Skips where no device is present.
 add_executable(recon_volume_allocate_test volume_allocate_test.cpp)
 target_link_libraries(
   recon_volume_allocate_test

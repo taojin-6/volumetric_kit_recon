@@ -46,17 +46,16 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"  // DepthCameraParams
 
 #include "gpu_test.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace tex = volumetric_kit::recon::texture;
-namespace vol = volumetric_kit::recon::volume;
 namespace rmesh = volumetric_kit::recon::mesh;
 
 namespace {
