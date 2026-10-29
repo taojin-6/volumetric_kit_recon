@@ -20,8 +20,8 @@
 #include <utility>
 #include <vector>
 
-#include "scratch_dir.hpp"
-#include "test_check.hpp"
+#include "volumetric_kit/core/testing/scratch_dir.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/recon/io/image_io.hpp"
 #include "volumetric_kit/recon/io/mesh_io.hpp"
 #include "volumetric_kit/recon/io/textured_mesh.hpp"
@@ -101,7 +101,7 @@ bool same_error(const vkc::Status& a, const vkc::Status& b) {
 }  // namespace
 
 int main() {
-  vr_test::Scratch scratch("recon_io_textured_mesh_");
+  vkc::test::Scratch scratch("recon_io_textured_mesh_");
   const fs::path dir = scratch.path;
   CHECK(fs::create_directory(dir / "materials"));
 

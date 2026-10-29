@@ -174,9 +174,10 @@ jobs:
       - name: Test
         if: steps.detect.outputs.present == 'true'
         env:
-          # The core's test policy (tests/gpu_test.hpp). lavapipe is required
-          # above, so a GPU test fails rather than skips without a device, and
-          # fails on any error the layer reports, missing barriers included.
+          # The core's test policy (core/testing/gpu_test.hpp). lavapipe is
+          # required above, so a GPU test fails rather than skips without a
+          # device, and fails on any error the layer reports, missing barriers
+          # included.
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
           VKC_TEST_SYNC_VALIDATION: '1'

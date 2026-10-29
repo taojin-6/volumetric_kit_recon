@@ -15,11 +15,12 @@
 #include <tuple>
 #include <vector>
 
-#include "buffer_readback.hpp"
 #include "fuse_frame.hpp"
-#include "gpu_test.hpp"
 #include "grid_readback.hpp"
-#include "test_check.hpp"
+#include "volumetric_kit/core/testing/buffer_readback.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
@@ -53,17 +54,17 @@ sensor::RgbdFrame wall(const std::vector<std::uint16_t>& depth,
   return frame;
 }
 
-int check_retained(const vr_test::Gpu& gpu,
+int check_retained(const vkc::test::Gpu& gpu,
                    vr::texture::ProjectiveTexturer& texturer,
                    const std::optional<sensor::DeviceFrame>& keyframe) {
   CHECK(keyframe && keyframe->has_color());
   CHECK(keyframe->timestamp_ns == 1);
   CHECK(keyframe->depth_camera.cam_to_world == vr::Mat4f(1.0f));
   CHECK(keyframe->color_camera.cam_to_world == vr::Mat4f(1.0f));
-  auto depth = vr_test::read_back<float>(gpu.device, gpu.allocator,
-                                         *keyframe->depth, kPixels);
-  auto color = vr_test::read_back<std::uint32_t>(gpu.device, gpu.allocator,
-                                                 *keyframe->color, kPixels);
+  auto depth = vkc::test::read_back<float>(gpu.device, gpu.allocator,
+                                           *keyframe->depth, kPixels);
+  auto color = vkc::test::read_back<std::uint32_t>(gpu.device, gpu.allocator,
+                                                   *keyframe->color, kPixels);
   CHECK(depth.ok() && color.ok());
   CHECK(*depth == std::vector<float>(kPixels, 1.0f));
   CHECK(*color == std::vector<std::uint32_t>(kPixels, kColor | 0xFF000000u));
@@ -96,7 +97,7 @@ int check_retained(const vr_test::Gpu& gpu,
 // fuse_keyframe fuses in the mode it is given: a wall at 1 m, then the same
 // camera seeing it at 2 m, so the first wall's band is free space well ahead
 // of the second's. Classic leaves weight there; Dynamic clears all of it.
-int check_mode(vr_test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
+int check_mode(vkc::test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
   auto volume = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
                                              0.15f, 256);
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
@@ -136,7 +137,7 @@ int check_mode(vr_test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
   return 0;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   auto volume = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
                                              0.15f, 256);
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
@@ -201,10 +202,10 @@ int gpu_main(vr_test::GpuContext& gpu) {
             .ok());
   CHECK(keyframe && keyframe->timestamp_ns == 2);
   CHECK(keyframe->color_camera.cam_to_world[3][0] == 0.25f);
-  auto depth = vr_test::read_back<float>(gpu.device, gpu.allocator,
-                                         *keyframe->depth, kPixels);
-  auto color = vr_test::read_back<std::uint32_t>(gpu.device, gpu.allocator,
-                                                 *keyframe->color, kPixels);
+  auto depth = vkc::test::read_back<float>(gpu.device, gpu.allocator,
+                                           *keyframe->depth, kPixels);
+  auto color = vkc::test::read_back<std::uint32_t>(gpu.device, gpu.allocator,
+                                                   *keyframe->color, kPixels);
   CHECK(depth.ok() && *depth == std::vector<float>(kPixels, 2.0f));
   CHECK(color.ok() &&
         *color == std::vector<std::uint32_t>(kPixels, 0xFF1122CCu));
@@ -220,5 +221,5 @@ int gpu_main(vr_test::GpuContext& gpu) {
 int main() {
   CHECK(vr_example::integration_mode(true) == kDynamic);
   CHECK(vr_example::integration_mode(false) == kClassic);
-  return vr_test::run_on_gpu(gpu_main);
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
 }

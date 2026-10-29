@@ -17,8 +17,8 @@
 #include <cstring>
 #include <vector>
 
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
@@ -28,8 +28,9 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
-#include "gpu_test.hpp"
 #include "grid_readback.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -64,7 +65,7 @@ vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
 }
 
 // Weight must match everywhere; tsdf and colour only where observed.
-int check_same(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& a,
+int check_same(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& a,
                vol::VoxelBlockGrid& b) {
   std::size_t observed = 0;
   CHECK(vr_test::compare_grids(
@@ -100,7 +101,7 @@ struct ColorCounts {
   std::size_t black = 0;
   std::size_t none = 0;
 };
-vkc::Result<ColorCounts> color_counts(const vr_test::Gpu& ctx,
+vkc::Result<ColorCounts> color_counts(const vkc::test::Gpu& ctx,
                                       vol::VoxelBlockGrid& g) {
   VKC_ASSIGN(const std::vector<vol::BlockIndex> active,
              g.map().compact_active_blocks());
@@ -129,7 +130,7 @@ int test_coverage(vkc::Device& dev, vkc::Allocator& alloc,
                   tsdf::TsdfIntegrator& integrator,
                   const std::vector<float>& depth,
                   const vr::DepthCameraParams& cam) {
-  const vr_test::Gpu ctx{dev, alloc};
+  const vkc::test::Gpu ctx{dev, alloc};
   std::vector<std::uint32_t> color(kWidth * kHeight);
   for (std::uint32_t v = 0; v < kHeight; ++v) {
     for (std::uint32_t u = 0; u < kWidth; ++u) {
@@ -138,7 +139,7 @@ int test_coverage(vkc::Device& dev, vkc::Allocator& alloc,
                          : (200u | (100u << 8) | (50u << 16) | 0xFF000000u);
     }
   }
-  auto color_buf = vr_test::upload_device_buffer(
+  auto color_buf = vkc::test::upload_device_buffer(
       dev, alloc, color.data(), color.size() * sizeof(std::uint32_t));
   CHECK(color_buf.ok());
   tsdf::ColorFrame frame{};
@@ -169,7 +170,7 @@ int test_coverage(vkc::Device& dev, vkc::Allocator& alloc,
   return 0;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::Device& dev = gpu.device;
   vkc::Allocator& alloc = gpu.allocator;
 
@@ -205,9 +206,9 @@ int gpu_main(vr_test::GpuContext& gpu) {
   auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
   CHECK(integrator.ok());
 
-  auto depth_buf = vr_test::upload_device_buffer(dev, alloc, depth.data(),
-                                                 depth.size() * sizeof(float));
-  auto color_buf = vr_test::upload_device_buffer(
+  auto depth_buf = vkc::test::upload_device_buffer(
+      dev, alloc, depth.data(), depth.size() * sizeof(float));
+  auto color_buf = vkc::test::upload_device_buffer(
       dev, alloc, color.data(), color.size() * sizeof(std::uint32_t));
   CHECK(depth_buf.ok() && color_buf.ok());
   CHECK(depth_buf.value().is_device_local() &&
@@ -270,8 +271,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
             .domain() == invalid);
   CHECK(integrator->integrate(device_grid.value(), empty, cam).domain() ==
         invalid);
-  auto small = vr_test::upload_device_buffer(dev, alloc, depth.data(),
-                                             sizeof(float) * kWidth);
+  auto small = vkc::test::upload_device_buffer(dev, alloc, depth.data(),
+                                               sizeof(float) * kWidth);
   CHECK(small.ok());
   CHECK(device_grid->map()
             .allocate_from_depth(small.value(), pinhole)
@@ -326,4 +327,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

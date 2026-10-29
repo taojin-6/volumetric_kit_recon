@@ -32,20 +32,19 @@ include(FetchContent)
 # alone. It leaves VKC_WITH_VULKAN unset rather than OFF, as calib does, so an
 # application that turns the tier on keeps it.
 #
-# The pin is core 0.25.0 (effc464, core #62's merge), as is the Homebrew key
+# The pin is core 0.29.0 (a4a6fff, core #65's merge), as is the Homebrew key
 # action in .github/workflows/_build.yml; the vkc_require_core checks below say
-# which core each part needs.
-#
-# TODO: pin a core release tag once the core tags its releases.
+# which core each part needs. The tests are main()s of their own on the core's
+# test support, whose Vulkan-free part a camera-only build's tests use too.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG effc4649acf4c418fe45143c6b728197f2bcbb58)
+  GIT_TAG a4a6fff4af65b26b25df27c8ed8c9eecbfbfcd87)
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
-  if(VR_BUILD_TESTS)
-    set(VKC_BUILD_TEST_SUPPORT ON)
-  endif()
+endif()
+if(VR_BUILD_TESTS)
+  set(VKC_BUILD_TEST_SUPPORT ON)
 endif()
 # Scenario parsing is optional and used only by executable examples and their
 # host-side adapter tests. Camera-only and library consumers need no parser.
@@ -66,9 +65,9 @@ if(VR_CAMERA_ONLY)
 else()
   vkc_require_core(${VR_CORE_MIN_VERSION} VULKAN)
 endif()
-if(NOT VR_CAMERA_ONLY
-   AND VR_BUILD_TESTS
-   AND NOT TARGET volumetric_kit::core_test_policy)
+if(VR_BUILD_TESTS
+   AND NOT (TARGET volumetric_kit::core_test_base
+            AND (VR_CAMERA_ONLY OR TARGET volumetric_kit::core_test_policy)))
   message(
     FATAL_ERROR
       "recon's tests need volumetric_kit_core's test support: set "

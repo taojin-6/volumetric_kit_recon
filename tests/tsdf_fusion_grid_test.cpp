@@ -14,12 +14,14 @@
 #include <string>
 #include <vector>
 
-#include "gpu_test.hpp"
-#include "test_check.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 
+namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
@@ -93,7 +95,7 @@ int host_checks(const vkc::test::LogCapture& log) {
 // The grid: block_grid_params' layout at the caller's start, carrying the
 // fuser's three attributes; and the cap is the ceiling it grows to on this
 // device.
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   auto grid =
       tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.02f, 0.08f, 1);
   CHECK(grid.ok() && grid->grid().num_buckets == 1);
@@ -132,7 +134,7 @@ int main() {
     const vkc::test::LogCapture log;
     CHECK(host_checks(log) == 0);
   }
-  const int rc = vr_test::run_on_gpu(gpu_main);
+  const int rc = vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
   if (rc == 0) std::puts("tsdf_fusion_grid: OK");
   return rc;
 }

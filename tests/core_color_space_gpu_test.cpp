@@ -30,7 +30,7 @@
 #include <fstream>
 #include <vector>
 
-#include "buffer_readback.hpp"
+#include "volumetric_kit/core/testing/buffer_readback.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/compute_pipeline.hpp"
@@ -42,7 +42,8 @@
 #include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 
-#include "gpu_test.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -69,7 +70,7 @@ std::vector<std::uint32_t> load_spirv(const char* path) {
   return words;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   // Device-only, as every buffer a kernel writes: the host reads the results
   // back through a batch rather than across the bus.
   auto make_buffer = [&](std::size_t bytes) {
@@ -168,11 +169,11 @@ int gpu_main(vr_test::GpuContext& gpu) {
     return 1;
   }
 
-  vkc::Result<std::vector<float>> linear_out = vr_test::read_back<float>(
+  vkc::Result<std::vector<float>> linear_out = vkc::test::read_back<float>(
       gpu.device, gpu.allocator, linear_buf.value(), kCodes);
   vkc::Result<std::vector<std::uint32_t>> round_out =
-      vr_test::read_back<std::uint32_t>(gpu.device, gpu.allocator,
-                                        round_buf.value(), kCodes);
+      vkc::test::read_back<std::uint32_t>(gpu.device, gpu.allocator,
+                                          round_buf.value(), kCodes);
   if (!linear_out || !round_out) {
     std::fprintf(stderr, "readback failed\n");
     return 1;
@@ -225,4 +226,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}
