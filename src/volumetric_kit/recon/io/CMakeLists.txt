@@ -5,40 +5,76 @@ include(GenerateExportHeader)
 
 set(_vr_io_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 
-# Host image decoding / PNG encoding, Mesh -> PLY serialization and the opt-in
-# mesh normalization helpers. The implementation-only libraries have no public
-# headers or targets.
-add_library(recon_io image_io.cpp mesh_normalization.cpp ply_writer.cpp
-                     stb_impl.cpp tinyply_impl.cpp)
-add_library(volumetric_kit::recon_io ALIAS recon_io)
+# --- recon_image_io: host image decoding and PNG encoding ---------------------
+# On the family core's base tier alone, with no Vulkan and no other recon tier,
+# so a capture app writes its images without the mesh stack. stb's
+# implementation is private: no public header or target.
+add_library(recon_image_io image_io.cpp stb_impl.cpp)
+add_library(volumetric_kit::recon_image_io ALIAS recon_image_io)
 generate_export_header(
-  recon_io
+  recon_image_io
   BASE_NAME
-  VR_IO
+  VR_IMAGE_IO
   EXPORT_MACRO_NAME
-  VR_IO_API
+  VR_IMAGE_IO_API
   EXPORT_FILE_NAME
-  "${_vr_io_generated_inc}/volumetric_kit/recon/io/export.hpp")
+  "${_vr_io_generated_inc}/volumetric_kit/recon/io/image_io_export.hpp")
 set_target_properties(
-  recon_io
+  recon_image_io
   PROPERTIES CXX_VISIBILITY_PRESET hidden
              VISIBILITY_INLINES_HIDDEN ON
              POSITION_INDEPENDENT_CODE ON)
-get_target_property(_vr_io_type recon_io TYPE)
-if(_vr_io_type STREQUAL "STATIC_LIBRARY")
-  target_compile_definitions(recon_io PUBLIC VR_IO_STATIC_DEFINE)
+get_target_property(_vr_image_io_type recon_image_io TYPE)
+if(_vr_image_io_type STREQUAL "STATIC_LIBRARY")
+  target_compile_definitions(recon_image_io PUBLIC VR_IMAGE_IO_STATIC_DEFINE)
 endif()
-target_compile_features(recon_io PUBLIC cxx_std_17)
+target_compile_features(recon_image_io PUBLIC cxx_std_17)
 # Catch backend / allocation exceptions at the Status boundary even when a
 # consuming application globally disables exceptions. Keep this private.
-target_compile_options(recon_io PRIVATE -fexceptions)
-target_link_libraries(recon_io PUBLIC recon_mesh)
+target_compile_options(recon_image_io PRIVATE -fexceptions)
+# PUBLIC: the header returns the core's Status/Result.
+target_link_libraries(recon_image_io PUBLIC volumetric_kit::core_base)
 target_include_directories(
-  recon_io PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-                  "$<BUILD_INTERFACE:${_vr_io_generated_inc}>")
-target_include_directories(recon_io SYSTEM PRIVATE "${VR_STB_INCLUDE_DIR}"
-                                                   "${VR_TINYPLY_INCLUDE_DIR}")
-vr_target_warnings(recon_io)
+  recon_image_io PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+                        "$<BUILD_INTERFACE:${_vr_io_generated_inc}>")
+target_include_directories(recon_image_io SYSTEM
+                           PRIVATE "${VR_STB_INCLUDE_DIR}")
+vr_target_warnings(recon_image_io)
+
+# --- recon_mesh_io: mesh files ------------------------------------------------
+# Mesh -> PLY serialization, the host triangle containers and the opt-in mesh
+# normalization helpers. PUBLIC recon_mesh because write_ply takes a mesh::Mesh.
+# tinyply's implementation is private: no public header or target.
+add_library(recon_mesh_io mesh_normalization.cpp ply_writer.cpp
+                          tinyply_impl.cpp)
+add_library(volumetric_kit::recon_mesh_io ALIAS recon_mesh_io)
+generate_export_header(
+  recon_mesh_io
+  BASE_NAME
+  VR_MESH_IO
+  EXPORT_MACRO_NAME
+  VR_MESH_IO_API
+  EXPORT_FILE_NAME
+  "${_vr_io_generated_inc}/volumetric_kit/recon/io/mesh_io_export.hpp")
+set_target_properties(
+  recon_mesh_io
+  PROPERTIES CXX_VISIBILITY_PRESET hidden
+             VISIBILITY_INLINES_HIDDEN ON
+             POSITION_INDEPENDENT_CODE ON)
+get_target_property(_vr_mesh_io_type recon_mesh_io TYPE)
+if(_vr_mesh_io_type STREQUAL "STATIC_LIBRARY")
+  target_compile_definitions(recon_mesh_io PUBLIC VR_MESH_IO_STATIC_DEFINE)
+endif()
+target_compile_features(recon_mesh_io PUBLIC cxx_std_17)
+target_compile_options(recon_mesh_io PRIVATE -fexceptions)
+target_link_libraries(recon_mesh_io PUBLIC recon_mesh)
+target_include_directories(
+  recon_mesh_io PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+                       "$<BUILD_INTERFACE:${_vr_io_generated_inc}>")
+target_include_directories(recon_mesh_io SYSTEM
+                           PRIVATE "${VR_TINYPLY_INCLUDE_DIR}")
+vr_target_warnings(recon_mesh_io)
+
 # Only vendored implementation TUs opt out of first-party warnings.
 set_source_files_properties(stb_impl.cpp tinyply_impl.cpp
                             PROPERTIES COMPILE_OPTIONS -w)
@@ -50,32 +86,32 @@ set_source_files_properties(mesh_normalization.cpp PROPERTIES COMPILE_OPTIONS
 # An installed prerequisite, like the sensor decoders. Keeping it separate lets
 # image / PLY consumers build without Assimp on every platform.
 if(VR_WITH_ASSIMP)
-  add_library(recon_io_assimp mesh_io.cpp)
-  add_library(volumetric_kit::recon_io_assimp ALIAS recon_io_assimp)
+  add_library(recon_mesh_io_assimp mesh_io.cpp)
+  add_library(volumetric_kit::recon_mesh_io_assimp ALIAS recon_mesh_io_assimp)
   generate_export_header(
-    recon_io_assimp
+    recon_mesh_io_assimp
     BASE_NAME
-    VR_IO_ASSIMP
+    VR_MESH_IO_ASSIMP
     EXPORT_MACRO_NAME
-    VR_IO_ASSIMP_API
+    VR_MESH_IO_ASSIMP_API
     EXPORT_FILE_NAME
-    "${_vr_io_generated_inc}/volumetric_kit/recon/io/assimp_export.hpp")
+    "${_vr_io_generated_inc}/volumetric_kit/recon/io/mesh_io_assimp_export.hpp")
   set_target_properties(
-    recon_io_assimp
+    recon_mesh_io_assimp
     PROPERTIES CXX_VISIBILITY_PRESET hidden
                VISIBILITY_INLINES_HIDDEN ON
                POSITION_INDEPENDENT_CODE ON)
-  get_target_property(_vr_io_assimp_type recon_io_assimp TYPE)
-  if(_vr_io_assimp_type STREQUAL "STATIC_LIBRARY")
-    target_compile_definitions(recon_io_assimp
-                               PUBLIC VR_IO_ASSIMP_STATIC_DEFINE)
+  get_target_property(_vr_mesh_io_assimp_type recon_mesh_io_assimp TYPE)
+  if(_vr_mesh_io_assimp_type STREQUAL "STATIC_LIBRARY")
+    target_compile_definitions(recon_mesh_io_assimp
+                               PUBLIC VR_MESH_IO_ASSIMP_STATIC_DEFINE)
   endif()
-  target_compile_features(recon_io_assimp PUBLIC cxx_std_17)
-  target_compile_options(recon_io_assimp PRIVATE -fexceptions)
-  # recon_io carries the public and generated include directories.
+  target_compile_features(recon_mesh_io_assimp PUBLIC cxx_std_17)
+  target_compile_options(recon_mesh_io_assimp PRIVATE -fexceptions)
+  # recon_mesh_io carries the public and generated include directories.
   target_link_libraries(
-    recon_io_assimp
-    PUBLIC recon_io
+    recon_mesh_io_assimp
+    PUBLIC recon_mesh_io
     PRIVATE assimp::assimp)
-  vr_target_warnings(recon_io_assimp)
+  vr_target_warnings(recon_mesh_io_assimp)
 endif()

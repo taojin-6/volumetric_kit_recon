@@ -223,6 +223,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest
   triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh
   — binned per block over the allocation's own candidates, with no topology.
+  *Amended 2026-10-28:* in a tier of its own, `voxelize`.
 - [**2026-09-28**](#2026-09-28--the-orbbec-driver-streams-colour-as-h265-on-request-every-colour-frame-is-decoded-in-order-on-a-thread-per-camera-ahead-of-the-mailbox-a-lost-frame-is-read-off-the-frame-index-not-the-clock-and-the-femto-megas-stream-is-decoded-as-bt601-full-range-which-it-codes-and-does-not-say) —
   The Orbbec driver streams colour as H.265 on request: every colour frame is
   decoded, in order, on a thread per camera ahead of the mailbox; a lost frame
@@ -838,6 +839,16 @@ entries relevant to your task; later amendments supersede earlier rules.
   kernel unprojects through a copy of the pinhole's one line; tsdf's
   `FrameInput` keeps `DepthCameraParams` and `to_depth_pinhole` copies it
   field by field. Allocation is main's, bit for bit.
+- [**2026-10-28**](#2026-10-28--io-is-two-targets-images-on-the-family-cores-base-tier-alone-mesh-files-on-mesh-amends-the-2026-10-03-asset-io-entry) —
+  `io` is two targets: `recon_image_io` (images, stb) links the family
+  core's base tier alone; `recon_mesh_io` (PLY, the triangle containers,
+  normalization, tinyply) links `mesh`, and `recon_mesh_io_assimp` replaces
+  `recon_io_assimp`. Headers and namespace are unchanged; `recon_io` is
+  gone.
+- [**2026-10-28**](#2026-10-28--a-triangle-meshs-distance-field-is-a-tier-of-its-own-voxelize-on-volume-alone-amends-the-2026-09-27-mesh-to-tsdf-entry) —
+  A triangle mesh's distance field is a tier of its own, `voxelize`
+  (`recon_voxelize`), on `volume` alone: `MeshIntegrator` and its kernels
+  leave `tsdf`, and the closest-point GLSL moves to `volume`.
 
 ## Decision record
 
@@ -6135,6 +6146,9 @@ both ways, on the shared M5 Max in Release: 1.6 to 1.9 s on one core, 0.25
 to 0.32 s threaded, every figure identical.
 
 ### 2026-09-27 — A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh — binned per block over the allocation's own candidates, with no topology.
+
+*Amended 2026-10-28 (below):* `MeshIntegrator` is
+`voxelize::MeshIntegrator`, in a tier of its own on `volume`.
 
 The second stage of mesh → TSDF (S1), on top of the 2026-08-31 block
 allocation (S0). It lands `tsdf::MeshIntegrator`, which writes a mesh's
@@ -16329,6 +16343,71 @@ Ubuntu, Release: the new and rewritten volume and tsdf tests pass. Replica
 `room0` (400 frames, 2 cm), fused on main and on this change on the M5 Max:
 every frame's allocated block count and block-set hash are the same, and so
 is the final mesh.
+
+### 2026-10-28 — `io` is two targets: images on the family core's base tier alone, mesh files on `mesh` (amends the 2026-10-03 asset I/O entry).
+
+**The rule.** `recon_image_io` holds image decoding and PNG encoding
+(`io/image_io.hpp`, with stb's implementation private) and links
+`volumetric_kit::core_base` alone: no Vulkan and no recon tier.
+`recon_mesh_io` holds the mesh files: PLY export (`io/ply_writer.hpp`), the
+host triangle containers (`io/triangle_mesh.hpp`) and the opt-in
+normalization helpers (`io/mesh_normalization.hpp`), with tinyply's
+implementation private. It links `recon_mesh` PUBLIC, because `write_ply`
+takes a `mesh::Mesh`. `recon_mesh_io_assimp` replaces `recon_io_assimp` on
+top of it (`io/mesh_io.hpp`, `io/textured_mesh.hpp`). The headers stay in
+`io/` and the namespace stays `vr::io`. Each target's export header and
+macro are named after it (`image_io_export.hpp` and `VR_IMAGE_IO_API`, and
+likewise for the other two). No `recon_io` target remains, and no alias.
+
+**Why.** `recon_io` linked `recon_mesh` PUBLIC for `write_ply` alone. So
+every image user pulled in `volume`, `recon_core` and Vulkan: the Replica
+sensor, and a calibration capture that only writes PNGs. The two halves also
+have different users, images on the capture side and mesh files on the mesh
+and codec side. With separate targets, each consumer names the half it uses
+once; the files can move later without a second rename. The 2026-10-03
+entry's "depends on `mesh`" now holds for `recon_mesh_io` alone.
+
+**Tests.** `recon_io_image` links `recon_image_io` alone, and
+`recon_subproject_defaults` fails when `recon_image_io` links anything but
+the core's base tier. `recon_io_ply` and `recon_io_mesh_normalization` link
+`recon_mesh_io`; `recon_io_mesh_file` and `recon_io_textured_mesh` link
+`recon_mesh_io_assimp`, the latter with `recon_image_io` for the PNG it
+writes. The examples link the half they call: `vr_example_common` links
+images; `fuse_replica`, `codec_replica` and `fuse_orbbec` link mesh files
+for their PLY.
+
+**Validation.** Apple M5 Max, macOS 27.2, Release with warnings as errors
+and Assimp 6.0.5: the build is warning-clean, and the 23 affected tests
+(`io`, the examples that read images or write PLY, the subproject consumer)
+pass under the validation layer with a device required.
+`recon_io_image_test` links `librecon_image_io.a` and the core's base tier,
+nothing else. Adding `recon_mesh` to `recon_image_io`'s links fails
+`recon_subproject_defaults`.
+
+### 2026-10-28 — A triangle mesh's distance field is a tier of its own, `voxelize`, on `volume` alone (amends the 2026-09-27 mesh-to-TSDF entry).
+
+**The rule.** `MeshIntegrator`, `MeshSdfMode`, `MeshSdfParams` and
+`MeshIntegrateStats` are `voxelize::`, in `voxelize/mesh_integrator.hpp`
+and the target `recon_voxelize`, which links `recon_volume` alone and sits
+right after it in the tier order. Its seven kernels and `mesh_scan.glsl`
+move with it, so `recon_tsdf` builds only the fusion kernels. The
+closest-point GLSL both mesh-driven passes share moves from `core` to
+`volume/shaders/triangle_common.glsl`, the lowest tier either is in. No
+header forwards and no namespace aliases the old names.
+
+**Why.** The conversion fuses no depth. Its header and source include no
+`tsdf` header and its kernels only `volume`'s GLSL and the closest point;
+it needs the grid, the triangle allocation's candidates and `recon_core`'s
+dispatch helper. In `tsdf` it made every fusing caller build seven mesh
+kernels it never runs, and every mesh caller -- `codec_mesh` and the
+consumers' stream writers -- link the fuser. It is the prep step that lets
+the voxel layer leave recon without depth fusion.
+
+**What stays.** The code, the kernels' bytes and every field it writes; the
+2026-09-27, 2026-10-02 and 2026-10-21 rules hold as written. Only the
+debug names change, `tsdf_mesh_*` and `tsdf.mesh_*` to `voxelize_mesh_*`
+and `voxelize.mesh_*`. The tests move with it: `recon_voxelize_mesh_integrate`
+and `recon_voxelize_mesh_integrate_exact`, unchanged but for their names.
 
 ## Measured lessons
 

@@ -9,6 +9,6 @@ target_include_directories(vr_example_common
 target_link_libraries(
   vr_example_common
   PUBLIC volumetric_kit::core_config volumetric_kit::recon_sensor
-         volumetric_kit::recon_io)
+         volumetric_kit::recon_image_io)
 target_compile_features(vr_example_common PUBLIC cxx_std_17)
 vr_target_warnings(vr_example_common)

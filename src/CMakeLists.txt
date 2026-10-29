@@ -15,11 +15,15 @@ set(_vr_tiers recon_camera)
 if(NOT VR_CAMERA_ONLY)
   add_subdirectory(volumetric_kit/recon/core)
   add_subdirectory(volumetric_kit/recon/volume)
+  # A triangle mesh's distance field, on volume alone: no depth fusion (the
+  # 2026-10-28 decision).
+  add_subdirectory(volumetric_kit/recon/voxelize)
   add_subdirectory(volumetric_kit/recon/tsdf)
   # mesh reads the volume voxel payload directly (proven against a dense
   # analytic SDF), so it depends on volume, not tsdf.
   add_subdirectory(volumetric_kit/recon/mesh)
-  # Host asset I/O branches off mesh for the public Mesh serialization API.
+  # Host file I/O: images on the family core's base tier alone, mesh files off
+  # mesh for the public Mesh serialization API.
   add_subdirectory(volumetric_kit/recon/io)
   # texture fills the mesh uv0 by projecting a posed camera onto it; it depends
   # on mesh (the Mesh it textures) + volume (DepthCameraParams + the projection
@@ -53,6 +57,7 @@ if(NOT VR_CAMERA_ONLY)
     _vr_tiers
     recon_core
     recon_volume
+    recon_voxelize
     recon_tsdf
     recon_mesh
     recon_texture
@@ -62,7 +67,8 @@ if(NOT VR_CAMERA_ONLY)
     recon_sensor_video_syntax
     recon_codec
     recon_eval
-    recon_io
+    recon_image_io
+    recon_mesh_io
     recon_stream
     recon_networking
     recon_sender)
@@ -73,8 +79,8 @@ endif()
 add_library(recon INTERFACE)
 add_library(volumetric_kit::recon ALIAS recon)
 target_link_libraries(recon INTERFACE ${_vr_tiers})
-if(TARGET recon_io_assimp)
-  target_link_libraries(recon INTERFACE recon_io_assimp)
+if(TARGET recon_mesh_io_assimp)
+  target_link_libraries(recon INTERFACE recon_mesh_io_assimp)
 endif()
 if(TARGET recon_sensor_apple)
   target_link_libraries(recon INTERFACE recon_sensor_apple)

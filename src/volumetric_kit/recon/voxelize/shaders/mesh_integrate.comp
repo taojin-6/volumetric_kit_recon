@@ -82,7 +82,7 @@
 #extension GL_GOOGLE_include_directive : require
 #define VR_HASH_COMMON_NO_PUSH_CONSTANTS
 #include "volumetric_kit/recon/volume/shaders/hash_common.glsl"
-#include "volumetric_kit/recon/core/shaders/triangle_common.glsl"
+#include "volumetric_kit/recon/volume/shaders/triangle_common.glsl"
 
 // Sizes, as macros so the preprocessor can check the shared memory they take.
 #define VR_THREADS 256      // a round of a block's voxels
@@ -138,7 +138,7 @@ layout(push_constant, scalar) uniform PushConstants {
   VoxelGridParams grid;
   uint first_bin;
   uint num_bins;
-  uint mode;    // kModeSigned or kModeShell (tsdf::MeshSdfMode)
+  uint mode;    // kModeSigned or kModeShell (voxelize::MeshSdfMode)
   float shell;  // shell half-thickness, metres
   uint tick;    // the map's tick, which each block written is stamped with
 } pc;
