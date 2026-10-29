@@ -10,9 +10,9 @@
 // r = (d - d_hist) / sigma_r, sigma_r = max(sqrt(pi/2) * mean_abs, floor(d)),
 // floor(d) = a + b d + c d^2 (the sensor's noise). Two cumulative sums,
 // S+ = max(0, S+ + r - k) (farther) and S- = max(0, S- - r - k) (nearer),
-// alarm past h, and one frame with |r| past one_frame alarms alone. A pixel
-// tests once it holds warm_up earlier samples (its noise estimate's count
-// plus the sample that started the history). An alarm restarts the history at
+// alarm past h, and one frame with |r| past one_frame alarms alone. Once its
+// camera is past its warm-up (pc.testing), a pixel tests every sample after the
+// one that started its history. An alarm restarts the history at
 // the sample, clears the sums and freezes the noise estimate for `freeze`
 // samples; any other sample updates the history -- a cumulative mean of the
 // first `memory` samples, then an exponential average of weight 1/memory --
@@ -57,7 +57,7 @@ layout(push_constant, scalar) uniform Push {
   float h;
   float one_frame;
   uint memory;
-  uint warm_up;
+  uint testing;  // 1 once the camera has had warm_up frames
   uint freeze;
   uint gate_word;  // the gate's word index; 0xFFFFFFFF for no gate
 } pc;
@@ -97,7 +97,7 @@ void main() {
       float e = d - s.depth;
       float r = e / sigma;
       bool alarm = false;
-      if (learned + 1u >= pc.warm_up) {
+      if (pc.testing != 0u) {
         s.far_sum = max(0.0, s.far_sum + r - pc.k);
         s.near_sum = max(0.0, s.near_sum - r - pc.k);
         if (s.far_sum > pc.h) {

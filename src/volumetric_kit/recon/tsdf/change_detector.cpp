@@ -50,7 +50,7 @@ struct Push {
   float h;
   float one_frame;
   std::uint32_t memory;
-  std::uint32_t warm_up;
+  std::uint32_t testing;  // 1 once the camera has had config.warm_up frames
   std::uint32_t freeze;
   std::uint32_t gate_word;
 };
@@ -78,7 +78,6 @@ core::Status check_config(const ChangeDetectorConfig& c) {
   if (c.memory < 1 || c.memory > kMaxMemory) {
     return bad("memory must be in [1, 1023]");
   }
-  if (c.warm_up > c.memory) return bad("warm_up must be at most memory");
   if (c.freeze > kMaxFreeze) return bad("freeze must be at most 4095");
   return {};
 }
@@ -200,6 +199,7 @@ core::Status ChangeDetector::record_detect(
     cam.mask = std::move(mask);
     cam.width = params.width;
     cam.height = params.height;
+    cam.frames = 0;
   }
 
   // A host image's device copy, which the batch keeps.
@@ -230,9 +230,10 @@ core::Status ChangeDetector::record_detect(
                   config_.h,
                   config_.one_frame,
                   config_.memory,
-                  config_.warm_up,
+                  cam.frames >= config_.warm_up ? 1u : 0u,
                   config_.freeze,
                   gate_word};
+  ++cam.frames;
   const std::uint32_t groups = std::min(
       core::group_count(static_cast<std::uint32_t>(pixels), kLocalSize),
       max_workgroup_count_x_);

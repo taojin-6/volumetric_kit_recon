@@ -21,6 +21,9 @@
 //   mask, a twin that skipped them.
 // - A camera that leaves and returns compares with its own history; one whose
 //   image changes size starts a new history.
+// - A pixel first seen late -- no return for 60 frames, then a mover nearer
+//   for 5, then no return again -- flags its first return of the far
+//   background: the warm-up is the camera's, not the pixel's.
 // - A closed gate word tests nothing: a 5 cm step behind it is flagged on
 //   the next frame the gate opens, as the history never saw it; the word is
 //   found at its offset, and a bad one is refused.
@@ -356,6 +359,43 @@ int gate_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
   return 0;
 }
 
+// Slot 21, 32 x 32: no return for frames 0-59, a mover at 1.5 m over frames
+// 60-64, no return again, and the background at 3 m returning at frame 80.
+int late_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
+  constexpr std::uint32_t kSlot = 21;
+  constexpr std::uint32_t kLateSide = 32;
+  const sensor::DepthCameraParams cam = camera(kLateSide);
+  Noise noise(11u);
+  std::vector<float> depth(kLateSide * kLateSide);
+  std::vector<std::uint32_t> mask(depth.size());
+  for (int t = 0; t <= 80; ++t) {
+    for (float& d : depth) {
+      if (t >= 60 && t < 65) {
+        d = 1.5f + tof_sigma(1.5f) * noise.gauss();
+      } else if (t == 80) {
+        d = 3.0f + tof_sigma(3.0f) * noise.gauss();
+      } else {
+        d = 0.0f;
+      }
+    }
+    vkc::CommandBatch batch(gpu.device, gpu.allocator);
+    CHECK(detector
+              .record_detect(batch, kSlot, vkc::StorageInput(depth.data()), cam)
+              .ok());
+    CHECK(batch
+              .readback(*detector.mask(kSlot), 0,
+                        mask.size() * sizeof(std::uint32_t), mask.data())
+              .ok());
+    CHECK(batch.submit().ok());
+  }
+  std::size_t farther = 0;
+  for (const std::uint32_t m : mask) farther += m == 2 ? 1 : 0;
+  std::printf("late pixels: %zu of %zu flag the background's return\n", farther,
+              mask.size());
+  CHECK(farther == mask.size());
+  return 0;
+}
+
 int refusals(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
   const sensor::DepthCameraParams cam = camera(kSide);
   const std::vector<float> depth(kPixels, 2.0f);
@@ -390,7 +430,6 @@ int refusals(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
         tsdf::ChangeDetectorConfig{0.5f, 8.0f, 0.0f},
         tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 0},
         tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 1024},
-        tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 30, 31},
         tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 30, 30, 4096}}) {
     CHECK(refused(
         tsdf::ChangeDetector::create(gpu.device, gpu.allocator, bad).status()));
@@ -418,6 +457,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   }
   if (refusals(gpu, detector) != 0) return 1;
   if (gate_case(gpu, detector) != 0) return 1;
+  if (late_case(gpu, detector) != 0) return 1;
 
   const tsdf::DepthNoise tof{};  // the Femto's
   const tsdf::DepthNoise stereo{0.0f, 0.0f, kStereoC};

@@ -812,8 +812,8 @@ camera a frame (`record_detect`) tests every valid sample and writes the
 camera's mask, a `uint32` a pixel: `PixelChange::None`, `Nearer` or
 `Farther`. Two-sided CUSUM on `r = (d - d_hist) / sigma_r` (k 0.5, h 8) or
 one frame past 6 sigma alarms; an alarm restarts the pixel's history and
-freezes its noise estimate for 30 samples; a pixel tests once it holds 30
-samples. An invalid sample changes nothing, a camera missing from a set is
+freezes its noise estimate for 30 samples; a camera's pixels test after its
+first 30 recorded frames. An invalid sample changes nothing, a camera missing from a set is
 simply not detected, and one whose image size changes starts over. A gate
 word, as `record_integrate` takes one, has a pass test nothing, though a
 camera's first frame at a new size starts its history all the same: that
