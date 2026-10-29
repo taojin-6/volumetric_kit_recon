@@ -28,9 +28,10 @@ geometry and compressed bitstreams → renderer handoff.
 - The camera side is the in-tree package `volumetric_kit_sensor`
   (`sensor/`), on the core alone, until it moves to a repository of its own;
   its [AGENTS.md](sensor/AGENTS.md), docs and CHANGELOG govern work there.
-  Nothing under `sensor/` includes recon (`sensor_recon_free`), recon's
-  libraries link its `sensor_frame` alone (`recon_library_sensor_links`),
-  and recon's examples assemble any of its tiers.
+  Nothing under `sensor/` includes recon or grid
+  (`sensor_package_boundary`), recon's libraries link its `sensor_frame`
+  alone (`recon_library_sensor_links`), and recon's examples assemble any of
+  its tiers.
 - The tiers work on any data. `io` may offer opt-in, generic unit,
   orientation and scale helpers, but a tier still never applies dataset
   preprocessing on its own: the caller opts in, as an example does for its
@@ -175,8 +176,8 @@ git -C "$recon_root" diff --check
 - `VR_BUILD_VIEWER`, grid's `VGRID_WITH_ASSIMP` and the in-tree sensor
   package's (`sensor/`) `VS_WITH_ORBBEC`, `VS_WITH_FFMPEG` and `VS_WITH_CUDA`
   enable optional paths (the package's options: [its
-  README](sensor/README.md#building)); `VS_BUILD_TESTS` builds the
-  package's tests in recon's tree, and `cmake -S sensor` builds and tests it
+  README](sensor/README.md#building)); in recon's tree the package's tests
+  and `-Werror` follow recon's, and `cmake -S sensor` builds and tests it
   alone. Orbbec, FFmpeg and Assimp are installed prerequisites, never fetched
   by this repository.
 - Tests use no real hardware: a camera is checked by hand through its example

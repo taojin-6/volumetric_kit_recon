@@ -146,15 +146,14 @@ jobs:
       # examples are built for their tests: lavapipe's maxStorageBufferRange is
       # the 128 MiB Vulkan guarantees, which no other leg's device reports, so
       # recon_fuse_replica_run here is an example's run at that floor. The
-      # in-tree sensor package's tests run here too (VS_BUILD_TESTS).
+      # in-tree sensor package's tests run here too, as recon's do.
       - name: Configure
         if: steps.detect.outputs.present == 'true'
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            -DVR_SANITIZE="address;undefined" -DVR_BUILD_EXAMPLES=ON \
-            -DVS_BUILD_TESTS=ON
+            -DVR_SANITIZE="address;undefined" -DVR_BUILD_EXAMPLES=ON
 
       # Runs the runner's CMAKE_BUILD_PARALLEL_LEVEL jobs (its .env), or one
       # per core where unset, as _build.yml's Build step does.

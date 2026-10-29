@@ -29,13 +29,13 @@ include(FetchContent)
 # The pin is core 0.29.0 (a4a6fff, core #65's merge), as is the Homebrew key
 # action in .github/workflows/_build.yml; the vkc_require_core checks below say
 # which core each part needs. The tests are main()s of their own on the core's
-# test support, which the sensor package's tests (VS_BUILD_TESTS) need too.
+# test support, as are the sensor package's, which follow recon's.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
   GIT_TAG a4a6fff4af65b26b25df27c8ed8c9eecbfbfcd87)
 set(VKC_WITH_VULKAN ON)
-if(VR_BUILD_TESTS OR VS_BUILD_TESTS)
+if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
 endif()
 # Scenario parsing is optional and used only by executable examples and their
@@ -69,10 +69,16 @@ endif()
 # Declared after the core, so the package's own core pin yields to the one
 # above, and before anything of recon's. An application that also fetches the
 # sensor package declares it first (by URL + SHA + SOURCE_SUBDIR sensor), and
-# FetchContent keeps that declaration. Its options (VS_WITH_ORBBEC,
-# VS_WITH_FFMPEG, VS_WITH_CUDA, VS_BUILD_TESTS) are given on recon's configure.
-FetchContent_Declare(volumetric_kit_sensor SOURCE_DIR
-                                           "${PROJECT_SOURCE_DIR}/sensor")
+# FetchContent keeps that declaration. Its drivers (VS_WITH_ORBBEC,
+# VS_WITH_FFMPEG, VS_WITH_CUDA) are given on recon's configure; in this build
+# its tests and -Werror follow recon's, as grid's did in-tree. It builds in
+# sensor/ under the build tree, not in _deps/, which CI caches for the fetched
+# dependencies alone.
+FetchContent_Declare(
+  volumetric_kit_sensor SOURCE_DIR "${PROJECT_SOURCE_DIR}/sensor" BINARY_DIR
+                        "${CMAKE_BINARY_DIR}/sensor")
+set(VS_BUILD_TESTS ${VR_BUILD_TESTS})
+set(VS_WARNINGS_AS_ERRORS ${VR_WARNINGS_AS_ERRORS})
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)

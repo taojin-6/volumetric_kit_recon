@@ -17,8 +17,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   consumer that declared grid from this repository (`SOURCE_SUBDIR grid`)
   declares it from grid's at its re-pin, by URL and SHA.
 - **The camera and sensor tiers are the in-tree package
-  `volumetric_kit_sensor`** (`sensor/`, 0.1.0; sensor/DECISIONS.md, the
-  2026-10-29 package entry): `camera`, `sensor` and its drivers, decoders,
+  `volumetric_kit_sensor`** (BREAKING; `sensor/`, 0.1.0; sensor/DECISIONS.md,
+  the 2026-10-29 package entry): `camera`, `sensor` and its drivers, decoders,
   prep and array, image I/O, and recon_core's `camera_params.hpp`,
   `color_space.hpp` and `pinhole.glsl` (now the header-only `sensor_frame`,
   with `DeviceFrame`), with their tests, tools, fixtures and docs. The
@@ -28,10 +28,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `sensor_frame` alone (`recon_library_sensor_links`), and recon exports no
   GLSL of its own. `VR_CAMERA_ONLY` is gone (the package's `VS_CAMERA_ONLY`
   builds `sensor_camera` alone), and the `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG`
-  and `VR_WITH_CUDA` options are the package's `VS_` ones. CI builds and
-  tests the package in recon's tree on every leg (`VS_BUILD_TESTS`), alone
-  on the CUDA leg, and camera-only in its container. **BREAKING for
-  consumers**: every name moved, with no alias or forwarding header;
+  and `VR_WITH_CUDA` options are the package's `VS_` ones. In recon's tree
+  the package's tests and `-Werror` follow recon's (`VR_BUILD_TESTS`,
+  `VR_WARNINGS_AS_ERRORS`), so CI tests it there on every leg, alone on the
+  CUDA leg, and camera-only in its container. For consumers, every name
+  moved, with no alias or forwarding header;
   [sensor/CHANGELOG.md](sensor/CHANGELOG.md)'s 0.1.0 maps each old name to
   its new one.
 

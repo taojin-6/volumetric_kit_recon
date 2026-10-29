@@ -332,10 +332,11 @@ jobs:
       # The key also hashes the conventional dep-pin homes
       # (third_party/CMakeLists.txt, the sensor package's
       # sensor/third_party/CMakeLists.txt) and the root list, so a FetchContent
-      # version bump in any of them busts the cache; hashFiles skips whichever of those paths
-      # does not exist yet. And it carries the Homebrew key (`none` off macOS),
-      # in the restore prefix too, so no tree built on other Homebrew versions
-      # is restored (DECISIONS.md, 2026-10-16, says why).
+      # version bump in any of them busts the cache; hashFiles skips whichever
+      # of those paths does not exist yet. And it carries the Homebrew key
+      # (`none` off macOS), in the restore prefix too, so no tree built on
+      # other Homebrew versions is restored (DECISIONS.md, 2026-10-16, says
+      # why).
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -374,8 +375,8 @@ jobs:
 
       # Default ("Unix Makefiles") generator + a parallel make build, per project
       # preference — no Ninja. The compile commands are the iOS check's flags.
-      # The in-tree sensor package (sensor/) takes its VS_ options and builds
-      # its tests here too, so every leg runs them as before the split.
+      # The in-tree sensor package (sensor/) takes its VS_ options; its tests
+      # and -Werror follow recon's, so every leg runs them as before the split.
       - name: Configure
         if: steps.detect.outputs.present == 'true'
         # Retry to ride out transient FetchContent git-clone DNS blips.
@@ -387,7 +388,6 @@ jobs:
                 -DVS_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
                 -DVS_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
                 -DVS_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }} \
-                -DVS_BUILD_TESTS=ON -DVS_WARNINGS_AS_ERRORS=ON \
                 -DVGRID_WITH_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}; then
               ok=1
               break
@@ -437,6 +437,7 @@ jobs:
           VS_TEST_HEVC_BACKEND: ${{ inputs.hevc_backend }}
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
+          VKC_TEST_SYNC_VALIDATION: ${{ inputs.sync_validation && '1' || '' }}
         run: |
           shopt -s nullglob
           flags=()
@@ -480,7 +481,7 @@ jobs:
           done
           rm -rf build-tsan
           cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=Debug \
-            -DVR_SANITIZE=thread -DVR_BUILD_EXAMPLES=OFF -DVS_BUILD_TESTS=ON \
+            -DVR_SANITIZE=thread -DVR_BUILD_EXAMPLES=OFF \
             -DVS_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
             -DVGRID_WITH_ASSIMP=OFF "${flags[@]}"
           cmake --build build-tsan \

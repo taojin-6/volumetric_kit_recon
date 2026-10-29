@@ -9,8 +9,7 @@ description: >-
 # sensor/cmake/vs_orbbec.cmake requires (VS_ORBBEC_SDK_MIN_VERSION): keep the
 # two in lockstep, so CI builds against exactly the oldest SDK the module
 # accepts. Every leg that builds VS_WITH_ORBBEC installs it through this action,
-# so the
-# pin lives here alone. Needs curl.
+# so the pin lives here alone. Needs curl.
 runs:
   using: composite
   steps:

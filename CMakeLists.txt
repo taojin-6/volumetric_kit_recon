@@ -26,9 +26,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # a consumer fetches it by commit (DECISIONS.md, 2026-10-22).
 #
 # The camera and sensor options are the sensor package's (sensor/CMakeLists.txt:
-# VS_WITH_ORBBEC, VS_WITH_FFMPEG, VS_WITH_CUDA, VS_BUILD_TESTS); a -D on recon's
-# configure reaches it as a cache variable. Its camera-only build is the
-# package's alone: recon needs its frame contract.
+# VS_WITH_ORBBEC, VS_WITH_FFMPEG, VS_WITH_CUDA); a -D on recon's configure
+# reaches it as a cache variable. Its tests and -Werror follow recon's
+# (third_party/). Its camera-only build is the package's alone: recon needs its
+# frame contract.
 if(PROJECT_IS_TOP_LEVEL)
   set(_vr_examples_default ON)
 else()
@@ -77,9 +78,9 @@ find_package(Vulkan REQUIRED)
 set(VR_CORE_MIN_VERSION 0.29.0)
 set(VR_SENSOR_MIN_VERSION 0.1.0)
 set(VR_GRID_MIN_VERSION 0.1.0)
-# Testing is on before third_party/ adds the sensor package, so its tests
-# (VS_BUILD_TESTS) join this build's CTest tree.
-if(VR_BUILD_TESTS OR VS_BUILD_TESTS)
+# Testing is on before third_party/ adds the sensor package, so its tests join
+# this build's CTest tree.
+if(VR_BUILD_TESTS)
   enable_testing()
 endif()
 add_subdirectory(third_party)

@@ -70,7 +70,7 @@ when it is the top-level project. The camera and sensor tiers are the
 in-tree sensor package (`sensor/`, `volumetric_kit::sensor_*`; its
 [README](sensor/README.md) covers its options, drivers and decoders), which
 recon declares after the core: recon's configure passes it the `VS_`
-options, and `-DVS_BUILD_TESTS=ON` builds its tests in recon's tree.
+options, and its tests and `-Werror` follow recon's.
 
 recon exports no GLSL. A consumer's kernels include the GLSL recon's kernels
 read as they do, through the core's `INCLUDE_TARGETS`: the sensor package's
