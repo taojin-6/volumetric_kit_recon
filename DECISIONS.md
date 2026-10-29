@@ -5345,12 +5345,30 @@ each other. Only change evicts; conflict averages.
   `DepthNoise` (the Femto's): the sensor package's frame does not carry its
   noise yet, which is a sensor change.
 
-**Cost.** On the M5 Max (take1 replay, four Femto cameras, 1 cm, Release,
-sets 40-119), integrate 4.61 ms a set against main's 4.58-4.59: the change
-tests 0.09 ms, the resets 1.46 ms (testing a voxel's weight before
-projecting it, as the former clear did, took them from 2.02). Memory: the
-detector's 35.4 MB for the rig. Classic is unchanged, bit for bit (40
-take1 sets: the codec stream byte-identical, the set-39 mesh identical).
+**Measured** on replays of the rig's recorded takes with synthetic movers
+drawn into the depth (lab RTX 4090, against main):
+- Still scenes: silhouette holes 3.9% to 2.7% (take1) and 4.5% to 2.9%
+  (take3), edge flicker 11.5% to 1.1% and 9.2% to 0.85%, the stream 74.8 to
+  15.0 and 64.9 to 11.3 Mbps; 1.8-3.0k rays a second reset over four
+  cameras, 0.007-0.010% of valid samples.
+- A box that enters, stays 10 s and leaves (take3): whole in the set it
+  arrives, and nothing of it left the set it goes (main: a 169 cm² ring at
+  its foot, 9 sets to clear).
+- A sphere at 0.1 m/s (take1): 38 cm² of ghost stays (main 68). At 1 m/s,
+  before the `Vanished` reset, 102 (main 85); not replayed since.
+- A walking column that vanishes mid-walk (take3): 0.49 m² stays along its
+  last pose and in slivers at its first (main 2.16 m²; 1.27 m² before the
+  `Vanished` reset).
+- A moving surface shows 99% of its visible area while it moves (main 90%).
+
+**Cost.** Release, take1 replay (four Femto cameras, 1 cm), sets 40-119,
+interleaved with main: integrate 1.62-1.63 ms a set on the RTX 4090 against
+main's 1.54-1.55 (the change tests 0.07 ms, the resets 0.63 ms in place of
+the former clears), and 4.62-4.63 ms on the M5 Max against 4.58-4.70 (0.11
+and 1.46 ms; testing a voxel's weight before projecting it, as the former
+clear did, took the resets from 2.02). Memory: the detector's 35.4 MB for
+the rig. Classic is unchanged (40 take1 sets: the codec stream
+byte-identical, the set-39 mesh the same triangles).
 
 **Tests.** `recon_tsdf_dynamic_change` fuses two cameras that disagree by
 8 mm on a wall through the `Fuser`: no voxel's weight falls while the
@@ -5364,14 +5382,15 @@ on the left: in the set it goes nothing of it meshes, by its cameras'
 `recon_tsdf_integrate_dynamic_set` gives the grazing camera a colour of its
 own, which the frontal camera's band must not take.
 `recon_tsdf_integrate_set` now compares a Dynamic set with its reverse bit
-for bit. Run on the M5 Max (MoltenVK,
-validation and synchronization validation) and the RTX 4090.
+for bit. Run on the M5 Max (MoltenVK) and the RTX 4090, with validation and
+synchronization validation.
 
-**Open.** A surface over no return that was there from its camera's first
-frames, or returned for under three samples in a row, flags nothing when it
-goes (`TODO(tsdf)`);
-partial evidence lowering the weight cap so slow motion slides; pixels that
-drop in and out; the noise model's edge and incidence terms.
+**Open.** A surface that leaves to no return flags nothing where its pixel
+returned anything in its camera's warm-up (a surface there from the start,
+or a background's sporadic return) or where it returned for under three
+samples in a row (`TODO(tsdf)`); partial evidence lowering the weight cap
+so slow motion slides; pixels that drop in and out; the noise model's edge
+and incidence terms.
 
 ## Measured lessons
 

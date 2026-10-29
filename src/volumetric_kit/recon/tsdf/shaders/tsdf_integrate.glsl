@@ -232,10 +232,10 @@ void main() {
   if (surface - zc < -trunc_dist) {
     return;  // behind the surface's band: occluded history stays
   }
-  // TODO(tsdf): a surface over no return that was there from its camera's
-  // first frames, or returned for under three samples in a row, flags
-  // nothing when it goes, so nothing resets it; a decay gated by visibility
-  // is the rule to try (DECISIONS.md, 2026-10-29).
+  // TODO(tsdf): a surface that leaves to no return flags nothing where its
+  // pixel returned anything in its camera's warm-up, or where it returned
+  // for under three samples in a row, so nothing resets it; a decay gated by
+  // visibility is the rule to try (DECISIONS.md, 2026-10-29).
   // The weight > 0.0 test above is the "did anything change" test: a voxel
   // at weight 0 is in the state the reset writes.
   tsdf[idx] = 0.0;

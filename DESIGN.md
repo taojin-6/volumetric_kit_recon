@@ -1130,13 +1130,14 @@ of the set's fusion and coding, and 6.49 / 4.38 ms at 5 mm. A loop slower
 than the rig gets the newest set, so sets drop; that cost is unmeasured.
 
 **On `tsdf`**, Dynamic resets on change (2026-10-29). Next, each judged on
-the lab rig: a surface over no return that was there from its camera's
-first frames, or returned for under three samples in a row, flags nothing
-when it goes (a decay gated by visibility); partial evidence lowering the
-weight cap along a ray, so slow motion slides instead of stepping; a rule for
-pixels
-that drop in and out, the source of most remaining false resets; and the
-sigma edge and incidence terms of the noise model.
+the lab rig: a surface that leaves to no return flags nothing where its
+pixel returned anything in its camera's warm-up, or where it returned for
+under three samples in a row (a decay gated by visibility; what stays of a
+walking column that vanishes, 0.49 m², and of a slow sphere, 38 cm²);
+partial evidence lowering the weight cap along a ray, so slow motion slides
+instead of stepping; a rule for pixels that drop in and out, the source of
+most remaining false resets; and the sigma edge and incidence terms of the
+noise model.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
 decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident,
