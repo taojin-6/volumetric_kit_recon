@@ -1014,7 +1014,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     std::vector<SetCounts> counts;
     CHECK(code_sets(gpu, fusion, path, &grids, Run{true, 1024, &counts, 4}) ==
           0);
-    CHECK(counts_case(counts, true, "dynamic rig", 4) == 0);
+    // Four change histories and the cameras' change reaches zeroed.
+    CHECK(counts_case(counts, true, "dynamic rig", 5) == 0);
   }
   // A grid of 32 buckets: the first set's round meets the capacity limit, so
   // its fusion is done again and grown, and its frame's front half after it,
