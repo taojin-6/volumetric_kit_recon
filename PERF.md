@@ -65,7 +65,7 @@ the device:
 | batch | code | records | read back |
 |---|---|---|---|
 | front | `SetSender::send`, `sender/set_sender.hpp` | prep (`record_process`), the allocation round and the fuse (`record_fuse`), the free pass when due (`record_free_stale`), the frame's front half (`record_front`) | the round's, the free pass's and the front's results, in ring slots |
-| back | `SetSender::send`'s frame, `sender/codec_stream.cpp` | the tables inline, rANS and the gather (`record_back`) | the back's results and the payload, in ring slots |
+| back | `SetSender::send`'s frame, `CodecStream::finish_frame`, `codec_stream/codec_stream.cpp` | the tables inline, rANS and the gather (`record_back`) | the back's results and the payload, in ring slots |
 
 A set fused again adds its blocking fuse and a front half of its own; a
 payload past its copied guess, a tail batch.
@@ -589,7 +589,7 @@ improvement awaits measurement; the figures below describe the original GC.
 
 ### Known gaps, not planned
 
-- **The decoders run only on NVIDIA with CUDA (`VR_WITH_CUDA`, Linux) and on
+- **The decoders run only on NVIDIA with CUDA (`VS_WITH_CUDA`, Linux) and on
   Apple.** An integrated GPU's decoder (VAAPI) would need its surfaces
   imported into Vulkan (DMA-BUF); none is planned. An NVIDIA GPU without a
   hardware JPEG engine decodes no MJPEG.

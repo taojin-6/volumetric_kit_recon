@@ -14,34 +14,38 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <string_view>
 #include <vector>
 
-#include "buffer_readback.hpp"
-#include "device_blocks.hpp"
-#include "grid_readback.hpp"
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/buffer_readback.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/compute_kernel.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/recon/core/color_space.hpp"
-#include "volumetric_kit/recon/core/dispatch.hpp"
+#include "volumetric_kit/grid/base/dispatch.hpp"
+#include "volumetric_kit/grid/testing/device_blocks.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
+#include "volumetric_kit/grid/volume/hash_types.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/hash_types.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
+#include "volumetric_kit/sensor/frame/color_space.hpp"
 
-#include "gpu_test.hpp"
 #include "project_pinhole_comp.spv.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
 namespace {
@@ -64,9 +68,9 @@ std::int32_t find_ptr(const std::vector<vol::BlockIndex>& active,
 
 // A color camera sharing a depth camera's intrinsics + pose (registered capture
 // in these tests); the color params simply drop the depth-range fields.
-vr::ColorCameraParams color_cam_of(const vr::DepthCameraParams& d) {
-  return vr::ColorCameraParams{d.fx,    d.fy,     d.cx,          d.cy,
-                               d.width, d.height, d.cam_to_world};
+sensor::ColorCameraParams color_cam_of(const sensor::DepthCameraParams& d) {
+  return sensor::ColorCameraParams{d.fx,    d.fy,     d.cx,          d.cy,
+                                   d.width, d.height, d.cam_to_world};
 }
 
 // --- Changed stamps -------------------------------------------------------
@@ -84,7 +88,7 @@ vr::ColorCameraParams color_cam_of(const vr::DepthCameraParams& d) {
 // first fuse legitimately changes the bz=12 blocks as well and the fixture
 // loses the separation it is built on.
 int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
-  const vr_test::Gpu ctx{device, allocator};
+  const vkc::test::Gpu ctx{device, allocator};
   vol::VoxelGridParams gp{};
   gp.voxel_size = 0.005f;
   gp.block_size = 8;
@@ -94,8 +98,8 @@ int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   gp.num_buckets = 256;
   gp.num_blocks = 256 * 8;
   gp.max_chain = 128;
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)}};
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, sizeof(float)},
+                                      {vol::kWeightAttribute, sizeof(float)}};
 
   vkc::Result<vol::VoxelBlockGrid> grid_a =
       vol::VoxelBlockGrid::create(device, allocator, gp, attrs, 2);
@@ -115,9 +119,9 @@ int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   vol::BlockIndex far{};
   far.coord = vr::Vec3i(5, 5, 5);  // projects outside the image
   blocks.push_back(far);
-  CHECK(vr_test::allocate_blocks(ctx, a.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(ctx, a.map(), blocks).value() == 0);
 
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = 525.0f;
   cam.fy = 525.0f;
   cam.cx = 320.0f;
@@ -236,7 +240,7 @@ int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   vol::VoxelBlockGrid b = std::move(grid_b).value();
   vol::BlockIndex one{};
   one.coord = vr::Vec3i(0, 0, 13);
-  CHECK(vr_test::allocate_blocks(ctx, b.map(), &one, 1).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(ctx, b.map(), &one, 1).value() == 0);
   const std::uint32_t ta = a.map().tick();
   const std::uint32_t tb = b.map().tick();
   CHECK(fuse(b, depth_band, 5.0f).ok());
@@ -248,7 +252,7 @@ int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
 }
 
 // A non-finite neighbor is a hole, like zero, not a poisoned sample.
-int nonfinite_depth_taps_case(const vr_test::Gpu& ctx) {
+int nonfinite_depth_taps_case(const vkc::test::Gpu& ctx) {
   const float hole[] = {1.0f, 0.0f, std::numeric_limits<float>::quiet_NaN(),
                         std::numeric_limits<float>::infinity(),
                         -std::numeric_limits<float>::infinity()};
@@ -261,8 +265,8 @@ int nonfinite_depth_taps_case(const vr_test::Gpu& ctx) {
   gp.max_chain = 128;
   gp.voxel_size = 0.125f;
   gp.trunc_dist = 0.1f;
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)}};
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, sizeof(float)},
+                                      {vol::kWeightAttribute, sizeof(float)}};
   auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
   CHECK(integrator.ok());
   for (float invalid : hole) {
@@ -275,10 +279,11 @@ int nonfinite_depth_taps_case(const vr_test::Gpu& ctx) {
       auto grid = std::move(made).value();
       vol::BlockIndex block{};
       block.coord = vr::Vec3i(0, 0, 1);
-      CHECK(vr_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
+      CHECK(vgrid_test::allocate_blocks(ctx, grid.map(), &block, 1).value() ==
+            0);
       auto active = grid.map().compact_active_blocks();
       CHECK(active.ok() && active->size() == 1);
-      vr::DepthCameraParams cam{};
+      sensor::DepthCameraParams cam{};
       cam.fx = cam.fy = 1.0f;
       cam.cx = tap == 0 ? 0.75f : 0.25f;
       cam.cy = tap == 0 ? 0.75f : 0.25f;
@@ -289,8 +294,8 @@ int nonfinite_depth_taps_case(const vr_test::Gpu& ctx) {
       std::vector<float> depth(9, 1.0f);
       depth[tap] = invalid;
       CHECK(integrator->integrate(grid, depth.data(), cam, 100.0f).ok());
-      auto weight = vr_test::read_attribute<float>(ctx.device, ctx.allocator,
-                                                   grid, "weight");
+      auto weight = vgrid_test::read_attribute<float>(
+          ctx.device, ctx.allocator, grid, vol::kWeightAttribute);
       CHECK(weight.ok());
       CHECK(weight.value()[active->front().ptr] == 1.0f);
     }
@@ -302,7 +307,7 @@ int nonfinite_depth_taps_case(const vr_test::Gpu& ctx) {
 // colour, is refused before any work: every projection through it would be
 // NaN, and no frustum bounds the call. A list with one such frame fuses none
 // of the others, and the grid's tick stays where it was.
-int nonfinite_camera_case(const vr_test::Gpu& ctx) {
+int nonfinite_camera_case(const vkc::test::Gpu& ctx) {
   const float nan = std::numeric_limits<float>::quiet_NaN();
   const float inf = std::numeric_limits<float>::infinity();
   vol::VoxelGridParams gp{};
@@ -314,9 +319,10 @@ int nonfinite_camera_case(const vr_test::Gpu& ctx) {
   gp.max_chain = 128;
   gp.voxel_size = 0.125f;
   gp.trunc_dist = 0.1f;
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec attrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
   auto made =
       vol::VoxelBlockGrid::create(ctx.device, ctx.allocator, gp, attrs, 3);
@@ -324,9 +330,9 @@ int nonfinite_camera_case(const vr_test::Gpu& ctx) {
   auto grid = std::move(made).value();
   vol::BlockIndex block{};
   block.coord = vr::Vec3i(0, 0, 1);
-  CHECK(vr_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
 
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = cam.fy = 1.0f;
   cam.cx = cam.cy = 1.0f;
   cam.width = cam.height = 3;
@@ -336,14 +342,14 @@ int nonfinite_camera_case(const vr_test::Gpu& ctx) {
   const std::vector<float> depth(9, 1.0f);
   const std::vector<std::uint32_t> pixels(9, 0xFF336699u);
 
-  std::vector<vr::DepthCameraParams> bad_depth(6, cam);
+  std::vector<sensor::DepthCameraParams> bad_depth(6, cam);
   bad_depth[0].cam_to_world[3].x = nan;  // a NaN pose
   bad_depth[1].cam_to_world[0].y = inf;  // and an infinite rotation entry
   bad_depth[2].fx = nan;
   bad_depth[3].cy = -inf;
   bad_depth[4].min_depth = nan;
   bad_depth[5].max_depth = inf;
-  std::vector<vr::ColorCameraParams> bad_color(4, color_cam_of(cam));
+  std::vector<sensor::ColorCameraParams> bad_color(4, color_cam_of(cam));
   bad_color[0].cam_to_world[3].z = nan;  // a NaN colour pose
   bad_color[1].cam_to_world[2].x = -inf;
   bad_color[2].fy = nan;
@@ -355,21 +361,21 @@ int nonfinite_camera_case(const vr_test::Gpu& ctx) {
            grid.map().tick() == tick;
   };
   const tsdf::ColorFrame good_color{pixels.data(), color_cam_of(cam)};
-  for (const vr::DepthCameraParams& bad : bad_depth) {
+  for (const sensor::DepthCameraParams& bad : bad_depth) {
     CHECK(refused(integrator->integrate(grid, depth.data(), bad)));
     const std::vector<tsdf::FrameInput> list = {
-        {{vkc::StorageInput(depth.data()), cam}, &good_color},
-        {{vkc::StorageInput(depth.data()), bad}, nullptr}};
+        {vkc::StorageInput(depth.data()), cam, &good_color},
+        {vkc::StorageInput(depth.data()), bad, nullptr}};
     CHECK(refused(integrator->integrate(grid, list)));
   }
-  for (const vr::ColorCameraParams& bad : bad_color) {
+  for (const sensor::ColorCameraParams& bad : bad_color) {
     const tsdf::ColorFrame frame{pixels.data(), bad};
     CHECK(
         refused(integrator->integrate(grid, depth.data(), cam, 5.0f,
                                       tsdf::IntegrationMode::Classic, &frame)));
   }
-  auto weight =
-      vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid, "weight");
+  auto weight = vgrid_test::read_attribute<float>(ctx.device, ctx.allocator,
+                                                  grid, vol::kWeightAttribute);
   CHECK(weight.ok());
   for (const float w : weight.value()) CHECK(w == 0.0f);
 
@@ -389,15 +395,15 @@ int nonfinite_camera_case(const vr_test::Gpu& ctx) {
 // one: the last case's point and camera are a float range apart, and the
 // rotation's zeros times that infinite offset are NaN.
 struct ProjectionCase {
-  vr::DepthCameraParams cam;
+  sensor::DepthCameraParams cam;
   vr::Vec3f world;
 };
 static_assert(sizeof(ProjectionCase) == 108,
               "mirrors Case in shaders/project_pinhole.comp");
 
-int projection_nan_case(const vr_test::Gpu& ctx) {
+int projection_nan_case(const vkc::test::Gpu& ctx) {
   const float nan = std::numeric_limits<float>::quiet_NaN();
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = cam.fy = 100.0f;
   cam.cx = cam.cy = 50.0f;
   cam.width = cam.height = 100;
@@ -426,7 +432,7 @@ int projection_nan_case(const vr_test::Gpu& ctx) {
                  vr_project_pinhole_comp_spv_size, 3)
             .ok());
   auto pool = builder.build();
-  auto in = vr_test::upload_device_buffer(
+  auto in = vkc::test::upload_device_buffer(
       ctx.device, ctx.allocator, cases.data(), n * sizeof(ProjectionCase));
   auto accepted =
       vkc::device_storage_buffer(ctx.allocator, n * sizeof(std::uint32_t));
@@ -439,10 +445,10 @@ int projection_nan_case(const vr_test::Gpu& ctx) {
   CHECK(vkc::dispatch(ctx.device, kernel, nullptr, 0, vkc::group_count(n, 64),
                       ctx.device.caps().limits().maxComputeWorkGroupCount[0])
             .ok());
-  auto got = vr_test::read_back<std::uint32_t>(ctx.device, ctx.allocator,
-                                               *accepted, n);
+  auto got = vkc::test::read_back<std::uint32_t>(ctx.device, ctx.allocator,
+                                                 *accepted, n);
   auto px =
-      vr_test::read_back<vr::Vec2f>(ctx.device, ctx.allocator, *pixels, 1);
+      vkc::test::read_back<vr::Vec2f>(ctx.device, ctx.allocator, *pixels, 1);
   CHECK(got.ok() && px.ok());
   CHECK(got.value()[0] == 1u);
   CHECK(approx(px.value()[0].x, 60.0f, 1e-4f) &&
@@ -463,7 +469,7 @@ int projection_nan_case(const vr_test::Gpu& ctx) {
 // the image, whose last half pixel rounds past it. Each pixel's colour names
 // it (R its column, G its row), and the first observation assigns it, so the
 // fused colour says which pixel was read.
-int color_pixel_case(const vr_test::Gpu& ctx) {
+int color_pixel_case(const vkc::test::Gpu& ctx) {
   vol::VoxelGridParams gp{};
   gp.block_size = 8;
   gp.voxels_per_block = 512;
@@ -473,9 +479,10 @@ int color_pixel_case(const vr_test::Gpu& ctx) {
   gp.max_chain = 128;
   gp.voxel_size = 0.125f;
   gp.trunc_dist = 0.1f;
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec attrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
   CHECK(integrator.ok());
   constexpr std::uint32_t kSide = 8;
@@ -503,10 +510,10 @@ int color_pixel_case(const vr_test::Gpu& ctx) {
     auto grid = std::move(made).value();
     vol::BlockIndex block{};
     block.coord = vr::Vec3i(0, 0, 1);
-    CHECK(vr_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
+    CHECK(vgrid_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
     auto active = grid.map().compact_active_blocks();
     CHECK(active.ok() && active->size() == 1);
-    vr::DepthCameraParams cam{};
+    sensor::DepthCameraParams cam{};
     cam.fx = cam.fy = 1.0f;
     cam.cx = c.cx;
     cam.cy = c.cy;
@@ -514,15 +521,15 @@ int color_pixel_case(const vr_test::Gpu& ctx) {
     cam.min_depth = 0.1f;
     cam.max_depth = 5.0f;
     cam.cam_to_world = vr::Mat4f(1.0f);
-    vr::ColorCameraParams color_cam = color_cam_of(cam);
+    sensor::ColorCameraParams color_cam = color_cam_of(cam);
     color_cam.height = c.color_height;
     const tsdf::ColorFrame frame{pixels.data(), color_cam};
     CHECK(integrator
               ->integrate(grid, depth.data(), cam, 5.0f,
                           tsdf::IntegrationMode::Classic, &frame)
               .ok());
-    auto color = vr_test::read_attribute<std::uint32_t>(
-        ctx.device, ctx.allocator, grid, "color");
+    auto color = vgrid_test::read_attribute<std::uint32_t>(
+        ctx.device, ctx.allocator, grid, vol::kColorAttribute);
     CHECK(color.ok());
     const std::uint32_t got = color.value()[active->front().ptr];
     CHECK((got & 0xFFu) == c.x);
@@ -533,7 +540,7 @@ int color_pixel_case(const vr_test::Gpu& ctx) {
 
 // Zero is a missing measurement even when the near bound admits it: a hole
 // neither allocates the block at the camera nor fuses a surface there.
-int zero_depth_case(const vr_test::Gpu& ctx) {
+int zero_depth_case(const vkc::test::Gpu& ctx) {
   vol::VoxelGridParams gp{};
   gp.block_size = 8;
   gp.voxels_per_block = 512;
@@ -543,15 +550,15 @@ int zero_depth_case(const vr_test::Gpu& ctx) {
   gp.max_chain = 128;
   gp.voxel_size = 0.125f;
   gp.trunc_dist = 0.5f;  // spans the voxels just in front of the camera
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)}};
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, sizeof(float)},
+                                      {vol::kWeightAttribute, sizeof(float)}};
   auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
   CHECK(integrator.ok());
   auto made =
       vol::VoxelBlockGrid::create(ctx.device, ctx.allocator, gp, attrs, 2);
   CHECK(made.ok());
   auto grid = std::move(made).value();
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = cam.fy = 1.0f;
   cam.cx = cam.cy = 1.25f;
   cam.width = cam.height = 3;
@@ -559,21 +566,23 @@ int zero_depth_case(const vr_test::Gpu& ctx) {
   cam.max_depth = 5.0f;
   cam.cam_to_world = vr::Mat4f(1.0f);
   const std::vector<float> depth(9, 0.0f);
-  CHECK(grid.map().allocate_from_depth(depth.data(), cam).ok());
+  CHECK(grid.map()
+            .allocate_from_depth(depth.data(), tsdf::to_depth_pinhole(cam))
+            .ok());
   auto none = grid.map().compact_active_blocks();
   CHECK(none.ok() && none->empty());
 
   const vol::BlockIndex block{};  // the block at the camera
-  CHECK(vr_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
   CHECK(integrator->integrate(grid, depth.data(), cam, 100.0f).ok());
-  auto weight =
-      vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid, "weight");
+  auto weight = vgrid_test::read_attribute<float>(ctx.device, ctx.allocator,
+                                                  grid, vol::kWeightAttribute);
   CHECK(weight.ok());
   for (float w : weight.value()) CHECK(w == 0.0f);
   return 0;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(nonfinite_depth_taps_case({gpu.device, gpu.allocator}) == 0);
   CHECK(zero_depth_case({gpu.device, gpu.allocator}) == 0);
   CHECK(nonfinite_camera_case({gpu.device, gpu.allocator}) == 0);
@@ -581,13 +590,13 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(color_pixel_case({gpu.device, gpu.allocator}) == 0);
 
   // Copies of a grid attribute; the arrays are device-local.
-  const auto floats = [&](const vol::VoxelBlockGrid& g, const char* name) {
-    return vr_test::read_attribute<float>(gpu.device, gpu.allocator, g, name)
+  const auto floats = [&](const vol::VoxelBlockGrid& g, std::string_view name) {
+    return vgrid_test::read_attribute<float>(gpu.device, gpu.allocator, g, name)
         .value();
   };
-  const auto words = [&](const vol::VoxelBlockGrid& g, const char* name) {
-    return vr_test::read_attribute<std::uint32_t>(gpu.device, gpu.allocator, g,
-                                                  name)
+  const auto words = [&](const vol::VoxelBlockGrid& g, std::string_view name) {
+    return vgrid_test::read_attribute<std::uint32_t>(gpu.device, gpu.allocator,
+                                                     g, name)
         .value();
   };
 
@@ -602,8 +611,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
   grid.max_chain = 128;
   const int bs = grid.block_size;
 
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)}};
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, sizeof(float)},
+                                      {vol::kWeightAttribute, sizeof(float)}};
   vkc::Result<vol::VoxelBlockGrid> grid_result =
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   if (!grid_result) {
@@ -631,14 +640,14 @@ int gpu_main(vr_test::GpuContext& gpu) {
     b.coord = vr::Vec3i(0, 0, cz);
     blocks.push_back(b);
   }
-  CHECK(vr_test::allocate_blocks(gpu, vbg.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> active =
       vbg.map().compact_active_blocks();
   CHECK(active.ok() && active.value().size() == blocks.size());
 
   // Camera at the world origin looking down +Z (identity pose), a pinhole with
   // a 640x480 image; the plane fills the view at a constant 0.5 m.
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = 525.0f;
   cam.fy = 525.0f;
   cam.cx = 320.0f;
@@ -659,8 +668,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
   CHECK(integ.integrate(vbg, depth.data(), cam, /*max_weight=*/5.0f).ok());
 
-  std::vector<float> tsdf_data = floats(vbg, "tsdf");
-  std::vector<float> weight_data = floats(vbg, "weight");
+  std::vector<float> tsdf_data = floats(vbg, vol::kTsdfAttribute);
+  std::vector<float> weight_data = floats(vbg, vol::kWeightAttribute);
 
   const std::int32_t p12 = find_ptr(active.value(), vr::Vec3i(0, 0, 12));
   const std::int32_t p13 = find_ptr(active.value(), vr::Vec3i(0, 0, 13));
@@ -710,16 +719,17 @@ int gpu_main(vr_test::GpuContext& gpu) {
         vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
     CHECK(made.ok());
     vol::VoxelBlockGrid split = std::move(made).value();
-    CHECK(vr_test::allocate_blocks(gpu, split.map(), blocks).value() == 0);
+    CHECK(vgrid_test::allocate_blocks(gpu, split.map(), blocks).value() == 0);
     vkc::Result<std::vector<vol::BlockIndex>> list =
         split.map().compact_active_blocks();
     CHECK(list.ok() && list.value().size() == blocks.size());
-    vr::detail::set_test_groups_per_dispatch(1);
+    vgrid::detail::set_test_groups_per_dispatch(1);
     const bool fused = integ.integrate(split, depth.data(), cam, 5.0f).ok();
-    vr::detail::set_test_groups_per_dispatch(0);
+    vgrid::detail::set_test_groups_per_dispatch(0);
     CHECK(fused);
-    const std::vector<float> split_tsdf = floats(split, "tsdf");
-    const std::vector<float> split_weight = floats(split, "weight");
+    const std::vector<float> split_tsdf = floats(split, vol::kTsdfAttribute);
+    const std::vector<float> split_weight =
+        floats(split, vol::kWeightAttribute);
     for (const vol::BlockIndex& b : active.value()) {
       const std::int32_t p = find_ptr(list.value(), b.coord);
       CHECK(p >= 0);
@@ -736,8 +746,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // the weight accumulates and saturates at the cap (4.25 + 4.25 -> min(8.5,
   // 5)).
   CHECK(integ.integrate(vbg, depth.data(), cam, /*max_weight=*/5.0f).ok());
-  tsdf_data = floats(vbg, "tsdf");
-  weight_data = floats(vbg, "weight");
+  tsdf_data = floats(vbg, vol::kTsdfAttribute);
+  weight_data = floats(vbg, vol::kWeightAttribute);
   CHECK(approx(tsdf_data[front], 0.015f, 1e-3f));
   CHECK(approx(weight_data[front], 5.0f, 1e-3f));
 
@@ -750,12 +760,13 @@ int gpu_main(vr_test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(grid2.ok());
   vol::VoxelBlockGrid vbg2 = std::move(grid2).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg2.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg2.map(), blocks).value() == 0);
 
   const float theta = 0.2f;  // ~11 deg about +Y
   const float ct = std::cos(theta);
   const float st = std::sin(theta);
-  vr::DepthCameraParams cam2 = cam;  // same intrinsics, range, and 0.5 m plane
+  sensor::DepthCameraParams cam2 =
+      cam;  // same intrinsics, range, and 0.5 m plane
   cam2.cam_to_world = vr::Mat4f(1.0f);
   cam2.cam_to_world[0] = vr::Vec4f(ct, 0.0f, -st, 0.0f);
   cam2.cam_to_world[2] = vr::Vec4f(st, 0.0f, ct, 0.0f);
@@ -766,8 +777,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
   vkc::Result<std::vector<vol::BlockIndex>> active2 =
       vbg2.map().compact_active_blocks();
   CHECK(active2.ok());
-  const std::vector<float> tsdf2 = floats(vbg2, "tsdf");
-  const std::vector<float> weight2 = floats(vbg2, "weight");
+  const std::vector<float> tsdf2 = floats(vbg2, vol::kTsdfAttribute);
+  const std::vector<float> weight2 = floats(vbg2, vol::kWeightAttribute);
   std::size_t cross_checked = 0;
   for (const vol::BlockIndex& b : active2.value()) {
     for (int lz = 0; lz < bs; ++lz) {
@@ -805,7 +816,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(dyn.ok());
   vol::VoxelBlockGrid vbg_dyn = std::move(dyn).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_dyn.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_dyn.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> dyn_active =
       vbg_dyn.map().compact_active_blocks();
   CHECK(dyn_active.ok());
@@ -813,14 +824,14 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(pd >= 0);
   const std::size_t vd = static_cast<std::size_t>(pd) + corner_local;
   CHECK(integ.integrate(vbg_dyn, depth.data(), cam, 5.0f).ok());
-  std::vector<float> dyn_weight = floats(vbg_dyn, "weight");
+  std::vector<float> dyn_weight = floats(vbg_dyn, vol::kWeightAttribute);
   CHECK(dyn_weight[vd] > 0.0f);  // fused at sdf = +0.02
   CHECK(integ
             .integrate(vbg_dyn, depth_far.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());
-  dyn_weight = floats(vbg_dyn, "weight");
-  const std::vector<float> dyn_tsdf = floats(vbg_dyn, "tsdf");
+  dyn_weight = floats(vbg_dyn, vol::kWeightAttribute);
+  const std::vector<float> dyn_tsdf = floats(vbg_dyn, vol::kTsdfAttribute);
   CHECK(dyn_weight[vd] == 0.0f && dyn_tsdf[vd] == 0.0f);  // stale voxel cleared
 
   // Dynamic clears only free space *past* the band, never near-surface
@@ -839,7 +850,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(cls.ok());
   vol::VoxelBlockGrid vbg_cls = std::move(cls).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_cls.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_cls.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> cls_active =
       vbg_cls.map().compact_active_blocks();
   CHECK(cls_active.ok());
@@ -848,14 +859,14 @@ int gpu_main(vr_test::GpuContext& gpu) {
   const std::size_t vc = static_cast<std::size_t>(pcl) + corner_local;
   CHECK(integ.integrate(vbg_cls, depth.data(), cam, 5.0f).ok());
   CHECK(integ.integrate(vbg_cls, depth_far.data(), cam, 5.0f).ok());  // classic
-  const std::vector<float> cls_weight = floats(vbg_cls, "weight");
+  const std::vector<float> cls_weight = floats(vbg_cls, vol::kWeightAttribute);
   CHECK(cls_weight[vc] > 0.0f);  // kept (clamped to +trunc, fused)
 
   // Bilinear depth sampling. Pixel centres sit at integer coordinates, so
   // cx = 320.5 puts the on-axis voxel's projection halfway between columns 320
   // and 321: a 50/50 blend, whose nearest pixel is 321. The on-axis voxel is
   // at world z = 0.48.
-  vr::DepthCameraParams bcam = cam;
+  sensor::DepthCameraParams bcam = cam;
   bcam.cx = 320.5f;
   const std::size_t bw = bcam.width;
   const std::size_t on_axis =
@@ -872,7 +883,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(bi.ok());
   vol::VoxelBlockGrid vbg_bi = std::move(bi).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_bi.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_bi.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> bi_active =
       vbg_bi.map().compact_active_blocks();
   CHECK(bi_active.ok());
@@ -880,8 +891,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(pbi >= 0);
   const std::size_t vbi = static_cast<std::size_t>(pbi) + on_axis;
   CHECK(integ.integrate(vbg_bi, depth_interp.data(), bcam, 5.0f).ok());
-  const std::vector<float> bi_tsdf = floats(vbg_bi, "tsdf");
-  const std::vector<float> bi_weight = floats(vbg_bi, "weight");
+  const std::vector<float> bi_tsdf = floats(vbg_bi, vol::kTsdfAttribute);
+  const std::vector<float> bi_weight = floats(vbg_bi, vol::kWeightAttribute);
   CHECK(bi_weight[vbi] > 0.0f);
   CHECK(approx(bi_tsdf[vbi], 0.01f, 1e-3f));   // bilinear: 0.49 - 0.48
   CHECK(!approx(bi_tsdf[vbi], 0.02f, 5e-3f));  // NOT nearest: 0.50 - 0.48
@@ -902,7 +913,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(ed.ok());
   vol::VoxelBlockGrid vbg_ed = std::move(ed).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_ed.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_ed.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> ed_active =
       vbg_ed.map().compact_active_blocks();
   CHECK(ed_active.ok());
@@ -910,8 +921,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(ped >= 0);
   const std::size_t ved = static_cast<std::size_t>(ped) + on_axis;
   CHECK(integ.integrate(vbg_ed, depth_edge.data(), bcam, 5.0f).ok());
-  const std::vector<float> ed_tsdf = floats(vbg_ed, "tsdf");
-  const std::vector<float> ed_weight = floats(vbg_ed, "weight");
+  const std::vector<float> ed_tsdf = floats(vbg_ed, vol::kTsdfAttribute);
+  const std::vector<float> ed_weight = floats(vbg_ed, vol::kWeightAttribute);
   CHECK(ed_weight[ved] > 0.0f);  // fused (fallback kept it in-band)
   CHECK(approx(ed_tsdf[ved], 0.0f,
                1e-3f));  // 0.48 - 0.48; not a cross-edge blend
@@ -920,14 +931,15 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // bytes, the mesh tier's layout). A grid with a `color` attribute + a
   // constant color frame: a first-observation voxel takes the sampled RGB; an
   // occluded voxel (never depth-fused) keeps zero.
-  const vol::AttributeSpec cattrs[] = {{"tsdf", sizeof(float)},
-                                       {"weight", sizeof(float)},
-                                       {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec cattrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   vkc::Result<vol::VoxelBlockGrid> cg =
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(cg.ok());
   vol::VoxelBlockGrid vbg_c = std::move(cg).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_c.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_c.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> c_active =
       vbg_c.map().compact_active_blocks();
   CHECK(c_active.ok());
@@ -948,8 +960,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
             .integrate(vbg_c, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &frame)
             .ok());
-  std::vector<std::uint32_t> c_color = words(vbg_c, "color");
-  std::vector<float> c_weight = floats(vbg_c, "weight");
+  std::vector<std::uint32_t> c_color = words(vbg_c, vol::kColorAttribute);
+  std::vector<float> c_weight = floats(vbg_c, vol::kWeightAttribute);
   CHECK(c_weight[c_front] > 0.0f);
   CHECK((c_color[c_front] & 0xFFu) == 200u);         // R
   CHECK(((c_color[c_front] >> 8) & 0xFFu) == 100u);  // G
@@ -965,21 +977,21 @@ int gpu_main(vr_test::GpuContext& gpu) {
             .integrate(vbg_c, depth_far.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic, &frame)
             .ok());
-  c_color = words(vbg_c, "color");
-  c_weight = floats(vbg_c, "weight");
+  c_color = words(vbg_c, vol::kColorAttribute);
+  c_weight = floats(vbg_c, vol::kWeightAttribute);
   CHECK(c_weight[c_front] == 0.0f && c_color[c_front] == 0u);  // color cleared
 
   // Separate color camera: shift it 10 m off in +X so the same voxel projects
   // out of the color frame. Depth still fuses it; color is skipped (stays
   // zero).
-  vr::DepthCameraParams off_cam = cam;
+  sensor::DepthCameraParams off_cam = cam;
   off_cam.cam_to_world = vr::Mat4f(1.0f);
   off_cam.cam_to_world[3] = vr::Vec4f(10.0f, 0.0f, 0.0f, 1.0f);
   vkc::Result<vol::VoxelBlockGrid> og =
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(og.ok());
   vol::VoxelBlockGrid vbg_o = std::move(og).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_o.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_o.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> o_active =
       vbg_o.map().compact_active_blocks();
   CHECK(o_active.ok());
@@ -992,8 +1004,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
             .integrate(vbg_o, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &off_frame)
             .ok());
-  const std::vector<std::uint32_t> o_color = words(vbg_o, "color");
-  const std::vector<float> o_weight = floats(vbg_o, "weight");
+  const std::vector<std::uint32_t> o_color = words(vbg_o, vol::kColorAttribute);
+  const std::vector<float> o_weight = floats(vbg_o, vol::kWeightAttribute);
   CHECK(o_weight[o_front] > 0.0f);  // depth still fuses the voxel
   CHECK(o_color[o_front] == 0u);    // but color is out of frame -> skipped
 
@@ -1006,7 +1018,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(wg.ok());
   vol::VoxelBlockGrid vbg_wu = std::move(wg).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_wu.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_wu.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> wu_active =
       vbg_wu.map().compact_active_blocks();
   CHECK(wu_active.ok());
@@ -1016,8 +1028,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
       static_cast<std::size_t>(wup12) + local_index(0, 0, 1, bs);
   CHECK(integ.integrate(vbg_wu, depth.data(), cam, 5.0f).ok());  // depth only
   CHECK(integ.integrate(vbg_wu, depth.data(), cam, 5.0f).ok());  // depth only
-  std::vector<std::uint32_t> wu_color = words(vbg_wu, "color");
-  std::vector<float> wu_weight = floats(vbg_wu, "weight");
+  std::vector<std::uint32_t> wu_color = words(vbg_wu, vol::kColorAttribute);
+  std::vector<float> wu_weight = floats(vbg_wu, vol::kWeightAttribute);
   CHECK(wu_weight[wu_front] >
         1.0f);                      // depth weight accumulated across 2 frames
   CHECK(wu_color[wu_front] == 0u);  // ...but no color observed yet
@@ -1025,8 +1037,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
             .integrate(vbg_wu, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &frame)
             .ok());
-  wu_color = words(vbg_wu, "color");
-  wu_weight = floats(vbg_wu, "weight");
+  wu_color = words(vbg_wu, vol::kColorAttribute);
+  wu_weight = floats(vbg_wu, vol::kWeightAttribute);
   CHECK((wu_color[wu_front] & 0xFFu) == 200u);  // first color assigns the
   CHECK(((wu_color[wu_front] >> 8) & 0xFFu) == 100u);  // full RGB, not a blend
   CHECK(((wu_color[wu_front] >> 16) & 0xFFu) == 50u);  // toward black
@@ -1062,7 +1074,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
               .integrate(vbg_wu, depth.data(), cam, 5.0f,
                          tsdf::IntegrationMode::Classic, &dark_frame)
               .ok());
-    const std::uint32_t got = words(vbg_wu, "color")[wu_front];
+    const std::uint32_t got = words(vbg_wu, vol::kColorAttribute)[wu_front];
 
     // Both weights are known here rather than recovered from the answer (which
     // would make the comparison circular and unfailable): `w_before` is the
@@ -1071,11 +1083,11 @@ int gpu_main(vr_test::GpuContext& gpu) {
     // identity pose, in front of the surface so no behind-dropoff applies. It
     // is the same weight the SDF assertions at the top of this test use.
     const float w_obs = 1.0f / (0.485f * 0.485f);
-    const vr::Vec3f prev_lin = vr::unpack_srgb_to_linear(prev_packed);
-    const vr::Vec3f obs_lin = vr::unpack_srgb_to_linear(kDark);
+    const vr::Vec3f prev_lin = sensor::unpack_srgb_to_linear(prev_packed);
+    const vr::Vec3f obs_lin = sensor::unpack_srgb_to_linear(kDark);
     const vr::Vec3f want_lin =
         (prev_lin * w_before + obs_lin * w_obs) / (w_before + w_obs);
-    const std::uint32_t want = vr::pack_linear_to_srgb(want_lin);
+    const std::uint32_t want = sensor::pack_linear_to_srgb(want_lin);
 
     // What the kernel produces: the linear mean, to within float32 rounding.
     // This is the assertion that fails if the blend reverts to encoded values.
@@ -1110,15 +1122,15 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // quiet error the whole decision exists to prevent, so it must be an error.
   {
     tsdf::ColorFrame p3_frame = frame;
-    p3_frame.encoding = {vr::ColorEncoding::Transfer::Srgb,
-                         vr::ColorEncoding::Primaries::DisplayP3};
+    p3_frame.encoding = {sensor::ColorEncoding::Transfer::Srgb,
+                         sensor::ColorEncoding::Primaries::DisplayP3};
     CHECK(!integ
                .integrate(vbg_wu, depth.data(), cam, 5.0f,
                           tsdf::IntegrationMode::Classic, &p3_frame)
                .ok());
     // The default declaration is canonical, so every existing caller is
     // unaffected -- which is what makes this an added guard, not a migration.
-    CHECK(vr::is_canonical(tsdf::ColorFrame{}.encoding));
+    CHECK(sensor::is_canonical(tsdf::ColorFrame{}.encoding));
   }
 
   // Regression: dynamic mode clears stale color whenever the grid carries a
@@ -1129,7 +1141,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(zg.ok());
   vol::VoxelBlockGrid vbg_dz = std::move(zg).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_dz.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_dz.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> dz_active =
       vbg_dz.map().compact_active_blocks();
   CHECK(dz_active.ok());
@@ -1141,15 +1153,15 @@ int gpu_main(vr_test::GpuContext& gpu) {
             .integrate(vbg_dz, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &frame)
             .ok());  // fuse depth + color
-  std::vector<std::uint32_t> dz_color = words(vbg_dz, "color");
-  std::vector<float> dz_weight = floats(vbg_dz, "weight");
+  std::vector<std::uint32_t> dz_color = words(vbg_dz, vol::kColorAttribute);
+  std::vector<float> dz_weight = floats(vbg_dz, vol::kWeightAttribute);
   CHECK(dz_weight[dz_front] > 0.0f && dz_color[dz_front] != 0u);  // fused
   CHECK(integ
             .integrate(vbg_dz, depth_far.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());  // depth-only recede
-  dz_color = words(vbg_dz, "color");
-  dz_weight = floats(vbg_dz, "weight");
+  dz_color = words(vbg_dz, vol::kColorAttribute);
+  dz_weight = floats(vbg_dz, vol::kWeightAttribute);
   CHECK(dz_weight[dz_front] == 0.0f &&
         dz_color[dz_front] == 0u);  // geometry + color ghost both cleared
 
@@ -1166,4 +1178,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

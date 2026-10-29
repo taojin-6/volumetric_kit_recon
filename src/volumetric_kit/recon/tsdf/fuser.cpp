@@ -11,7 +11,7 @@
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
-#include "volumetric_kit/recon/volume/grid_growth.hpp"
+#include "volumetric_kit/grid/volume/grid_growth.hpp"
 
 namespace volumetric_kit::recon::tsdf {
 namespace {
@@ -33,6 +33,18 @@ std::uint64_t next_serial() noexcept {
   return counter.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
+// The frames' depth, as allocation takes it. Throws std::bad_alloc, which the
+// callers' entry points turn into a status.
+std::vector<volumetric_kit::grid::volume::DepthInput> depth_inputs(
+    const std::vector<FrameInput>& frames) {
+  std::vector<volumetric_kit::grid::volume::DepthInput> out;
+  out.reserve(frames.size());
+  for (const FrameInput& f : frames) {
+    out.push_back({f.depth, to_depth_pinhole(f.camera)});
+  }
+  return out;
+}
+
 }  // namespace
 
 // What finish needs of a recorded set: its frames and fusion, to fuse again;
@@ -45,9 +57,9 @@ struct Fuser::Recorded {
   IntegrationMode mode = IntegrationMode::Classic;
   bool gated = false;
   bool may_grow = true;
-  volume::RecordedRounds round;
+  volumetric_kit::grid::volume::RecordedRounds round;
   FuseReport report;
-  const volume::VoxelBlockGrid* grid = nullptr;
+  const volumetric_kit::grid::volume::VoxelBlockGrid* grid = nullptr;
 };
 
 core::Result<Fuser> Fuser::create(core::Device& device,
@@ -81,10 +93,12 @@ Fuser::Fuser(core::Device& device, core::Allocator& allocator,
 Fuser::~Fuser() = default;
 Fuser::Fuser(Fuser&&) noexcept = default;
 
-core::Result<bool> Fuser::grow(volume::VoxelBlockGrid& grid, FuseReport& report,
-                               bool& may_grow, core::StageMetrics* metrics) {
+core::Result<bool> Fuser::grow(
+    volumetric_kit::grid::volume::VoxelBlockGrid& grid, FuseReport& report,
+    bool& may_grow, core::StageMetrics* metrics) {
   if (!may_grow || report.grows >= config_.max_grows_per_set) return false;
-  core::Status status = volume::grow_grid(grid, 0, metrics);
+  core::Status status =
+      volumetric_kit::grid::volume::grow_grid(grid, 0, metrics);
   if (!status.ok()) {
     if (!out_of_memory(status)) return status;
     // Growing is opportunistic: allocation may still complete in the current
@@ -102,12 +116,13 @@ core::Result<bool> Fuser::grow(volume::VoxelBlockGrid& grid, FuseReport& report,
   return true;
 }
 
-core::Status Fuser::fuse_blocking(volume::VoxelBlockGrid& grid,
-                                  const std::vector<FrameInput>& frames,
-                                  float max_weight, IntegrationMode mode,
-                                  FuseReport& report, bool& may_grow,
-                                  core::StageMetrics* metrics) {
-  const std::vector<volume::DepthInput> depths(frames.begin(), frames.end());
+core::Status Fuser::fuse_blocking(
+    volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+    const std::vector<FrameInput>& frames, float max_weight,
+    IntegrationMode mode, FuseReport& report, bool& may_grow,
+    core::StageMetrics* metrics) {
+  const std::vector<volumetric_kit::grid::volume::DepthInput> depths =
+      depth_inputs(frames);
   int lock_retries = 0;
   for (;;) {
     VKC_ASSIGN(report.dropped, grid.map().allocate_from_depth(
@@ -129,10 +144,10 @@ core::Status Fuser::fuse_blocking(volume::VoxelBlockGrid& grid,
   return integrator_.integrate(grid, frames, max_weight, mode, metrics);
 }
 
-core::Result<FuseReport> Fuser::fuse(volume::VoxelBlockGrid& grid,
-                                     const std::vector<FrameInput>& frames,
-                                     float max_weight, IntegrationMode mode,
-                                     core::StageMetrics* metrics) try {
+core::Result<FuseReport> Fuser::fuse(
+    volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+    const std::vector<FrameInput>& frames, float max_weight,
+    IntegrationMode mode, core::StageMetrics* metrics) try {
   core::CommandBatch batch(*device_, *allocator_);
   VKC_ASSIGN(const PendingFuse pending,
              record_fuse(batch, grid, frames, max_weight, mode, metrics));
@@ -155,7 +170,8 @@ core::Result<FuseReport> Fuser::fuse(volume::VoxelBlockGrid& grid,
 }
 
 core::Result<PendingFuse> Fuser::record_fuse(
-    core::CommandBatch& batch, volume::VoxelBlockGrid& grid,
+    core::CommandBatch& batch,
+    volumetric_kit::grid::volume::VoxelBlockGrid& grid,
     const std::vector<FrameInput>& frames, float max_weight,
     IntegrationMode mode, core::StageMetrics* metrics) try {
   if (!valid()) {
@@ -179,16 +195,19 @@ core::Result<PendingFuse> Fuser::record_fuse(
         std::uint32_t(grid.map().tick() - refused_tick_) < kGrowthRetryTicks);
   pending_.reset();
   if (!frames.empty()) {
-    if (report.load_factor > volume::VoxelHashMap::kGrowThreshold) {
+    if (report.load_factor >
+        volumetric_kit::grid::volume::VoxelHashMap::kGrowThreshold) {
       VKC_TRY(grow(grid, report, recorded->may_grow, metrics).status());
     }
     // A set whose fuse needs its whole band waits on the round's gate: a
     // strict fuser's, and the first set of a grid holding no block.
     recorded->gated =
         !config_.allow_partial || grid.map().allocated_blocks() == 0;
-    const volume::DeviceCount gate{&gate_, 0, 1};
-    const volume::DeviceCount* gated = recorded->gated ? &gate : nullptr;
-    const std::vector<volume::DepthInput> depths(frames.begin(), frames.end());
+    const volumetric_kit::grid::volume::DeviceCount gate{&gate_, 0, 1};
+    const volumetric_kit::grid::volume::DeviceCount* gated =
+        recorded->gated ? &gate : nullptr;
+    const std::vector<volumetric_kit::grid::volume::DepthInput> depths =
+        depth_inputs(frames);
     // One row for the set, the round and the compaction its breakdowns with
     // their device halves alone, as its host time holds theirs. The rows are
     // placed now, the stage's first, so a batch's later stages, whose device
@@ -218,9 +237,10 @@ core::Result<PendingFuse> Fuser::record_fuse(
   return core::Status::out_of_memory("Fuser::fuse: host allocation failed");
 }
 
-core::Result<FuseReport> Fuser::finish(const PendingFuse& pending,
-                                       volume::VoxelBlockGrid& grid,
-                                       core::StageMetrics* metrics) try {
+core::Result<FuseReport> Fuser::finish(
+    const PendingFuse& pending,
+    volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+    core::StageMetrics* metrics) try {
   if (!holds(pending)) {
     return core::Status::invalid_argument(
         "Fuser::finish: the pending set is not this fuser's last record "

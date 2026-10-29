@@ -5,7 +5,6 @@
 
 #include <utility>
 
-#include "stream_coder.hpp"
 #include "volumetric_kit/recon/sender/fuse_inputs.hpp"
 
 namespace volumetric_kit::recon::sender {
@@ -18,16 +17,18 @@ constexpr std::uint32_t kSpans = 128;
 
 }  // namespace
 
-core::Result<SetSender> SetSender::create(const core::Device& device,
-                                          tsdf::Fuser& fuser,
-                                          volume::VoxelBlockGrid& grid,
-                                          CodecStream* stream, Config config) {
+core::Result<SetSender> SetSender::create(
+    const core::Device& device, tsdf::Fuser& fuser,
+    volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+    volumetric_kit::grid::codec_stream::CodecStream* stream, Config config) {
   VKC_ASSIGN(core::GpuTimer timer, core::GpuTimer::create(device, kSpans));
   return SetSender(fuser, grid, stream, config, std::move(timer));
 }
 
-SetSender::SetSender(tsdf::Fuser& fuser, volume::VoxelBlockGrid& grid,
-                     CodecStream* stream, Config config, core::GpuTimer timer)
+SetSender::SetSender(tsdf::Fuser& fuser,
+                     volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+                     volumetric_kit::grid::codec_stream::CodecStream* stream,
+                     Config config, core::GpuTimer timer)
     : fuser_(&fuser),
       grid_(&grid),
       stream_(stream),
@@ -44,10 +45,10 @@ core::Result<SetSender::Sent> SetSender::send(
     const std::vector<std::optional<sensor::DeviceFrame>>& frames,
     std::shared_ptr<const void> inputs, std::size_t index, std::uint64_t pts_ns,
     core::StageMetrics* rows, const std::function<void()>& sent) {
-  // A coded set's frame goes through the stream's coder, in halves.
-  detail::StreamCoder* const coder =
-      code_due(index) ? stream_->coder() : nullptr;
-  if (code_due(index) && coder == nullptr) {
+  // A coded set's frame goes through the stream in halves.
+  volumetric_kit::grid::codec_stream::CodecStream* const coder =
+      code_due(index) ? stream_ : nullptr;
+  if (coder != nullptr && !coder->valid()) {
     return core::Status::invalid_argument(
         "SetSender: the stream is moved from");
   }
@@ -57,20 +58,22 @@ core::Result<SetSender::Sent> SetSender::send(
              fuser_->record_fuse(front, *grid_, in.frames, config_.max_weight,
                                  config_.mode, rows));
   // Housekeeping: a pass refused is reported and the set goes on.
-  std::optional<volume::RecordedRounds> freed;
+  std::optional<volumetric_kit::grid::volume::RecordedRounds> freed;
   if (config_.free_after > 0 &&
       (index + 1) % static_cast<std::size_t>(config_.free_after) == 0) {
-    core::Result<volume::RecordedRounds> pass = grid_->record_free_stale(
-        front, static_cast<std::uint32_t>(config_.free_after), rows);
+    core::Result<volumetric_kit::grid::volume::RecordedRounds> pass =
+        grid_->record_free_stale(
+            front, static_cast<std::uint32_t>(config_.free_after), rows);
     if (pass.ok()) {
       freed.emplace(std::move(pass).value());
     } else {
       out.freed = pass.status();
     }
   }
-  std::optional<codec::PendingEncode> coded;
+  std::optional<volumetric_kit::grid::codec::PendingEncode> coded;
   if (coder != nullptr) {
-    core::Result<codec::PendingEncode> recorded = coder->record(front, *grid_);
+    core::Result<volumetric_kit::grid::codec::PendingEncode> recorded =
+        coder->record_front(front, *grid_);
     if (!recorded.ok()) {
       fuser_->abandon(fused);
       return recorded.status();

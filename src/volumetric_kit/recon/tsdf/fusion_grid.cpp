@@ -10,17 +10,17 @@
 #include <string>
 
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/grid/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/core/log.hpp"
-#include "volumetric_kit/recon/volume/voxel_grid.hpp"
 
 namespace volumetric_kit::recon::tsdf {
 namespace {
 
 // What every fusion grid carries: the attributes Fuser writes.
-constexpr volume::AttributeSpec kFusionAttributes[] = {
-    {"tsdf", sizeof(float)},
-    {"weight", sizeof(float)},
-    {"color", sizeof(std::uint32_t)}};
+constexpr volumetric_kit::grid::volume::AttributeSpec kFusionAttributes[] = {
+    {volumetric_kit::grid::volume::kTsdfAttribute, sizeof(float)},
+    {volumetric_kit::grid::volume::kWeightAttribute, sizeof(float)},
+    {volumetric_kit::grid::volume::kColorAttribute, sizeof(std::uint32_t)}};
 
 // The warning for a caller's start capped to the device; a host allocation
 // failure loses the warning alone.
@@ -46,12 +46,14 @@ std::int32_t fusion_buckets(float voxel_size,
   const std::int64_t start =
       num_buckets ? *num_buckets : std::int64_t(16384.0 * scale);
   // max_num_buckets' arithmetic, on the layout of a one-bucket grid.
-  const volume::VoxelGridParams grid =
-      volume::block_grid_params(voxel_size, voxel_size, 1);
+  const volumetric_kit::grid::volume::VoxelGridParams grid =
+      volumetric_kit::grid::volume::block_grid_params(voxel_size, voxel_size,
+                                                      1);
   const auto voxels = std::uint64_t(grid.voxels_per_block);
   std::uint64_t blocks =
       std::uint64_t(std::numeric_limits<std::int32_t>::max()) / voxels;
-  for (const volume::AttributeSpec& attr : kFusionAttributes) {
+  for (const volumetric_kit::grid::volume::AttributeSpec& attr :
+       kFusionAttributes) {
     blocks = std::min<std::uint64_t>(
         blocks, max_storage_buffer_range / (voxels * attr.element_size));
   }
@@ -61,12 +63,12 @@ std::int32_t fusion_buckets(float voxel_size,
   return static_cast<std::int32_t>(std::min(start, ceiling));
 }
 
-core::Result<volume::VoxelBlockGrid> create_fusion_grid(
+core::Result<volumetric_kit::grid::volume::VoxelBlockGrid> create_fusion_grid(
     core::Device& device, core::Allocator& allocator, float voxel_size,
     float trunc_dist, std::optional<std::int32_t> num_buckets) {
-  return volume::VoxelBlockGrid::create(
+  return volumetric_kit::grid::volume::VoxelBlockGrid::create(
       device, allocator,
-      volume::block_grid_params(
+      volumetric_kit::grid::volume::block_grid_params(
           voxel_size, trunc_dist,
           fusion_buckets(voxel_size, core::max_storage_buffer_range(device),
                          num_buckets)),

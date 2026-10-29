@@ -21,18 +21,18 @@
 #include <utility>
 #include <vector>
 
-#include "scratch_dir.hpp"
 #include "set_dump.hpp"
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/recon/io/image_io.hpp"
-#include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
-#include "volumetric_kit/recon/sensor/utils/picture_readback.hpp"
+#include "volumetric_kit/core/testing/scratch_dir.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
+#include "volumetric_kit/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/sensor/io/image_io.hpp"
+#include "volumetric_kit/sensor/prep/picture_readback.hpp"
+#include "volumetric_kit/sensor/rgbd_frame.hpp"
 
 namespace vkc = volumetric_kit::core;
-namespace io = volumetric_kit::recon::io;
-namespace sensor = volumetric_kit::recon::sensor;
+namespace io = volumetric_kit::sensor::io;
+namespace sensor = volumetric_kit::sensor;
 
 namespace {
 
@@ -84,7 +84,7 @@ int test_luma_rgba() {
 }
 
 int test_dump() {
-  vr_test::Scratch scratch("vr_set_dump_");
+  vkc::test::Scratch scratch("vr_set_dump_");
   const std::string dir = scratch.path.string();
   const std::vector<std::string> ids = {"A", "B", "C"};
   const std::vector<std::uint8_t> jpeg_a = {0xff, 0xd8, 0x00, 0x01, 0xff, 0xd9};
@@ -115,8 +115,8 @@ int test_dump() {
   luma[0] = view;
 
   CHECK(vr_example::dump_set(dir, 7, set, ids, &luma).ok());
-  CHECK(vr_test::read_bytes(dir + "/set_007_A.jpg") == jpeg_a);
-  CHECK(vr_test::read_bytes(dir + "/set_007_C.jpg") == jpeg_c);
+  CHECK(vkc::test::read_bytes(dir + "/set_007_A.jpg") == jpeg_a);
+  CHECK(vkc::test::read_bytes(dir + "/set_007_C.jpg") == jpeg_c);
   CHECK(!exists(dir + "/set_007_B.jpg"));
   CHECK(!exists(dir + "/set_007_C_luma.png"));
   const vkc::Result<std::vector<std::uint32_t>> png =
@@ -131,13 +131,13 @@ int test_dump() {
 
   // No views: the JPEGs alone.
   CHECK(vr_example::dump_set(dir, 8, set, ids, nullptr).ok());
-  CHECK(vr_test::read_bytes(dir + "/set_008_A.jpg") == jpeg_a);
+  CHECK(vkc::test::read_bytes(dir + "/set_008_A.jpg") == jpeg_a);
   CHECK(!exists(dir + "/set_008_A_luma.png"));
 
   // A set dumped again: its first JPEG is already there, and is kept.
   const vkc::Status again = vr_example::dump_set(dir, 7, set, ids, &luma);
   CHECK(again.domain() == Code::InvalidArgument);
-  CHECK(vr_test::read_bytes(dir + "/set_007_A.jpg") == jpeg_a);
+  CHECK(vkc::test::read_bytes(dir + "/set_007_A.jpg") == jpeg_a);
 
   // A frame with no JPEG, as H.265 colour has none: refused, naming it,
   // before any of the set is written.
@@ -168,7 +168,7 @@ sensor::FrameSet two_jpegs() {
 
 // The dump over a run, from its check before the cameras open to its report.
 int test_run() {
-  vr_test::Scratch scratch("vr_set_dump_run_");
+  vkc::test::Scratch scratch("vr_set_dump_run_");
   const std::string dir = (scratch.path / "dump").string();
   const std::vector<std::string> ids = {"A", "B"};
   const sensor::FrameSet set = two_jpegs();

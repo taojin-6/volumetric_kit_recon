@@ -60,7 +60,7 @@ jobs:
             exit 1
           fi
 
-      # rig_viewer is built only with the Orbbec driver (VR_WITH_ORBBEC).
+      # rig_viewer is built only with the Orbbec driver (VS_WITH_ORBBEC).
       - name: Install the Orbbec SDK
         uses: ./.github/actions/install-orbbec-sdk
 
@@ -82,7 +82,7 @@ jobs:
           ok=0
           for attempt in 1 2 3; do
             if cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-                -DVR_BUILD_VIEWER=ON -DVR_BUILD_TESTS=ON -DVR_WITH_ORBBEC=ON; then
+                -DVR_BUILD_VIEWER=ON -DVR_BUILD_TESTS=ON -DVS_WITH_ORBBEC=ON; then
               ok=1
               break
             fi

@@ -17,12 +17,12 @@
 
 #include "volumetric_kit/gfx/assets/mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
-#include "volumetric_kit/recon/mesh/device_mesh.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/grid/mesh/device_mesh.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
 
 namespace fuse_viewer {
 
-namespace rmesh = volumetric_kit::recon::mesh;
+namespace rmesh = volumetric_kit::grid::mesh;
 namespace gassets = volumetric_kit::gfx::assets;
 namespace gpipelines = volumetric_kit::gfx::pipelines;
 

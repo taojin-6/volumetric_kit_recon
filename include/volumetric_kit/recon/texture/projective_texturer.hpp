@@ -16,13 +16,13 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/compute_kernel.hpp"
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
+#include "volumetric_kit/core/vulkan/fwd.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
-#include "volumetric_kit/recon/core/camera_params.hpp"
-#include "volumetric_kit/recon/core/fwd.hpp"
-#include "volumetric_kit/recon/mesh/device_mesh.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/grid/mesh/device_mesh.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/export.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
+#include "volumetric_kit/sensor/frame/camera_params.hpp"
 
 namespace volumetric_kit::recon::texture {
 
@@ -44,10 +44,10 @@ namespace volumetric_kit::recon::texture {
 /// side test refuses; a vertex with a zero normal has no side and passes it.
 ///
 /// **Per vertex, not per triangle**, and that is what makes this pass safe on a
-/// mesh built with `mesh::MarchingCubesConfig::share_vertices`. Every input to
-/// the verdict above is a property of the vertex alone, so deciding it per
-/// triangle and writing the answer to three vertices was only ever a choice --
-/// and on a shared mesh a wrong one, since a vertex belonging to several
+/// mesh built with `vgrid::mesh::MarchingCubesConfig::share_vertices`. Every
+/// input to the verdict above is a property of the vertex alone, so deciding it
+/// per triangle and writing the answer to three vertices was only ever a choice
+/// -- and on a shared mesh a wrong one, since a vertex belonging to several
 /// triangles that disagreed was written by whichever thread ran last. One
 /// thread per vertex means one writer per vertex. It is also less work: a
 /// shared vertex used to be projected once per referencing triangle.
@@ -63,11 +63,11 @@ namespace volumetric_kit::recon::texture {
 ///   texel inside the border to stop bilinear bleed at the atlas edge. The
 ///   caller binds that image as the renderer's atlas.
 /// - **in frame but occluded** -- `uv0 = -uv - 1`: still negative, so
-///   `HybridMeshPipeline` selects @ref mesh::Vertex::color exactly as before,
-///   but the coordinate is **carried** rather than discarded. gfx decodes it
-///   instead of substituting `(0, 0)`. Without this a triangle mixing the two
-///   classes interpolates from a real coordinate toward the atlas origin and
-///   smears the corner of the image across its face.
+///   `HybridMeshPipeline` selects `vgrid::mesh::Vertex::color` exactly as
+///   before, but the coordinate is **carried** rather than discarded. gfx
+///   decodes it instead of substituting `(0, 0)`. Without this a triangle
+///   mixing the two classes interpolates from a real coordinate toward the
+///   atlas origin and smears the corner of the image across its face.
 /// - **behind the camera** -- the `(-1, -1)` sentinel. The pinhole divide has
 ///   no meaning there, so no coordinate exists to carry; it decodes to
 ///   `(0, 0)`, which is what gfx already substituted. A vertex **in front but
@@ -110,8 +110,8 @@ namespace volumetric_kit::recon::texture {
 /// interpolate across the atlas between two tiles, which no per-vertex
 /// encoding can prevent. So that path needs an unshared mesh, where each
 /// triangle owns its three vertices, and refuses a shared one -- the one
-/// refusal @ref mesh::DeviceMesh::shares_vertices means to this class; see
-/// those overloads for how a view is chosen. Each tile is its view's colour
+/// refusal `vgrid::mesh::DeviceMesh::shares_vertices` means to this class;
+/// see those overloads for how a view is chosen. Each tile is its view's colour
 /// image at that image's own resolution, by the normalized-coordinate argument
 /// above.
 ///
@@ -162,13 +162,14 @@ class VR_TEXTURE_API ProjectiveTexturer {
 
   /// @brief Texture @p mesh with one posed frame, rewriting every vertex's
   ///        `uv0` in place.
-  /// @param mesh      The mesh to texture; **every** @ref mesh::Vertex::uv0 is
-  ///                  overwritten, with one of the three values the class note
-  ///                  above describes -- so read the **sign**, never `== (-1,
-  ///                  -1)`. Positions/normals/colors are unchanged, and
-  ///                  @ref mesh::Mesh::indices is neither read nor validated:
-  ///                  the dispatch is per vertex, so a mesh carrying vertices
-  ///                  and no indices is textured rather than refused.
+  /// @param mesh      The mesh to texture; **every**
+  ///                  `vgrid::mesh::Vertex::uv0` is overwritten, with one of
+  ///                  the three values the class note above describes -- so
+  ///                  read the **sign**, never `== (-1, -1)`.
+  ///                  Positions/normals/colors are unchanged, and
+  ///                  `vgrid::mesh::Mesh::indices` is neither read nor
+  ///                  validated: the dispatch is per vertex, so a mesh carrying
+  ///                  vertices and no indices is textured rather than refused.
   /// @param depth     Row-major depth image in **metres**, length
   ///                  `cam.width * cam.height` (the host applies any raw sensor
   ///                  depth-scale first) -- the occlusion reference.
@@ -196,8 +197,8 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         sample would count), the vertex count exceeds a single 1-D
   ///         dispatch, or a vertex / depth buffer would exceed the device
   ///         `maxStorageBufferRange`; otherwise a buffer or dispatch failure.
-  core::Status texture(mesh::Mesh& mesh, const float* depth,
-                       const DepthCameraParams& cam,
+  core::Status texture(volumetric_kit::grid::mesh::Mesh& mesh,
+                       const float* depth, const sensor::DepthCameraParams& cam,
                        float occlusion_threshold = 0.02f,
                        core::StageMetrics* metrics = nullptr);
 
@@ -207,17 +208,18 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// geometry never moves. That overload has to upload every vertex and index
   /// and then read the vertices back (~45 MB each way on a ~940 k-vertex room
   /// scan) purely to hand the kernel bytes the producing pass had already
-  /// written to the device. Given a @ref mesh::DeviceMesh straight from
-  /// @ref mesh::MarchingCubes::extract_device, only the depth frame is
+  /// written to the device. Given a `vgrid::mesh::DeviceMesh` straight from
+  /// `vgrid::mesh::MarchingCubes::extract_device`, only the depth frame is
   /// uploaded and nothing is read back; `uv0` is rewritten where it already
   /// lives, ready for the next device consumer.
   ///
   /// @param mesh   A device-resident mesh whose producer has not extracted
   ///               again. Checked rather than assumed -- see
-  ///               @ref mesh::DeviceMesh::is_current, which this calls: binding
-  ///               a superseded view can be a use-after-free of a `VkBuffer`
-  ///               the producer already destroyed, so this pass refuses instead
-  ///               of relying on the caller. An empty mesh is a no-op.
+  ///               `vgrid::mesh::DeviceMesh::is_current`, which this calls:
+  ///               binding a superseded view can be a use-after-free of a
+  ///               `VkBuffer` the producer already destroyed, so this pass
+  ///               refuses instead of relying on the caller. An empty mesh is a
+  ///               no-op.
   /// @param depth  As the host overload.
   /// @param cam    As the host overload.
   /// @param occlusion_threshold  As the host overload.
@@ -229,8 +231,8 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// @return OK on success, or the same failures as the host overload except
   ///         those about host arrays; `Status::Code::InvalidArgument` if
   ///         @p mesh names no buffers or has been superseded.
-  core::Status texture(const mesh::DeviceMesh& mesh, const float* depth,
-                       const DepthCameraParams& cam,
+  core::Status texture(const volumetric_kit::grid::mesh::DeviceMesh& mesh,
+                       const float* depth, const sensor::DepthCameraParams& cam,
                        float occlusion_threshold = 0.02f,
                        core::StageMetrics* metrics = nullptr);
 
@@ -268,14 +270,16 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         colour camera with no image, an image size that is one-sided or
   ///         not the colour camera's, or a coverage that is not a storage
   ///         buffer or is smaller than the image.
-  core::Status texture(const mesh::DeviceMesh& mesh, const TextureView& view,
+  core::Status texture(const volumetric_kit::grid::mesh::DeviceMesh& mesh,
+                       const TextureView& view,
                        float occlusion_threshold = 0.02f,
                        core::StageMetrics* metrics = nullptr);
 
   /// @brief As the @ref TextureView overload above, for a host mesh, uploaded
   ///        and read back as the first host overload is.
   /// @return As that overload and the first host overload.
-  core::Status texture(mesh::Mesh& mesh, const TextureView& view,
+  core::Status texture(volumetric_kit::grid::mesh::Mesh& mesh,
+                       const TextureView& view,
                        float occlusion_threshold = 0.02f,
                        core::StageMetrics* metrics = nullptr);
 
@@ -330,7 +334,7 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         views, overlaps itself or lies past @ref max_atlas_extent, a
   ///         shared, superseded or buffer-less mesh, or depth or coverage too
   ///         large for one binding; else a dispatch failure.
-  core::Status texture(const mesh::DeviceMesh& mesh,
+  core::Status texture(const volumetric_kit::grid::mesh::DeviceMesh& mesh,
                        const std::vector<TextureView>& views,
                        const AtlasLayout& layout,
                        float occlusion_threshold = 0.02f,
@@ -340,7 +344,8 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// @param mesh  Unshared: `indices` must be `0, 1, 2, ...`, one per vertex.
   /// @return As the device overload; a mesh whose indices are not that run is
   ///         InvalidArgument.
-  core::Status texture(mesh::Mesh& mesh, const std::vector<TextureView>& views,
+  core::Status texture(volumetric_kit::grid::mesh::Mesh& mesh,
+                       const std::vector<TextureView>& views,
                        const AtlasLayout& layout,
                        float occlusion_threshold = 0.02f,
                        core::StageMetrics* metrics = nullptr);

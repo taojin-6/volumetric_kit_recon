@@ -12,29 +12,30 @@
 #include <cstdio>
 #include <vector>
 
-#include "device_blocks.hpp"
-#include "gpu_test.hpp"
 #include "remesh_report.hpp"
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/grid/testing/device_blocks.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_grid.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 
 namespace {
 
 // Stamp the block at `coord` changed at the map's tick, as a pass writing
 // its voxels would.
 vkc::Status touch(vkc::Device& device, vkc::Allocator& allocator,
-                  vol::VoxelBlockGrid& grid, vr::Vec3i coord) {
+                  vol::VoxelBlockGrid& grid, vgrid::Vec3i coord) {
   VKC_ASSIGN(const std::vector<vol::BlockIndex> active,
              grid.map().compact_active_blocks());
   VKC_ASSIGN(std::vector<vol::BlockStamp> stamps,
@@ -53,9 +54,9 @@ vkc::Status touch(vkc::Device& device, vkc::Allocator& allocator,
 
 }  // namespace
 
-int gpu_main(vr_test::GpuContext& gpu) {
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)}};
+int gpu_main(vkc::test::GpuContext& gpu) {
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, sizeof(float)},
+                                      {vol::kWeightAttribute, sizeof(float)}};
   auto made = vol::VoxelBlockGrid::create(
       gpu.device, gpu.allocator, vol::block_grid_params(0.01f, 0.04f, 256),
       attrs, 2);
@@ -72,15 +73,15 @@ int gpu_main(vr_test::GpuContext& gpu) {
     for (int y = 0; y < 3; ++y) {
       for (int x = 0; x < 3; ++x) {
         vol::BlockIndex b{};
-        b.coord = vr::Vec3i(x, y, z);
+        b.coord = vgrid::Vec3i(x, y, z);
         cube.push_back(b);
       }
     }
   }
-  CHECK(vr_test::allocate_blocks(gpu, grid.map(), cube.data(), 27).ok());
+  CHECK(vgrid_test::allocate_blocks(gpu, grid.map(), cube.data(), 27).ok());
   const std::uint32_t before = grid.map().tick();
   grid.map().advance_tick();
-  CHECK(touch(gpu.device, gpu.allocator, grid, vr::Vec3i(1, 1, 1)).ok());
+  CHECK(touch(gpu.device, gpu.allocator, grid, vgrid::Vec3i(1, 1, 1)).ok());
 
   auto active = grid.map().compact_active_blocks();
   CHECK(active.ok() && active.value().size() == 27);
@@ -92,7 +93,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // A corner block reaches only itself inside the cube.
   grid.map().advance_tick();
   const std::uint32_t middle = grid.map().tick() - 1;
-  CHECK(touch(gpu.device, gpu.allocator, grid, vr::Vec3i(0, 0, 0)).ok());
+  CHECK(touch(gpu.device, gpu.allocator, grid, vgrid::Vec3i(0, 0, 0)).ok());
   blocks = vr_example::changed_since(grid, active.value(), middle);
   CHECK(blocks.ok());
   CHECK(blocks.value().changed == 1 && blocks.value().remesh == 1);
@@ -112,4 +113,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
   return 0;
 }
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

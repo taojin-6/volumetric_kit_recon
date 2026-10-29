@@ -9,15 +9,17 @@
 #include "config.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
-#include "volumetric_kit/recon/sensor/orbbec/orbbec_stream.hpp"
+#include "volumetric_kit/sensor/orbbec/orbbec_stream.hpp"
 
 namespace vr_example {
 
+namespace config = volumetric_kit::core::config;
+
 /// @return Runtime stream settings copied from core's validated configuration.
-inline volumetric_kit::recon::sensor::OrbbecStreamOptions orbbec_stream_options(
+inline volumetric_kit::sensor::OrbbecStreamOptions orbbec_stream_options(
     const config::Config& settings) {
-  volumetric_kit::recon::sensor::OrbbecStreamOptions streams;
-  namespace sensor = volumetric_kit::recon::sensor;
+  volumetric_kit::sensor::OrbbecStreamOptions streams;
+  namespace sensor = volumetric_kit::sensor;
   const auto& source = settings.source;
   streams.color_codec = source.color_codec == config::ColorCodec::Hevc
                             ? sensor::OrbbecColorCodec::Hevc
@@ -40,7 +42,7 @@ inline volumetric_kit::recon::sensor::OrbbecStreamOptions orbbec_stream_options(
 inline void apply_orbbec_config(
     const config::Config& settings, const volumetric_kit::core::Device& device,
     volumetric_kit::core::Allocator& allocator,
-    volumetric_kit::recon::sensor::OrbbecStreamOptions& streams) {
+    volumetric_kit::sensor::OrbbecStreamOptions& streams) {
   streams = orbbec_stream_options(settings);
   streams.device = &device;
   streams.allocator = &allocator;

@@ -37,24 +37,26 @@
 #include <utility>
 #include <vector>
 
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 
-#include "buffer_readback.hpp"
-#include "gpu_test.hpp"
+#include "volumetric_kit/core/testing/buffer_readback.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace tex = volumetric_kit::recon::texture;
-namespace rmesh = volumetric_kit::recon::mesh;
+namespace rmesh = volumetric_kit::grid::mesh;
 
 namespace {
 
@@ -63,11 +65,11 @@ constexpr std::uint32_t kH = 240;
 constexpr float kWallZ = 3.0f;
 
 // A camera at `eye` looking along `forward` (in the x-z plane), y down.
-vr::DepthCameraParams camera(vr::Vec3f eye, vr::Vec3f forward) {
+sensor::DepthCameraParams camera(vr::Vec3f eye, vr::Vec3f forward) {
   const vr::Vec3f z = glm::normalize(forward);
   const vr::Vec3f y(0.0f, 1.0f, 0.0f);
   const vr::Vec3f x = vr::cross(y, z);  // so that x cross y = z
-  vr::DepthCameraParams c{};
+  sensor::DepthCameraParams c{};
   c.fx = 250.0f;
   c.fy = 250.0f;
   c.cx = 160.0f;
@@ -84,7 +86,7 @@ vr::DepthCameraParams camera(vr::Vec3f eye, vr::Vec3f forward) {
   return c;
 }
 
-vr::Vec3f to_camera(const vr::DepthCameraParams& c, vr::Vec3f world) {
+vr::Vec3f to_camera(const sensor::DepthCameraParams& c, vr::Vec3f world) {
   const vr::Vec3f d = world - vr::Vec3f(c.cam_to_world[3]);
   return vr::Vec3f(vr::dot(vr::Vec3f(c.cam_to_world[0]), d),
                    vr::dot(vr::Vec3f(c.cam_to_world[1]), d),
@@ -94,7 +96,7 @@ vr::Vec3f to_camera(const vr::DepthCameraParams& c, vr::Vec3f world) {
 // `c` at `scale` of its resolution, its intrinsics rescaled about pixel
 // centres as sensor::depth_from_registered_color does, so a pixel centre is
 // the same fraction of either image.
-vr::DepthCameraParams rescaled(vr::DepthCameraParams c, float scale) {
+sensor::DepthCameraParams rescaled(sensor::DepthCameraParams c, float scale) {
   c.fx *= scale;
   c.fy *= scale;
   c.cx = (c.cx + 0.5f) * scale - 0.5f;
@@ -105,7 +107,7 @@ vr::DepthCameraParams rescaled(vr::DepthCameraParams c, float scale) {
 }
 
 // The wall's depth in each pixel of `c`: the camera-space z of the ray's hit.
-std::vector<float> wall_depth(const vr::DepthCameraParams& c) {
+std::vector<float> wall_depth(const sensor::DepthCameraParams& c) {
   std::vector<float> depth(static_cast<std::size_t>(c.width) * c.height, 0.0f);
   const vr::Vec3f eye(c.cam_to_world[3]);
   for (std::uint32_t v = 0; v < c.height; ++v) {
@@ -128,9 +130,9 @@ std::vector<float> wall_depth(const vr::DepthCameraParams& c) {
 // of its own. Not a rescale of `c`, so a coordinate taken from the depth
 // camera instead lands elsewhere; a little wider, so it records everything
 // `c` sees on the wall.
-vr::ColorCameraParams color_beside(const vr::DepthCameraParams& c,
-                                   float baseline) {
-  vr::ColorCameraParams k{};
+sensor::ColorCameraParams color_beside(const sensor::DepthCameraParams& c,
+                                       float baseline) {
+  sensor::ColorCameraParams k{};
   k.fx = 480.0f;
   k.fy = 480.0f;
   k.cx = 321.5f;
@@ -144,15 +146,15 @@ vr::ColorCameraParams color_beside(const vr::DepthCameraParams& c,
 
 // A host view of `depth` through `cam`, its image taken by `color`.
 tex::TextureView color_view(const float* depth,
-                            const vr::DepthCameraParams& cam,
-                            const vr::ColorCameraParams& color) {
+                            const sensor::DepthCameraParams& cam,
+                            const sensor::ColorCameraParams& color) {
   tex::TextureView view{depth, cam};
   view.color_camera = color;
   return view;
 }
 
 // color_beside's intrinsics, at `eye` looking along `forward`.
-vr::ColorCameraParams color_camera(vr::Vec3f eye, vr::Vec3f forward) {
+sensor::ColorCameraParams color_camera(vr::Vec3f eye, vr::Vec3f forward) {
   return color_beside(camera(eye, forward), 0.0f);
 }
 
@@ -163,9 +165,9 @@ vr::ColorCameraParams color_camera(vr::Vec3f eye, vr::Vec3f forward) {
 vr::Vec2f expected_uv(vr::Vec3f world, const tex::TextureView& view,
                       const tex::AtlasTile& tile,
                       const tex::AtlasLayout& layout) {
-  vr::DepthCameraParams c = view.cam;
+  sensor::DepthCameraParams c = view.cam;
   if (view.color_camera) {
-    const vr::ColorCameraParams& k = *view.color_camera;
+    const sensor::ColorCameraParams& k = *view.color_camera;
     c.fx = k.fx;
     c.fy = k.fy;
     c.cx = k.cx;
@@ -236,7 +238,7 @@ std::shared_ptr<const vkc::Buffer> to_device(
   desc.memory = vkc::MemoryUsage::DeviceOnly;
   vkc::Result<vkc::Buffer> buffer = allocator.create_buffer(desc);
   if (!buffer ||
-      !vr_test::write_back(device, allocator, buffer.value(), data).ok()) {
+      !vkc::test::write_back(device, allocator, buffer.value(), data).ok()) {
     return nullptr;
   }
   return std::make_shared<const vkc::Buffer>(std::move(buffer).value());
@@ -245,7 +247,7 @@ std::shared_ptr<const vkc::Buffer> to_device(
 // Colour camera `k`'s image marking its coverage as GpuFramePrep does: grey
 // where `seen(x, y)`, and a 0 word -- black, recording nothing -- elsewhere.
 template <typename Seen>
-std::vector<std::uint32_t> coverage_image(const vr::ColorCameraParams& k,
+std::vector<std::uint32_t> coverage_image(const sensor::ColorCameraParams& k,
                                           Seen seen) {
   std::vector<std::uint32_t> image(static_cast<std::size_t>(k.width) *
                                    k.height);
@@ -309,7 +311,7 @@ int texture_alone(tex::ProjectiveTexturer& texturer,
   return check_triangle(m, 0, want, one, layout.value());
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::Result<tex::ProjectiveTexturer> created =
       tex::ProjectiveTexturer::create(gpu.device, gpu.allocator);
   CHECK(created.ok());
@@ -317,11 +319,11 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(texturer.max_atlas_extent() >= 4096);  // the Vulkan minimum
 
   const vr::Vec3f target(0.0f, 0.0f, kWallZ);
-  const vr::DepthCameraParams cam0 =
+  const sensor::DepthCameraParams cam0 =
       camera(vr::Vec3f(0.0f, 0.0f, 0.0f), vr::Vec3f(0.0f, 0.0f, 1.0f));
-  const vr::DepthCameraParams cam1 =
+  const sensor::DepthCameraParams cam1 =
       camera(vr::Vec3f(2.0f, 0.0f, 0.0f), target - vr::Vec3f(2.0f, 0.0f, 0.0f));
-  const vr::DepthCameraParams cam2 = camera(
+  const sensor::DepthCameraParams cam2 = camera(
       vr::Vec3f(-2.0f, 0.0f, 0.0f), target - vr::Vec3f(-2.0f, 0.0f, 0.0f));
   const std::vector<float> depth1 = wall_depth(cam1);
   const std::vector<float> depth2 = wall_depth(cam2);
@@ -373,7 +375,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // full-resolution depth puts it. First, so the calls after it grow the
   // texturer's buffers from one small view to three large ones.
   {
-    const vr::DepthCameraParams half = rescaled(cam1, 0.5f);
+    const sensor::DepthCameraParams half = rescaled(cam1, 0.5f);
     const std::vector<float> half_depth = wall_depth(half);
     tex::TextureView low{half_depth.data(), half, kW, kH};
     const std::vector<tex::TextureView> lows = {low};
@@ -647,8 +649,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // colour camera and textures them under the others, while a triangle far
   // from the occluder is textured under all three.
   for (float min_depth : {0.1f, 1e-8f, 0.0f}) {
-    vr::DepthCameraParams sight_cam0 = cam0;
-    vr::DepthCameraParams sight_cam2 = cam2;
+    sensor::DepthCameraParams sight_cam0 = cam0;
+    sensor::DepthCameraParams sight_cam2 = cam2;
     sight_cam0.min_depth = min_depth;
     sight_cam2.min_depth = min_depth;
     std::vector<float> occluded = wall_depth(sight_cam0);
@@ -765,7 +767,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // The atlas on its own: tiles in order, in floor(sqrt(n)) rows, a row
   // ended early at the extent, and the refusals.
   {
-    vr::DepthCameraParams small = cam0;
+    sensor::DepthCameraParams small = cam0;
     small.width = 4;
     small.height = 2;
     const std::vector<tex::TextureView> two = {{nullptr, small},
@@ -794,7 +796,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(wide.ok() && wide->width == 12 && wide->height == 4);
     CHECK(wide->tiles[3].x == 0 && wide->tiles[3].y == 2);
     // Two views a row, unless the second would pass the extent: 4 + 6 > 8.
-    vr::DepthCameraParams wider = small;
+    sensor::DepthCameraParams wider = small;
     wider.width = 6;
     const std::vector<tex::TextureView> uneven = {{nullptr, small},
                                                   {nullptr, wider}};
@@ -809,7 +811,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
           vkc::Status::Code::InvalidArgument);  // wider than the extent
     CHECK(tex::side_by_side_atlas(three, 4).status().domain() ==
           vkc::Status::Code::InvalidArgument);  // three rows of 2 > 4 tall
-    vr::DepthCameraParams empty = small;
+    sensor::DepthCameraParams empty = small;
     empty.width = 0;
     CHECK(tex::side_by_side_atlas({{nullptr, empty}}, 16).status().domain() ==
           vkc::Status::Code::InvalidArgument);
@@ -912,4 +914,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

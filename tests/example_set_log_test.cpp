@@ -19,10 +19,10 @@
 
 #include "set_log.hpp"
 #include "stage_table.hpp"
-#include "test_check.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 
 namespace vkc = volumetric_kit::core;
-namespace codec = volumetric_kit::recon::codec;
+namespace codec = volumetric_kit::grid::codec;
 
 namespace {
 
@@ -35,9 +35,9 @@ bool has_line(const std::string& table, const std::string& line) {
 
 int main() {
   // The nearest rank: the ceil(p n)-th smallest.
-  CHECK(vr_example::nearest_rank(std::vector<int>{1, 2, 3, 4}, 50) == 2);
-  CHECK(vr_example::nearest_rank(std::vector<int>{1, 2, 3, 4}, 95) == 4);
-  CHECK(vr_example::nearest_rank(std::vector<int>{7}, 50) == 7);
+  CHECK(vgrid_example::nearest_rank(std::vector<int>{1, 2, 3, 4}, 50) == 2);
+  CHECK(vgrid_example::nearest_rank(std::vector<int>{1, 2, 3, 4}, 95) == 4);
+  CHECK(vgrid_example::nearest_rank(std::vector<int>{7}, 50) == 7);
 
   // A device whose counters move as the sets run: two submits and a staging
   // buffer a P-frame set, one submit an uncoded one.

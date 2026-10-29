@@ -25,13 +25,13 @@
 #include "viewer_panels.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
-#include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
+#include "volumetric_kit/sensor/array/sensor_array.hpp"
 
 namespace fuse_viewer {
 
-namespace rsensor = volumetric_kit::recon::sensor;
+namespace rsensor = volumetric_kit::sensor;
 namespace rtex = volumetric_kit::recon::texture;
 
 /// Why a mesh went out without an atlas. Such a mesh draws in fused vertex
@@ -284,7 +284,7 @@ class AtlasCopyTimes {
         "atlas copy, device ms (mean / p50 / p95 / max) over %s%zu timed: "
         "%s; %llu untimed\n",
         dropped_ ? "the newest " : "", device_ms_.size(),
-        vr_example::format_stats(
+        vgrid_example::format_stats(
             std::vector<double>(device_ms_.begin(), device_ms_.end()))
             .c_str(),
         static_cast<unsigned long long>(untimed_));

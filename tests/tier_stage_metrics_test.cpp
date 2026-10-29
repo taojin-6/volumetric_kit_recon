@@ -45,17 +45,21 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
-#include "buffer_readback.hpp"
-#include "gpu_test.hpp"
+#include "volumetric_kit/core/testing/buffer_readback.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
 
 #if defined(__unix__) || defined(__APPLE__)
@@ -159,8 +163,8 @@ bool row_reports_both_halves(const vkc::StageMetrics& m, const char* stage,
 
 // A camera looking down +Z at a plane 1 m away -- enough surface to allocate
 // blocks, fuse them, and mesh something.
-vr::DepthCameraParams plane_camera() {
-  vr::DepthCameraParams cam{};
+sensor::DepthCameraParams plane_camera() {
+  sensor::DepthCameraParams cam{};
   cam.width = kWidth;
   cam.height = kHeight;
   cam.fx = 64.0f;
@@ -173,19 +177,20 @@ vr::DepthCameraParams plane_camera() {
   return cam;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
-  const vr::volume::VoxelGridParams params{
+int gpu_main(vkc::test::GpuContext& gpu) {
+  const vgrid::volume::VoxelGridParams params{
       /*voxel_size=*/0.02f,     /*block_size=*/8,
       /*voxels_per_block=*/512,
       /*trunc_dist=*/0.04f,     /*bucket_size=*/8,
       /*num_buckets=*/64,
       /*num_blocks=*/512,       /*max_chain=*/128};
 
-  const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                             {"weight", sizeof(float)}};
-  vkc::Result<vr::volume::VoxelBlockGrid> grid =
-      vr::volume::VoxelBlockGrid::create(gpu.device, gpu.allocator, params,
-                                         attrs, 2);
+  const vgrid::volume::AttributeSpec attrs[] = {
+      {vgrid::volume::kTsdfAttribute, sizeof(float)},
+      {vgrid::volume::kWeightAttribute, sizeof(float)}};
+  vkc::Result<vgrid::volume::VoxelBlockGrid> grid =
+      vgrid::volume::VoxelBlockGrid::create(gpu.device, gpu.allocator, params,
+                                            attrs, 2);
   CHECK(grid);
 
   vkc::Result<vr::tsdf::TsdfIntegrator> integrator =
@@ -196,7 +201,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       vr::texture::ProjectiveTexturer::create(gpu.device, gpu.allocator);
   CHECK(texturer);
 
-  const vr::DepthCameraParams cam = plane_camera();
+  const sensor::DepthCameraParams cam = plane_camera();
   const std::vector<float> depth(kWidth * kHeight, 1.0f);
 
   // Whether THIS device can time at all, asked directly rather than inferred
@@ -220,7 +225,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // StageMetrics no call was handed stays empty proves only that a default-
   // constructed vector is empty; it holds against precisely that tier.
   for (int n = 0; n < kPastOneWindow; ++n) {
-    CHECK(grid.value().map().allocate_from_depth(depth.data(), cam));
+    CHECK(grid.value().map().allocate_from_depth(
+        depth.data(), vr::tsdf::to_depth_pinhole(cam)));
     CHECK(integrator.value().integrate(grid.value(), depth.data(), cam));
   }
   vkc::StageMetrics after_untimed;
@@ -239,7 +245,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(grid.value().clear().ok());
   vkc::StageMetrics metrics;
   vkc::Result<std::uint32_t> allocated = grid.value().map().allocate_from_depth(
-      depth.data(), cam, nullptr, &metrics);
+      depth.data(), vr::tsdf::to_depth_pinhole(cam), nullptr, &metrics);
   CHECK(allocated);
   CHECK(integrator.value().integrate(grid.value(), depth.data(), cam, 5.0f,
                                      vr::tsdf::IntegrationMode::Classic,
@@ -248,7 +254,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // A mesh the texturer can chew on: three vertices is enough, since what is
   // under test is that the tier *reports*, not what it computes (that is
   // texture_projective_test's job).
-  vr::mesh::Mesh mesh;
+  vgrid::mesh::Mesh mesh;
   mesh.vertices.resize(3);
   mesh.vertices[0].position = {0.0f, 0.0f, 1.0f};
   mesh.vertices[1].position = {0.1f, 0.0f, 1.0f};
@@ -299,16 +305,16 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // over a large image makes the round far longer than the fuse, so a
   // compaction row that still held the round would overrun "integrate".
   {
-    vr::DepthCameraParams narrow = cam;
+    sensor::DepthCameraParams narrow = cam;
     narrow.width = narrow.height = 1024;
     narrow.fx = narrow.fy = 16384.0f;
     narrow.cx = narrow.cy = 512.0f;
     const std::vector<float> plane(std::size_t{1024} * 1024, 1.0f);
-    vkc::Result<vkc::Buffer> on_device = vr_test::upload_device_buffer(
+    vkc::Result<vkc::Buffer> on_device = vkc::test::upload_device_buffer(
         gpu.device, gpu.allocator, plane.data(), plane.size() * sizeof(float));
     CHECK(on_device);
-    const vr::tsdf::FrameInput frame{
-        {vkc::StorageInput(on_device.value()), narrow}, nullptr};
+    const vr::tsdf::FrameInput frame{vkc::StorageInput(on_device.value()),
+                                     narrow, nullptr};
     vr::tsdf::FuserConfig partial;
     partial.allow_partial = true;
     vkc::Result<vr::tsdf::Fuser> fuser =
@@ -351,8 +357,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
   // --- the mesh tier: an extract over its compaction and its dispatch --------
   {
-    vkc::Result<vr::mesh::MarchingCubes> mc =
-        vr::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
+    vkc::Result<vgrid::mesh::MarchingCubes> mc =
+        vgrid::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
     CHECK(mc);
     // The fuses above moved the active set, so this one compacts.
     vkc::StageMetrics first;
@@ -386,7 +392,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     // its one dispatch's submit, which is the stage's tile.
     CHECK(grid.value().map().compact_active_blocks_on_device());
     vkc::StageMetrics again;
-    vr::mesh::ExtractTimings timings;
+    vgrid::mesh::ExtractTimings timings;
     CHECK(mc.value().extract_device(grid.value(), 0.0f, &timings, &again));
     CHECK(find(again, "  ..compact") == nullptr);
     const vkc::StageRow* steady = find(again, "  ..dispatch");
@@ -450,9 +456,9 @@ int gpu_main(vr_test::GpuContext& gpu) {
   {
     vkc::StageMetrics frustum;
     CHECK(grid.value().map().compact_active_blocks_in_frusta_on_device(
-        {vr::volume::make_frustum_planes(cam.fx, cam.fy, cam.cx, cam.cy,
-                                         cam.width, cam.height, cam.min_depth,
-                                         cam.max_depth, cam.cam_to_world)},
+        {vgrid::volume::make_frustum_planes(
+            cam.fx, cam.fy, cam.cx, cam.cy, cam.width, cam.height,
+            cam.min_depth, cam.max_depth, cam.cam_to_world)},
         &frustum));
     CHECK(row_reports_both_halves(frustum, "active set", device_can_time,
                                   "frustum compaction"));
@@ -485,4 +491,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

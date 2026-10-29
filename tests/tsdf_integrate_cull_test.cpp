@@ -18,25 +18,28 @@
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <string_view>
 #include <vector>
 
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/grid/volume/frustum.hpp"
+#include "volumetric_kit/grid/volume/hash_types.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/frustum.hpp"
-#include "volumetric_kit/recon/volume/hash_types.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
-#include "gpu_test.hpp"
-#include "grid_readback.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
 namespace {
@@ -64,9 +67,10 @@ vol::VoxelGridParams grid_params() {
 
 vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
                                            vkc::Allocator& allocator) {
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec attrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   return vol::VoxelBlockGrid::create(device, allocator, grid_params(), attrs,
                                      3);
 }
@@ -74,7 +78,7 @@ vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
 // A camera looking down world +z from `eye`, seeing a wall at depth `z`, in
 // one colour.
 struct Frame {
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   std::vector<float> depth;
   std::vector<std::uint32_t> color;
 };
@@ -117,7 +121,7 @@ Frame witness() {
 }
 
 // The frustum integrate culls `cam` to.
-vol::FrustumPlanes reach(const vr::DepthCameraParams& cam) {
+vol::FrustumPlanes reach(const sensor::DepthCameraParams& cam) {
   return vol::make_frustum_planes(cam.fx, cam.fy, cam.cx, cam.cy, cam.width,
                                   cam.height, 0.0f, cam.max_depth + kTrunc,
                                   cam.cam_to_world);
@@ -129,16 +133,18 @@ struct Block {
   vol::BlockStamp stamp;
 };
 
-vkc::Result<std::map<Coord, Block>> blocks_of(const vr_test::Gpu& ctx,
+vkc::Result<std::map<Coord, Block>> blocks_of(const vkc::test::Gpu& ctx,
                                               vol::VoxelBlockGrid& g) {
   VKC_ASSIGN(const std::vector<vol::BlockIndex> active,
              g.map().compact_active_blocks());
-  const auto read = [&](const char* name) {
-    return vr_test::read_blocks<std::uint32_t>(ctx, g, name, active);
+  const auto read = [&](std::string_view name) {
+    return vgrid_test::read_blocks<std::uint32_t>(ctx, g, name, active);
   };
-  VKC_ASSIGN(const std::vector<std::uint32_t> tsdf, read("tsdf"));
-  VKC_ASSIGN(const std::vector<std::uint32_t> weight, read("weight"));
-  VKC_ASSIGN(const std::vector<std::uint32_t> color, read("color"));
+  VKC_ASSIGN(const std::vector<std::uint32_t> tsdf, read(vol::kTsdfAttribute));
+  VKC_ASSIGN(const std::vector<std::uint32_t> weight,
+             read(vol::kWeightAttribute));
+  VKC_ASSIGN(const std::vector<std::uint32_t> color,
+             read(vol::kColorAttribute));
   VKC_ASSIGN(const std::vector<vol::BlockStamp> stamps,
              g.map().read_block_stamps());
   const std::size_t vpb = grid_params().voxels_per_block;
@@ -179,7 +185,7 @@ constexpr int kZ = 2;
 // Fuse `steps` -- each a set of frames, allocated and then integrated as one
 // call -- into A and B, and compare. `fused` is a layer that must end up with
 // weighted voxels, which pins that the scenario reaches the edge it is about.
-int run(const vr_test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
+int run(const vkc::test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
         const char* name, tsdf::IntegrationMode mode,
         const std::vector<std::vector<Frame>>& steps, Layer fused) {
   auto a = make_grid(ctx.device, ctx.allocator);
@@ -191,11 +197,13 @@ int run(const vr_test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
     std::vector<tsdf::ColorFrame> colors;
     colors.reserve(frames.size());
     for (const Frame& f : frames) {
-      depths.push_back({vkc::StorageInput(f.depth.data()), f.cam});
+      depths.push_back(
+          {vkc::StorageInput(f.depth.data()), tsdf::to_depth_pinhole(f.cam)});
       colors.push_back(tsdf::ColorFrame{
           f.color.data(),
-          vr::ColorCameraParams{f.cam.fx, f.cam.fy, f.cam.cx, f.cam.cy,
-                                f.cam.width, f.cam.height, f.cam.cam_to_world},
+          sensor::ColorCameraParams{f.cam.fx, f.cam.fy, f.cam.cx, f.cam.cy,
+                                    f.cam.width, f.cam.height,
+                                    f.cam.cam_to_world},
           {}});
     }
     CHECK(settle(a.value(), depths) == 0);
@@ -204,10 +212,10 @@ int run(const vr_test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
     // frustum alone is the witness's.
     std::vector<tsdf::FrameInput> fa;
     std::vector<tsdf::FrameInput> fb{
-        {{vkc::StorageInput(all.depth.data()), all.cam}, nullptr}};
+        {vkc::StorageInput(all.depth.data()), all.cam, nullptr}};
     for (std::size_t i = 0; i < frames.size(); ++i) {
-      fa.push_back({depths[i], &colors[i]});
-      fb.push_back({depths[i], &colors[i]});
+      fa.push_back({depths[i].depth, frames[i].cam, &colors[i]});
+      fb.push_back({depths[i].depth, frames[i].cam, &colors[i]});
     }
     fb.push_back(fb.front());
     auto active = b->map().compact_active_blocks();
@@ -246,7 +254,7 @@ int run(const vr_test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
   return 0;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   auto integrator = tsdf::TsdfIntegrator::create(gpu.device, gpu.allocator);
   CHECK(integrator.ok());
   tsdf::TsdfIntegrator& integ = integrator.value();
@@ -306,7 +314,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(g.ok());
     std::vector<vol::DepthInput> depths;
     for (const Frame& f : pair) {
-      depths.push_back({vkc::StorageInput(f.depth.data()), f.cam});
+      depths.push_back(
+          {vkc::StorageInput(f.depth.data()), tsdf::to_depth_pinhole(f.cam)});
     }
     CHECK(settle(g.value(), depths) == 0);
     auto active = g->map().compact_active_blocks();
@@ -325,7 +334,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     // every call fused the whole set; an empty grid does not tick.
     const Frame away = wall(1.0f, vr::Vec3f(0.0f, 0.0f, 10.0f));
     const std::vector<tsdf::FrameInput> lone{
-        {{vkc::StorageInput(away.depth.data()), away.cam}, nullptr}};
+        {vkc::StorageInput(away.depth.data()), away.cam, nullptr}};
     auto missed =
         g->map().compact_active_blocks_in_frusta_on_device({reach(away.cam)});
     CHECK(missed.ok() && missed.value().count == 0);
@@ -345,4 +354,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

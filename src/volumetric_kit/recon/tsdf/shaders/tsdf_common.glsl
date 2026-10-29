@@ -6,30 +6,14 @@
 // push-constant block. #included by tsdf_integrate.glsl, the body of the
 // integrate and clear kernels.
 //
-// VoxelGridParams / BlockIndex mirror volume/{voxel_grid,hash_types}.hpp (the
-// same scalar-layout structs the volume kernels use in hash_common.glsl);
-// IntegrateParams mirrors the host struct in tsdf_integrator.cpp. Under scalar
+// VoxelGridParams / BlockIndex are the voxel grid's, from the GLSL grid_volume
+// exports (grid_types.glsl); the cameras mirror the host structs. Under scalar
 // block layout every field lands at its host offset -- no std430 vec padding.
 
 #extension GL_EXT_scalar_block_layout : require
 
-#include "volumetric_kit/recon/core/shaders/pinhole.glsl"
-
-struct VoxelGridParams {
-  float voxel_size;
-  int block_size;
-  int voxels_per_block;
-  float trunc_dist;
-  int bucket_size;
-  int num_buckets;
-  int num_blocks;
-  int max_chain;
-};
-
-struct BlockIndex {
-  ivec3 coord;
-  int ptr;
-};
+#include "volumetric_kit/sensor/frame/shaders/pinhole.glsl"
+#include "volumetric_kit/grid/volume/shaders/grid_types.glsl"
 
 // Camera intrinsics + pose + depth range (mirrors DepthCameraParams
 // byte-for-byte: scalars at their 4-byte offsets, the cam_to_world mat4 at 32).
@@ -62,22 +46,22 @@ struct ColorCameraParams {
 };
 
 // Project a world point into a pinhole camera given its intrinsics + rigid
-// cam_to_world pose: core/shaders/pinhole.glsl's vr_world_to_camera, then its
-// vr_project_pinhole, under its rules. Also sets `zc`, the camera-space depth
+// cam_to_world pose: sensor/frame/shaders/pinhole.glsl's vs_world_to_camera, then its
+// vs_project_pinhole, under its rules. Also sets `zc`, the camera-space depth
 // (metres). The two project_to_image overloads adapt the depth and color
 // camera structs onto it.
 bool project_pinhole(mat4 cam_to_world, float fx, float fy, float cx, float cy,
                      uint width, uint height, vec3 world, out vec2 px,
                      out float zc) {
-  vec3 p_cam = vr_world_to_camera(cam_to_world, world);
+  vec3 p_cam = vs_world_to_camera(cam_to_world, world);
   zc = p_cam.z;
-  return vr_project_pinhole(p_cam, vec4(fx, fy, cx, cy), uvec2(width, height),
+  return vs_project_pinhole(p_cam, vec4(fx, fy, cx, cy), uvec2(width, height),
                             px);
 }
 
-// vr_nearest_pixel for a camera's width and height.
+// vs_nearest_pixel for a camera's width and height.
 uvec2 nearest_pixel(vec2 px, uint width, uint height) {
-  return vr_nearest_pixel(px, uvec2(width, height));
+  return vs_nearest_pixel(px, uvec2(width, height));
 }
 
 bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,

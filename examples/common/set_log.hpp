@@ -24,11 +24,11 @@
 #include "stage_table.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
-#include "volumetric_kit/recon/codec/codec_params.hpp"
+#include "volumetric_kit/grid/codec/codec_params.hpp"
 
 namespace vr_example {
 
-namespace vr = volumetric_kit::recon;
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
 
 /// @return The system clock now, in nanoseconds since its epoch: the clock a
@@ -73,7 +73,7 @@ class SetLog {
     vkc::StageMetrics rows;
     /// Its coded frame's type, as the encoder finished it; none for a set
     /// not coded.
-    std::optional<vr::codec::FrameType> type;
+    std::optional<vgrid::codec::FrameType> type;
     /// For a set not coded, the name of the sets it is tabled with -- a
     /// viewer's sets that published a mesh apart from those that only
     /// fused -- with string-literal lifetime; null reads "uncoded".
@@ -221,7 +221,7 @@ class SetLog {
   // A set's group: its frame's type, or, not coded, its kind.
   static const char* group_of(const Set& s) {
     if (s.type) {
-      return *s.type == vr::codec::FrameType::kInter ? "P-frame" : "I-frame";
+      return *s.type == vgrid::codec::FrameType::kInter ? "P-frame" : "I-frame";
     }
     return s.kind != nullptr ? s.kind : "uncoded";
   }
@@ -260,7 +260,7 @@ class SetLog {
     return rows;
   }
 
-  // Four cells of `what`, as wide as format_stats()'s.
+  // Four cells of `what`, as wide as vgrid_example::format_stats()'s.
   static std::string cells(const char* what) {
     char text[64];
     std::snprintf(text, sizeof text, "%8s %8s %8s %8s", what, what, what, what);
@@ -284,7 +284,7 @@ class SetLog {
       std::vector<double> busy, wait, device;
       vkc::DeviceTime worst = vkc::DeviceTime::None;
       for (const Set* s : sets) {
-        const vkc::StageRow* row = find_row(s->rows, row_name);
+        const vkc::StageRow* row = vgrid_example::find_row(s->rows, row_name);
         if (row == nullptr) continue;
         busy.push_back(row->cpu_ms - row->wait_ms);
         wait.push_back(row->wait_ms);
@@ -295,15 +295,16 @@ class SetLog {
       }
       std::string device_cells = cells("-");
       if (worst == vkc::DeviceTime::Measured) {
-        device_cells = format_stats(device);
+        device_cells = vgrid_example::format_stats(device);
       } else if (worst == vkc::DeviceTime::NotTimed) {
         device_cells = cells("n/t");
       } else if (worst == vkc::DeviceTime::Unavailable) {
         device_cells = cells("n/a");
       }
       std::snprintf(line, sizeof line, "  %-20s %5zu  %s  %s  %s\n", row_name,
-                    busy.size(), format_stats(busy).c_str(),
-                    format_stats(wait).c_str(), device_cells.c_str());
+                    busy.size(), vgrid_example::format_stats(busy).c_str(),
+                    vgrid_example::format_stats(wait).c_str(),
+                    device_cells.c_str());
       out += line;
     }
     // The device's counters per set.
@@ -333,7 +334,7 @@ class SetLog {
       std::vector<double> values;
       for (const Set* s : sets) values.push_back(count.of(s->counted()));
       std::snprintf(line, sizeof line, "    %-18s %s\n", count.name,
-                    format_stats(values).c_str());
+                    vgrid_example::format_stats(values).c_str());
       out += line;
     }
     // The latencies, where the stamps are known.
@@ -349,9 +350,10 @@ class SetLog {
           values.push_back(*ms);
         }
       }
-      std::snprintf(
-          line, sizeof line, "    %-18s %s\n", latency.name,
-          values.empty() ? cells("n/a").c_str() : format_stats(values).c_str());
+      std::snprintf(line, sizeof line, "    %-18s %s\n", latency.name,
+                    values.empty()
+                        ? cells("n/a").c_str()
+                        : vgrid_example::format_stats(values).c_str());
       out += line;
     }
     std::size_t redone = 0;

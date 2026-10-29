@@ -25,8 +25,8 @@
 #include <utility>
 #include <vector>
 
-#include "test_check.hpp"
 #include "viewer_atlas.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/testing/vulkan_policy.hpp"
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"

@@ -110,21 +110,20 @@
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/shared_device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/recon/camera/array_calibration.hpp"
-#include "volumetric_kit/recon/camera/camera_model.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/mesh/device_mesh.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/mesh/mesh_exchange.hpp"
-#include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
-#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
+#include "volumetric_kit/grid/mesh/device_mesh.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/mesh/mesh_exchange.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
+#include "volumetric_kit/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/sensor/camera/array_calibration.hpp"
+#include "volumetric_kit/sensor/camera/camera_model.hpp"
+#include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
+#include "volumetric_kit/sensor/rgbd_sensor.hpp"
 
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
@@ -142,12 +141,12 @@
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace rtsdf = volumetric_kit::recon::tsdf;
-namespace rmesh = volumetric_kit::recon::mesh;
+namespace rmesh = volumetric_kit::grid::mesh;
 namespace rtex = volumetric_kit::recon::texture;
-namespace rsensor = volumetric_kit::recon::sensor;
-namespace rcamera = volumetric_kit::recon::camera;
+namespace rsensor = volumetric_kit::sensor;
+namespace rcamera = volumetric_kit::sensor::camera;
 namespace vg = volumetric_kit::gfx;
 namespace glfw = volumetric_kit::gfx::glfw;
 namespace vgp = volumetric_kit::gfx::pipelines;
@@ -170,7 +169,7 @@ constexpr std::size_t kLoggedSets = 15000;
 constexpr auto kSaveEvery = std::chrono::seconds(30);
 
 // The three ways the hybrid pipeline shades, as the View panel offers them.
-using Shading = vr_example::config::Shading;
+using Shading = vgrid_example::config::Shading;
 
 std::uint32_t shading_flags(Shading shading) {
   switch (shading) {
@@ -184,7 +183,7 @@ std::uint32_t shading_flags(Shading shading) {
   return vgp::kHybridMeshLit;
 }
 
-using Options = vr_example::config::Config;
+using Options = vgrid_example::config::Config;
 
 // A turntable around `target`, about the primary camera's image-up axis.
 // recon's world is the rig's, whose cameras follow OpenCV (+Y down), so gfx's
@@ -321,8 +320,7 @@ int run(GLFWwindow* window, const Options& opt) {
       windowed ? app.allocator() : offscreen->allocator();
   win::FrameLoop& loop = windowed ? app.frame_loop() : offscreen->frame_loop();
 
-  auto recon_device_result =
-      vkc::Device::adopt(shared->compute_payload(), vr::device_requirements());
+  auto recon_device_result = fuse_viewer::adopt_fuse_device(*shared);
   if (!recon_device_result) {
     std::fprintf(stderr, "recon Device::adopt: %s\n",
                  recon_device_result.status().message().c_str());
@@ -1048,7 +1046,7 @@ int run(GLFWwindow* window, const Options& opt) {
       glfwPollEvents();
       // Ctrl+C closes the window: the loop leaves as on a click, the fuse
       // thread stops the rig, and the cameras are released.
-      if (vr_example::interrupted()) {
+      if (vgrid_example::interrupted()) {
         glfwSetWindowShouldClose(window, GLFW_TRUE);
         continue;
       }
@@ -1056,7 +1054,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // Offscreen, the run ends with fusion -- run.sets, or a failure -- at
       // run.frames or on Ctrl+C. The frame begun after draws the mesh fusion
       // published last, and is saved.
-      last_frame = fusing_done.load() || vr_example::interrupted() ||
+      last_frame = fusing_done.load() || vgrid_example::interrupted() ||
                    (opt.run.frames > 0 && drawn + 1 >= opt.run.frames);
     }
 
@@ -1358,7 +1356,7 @@ int run(GLFWwindow* window, const Options& opt) {
 }  // namespace
 
 int run_main(const Options& opt) {
-  vr_example::catch_interrupts();
+  vgrid_example::catch_interrupts();
   // No window system to connect to -- an ssh session on a machine with no
   // desktop -- is no display: the run draws offscreen. A display whose window
   // cannot be made stays an error, below.
@@ -1384,7 +1382,7 @@ int run_main(const Options& opt) {
 }
 
 int main(int argc, char** argv) {
-  return vr_example::configured_main(argc, argv,
-                                     vr_example::config::Application::RigViewer,
-                                     "rig_viewer", run_main);
+  return vgrid_example::configured_main(
+      argc, argv, vgrid_example::config::Application::RigViewer, "rig_viewer",
+      run_main);
 }

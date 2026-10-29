@@ -6,6 +6,37 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **grid is fetched from its own repository**
+  ([`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid),
+  pinned at 0.1.0, `cbf7a6e`), and `grid/` is gone from this one, with the
+  CI job that tested it alone: grid's own CI tests it, so recon builds
+  neither grid's tests nor its `-Werror`. Targets, headers and bytes are unchanged. A
+  consumer that declared grid from this repository (`SOURCE_SUBDIR grid`)
+  declares it from grid's at its re-pin, by URL and SHA.
+- **The camera and sensor tiers are the in-tree package
+  `volumetric_kit_sensor`** (BREAKING; `sensor/`, 0.1.0; sensor/DECISIONS.md,
+  the 2026-10-29 package entry): `camera`, `sensor` and its drivers, decoders,
+  prep and array, image I/O, and recon_core's `camera_params.hpp`,
+  `color_space.hpp` and `pinhole.glsl` (now the header-only `sensor_frame`,
+  with `DeviceFrame`), with their tests, tools, fixtures and docs. The
+  package has its own `device_requirements()`, GLM aliases and version.
+  recon declares it after the core (`SOURCE_DIR sensor`) and before grid,
+  and requires 0.1.0 with `vkc_require_sibling`; its libraries link
+  `sensor_frame` alone (`recon_library_sensor_links`), and recon exports no
+  GLSL of its own. `VR_CAMERA_ONLY` is gone (the package's `VS_CAMERA_ONLY`
+  builds `sensor_camera` alone), and the `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG`
+  and `VR_WITH_CUDA` options are the package's `VS_` ones. In recon's tree
+  the package's tests and `-Werror` follow recon's (`VR_BUILD_TESTS`,
+  `VR_WARNINGS_AS_ERRORS`), so CI tests it there on every leg, alone on the
+  CUDA leg, and camera-only in its container. The ThreadSanitizer step runs
+  the package's threaded tests (`sensor_tsan_tests`); recon has none left.
+  For consumers, every name
+  moved, with no alias or forwarding header;
+  [sensor/CHANGELOG.md](sensor/CHANGELOG.md)'s 0.1.0 maps each old name to
+  its new one.
+
 ### Added
 
 - `examples`: **`rig_viewer` draws offscreen where there is no display**
@@ -18,10 +49,53 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `make_offscreen_viewer_device`, `offscreen_frames`, `OffscreenRenderer`,
   `bmp_bytes`, `write_bmp` and `FrameSaver`; `ProfilerDetach` holds a frame
   loop. The gfx pin moves from #152's main to #161's head, crossing
-  #153-#160 with no change to recon's draws, and the core pin to 0.27.0
-  (#64's head), `VR_CORE_MIN_VERSION` with it; `to_gfx_mesh` builds under
-  GCC's `-Wclass-memaccess`. Tests: `recon_example_viewer_offscreen`
-  (new), built and run by the viewer CI leg.
+  #153-#160, #162 and #163 with no change to recon's draws, and the core
+  pin to 0.30.0 (#64's head), `VR_CORE_MIN_VERSION` with it; `to_gfx_mesh`
+  builds under GCC's `-Wclass-memaccess`. Tests:
+  `recon_example_viewer_offscreen` (new), built and run by the viewer CI
+  leg.
+
+## [0.1.0] - 2026-10-28
+
+### Changed
+
+- **grid is a package of its own** (`grid/`, `volumetric_kit_grid` 0.1.0;
+  grid's DECISIONS.md, the 2026-10-28 package entry): `volume`, `voxelize`,
+  `mesh`, `io`'s mesh files (now `mesh_io`), `eval`, `codec`,
+  `codec_stream`, `stream` and `networking`, with their tests, examples
+  (`codec_mesh`, `serve_stream`), templates and docs, and recon_core's split
+  dispatch, now `grid_base`'s public `base/dispatch.hpp`. grid has its own
+  `device_requirements()` (scalar block layout), log source (`"vgrid"`), GLM
+  aliases and version; recon_core keeps its own. recon declares grid after
+  the core (`SOURCE_DIR grid`) and requires 0.1.0 with
+  `vkc_require_sibling`; its tsdf, texture, sender, examples and tests link
+  grid's targets. recon is 0.1.0. CI adds a job that builds and tests `grid/`
+  alone. Migration, at a consumer's re-pin (no forwarding header, alias or
+  shim is left):
+
+  | before | after |
+  | --- | --- |
+  | `volumetric_kit/recon/<tier>/…` for the tiers above | `volumetric_kit/grid/<tier>/…` |
+  | `volumetric_kit/recon/io/{ply_writer,triangle_mesh,textured_mesh,mesh_normalization,mesh_io}.hpp` | `volumetric_kit/grid/mesh_io/…` |
+  | `volumetric_kit::recon::<tier>` (`vr::volume`, …) | `volumetric_kit::grid::<tier>` (`vgrid::volume`, …) |
+  | `volumetric_kit::recon::io` (mesh files) | `volumetric_kit::grid::mesh_io` |
+  | `volumetric_kit::recon::detail::dispatch_items` and the split dispatch | `volumetric_kit::grid::detail::…`, `volumetric_kit/grid/base/dispatch.hpp` |
+  | `volumetric_kit::recon::Vec3f` (and the other aliases) in grid's headers | `volumetric_kit::grid::Vec3f` |
+  | `volumetric_kit::recon_<tier>` targets | `volumetric_kit::grid_<tier>`; umbrella `volumetric_kit::grid` |
+  | `recon_mesh_io`, `recon_mesh_io_assimp` | `grid_mesh_io`, `grid_mesh_io_assimp` |
+  | `VR_WITH_ASSIMP` | `VGRID_WITH_ASSIMP` |
+  | `VR_<TIER>_API`, `VR_<TIER>_STATIC_DEFINE` | `VGRID_<TIER>_API`, `VGRID_<TIER>_STATIC_DEFINE` |
+  | GLSL `volumetric_kit/recon/volume/shaders/{grid_types,voxel_color}.glsl` through `INCLUDE_TARGETS volumetric_kit::recon_volume` | `volumetric_kit/grid/volume/shaders/…` through `volumetric_kit::grid_volume` |
+  | GLSL `vrTickAfter`, `vrLocalIndex`, `vrVoxelColorToLinear`, … | `vgridTickAfter`, `vgridLocalIndex`, `vgridVoxelColorToLinear`, … |
+  | `examples/common/{config,info_log,interrupt,stage_table,codec_config,codec_quantization,codec_report,codec_sweep,stream_replay}.hpp`, namespace `vr_example` | `grid/examples/common/…` (`grid_example_common`), namespace `vgrid_example` |
+  | `config/examples/codec_mesh*.json` | `grid/config/examples/codec_mesh*.json` |
+  | log source `"vr"` from the server, the client and the codec stream | `"vgrid"` |
+
+  Bytes are unchanged: codec frames, `.vrst` files and PLY (its comment
+  stays `volumetric_kit_recon`).
+
+### Added
+
 - `camera`, `sensor`, examples: **every colour camera opens at the
   calibration's exposure** (the 2026-10-27 colour-controls decision):
   `camera::ColorControls` (`camera/color_controls.hpp`), a manual exposure,
@@ -201,6 +275,135 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `volume`, `tsdf`, `mesh`, `codec`, `voxelize`, `io`: **the voxel grid's
+  GPU contract has one home, in `volume`** (the 2026-10-28 grid-contract
+  decision). `recon_volume` exports two GLSL files with `vkc_export_glsl`:
+  `volume/shaders/grid_types.glsl` (`VoxelGridParams`, `BlockIndex`,
+  `BlockStamp`, the in-block index `vrLocalIndex` / `vrLocalBase`, and
+  `vrTickAfter`), which absorbs `block_stamp.glsl` and replaces
+  `tsdf_common.glsl`'s copies of the structs, and
+  `volume/shaders/voxel_color.glsl`, the colour attribute's format (the
+  sRGB curve from `core/shaders/color_common.glsl`, which is gone,
+  `kVoxelColorUnobserved`, `vrVoxelColorFromObserved` for a first
+  observation, `vrVoxelColorToLinear` for the mesher), with its host half
+  `volume/voxel_color.hpp`. tsdf's and texture's kernels include only
+  exported GLSL (`vr_embed_shaders(... INCLUDE_TARGETS ...)`), not `src/`.
+  `kTsdfAttribute`, `kWeightAttribute` and `kColorAttribute`
+  (`voxel_block_grid.hpp`) name the shared attributes. The PLY writer
+  encodes sRGB with a copy of its own, so `recon_mesh_io` includes no colour
+  vocabulary. `VoxelHashMap::entries_buffer()` and `entries_buffer_size()`
+  leave the public header for `VoxelHashMap::Internal`
+  (`src/volumetric_kit/recon/volume/hash_map_internal.hpp`), which codec,
+  mesh and voxelize include on their private `src/` path.
+  `vr_compile_shaders` (`cmake/vr_shaders.cmake`), left with no caller, is
+  gone. Fused voxels, meshes and codec streams are main's, bit for bit.
+  Migration: a consumer's kernel includes `grid_types.glsl` and
+  `voxel_color.glsl` through `INCLUDE_TARGETS volumetric_kit::recon_volume`;
+  nothing outside the voxel grid's tiers binds the hash entries. Tests:
+  `recon_volume_grid_types` (new), `recon_volume_voxel_color` (was
+  `recon_core_color_space_gpu`), `recon_tsdf_voxel_color_space` (new),
+  `recon_io_ply`, `recon_subproject_glsl`, `recon_subproject_headers`,
+  `recon_mesh_marching_cubes_sparse`, `recon_volume_hash_map`,
+  `recon_voxelize_mesh_integrate_exact`, and the tests that name the
+  attributes.
+- `codec_stream`, `sender`: **the codec stream is a tier of its own,
+  `codec_stream`, and its frame in halves is public** (the 2026-10-28
+  codec-stream decision): `codec_stream::CodecStream`, `CodecOutputs` and
+  `SentFrame` (`codec_stream/codec_stream.hpp`) in the new target
+  `volumetric_kit::recon_codec_stream`, which links the codec, the stream and
+  networking, and no fusion or sensor tier; `recon_sender` keeps `SetSender`
+  and `fuse_inputs` and links it. `CodecStream` gains `record_front`,
+  `front_ran`, `redo`, `finish_frame` and `valid()`, through which
+  `SetSender` codes its frames; `CodecStream::coder()` is gone. Frames,
+  records and rows are unchanged. Migration: include
+  `volumetric_kit/recon/codec_stream/codec_stream.hpp`, name
+  `codec_stream::` for `sender::` on those three types, and link
+  `recon_codec_stream` where `recon_sender` was linked only for the stream;
+  nothing forwards from the old names. Tests: `recon_sender_codec_stream` is
+  `recon_codec_stream`, and its case through `SetSender` is in
+  `recon_sender_set_sender`.
+- `examples`: **the codec helpers include no fusion**: `sender_config` and
+  `report_sent` move from `examples/common/codec_config.hpp` and
+  `codec_report.hpp` to the new `examples/common/fuse_sender.hpp`, so the
+  codec helpers include neither `fuse_frame.hpp` nor `sender::SetSender`,
+  and `codec_mesh` includes no fuser or sensor header (it still links
+  `recon_sender` for `CodecStream`). The functions, and every report, log
+  and parse, are unchanged. Migration: a caller of either includes
+  `fuse_sender.hpp`. Tests: `recon_example_config` and
+  `recon_example_codec_report` keep the codec halves;
+  `recon_example_fuse_config` and `recon_example_fuse_sender` (new) take the
+  fusing halves.
+- `core`, tests, build: **recon adopts core 0.29.0 and drops its own copies**
+  (the 2026-10-28 core-adoption decision): the core pin, the Homebrew key
+  action and `VR_CORE_MIN_VERSION` move to 0.29.0 (core #65's merge).
+  recon's headers include the core's `volumetric_kit/core/vulkan/fwd.hpp`;
+  `volumetric_kit/recon/core/fwd.hpp` is gone. `recon_core` exports
+  `pinhole.glsl` with the core's `vkc_export_glsl`, at the same include
+  path; its `VR_SHADER_INCLUDE_DIR` property is gone. The umbrella
+  `volumetric_kit::recon` carries recon's version as `VKC_PACKAGE_VERSION`,
+  for a consumer's `vkc_require_sibling`. The tests run on the core's test
+  support (`volumetric_kit/core/testing/`, namespace
+  `volumetric_kit::core::test`, `VKC_TEST_SANITIZED`); recon's
+  `test_check.hpp`, `scratch_dir.hpp`, `buffer_readback.hpp`,
+  `test_allocation_failure.{hpp,cpp}` and `gpu_test.hpp`'s harness are
+  gone, and the decoder skips and `bare_device` stay in
+  `tests/decoder_test.hpp`. A camera-only build with tests sets
+  `VKC_BUILD_TEST_SUPPORT` too. Migration: pin core 0.29.0 or newer first;
+  include `volumetric_kit/core/vulkan/fwd.hpp`; a consumer's kernels reach
+  `pinhole.glsl` with `INCLUDE_TARGETS volumetric_kit::recon_core` in place
+  of reading `VR_SHADER_INCLUDE_DIR`, at its next re-pin. Tests:
+  `recon_subproject_defaults` (its consumer's `vkc_require_sibling` accepts
+  recon), `recon_subproject_old_recon` (new: refused under a floor above
+  recon's version), `recon_subproject_glsl` (through `INCLUDE_TARGETS`),
+  `recon_subproject_old_core` (the 0.29.0 floor), and
+  `recon_decoder_test_harness` (was `recon_gpu_test_harness`, whose generic
+  cases the core's `vkc_testing_gpu_test_harness_test` holds).
+- `voxelize`, `tsdf`, `volume`: **`MeshIntegrator` moves to a tier of its
+  own, `voxelize`** (the 2026-10-28 voxelize decision):
+  `voxelize::MeshIntegrator`, `MeshSdfMode`, `MeshSdfParams` and
+  `MeshIntegrateStats` (`voxelize/mesh_integrator.hpp`) in the new target
+  `volumetric_kit::recon_voxelize`, which links `recon_volume` alone;
+  `recon_tsdf` no longer builds the 7 mesh kernels. The closest-point GLSL
+  moves from `core/shaders/` to `volume/shaders/triangle_common.glsl`. The
+  code, the kernels and what they write are unchanged. Migration: include
+  `volumetric_kit/recon/voxelize/mesh_integrator.hpp`, name
+  `voxelize::` for `tsdf::`, and link `recon_voxelize`; nothing forwards
+  from the old names. Tests: `recon_tsdf_mesh_integrate` and
+  `recon_tsdf_mesh_integrate_exact` are `recon_voxelize_mesh_integrate` and
+  `recon_voxelize_mesh_integrate_exact`.
+- `io`, examples: **`recon_io` splits into `recon_image_io` and
+  `recon_mesh_io`** (the 2026-10-28 decision). `recon_image_io` holds
+  `io/image_io.hpp` and links the family core's base tier alone, with no
+  Vulkan and no mesh tier. `recon_mesh_io` holds `io/ply_writer.hpp`,
+  `io/triangle_mesh.hpp` and `io/mesh_normalization.hpp`, and links
+  `recon_mesh`. `recon_mesh_io_assimp` replaces `recon_io_assimp`. Headers
+  and `vr::io` are unchanged; the export headers and macros follow the
+  targets (`VR_IMAGE_IO_API`, `VR_MESH_IO_API`, `VR_MESH_IO_ASSIMP_API`).
+  The umbrella `volumetric_kit::recon` links all three. Migration: link
+  `recon_image_io` for images, `recon_mesh_io` for PLY and normalization and
+  `recon_mesh_io_assimp` for import; `recon_io` and `recon_io_assimp` are
+  gone. Tests: `recon_io_image` (now `recon_image_io` alone),
+  `recon_io_ply`, `recon_io_mesh_normalization`, `recon_io_mesh_file`,
+  `recon_io_textured_mesh`, `recon_example_set_dump`,
+  `recon_subproject_defaults` (`recon_image_io` links the core's base tier
+  alone).
+- `volume`, `tsdf`: **the voxel layer takes its own depth camera** (the
+  2026-10-28 camera-free volume decision): `volume::DepthPinhole`
+  (`voxel_hash_map.hpp`), the fields and 96-byte layout of
+  `DepthCameraParams`, is `DepthInput::camera` and the camera the one-frame
+  `allocate_from_depth` overloads take, and the depth kernel unprojects
+  through a copy of its own; nothing in `volume` includes `camera_params.hpp`
+  or `pinhole.glsl`. `tsdf::FrameInput` no longer derives from `DepthInput`:
+  it holds the depth, its `DepthCameraParams` and its colour, and
+  `tsdf::to_depth_pinhole` copies a camera field by field. Allocation gives
+  main's blocks, heap count and stamps, bit for bit. Migration: pass
+  `tsdf::to_depth_pinhole(camera)` to `allocate_from_depth`; build a
+  `FrameInput` as `{depth, camera, color}`, not `{{depth, camera}, color}`;
+  a list of them no longer slices into `DepthInput`s. Tests:
+  `recon_volume_allocate`, `recon_volume_depth_unproject` (new),
+  `recon_volume_camera_free` (new), `recon_tsdf_depth_pinhole` (new),
+  `recon_volume_block_stamps`, `recon_volume_recorded`, and the tsdf,
+  sensor and stage-metrics tests that allocate from depth.
 - `sensor`: **the Orbbec driver defaults to H.265 at 3840x2160 and 25 fps**
   (the 2026-10-27 colour-controls decision), depth 640x576 as before: the
   streams core 0.25.0's Orbbec scenarios default to, which recon now needs

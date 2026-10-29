@@ -27,11 +27,11 @@
 #include <vector>
 
 #include "rig_report.hpp"
-#include "scratch_dir.hpp"
-#include "test_check.hpp"
 #include "viewer_atlas.hpp"
 #include "viewer_common.hpp"
 #include "viewer_offscreen.hpp"
+#include "volumetric_kit/core/testing/scratch_dir.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/testing/vulkan_policy.hpp"
 
 #include "volumetric_kit/core/base/stage_metrics.hpp"
@@ -47,7 +47,6 @@
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 
 namespace {
@@ -55,7 +54,6 @@ namespace {
 namespace vkc = volumetric_kit::core;
 namespace vg = volumetric_kit::gfx;
 namespace vgp = volumetric_kit::gfx::pipelines;
-namespace vr = volumetric_kit::recon;
 namespace rtex = volumetric_kit::recon::texture;
 namespace win = volumetric_kit::gfx::windowing;
 using Clock = std::chrono::steady_clock;
@@ -140,7 +138,7 @@ int bmp_is_the_bytes_behind_a_header(const std::filesystem::path& dir) {
   const std::string path = (dir / "host.bmp").string();
   CHECK(fuse_viewer::write_bmp(path, pixels.data(), {1, 1}).ok());
   CHECK(fuse_viewer::write_bmp(path, pixels.data(), extent).ok());
-  CHECK(vr_test::read_bytes(path) == file);
+  CHECK(vkc::test::read_bytes(path) == file);
   CHECK(!fuse_viewer::write_bmp((dir / "missing" / "host.bmp").string(),
                                 pixels.data(), extent)
              .ok());
@@ -263,9 +261,8 @@ int draws_and_saves_offscreen(const std::filesystem::path& dir) {
     return 1;
   }
 
-  // recon's half, as rig_viewer adopts it, and gfx's.
-  auto rdevice =
-      vkc::Device::adopt(shared->compute_payload(), vr::device_requirements());
+  // recon's and the sensor package's half, as rig_viewer adopts it, and gfx's.
+  auto rdevice = fuse_viewer::adopt_fuse_device(*shared);
   CHECK(rdevice.ok());
   auto rallocator =
       vkc::Allocator::create(shared->instance().handle(), rdevice.value());
@@ -375,7 +372,7 @@ int draws_and_saves_offscreen(const std::filesystem::path& dir) {
   // Each file: the header, the quad's middle in the atlas's colour, and a
   // corner in the pass's clear, (0.05, 0.05, 0.07) linear.
   for (const std::string& path : saver.saved()) {
-    const std::vector<std::uint8_t> file = vr_test::read_bytes(path);
+    const std::vector<std::uint8_t> file = vkc::test::read_bytes(path);
     if (const int rc = check_bmp_header(file, kExtent)) return rc;
     const std::uint8_t* centre =
         bmp_pixel(file, kExtent, kExtent.width / 2, kExtent.height / 2);
@@ -452,7 +449,7 @@ int draws_and_saves_offscreen(const std::filesystem::path& dir) {
 }
 
 int run_offscreen_tests() {
-  const vr_test::Scratch scratch("recon_viewer_offscreen_");
+  const vkc::test::Scratch scratch("recon_viewer_offscreen_");
   if (const int rc = bmp_is_the_bytes_behind_a_header(scratch.path)) {
     return rc;
   }

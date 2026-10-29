@@ -9,6 +9,11 @@ It is the standalone sibling of
 Vulkan/MoltenVK renderer). The two are independent libraries that meet at a thin
 interop seam: `recon` builds the volume, `gfx` renders it.
 
+The voxel grid and what reads it -- voxel hashing, marching cubes, mesh files,
+quality measurement, the codec and the `.vrst` stream and its live serving --
+are [`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid),
+a repository of its own that recon builds on, on the core alone.
+
 > Start with [AGENTS.md](AGENTS.md) for shared working conventions and commands.
 > [DESIGN.md](DESIGN.md) describes the architecture, current implementation,
 > and remaining work. [DECISIONS.md](DECISIONS.md#decision-index) holds the
@@ -24,9 +29,12 @@ clean, independently consumable tiers.
 
 ## Design at a glance
 
-- **Tiered, like gfx:** `core` → `volume` → `tsdf` → `mesh` → `texture` →
-  `interop`, with `sensor` off `core`, `codec` off `volume`, and `eval`/`io` off
-  `mesh`. A tier may depend only on tiers to its left.
+- **Tiered, like gfx:** `core` → `tsdf` → `texture` → `interop`, on grid's
+  tiers below them. A tier may depend only on tiers to its left, and grid on
+  nothing of recon's.
+- **Cameras in a package of their own:** capture, decoding and frame
+  preparation are the in-tree sensor package ([sensor/](sensor/README.md)),
+  whose frame contract (`sensor_frame`) is all recon's libraries link.
 - **One Vulkan path everywhere:** compute runs as Vulkan compute shaders
   (GLSL → SPIR-V), with MoltenVK on Apple — Linux / Android / macOS / iOS
   from one source, mirroring `volumetric_kit_gfx`. No Metal/CUDA split. GCC or
@@ -58,20 +66,36 @@ Consume it from another CMake project with `FetchContent`, pinned by commit
 (recon has no install rules), then link a tier (e.g.
 `volumetric_kit::recon_core`). Fetched, recon builds its library tiers alone:
 its tests, examples and `-Werror` (`VR_WARNINGS_AS_ERRORS`) default on only
-when it is the top-level project. A consumer with no GPU work, such as calib's
-solver, sets `VR_CAMERA_ONLY` ON to build the camera tier
-(`volumetric_kit::recon_camera`) alone, with no Vulkan SDK; it refuses the
-examples and the optional drivers.
+when it is the top-level project. The camera and sensor tiers are the
+in-tree sensor package (`sensor/`, `volumetric_kit::sensor_*`; its
+[README](sensor/README.md) covers its options, drivers and decoders), which
+recon declares after the core: recon's configure passes it the `VS_`
+options, and its tests and `-Werror` follow recon's.
 
-A consumer's kernels include recon's GLSL pinhole as recon's own do,
-`#include "volumetric_kit/recon/core/shaders/pinhole.glsl"`, under the root
-that `volumetric_kit::recon_core`'s `VR_SHADER_INCLUDE_DIR` property names,
-which holds the exported GLSL alone.
+recon exports no GLSL. A consumer's kernels include the GLSL recon's kernels
+read as they do, through the core's `INCLUDE_TARGETS`: the sensor package's
+`volumetric_kit::sensor_frame` exports the pinhole
+(`volumetric_kit/sensor/frame/shaders/pinhole.glsl`) with `vkc_export_glsl`,
+under a root that holds it alone. The voxel grid's contract is grid's
+([its README](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#building)).
 
 ```cmake
-get_target_property(vr_glsl volumetric_kit::recon_core VR_SHADER_INCLUDE_DIR)
-vkc_compile_shaders(my_kernels INCLUDE_DIRS "${vr_glsl}" SHADERS my.comp)
+vkc_compile_shaders(my_kernels INCLUDE_TARGETS volumetric_kit::sensor_frame
+                    SHADERS my.comp)
 ```
+
+A consumer that needs a recon at least as new as a given version calls the
+core's `vkc_require_sibling(volumetric_kit::recon <min-version>)` after
+`FetchContent_MakeAvailable(volumetric_kit_recon)`: the umbrella carries
+recon's `project(VERSION)` as `VKC_PACKAGE_VERSION`.
+
+recon builds on grid, fetched pinned by commit after the core and checked
+with `vkc_require_sibling(volumetric_kit::grid ...)` at
+`VR_GRID_MIN_VERSION` (0.1.0). grid's own CI tests grid, so its tests and
+`-Werror` stay off here; recon's tests and examples turn on its test support
+and its examples' helpers. An application that fetches grid itself declares
+it first; to build against a local grid checkout, pass
+`-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_GRID=<path>`.
 
 recon builds on [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core),
 the family's shared foundation, fetched pinned by commit on the first configure:
@@ -81,76 +105,40 @@ names (`volumetric_kit::core::Status`, `volumetric_kit::core::Device`) and which
 one `VkDevice` shares with gfx.
 An application that also fetches calib, which builds on the core too, declares
 `volumetric_kit_core` first, so both build against one copy, and sets
-`VKC_WITH_VULKAN ON` before the first `FetchContent_MakeAvailable` of it
-unless recon is camera-only; to build against a local core checkout, pass
+`VKC_WITH_VULKAN ON` before the first `FetchContent_MakeAvailable` of it; to
+build against a local core checkout, pass
 `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`. recon needs the core
-at `VR_CORE_MIN_VERSION` (0.27.0) or newer, with its vulkan tier unless
-`VR_CAMERA_ONLY` is ON, and checks both with the core's `vkc_require_core`:
+at `VR_CORE_MIN_VERSION` (0.30.0) or newer, with its vulkan tier, and checks
+both with the core's `vkc_require_core`:
 on a core older than that or missing a required tier, recon's configure
 fails saying why. A core older than 0.1.0 has no `vkc_require_core`, so the
 configure stops at that call as an unknown command: move the first-declared
-pin to 0.27.0 or newer.
+pin to 0.30.0 or newer.
 
 Examples and tests also need the core's config tier. That floor covers every
 core version they and the viewers' pinned gfx (`VR_BUILD_VIEWER`) need.
 
 ### Asset I/O
 
-`volumetric_kit::recon_io` provides encoded RGB image loading, 16-bit
-grayscale depth PNG loading with explicit units, RGBA8 and 16-bit grayscale
-PNG writing, and binary PLY mesh export. Include `io/image_io.hpp` or
-`io/ply_writer.hpp` under `volumetric_kit/recon/`. These are host file
-operations; they allocate no Vulkan resources and do not download a live GPU
-volume.
-
-Static mesh import is a separate optional target,
-`volumetric_kit::recon_io_assimp`, with Assimp as a private implementation
-dependency. Install Assimp and enable it explicitly:
-
-```sh
-brew install assimp                       # macOS
-sudo apt install libassimp-dev zlib1g-dev   # Debian/Ubuntu
-cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
-    -DVR_WITH_ASSIMP=ON
-```
-
-`io::load_mesh(path)` in `io/mesh_io.hpp` returns owned positions and triangle
-indices. It triangulates polygons, applies scene-node transforms and instances,
-preserves winding under reflections, and joins exactly coincident positions.
-OBJ, PLY and glTF are covered by tests; other formats depend on the installed
-Assimp build. Materials/textures are discarded and animated/skinned/morphed
-assets are refused. Import does not impose physical units or a target height:
-normalization such as Rafa2's 1.7 m convention is a caller operation, with
-the opt-in helpers of `io/mesh_normalization.hpp` (in `recon_io`).
-
-`io::load_textured_mesh(path)` in `io/textured_mesh.hpp` loads the same
-triangles with one UV per vertex, a position repeated at UV seams, and the
-path of the diffuse map.
-
-The default build does not need Assimp. Cross-compiles must supply Assimp for
-the target platform, not a host package.
+recon reads and writes no asset files of its own: image files are the
+sensor package's (`volumetric_kit::sensor_image_io`,
+[its README](sensor/README.md#image-files)), and mesh files -- PLY export
+and the optional Assimp import (`VGRID_WITH_ASSIMP`) -- are grid's
+([its README](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#mesh-files)).
 
 ### Optional: Orbbec SDK
 
-The Orbbec (Femto Mega) capture code is off by default and needs the
-[Orbbec SDK](https://github.com/orbbec/OrbbecSDK_v2/releases) ≥ 2.10.6
-installed. It is not fetched: install it once, outside the repo (the family
-convention is `<workspace>/third_party/OrbbecSDK_v<version>`), and point the
-build at its root:
+The live example, `fuse_orbbec`, needs the sensor package's Orbbec driver:
+the installed Orbbec SDK and, on Linux, the video decoders
+([the package's README](sensor/README.md#orbbec-driver)).
 
 ```sh
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
-    -DVR_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
-# on Linux, add -DVR_WITH_FFMPEG=ON -DVR_WITH_CUDA=ON
-# or once, for every repo that finds it:  export OrbbecSDK_ROOT=<sdk>
+    -DVS_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
+# on Linux, add -DVS_WITH_FFMPEG=ON -DVS_WITH_CUDA=ON
 ```
 
-The driver decodes each camera's colour itself, so it needs the video
-decoders too (see below: every Apple build has them; on Linux, FFmpeg and
-CUDA). That builds
-`volumetric_kit::recon_sensor_orbbec` -- `OrbbecSensor`, one camera as an
-`IRgbdSensor` (`sensor/orbbec/orbbec_sensor.hpp`), which a `SensorArray`
-reads as a synced rig -- and the live example. Every example takes a core
+Every example takes a core
 scenario file through `--config`; `--help` prints the common entry point.
 The core owns JSON decoding, defaults, units, ranges, source selection and
 operation compatibility. See [example configurations](config/README.md).
@@ -192,128 +180,28 @@ and output settings before opening any resource. Relative paths are resolved
 from the scenario file's directory, including the sync, calibration and output
 paths.
 
-### Video decoders
-
-The HEVC and JPEG decoders (`volumetric_kit::recon_sensor_video`,
-`sensor/video/`) decode on the GPU's hardware and hand their pictures out on
-the device only. Every Apple build has them, on VideoToolbox with no
-FFmpeg; their pictures reach Vulkan through `PixelBufferImporter`
-(`volumetric_kit::recon_sensor_apple`, `sensor/apple/`). On Linux they are
-off by default: NVDEC through FFmpeg ≥ 6.1, found through pkg-config, and
-nvJPEG, with the CUDA 13 toolkit's headers (`cmake/vr_cuda.cmake`).
-`VR_WITH_FFMPEG` on Apple fails the configure. The H.265 syntax the Apple
-decoder reads (`volumetric_kit::recon_sensor_video_syntax`,
-`sensor/video/hevc_syntax.hpp`) is host code, in every build.
-
-```sh
-sudo apt install pkg-config libavcodec-dev libavutil-dev
-cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
-    -DVR_WITH_FFMPEG=ON -DVR_WITH_CUDA=ON
-# fail, rather than skip, where the decoders find no device path
-# (videotoolbox on a Mac):
-VR_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
-```
-
 ## Codec evaluation
 
-`codec_replica` runs the grid codec on a fused room sequence. `codec_mesh`
-codes one triangle mesh or a numbered sequence of them: it loads each through
-`io::load_mesh`, uses `tsdf::MeshIntegrator` to convert it to a TSDF,
-compresses and decodes that grid, then extracts the decoded surface with
-marching cubes. Build the mesh example with `VR_WITH_ASSIMP=ON` after
-installing the [asset I/O prerequisites](#asset-io).
-Their `codec` section selects `quantization_table` (`uniform`, `band`,
-`radial`), `quantization_scale`, `segment_size`, `intra_period` (an I-frame
-every N coded frames, zero-motion P-frames between; 1, the default, codes
-every frame intra), `update_size` at a period above 1 (a P-frame's entries
-per update segment; 0, the default, takes the segment size), and the shared
-rate-distortion `sweep`, which codes intra.
-`output.stream` records every coded frame in a new `.vrst` file, each I-frame
-a key (see [the stream container](DESIGN.md#stream)), and `output.csv` writes
-a row per decoded frame: its type (`I` or `P`), bytes, blocks, and encode and
-decode host and device ms.
-
-A mesh scenario gives the head-up direction (`source.up_vector`) and either
-the input's unit (`source.metres_per_unit`) or a height to fit
-(`source.height_m`). The example rotates head-up to +Y, centres X/Z and puts
-the lowest point at Y=0, with one transform fitted to every frame it codes,
-printed once and stored in the stream; the files are left unchanged.
-Rafa2's OBJs declare no unit and its person is tilted, so its scenarios give
-the visually checked long principal axis and fit 1.7 m: a height
-normalization, not an assertion about the source's unit.
-
-A sequence's `source.path` holds a printf-style frame number, such as
-`Frame_%05d_textured.obj` (`%d` or `%0Nd` once; `%%` for a literal `%`), and
-`run.first` and `run.frames` select an exact range, every file checked
-before any work. Each frame is converted alone and coded as one record whose
-set is its number, at 30 fps. A mesh's field is a true distance, so
-`codec_mesh` codes it without the observed mask
-(`EncoderConfig::true_sdf`), in a band of at least 15 voxels from the
-surface (`fusion.truncation_m`), plus the shell's half-thickness in shell
-mode; it refuses a narrower one before any GPU work.
-`codec_mesh_sequence.json` codes Rafa2's frames 1–150 at 5 mm in a 16-voxel
-band, at K 56 and scale 0.040877; its frames 151–300 replay 150–1, so stop
-at 150. Frames 74–99 and 128–131 have holes, so it sets
-`source.allow_holes: true`: signed mode then takes a mesh whose only defect
-is boundary edges, each hole growing a skirt past its rim, which the coding
-cuts where it flips sign farther than √3 voxels out.
+`codec_replica` runs grid's codec on a fused room sequence; grid's
+`codec_mesh` codes a mesh or a sequence of them, and grid's README documents
+the `codec` section both read ([its codec evaluation](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#codec-evaluation)).
 
 ```sh
-cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
-  -DVR_WITH_ASSIMP=ON
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release
 cmake --build "$recon_root/build" --parallel
-# Edit source.path in these files to point at the installed datasets.
+# Edit source.path in this file to point at the installed dataset.
 "$recon_root/build/examples/codec_replica/codec_replica" \
   --config "$recon_root/config/examples/codec_replica.json"
-"$recon_root/build/examples/codec_mesh/codec_mesh" \
-  --config "$recon_root/config/examples/codec_mesh.json"
-"$recon_root/build/examples/codec_mesh/codec_mesh" \
-  --config "$recon_root/config/examples/codec_mesh_sequence.json"
 ```
-
-The mesh example's comparisons, sweep and `output.prefix` PLYs are the last
-frame's: `_input.ply` (normalized original), `_source.ply` (uncompressed
-TSDF surface) and `_decoded.ply`. Conversion error, codec-only error and
-total error are reported separately. `codec.inspect_only` checks every
-frame's input and normalization without a GPU.
-The signed mode checks indexed topology and winding; it does not establish
-freedom from self-intersections. `source.sdf_mode: "shell"` supports open or
-inconsistently wound meshes, with an intentional surface offset.
-
-Use a Release build for measurements. The current format is v3, with a
-global scale and the K kept bases' quantization weights in each frame; older
-versions are refused. See [the codec contract](DESIGN.md#codec) and
-[the measurement record](DECISIONS.md#2026-10-02--per-basis-quantization-and-a-normalized-mesh-codec-fixture).
 
 ## Live streaming
 
-`volumetric_kit::recon_networking` serves a session to viewers over TCP as
-it is recorded (`networking/stream_server.hpp`) and reads it as it arrives
-(`networking/stream_client.hpp`), byte for byte the `.vrst` file's chunks;
-see [the networking contract](DESIGN.md#networking). `fuse_orbbec` serves
-the rig's coded frames with `output.serve`, coding the next set as a key
-for a viewer that joins or falls behind, through
+`fuse_orbbec` serves the rig's coded frames with `output.serve`, coding the
+next set as a key for a viewer that joins or falls behind, through
 `volumetric_kit::recon_sender`: each set fused and its frame coded in two
-batches, then written and served ([the sender contract](DESIGN.md#sender)).
-`serve_stream` serves a recording live, paced by its pts and looping until
-Ctrl+C, with no camera or GPU; a viewer connects to the sender's
-`host:port`:
-
-```sh
-"$recon_root/build/examples/serve_stream/serve_stream" rafa2.vrst  # port 47801
-"$recon_root/build/examples/serve_stream/serve_stream" rafa2.vrst --port 0
-```
-
-Both listen on every interface, with no authentication or encryption: any
-host that reaches the port can watch, and the first four to connect keep
-their slots while they stay (`max_viewers`). Both print each viewer joining
-and leaving on stderr; one the sender closes, or whose connection fails,
-ends with `closed: <why>` or `failed: <why>` in place of `left`:
-
-```text
-[vr info] StreamServer: viewer 192.168.1.20:52311 joined, 1 of 4
-[vr info] StreamServer: viewer 192.168.1.20:52311 left
-```
+batches ([the sender contract](DESIGN.md#sender)), then written and served
+by grid's codec stream. The server, the client, `serve_stream` and what they
+print are grid's ([its live streaming](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#live-streaming)).
 
 ## License
 

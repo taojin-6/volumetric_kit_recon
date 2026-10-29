@@ -12,18 +12,18 @@
 #include <utility>
 
 #include "fuse_orbbec_sets.hpp"
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/recon/camera/array_calibration.hpp"
-#include "volumetric_kit/recon/camera/camera_model.hpp"
-#include "volumetric_kit/recon/camera/color_controls.hpp"
-#include "volumetric_kit/recon/sensor/orbbec/orbbec_stream.hpp"
-#include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
+#include "volumetric_kit/sensor/camera/array_calibration.hpp"
+#include "volumetric_kit/sensor/camera/camera_model.hpp"
+#include "volumetric_kit/sensor/camera/color_controls.hpp"
+#include "volumetric_kit/sensor/orbbec/orbbec_stream.hpp"
+#include "volumetric_kit/sensor/orbbec/orbbec_sync_config.hpp"
+#include "volumetric_kit/sensor/rgbd_sensor.hpp"
 
 namespace vkc = volumetric_kit::core;
-namespace camera = volumetric_kit::recon::camera;
-namespace sensor = volumetric_kit::recon::sensor;
+namespace camera = volumetric_kit::sensor::camera;
+namespace sensor = volumetric_kit::sensor;
 
 namespace {
 

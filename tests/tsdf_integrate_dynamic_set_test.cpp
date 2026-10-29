@@ -27,27 +27,28 @@
 #include <tuple>
 #include <vector>
 
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/volume/hash_types.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/hash_types.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
-#include "gpu_test.hpp"
-#include "grid_readback.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
-namespace mesh = volumetric_kit::recon::mesh;
+namespace mesh = volumetric_kit::grid::mesh;
 
 namespace {
 
@@ -76,16 +77,17 @@ vol::VoxelGridParams grid_params() {
 
 vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
                                            vkc::Allocator& allocator) {
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec attrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   return vol::VoxelBlockGrid::create(device, allocator, grid_params(), attrs,
                                      3);
 }
 
 // A camera and the constant depth it sees: a wall square to its axis.
 struct View {
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   std::vector<float> depth;
 };
 
@@ -129,7 +131,8 @@ View grazing() {
 int allocate(vol::VoxelBlockGrid& grid, const std::vector<View>& views) {
   std::vector<vol::DepthInput> depths;
   for (const View& v : views) {
-    depths.push_back({vkc::StorageInput(v.depth.data()), v.cam});
+    depths.push_back(
+        {vkc::StorageInput(v.depth.data()), tsdf::to_depth_pinhole(v.cam)});
   }
   for (int round = 0; round < 5; ++round) {
     vol::AllocFailures why;
@@ -157,7 +160,7 @@ int fuse(tsdf::TsdfIntegrator& integrator, vol::VoxelBlockGrid& grid,
       CHECK(integrator.integrate(grid, v.depth.data(), v.cam, 5.0f, kDynamic, c)
                 .ok());
     } else {
-      frames.push_back({{vkc::StorageInput(v.depth.data()), v.cam}, c});
+      frames.push_back({vkc::StorageInput(v.depth.data()), v.cam, c});
     }
   }
   if (!each) CHECK(integrator.integrate(grid, frames, 5.0f, kDynamic).ok());
@@ -168,7 +171,7 @@ int fuse(tsdf::TsdfIntegrator& integrator, vol::VoxelBlockGrid& grid,
 int check_same(vkc::Device& device, vkc::Allocator& allocator,
                vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
   std::size_t blocks = 0;
-  CHECK(vr_test::same_grids({device, allocator}, a, b, nullptr, &blocks));
+  CHECK(vgrid_test::same_grids({device, allocator}, a, b, nullptr, &blocks));
   CHECK(blocks != 0);
   return 0;
 }
@@ -224,7 +227,7 @@ std::int64_t voxel_at(const std::map<Coord, std::int32_t>& blocks, float x,
 
 }  // namespace
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::Device& dev = gpu.device;
   vkc::Allocator& alloc = gpu.allocator;
 
@@ -276,12 +279,12 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // Where G looks -- x = 0, y = 0, a metre down its axis -- F's near band
   // holds weight and F's colour.
   {
-    auto blocks = vr_test::blocks_of(fg.value());
+    auto blocks = vgrid_test::blocks_of(fg.value());
     CHECK(blocks.ok());
-    auto weight =
-        vr_test::read_attribute<float>(dev, alloc, fg.value(), "weight");
-    auto colors =
-        vr_test::read_attribute<std::uint32_t>(dev, alloc, fg.value(), "color");
+    auto weight = vgrid_test::read_attribute<float>(dev, alloc, fg.value(),
+                                                    vol::kWeightAttribute);
+    auto colors = vgrid_test::read_attribute<std::uint32_t>(
+        dev, alloc, fg.value(), vol::kColorAttribute);
     CHECK(weight.ok() && colors.ok());
     for (const float z : {0.97f, 0.98f, 0.99f, 1.00f}) {
       const std::int64_t i = voxel_at(blocks.value(), 0.0f, 0.0f, z);
@@ -311,4 +314,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
   return 0;
 }
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

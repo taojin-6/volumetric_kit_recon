@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "fuse_device.hpp"
 #include "viewer_common.hpp"
 #include "volumetric_kit/core/base/file_io.hpp"
 #include "volumetric_kit/core/base/result.hpp"
@@ -33,7 +34,6 @@
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace fuse_viewer {
 
@@ -44,14 +44,16 @@ namespace fuse_viewer {
 inline constexpr std::chrono::nanoseconds kOffscreenFrameInterval =
     std::chrono::nanoseconds(std::chrono::seconds(1)) / 60;
 
-/// @brief The device both libraries adopt where there is no display: core's
-///        `SharedDevice` with no surface, recon's requirements as compute and
-///        @p app's as graphics, which presents nothing. Prints the device's
-///        summary, as @ref make_viewer_device does.
+/// @brief The device gfx, recon and the sensor package all adopt where there
+///        is no display: core's `SharedDevice` with no surface, recon's and
+///        the sensor package's requirements as compute and @p app's as
+///        graphics, which presents nothing. Prints the device's summary, as
+///        @ref make_viewer_device does.
 /// @param app         As @ref viewer_device_config.
 /// @param validation  As @ref viewer_device_config.
 /// @return The device, to be declared before, and so outlive, everything
-///         adopted or made on it; or `SharedDevice::create`'s failure.
+///         adopted or made on it; or the requirements' merge's or
+///         `SharedDevice::create`'s failure.
 inline vkc::Result<std::unique_ptr<vkc::SharedDevice>>
 make_offscreen_viewer_device(const vg::app::WindowedAppConfig& app,
                              bool validation) {
@@ -59,7 +61,7 @@ make_offscreen_viewer_device(const vg::app::WindowedAppConfig& app,
       viewer_device_config(app, validation);
   vkc::SharedDeviceConfig config;
   config.instance = settings.instance;
-  config.compute = vr::device_requirements();
+  VKC_ASSIGN(config.compute, vr_example::fuse_device_requirements());
   config.graphics = settings.graphics;
   config.graphics.needs_present = false;
   VKC_ASSIGN(std::unique_ptr<vkc::SharedDevice> shared,

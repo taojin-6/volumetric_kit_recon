@@ -16,9 +16,9 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/recon/core/camera_params.hpp"
-#include "volumetric_kit/recon/core/fwd.hpp"
+#include "volumetric_kit/core/vulkan/fwd.hpp"
 #include "volumetric_kit/recon/texture/export.hpp"
+#include "volumetric_kit/sensor/frame/camera_params.hpp"
 
 namespace volumetric_kit::recon::texture {
 
@@ -58,7 +58,7 @@ struct TextureView {
   /// The depth camera, posed, with the depth range a sample must fall in to
   /// count (`min_depth < max_depth`). It projects the vertices for the
   /// occlusion test, which reads the depth through it.
-  DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   /// The colour image's width and height in pixels, which is this view's
   /// tile. Both zero (the default) means the depth map's size, or
   /// @ref color_camera's when that is set; one zero and not the other, or a
@@ -76,7 +76,7 @@ struct TextureView {
   std::shared_ptr<const core::Buffer> depth_buffer = nullptr;
   /// The camera the tile's image was taken with, when it is not registered to
   /// @ref cam. Unset (the default) means registered, as described above.
-  std::optional<ColorCameraParams> color_camera = std::nullopt;
+  std::optional<sensor::ColorCameraParams> color_camera = std::nullopt;
   /// What the image recorded: the image itself on the device, one word a
   /// pixel of the tile's size, with 0 in a word's high byte where it recorded
   /// nothing -- `sensor::DeviceFrame::color`, black where the lens saw

@@ -14,12 +14,12 @@
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
+#include "volumetric_kit/core/vulkan/fwd.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
-#include "volumetric_kit/recon/core/fwd.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 namespace volumetric_kit::recon::tsdf {
 
@@ -50,7 +50,7 @@ struct FuseReport {
   /// once. Nonzero only with @ref FuserConfig::allow_partial.
   std::uint32_t dropped = 0;
   /// The last allocation's failures by reason.
-  volume::AllocFailures failures;
+  volumetric_kit::grid::volume::AllocFailures failures;
   /// A capacity or memory error that prevented growth. The band may still
   /// fit without growing; otherwise only partial mode can return this report.
   core::Status growth_error;
@@ -130,11 +130,11 @@ class VR_TSDF_API Fuser {
   /// @return A report; `Status::Code::OutOfMemory` for an incomplete band in
   ///         strict mode or host allocation failure; a resize's backend OOM
   ///         when it prevents completion; or another tier's error.
-  core::Result<FuseReport> fuse(volume::VoxelBlockGrid& grid,
-                                const std::vector<FrameInput>& frames,
-                                float max_weight = 5.0f,
-                                IntegrationMode mode = IntegrationMode::Classic,
-                                core::StageMetrics* metrics = nullptr);
+  core::Result<FuseReport> fuse(
+      volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+      const std::vector<FrameInput>& frames, float max_weight = 5.0f,
+      IntegrationMode mode = IntegrationMode::Classic,
+      core::StageMetrics* metrics = nullptr);
 
   /// @brief Record @p frames' fusion into @p batch, after what it holds (the
   ///        set's preparation): one allocation round of their bands, then the
@@ -163,7 +163,8 @@ class VR_TSDF_API Fuser {
   /// @pre The batch of this fuser's last record has resolved, and nothing
   ///      @p batch holds yet reads @p grid: a grow ahead replaces its buffers.
   core::Result<PendingFuse> record_fuse(
-      core::CommandBatch& batch, volume::VoxelBlockGrid& grid,
+      core::CommandBatch& batch,
+      volumetric_kit::grid::volume::VoxelBlockGrid& grid,
       const std::vector<FrameInput>& frames, float max_weight = 5.0f,
       IntegrationMode mode = IntegrationMode::Classic,
       core::StageMetrics* metrics = nullptr);
@@ -184,9 +185,10 @@ class VR_TSDF_API Fuser {
   /// @return The report; `Status::Code::InvalidArgument` for a pending this
   ///         fuser no longer holds or another grid; or what @ref fuse returns
   ///         for a set fused again or a grow.
-  core::Result<FuseReport> finish(const PendingFuse& pending,
-                                  volume::VoxelBlockGrid& grid,
-                                  core::StageMetrics* metrics = nullptr);
+  core::Result<FuseReport> finish(
+      const PendingFuse& pending,
+      volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+      core::StageMetrics* metrics = nullptr);
 
   /// @brief Drop @p pending unjudged: its batch failed or was never submitted.
   ///        The grid holds what the batch left, and the heap's host copy
@@ -207,11 +209,12 @@ class VR_TSDF_API Fuser {
         TsdfIntegrator integrator, FuserConfig config);
   // Grow `grid` once for `report`, when this set may: false when it may not
   // or the grow ran out of memory (kept in the report), or another failure.
-  core::Result<bool> grow(volume::VoxelBlockGrid& grid, FuseReport& report,
-                          bool& may_grow, core::StageMetrics* metrics);
+  core::Result<bool> grow(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+                          FuseReport& report, bool& may_grow,
+                          core::StageMetrics* metrics);
   // The blocking fusion: allocation rounds until the band is in or as far as
   // the config allows, grows for capacity, then the integrate.
-  core::Status fuse_blocking(volume::VoxelBlockGrid& grid,
+  core::Status fuse_blocking(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
                              const std::vector<FrameInput>& frames,
                              float max_weight, IntegrationMode mode,
                              FuseReport& report, bool& may_grow,

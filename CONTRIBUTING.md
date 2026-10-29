@@ -22,7 +22,8 @@ pip install pre-commit
 pre-commit install
 ```
 
-For platform dependencies and optional drivers, see [Building](README.md#building).
+For platform dependencies and optional drivers, see [Building](README.md#building)
+and, for the camera side, [the sensor package's README](sensor/README.md#building).
 Run the commands in [Build and validation](AGENTS.md#build-and-validation) from
 your task's worktree. Set the build type explicitly; performance reports use
 Release.

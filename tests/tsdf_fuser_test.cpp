@@ -15,33 +15,38 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
-#include "gpu_test.hpp"
-#include "grid_readback.hpp"
-#include "sphere_scene.hpp"
+#include "depth_inputs.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
+#include "volumetric_kit/grid/testing/sphere_scene.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
 namespace {
 
 constexpr int kCameras = 3;
+
+using View = vgrid_test::SphereView<sensor::DepthCameraParams>;
 
 vol::VoxelGridParams params(std::int32_t num_buckets) {
   vol::VoxelGridParams grid{};
@@ -59,9 +64,10 @@ vol::VoxelGridParams params(std::int32_t num_buckets) {
 vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
                                            vkc::Allocator& allocator,
                                            const vol::VoxelGridParams& grid) {
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec attrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   return vol::VoxelBlockGrid::create(device, allocator, grid, attrs, 3);
 }
 
@@ -73,8 +79,8 @@ vkc::Result<tsdf::Fuser> make_fuser(vkc::Device& device,
 
 // Whether two grids' blocks carry the same stamps, block by block.
 bool same_stamps(vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
-  auto blocks_a = vr_test::blocks_of(a);
-  auto blocks_b = vr_test::blocks_of(b);
+  auto blocks_a = vgrid_test::blocks_of(a);
+  auto blocks_b = vgrid_test::blocks_of(b);
   auto stamps_a = a.map().read_block_stamps();
   auto stamps_b = b.map().read_block_stamps();
   if (!blocks_a.ok() || !blocks_b.ok() || !stamps_a.ok() || !stamps_b.ok() ||
@@ -96,24 +102,26 @@ bool same_stamps(vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
 }
 
 // Whether each block `grid` holds carries the bits `expected` holds there.
-bool held_blocks_match(const vr_test::Gpu& gpu, vol::VoxelBlockGrid& expected,
+bool held_blocks_match(const vkc::test::Gpu& gpu, vol::VoxelBlockGrid& expected,
                        vol::VoxelBlockGrid& grid) {
-  auto all = vr_test::blocks_of(expected);
+  auto all = vgrid_test::blocks_of(expected);
   auto held = grid.map().compact_active_blocks();
   if (!all.ok() || !held.ok()) return false;
-  vr_test::detail::MatchedBlocks blocks;
+  vgrid_test::detail::MatchedBlocks blocks;
   for (const vol::BlockIndex& b : *held) {
     const auto there =
-        all->find(vr_test::BlockCoord{b.coord.x, b.coord.y, b.coord.z});
+        all->find(vgrid_test::BlockCoord{b.coord.x, b.coord.y, b.coord.z});
     if (there == all->end()) return false;
     blocks.a.push_back({b.coord, there->second});
     blocks.b.push_back(b);
   }
-  for (const char* name : {"weight", "tsdf", "color"}) {
-    auto a = vr_test::read_blocks<std::uint32_t>(gpu, expected, name, blocks.a);
-    auto b = vr_test::read_blocks<std::uint32_t>(gpu, grid, name, blocks.b);
+  for (const std::string_view name :
+       {vol::kWeightAttribute, vol::kTsdfAttribute, vol::kColorAttribute}) {
+    auto a =
+        vgrid_test::read_blocks<std::uint32_t>(gpu, expected, name, blocks.a);
+    auto b = vgrid_test::read_blocks<std::uint32_t>(gpu, grid, name, blocks.b);
     if (!a.ok() || !b.ok() ||
-        !vr_test::detail::compare_voxels(
+        !vgrid_test::detail::compare_voxels(
             blocks, std::size_t(grid.grid().voxels_per_block),
             [&](std::size_t i) { return a.value()[i] == b.value()[i]; })) {
       return false;
@@ -123,11 +131,11 @@ bool held_blocks_match(const vr_test::Gpu& gpu, vol::VoxelBlockGrid& expected,
 }
 
 // Whether any voxel of `grid` holds weight: the set was integrated.
-vkc::Result<bool> fused_any(const vr_test::Gpu& gpu,
+vkc::Result<bool> fused_any(const vkc::test::Gpu& gpu,
                             const vol::VoxelBlockGrid& grid) {
   VKC_ASSIGN(const std::vector<float> weight,
-             vr_test::read_attribute<float>(gpu.device, gpu.allocator, grid,
-                                            "weight"));
+             vgrid_test::read_attribute<float>(gpu.device, gpu.allocator, grid,
+                                               vol::kWeightAttribute));
   for (const float w : weight) {
     if (w > 0.0f) return true;
   }
@@ -136,16 +144,18 @@ vkc::Result<bool> fused_any(const vr_test::Gpu& gpu,
 
 }  // namespace
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::Device& dev = gpu.device;
   vkc::Allocator& alloc = gpu.allocator;
-  const vr_test::Gpu ctx{dev, alloc};
+  const vkc::test::Gpu ctx{dev, alloc};
 
   // The set: three cameras, depth and colour on the host.
-  std::vector<vr_test::SphereView> views;
-  for (int c = 0; c < kCameras; ++c) views.push_back(vr_test::sphere_view(c));
+  std::vector<View> views;
+  for (int c = 0; c < kCameras; ++c) {
+    views.push_back(vgrid_test::sphere_view<sensor::DepthCameraParams>(c));
+  }
   std::vector<tsdf::ColorFrame> colors;
-  for (const vr_test::SphereView& v : views) {
+  for (const View& v : views) {
     colors.push_back({v.color.data(),
                       {v.cam.fx, v.cam.fy, v.cam.cx, v.cam.cy, v.cam.width,
                        v.cam.height, v.cam.cam_to_world},
@@ -153,7 +163,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   }
   std::vector<tsdf::FrameInput> set;
   for (int c = 0; c < kCameras; ++c) {
-    set.push_back({{vkc::StorageInput(views[c].depth.data()), views[c].cam},
+    set.push_back({vkc::StorageInput(views[c].depth.data()), views[c].cam,
                    &colors[std::size_t(c)]});
   }
 
@@ -162,13 +172,13 @@ int gpu_main(vr_test::GpuContext& gpu) {
   auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
   auto reference = make_grid(dev, alloc, params(256));
   CHECK(integrator.ok() && reference.ok());
-  const std::vector<vol::DepthInput> depths(set.begin(), set.end());
+  const std::vector<vol::DepthInput> depths = vr_test::depth_inputs(set);
   for (int pass = 0; pass < 2; ++pass) {
     auto failed = reference->map().allocate_from_depth(depths);
     CHECK(failed.ok() && failed.value() == 0);
     CHECK(integrator->integrate(*reference, set).ok());
   }
-  auto reference_blocks = vr_test::blocks_of(*reference);
+  auto reference_blocks = vgrid_test::blocks_of(*reference);
   CHECK(reference_blocks.ok());
   const auto blocks = std::int32_t(reference_blocks->size());
   std::printf("  the set allocates %d blocks\n", blocks);
@@ -196,7 +206,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       }
     }
     std::size_t observed = 0;
-    CHECK(vr_test::same_grids(ctx, *reference, *grid, &observed));
+    CHECK(vgrid_test::same_grids(ctx, *reference, *grid, &observed));
     CHECK(observed > 10000);
   }
 
@@ -212,7 +222,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     report = fuser->fuse(*grid, set);
     CHECK(report.ok() && report->grows == 1 && report->dropped == 0);
     CHECK(report->from_buckets == buckets && report->to_buckets == 2 * buckets);
-    CHECK(vr_test::same_grids(ctx, *reference, *grid));
+    CHECK(vgrid_test::same_grids(ctx, *reference, *grid));
     const std::uint32_t tick = grid->map().tick();
     report = fuser->fuse(*grid, {});
     CHECK(report.ok() && report->grows == 0 && grid->map().tick() == tick);
@@ -239,7 +249,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     auto report = retry->fuse(*grid, set);
     CHECK(report.ok() && report->dropped == 0);
     CHECK(retry->fuse(*grid, set).ok());
-    CHECK(vr_test::same_grids(ctx, *reference, *grid));
+    CHECK(vgrid_test::same_grids(ctx, *reference, *grid));
   }
 
   // A live grid's steady state: once it holds a block (the tier calls fuse
@@ -269,7 +279,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
         CHECK(report.ok() && report->dropped == 0 && report->grows == 0);
         CHECK(!report->redone);
       }
-      CHECK(vr_test::same_grids(ctx, *expected, *grid));
+      CHECK(vgrid_test::same_grids(ctx, *expected, *grid));
       CHECK(same_stamps(*expected, *grid));
       CHECK(grid->map().tick() == expected->map().tick());
     }
@@ -286,7 +296,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       for (const std::size_t cameras : {std::size_t{1}, set.size()}) {
         const std::vector<tsdf::FrameInput> frames(set.begin(),
                                                    set.begin() + cameras);
-        const std::vector<vol::DepthInput> band(frames.begin(), frames.end());
+        const std::vector<vol::DepthInput> band = vr_test::depth_inputs(frames);
         tsdf::FuserConfig config;
         config.allow_partial = partial;
         auto fuser = make_fuser(dev, alloc, config);
@@ -305,7 +315,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
           CHECK(report.ok() && report->dropped == 0 && report->grows == 0);
           CHECK(pass == 0 || !report->redone);
         }
-        CHECK(vr_test::same_grids(ctx, *expected, *grid));
+        CHECK(vgrid_test::same_grids(ctx, *expected, *grid));
         CHECK(same_stamps(*expected, *grid));
         CHECK(grid->map().tick() == expected->map().tick());
       }
@@ -364,10 +374,10 @@ int gpu_main(vr_test::GpuContext& gpu) {
     std::vector<vkc::Buffer> color_buffers;
     std::vector<tsdf::ColorFrame> device_colors = colors;
     for (int c = 0; c < kCameras; ++c) {
-      auto depth =
-          vr_test::upload_device_buffer(dev, alloc, views[c].depth.data(),
-                                        views[c].depth.size() * sizeof(float));
-      auto color = vr_test::upload_device_buffer(
+      auto depth = vkc::test::upload_device_buffer(
+          dev, alloc, views[c].depth.data(),
+          views[c].depth.size() * sizeof(float));
+      auto color = vkc::test::upload_device_buffer(
           dev, alloc, views[c].color.data(),
           views[c].color.size() * sizeof(std::uint32_t));
       CHECK(depth.ok() && color.ok());
@@ -378,9 +388,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
     for (int c = 0; c < kCameras; ++c) {
       device_colors[std::size_t(c)].pixels = nullptr;
       device_colors[std::size_t(c)].buffer = &color_buffers[std::size_t(c)];
-      device_set.push_back(
-          {{vkc::StorageInput(depth_buffers[std::size_t(c)]), views[c].cam},
-           &device_colors[std::size_t(c)]});
+      device_set.push_back({vkc::StorageInput(depth_buffers[std::size_t(c)]),
+                            views[c].cam, &device_colors[std::size_t(c)]});
     }
     auto fuser = make_fuser(dev, alloc);
     auto grid = make_grid(dev, alloc, params(1024));
@@ -409,7 +418,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     std::vector<tsdf::FrameInput> first{set[0]};
     std::uint32_t first_blocks = 0;
     for (const std::vector<tsdf::FrameInput>* frames : {&first, &set}) {
-      const std::vector<vol::DepthInput> band(frames->begin(), frames->end());
+      const std::vector<vol::DepthInput> band = vr_test::depth_inputs(*frames);
       auto failed = expected->map().allocate_from_depth(band);
       CHECK(failed.ok() && failed.value() == 0);
       CHECK(integrator->integrate(*expected, *frames).ok());
@@ -492,4 +501,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
   return 0;
 }
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

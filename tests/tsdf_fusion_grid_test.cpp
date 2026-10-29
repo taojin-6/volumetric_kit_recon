@@ -14,14 +14,16 @@
 #include <string>
 #include <vector>
 
-#include "gpu_test.hpp"
-#include "test_check.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/grid/volume/voxel_grid.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_grid.hpp"
 
+namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 using tsdf::fusion_buckets;
 
@@ -93,7 +95,7 @@ int host_checks(const vkc::test::LogCapture& log) {
 // The grid: block_grid_params' layout at the caller's start, carrying the
 // fuser's three attributes; and the cap is the ceiling it grows to on this
 // device.
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   auto grid =
       tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.02f, 0.08f, 1);
   CHECK(grid.ok() && grid->grid().num_buckets == 1);
@@ -106,12 +108,13 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(got.bucket_size == want.bucket_size &&
         got.num_blocks == want.num_blocks && got.max_chain == want.max_chain);
   CHECK(grid->attribute_count() == 3);
-  CHECK(grid->attribute("tsdf").ok() &&
-        grid->attribute("tsdf")->element_size == sizeof(float));
-  CHECK(grid->attribute("weight").ok() &&
-        grid->attribute("weight")->element_size == sizeof(float));
-  CHECK(grid->attribute("color").ok() &&
-        grid->attribute("color")->element_size == sizeof(std::uint32_t));
+  CHECK(grid->attribute(vol::kTsdfAttribute).ok() &&
+        grid->attribute(vol::kTsdfAttribute)->element_size == sizeof(float));
+  CHECK(grid->attribute(vol::kWeightAttribute).ok() &&
+        grid->attribute(vol::kWeightAttribute)->element_size == sizeof(float));
+  CHECK(grid->attribute(vol::kColorAttribute).ok() &&
+        grid->attribute(vol::kColorAttribute)->element_size ==
+            sizeof(std::uint32_t));
   const std::int32_t cap =
       fusion_buckets(0.02f, vkc::max_storage_buffer_range(gpu.device), kAny);
   CHECK(warned(gpu.log, 1, cap, kAny));
@@ -132,7 +135,7 @@ int main() {
     const vkc::test::LogCapture log;
     CHECK(host_checks(log) == 0);
   }
-  const int rc = vr_test::run_on_gpu(gpu_main);
+  const int rc = vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
   if (rc == 0) std::puts("tsdf_fusion_grid: OK");
   return rc;
 }

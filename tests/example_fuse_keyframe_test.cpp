@@ -15,18 +15,22 @@
 #include <tuple>
 #include <vector>
 
-#include "buffer_readback.hpp"
 #include "fuse_frame.hpp"
-#include "gpu_test.hpp"
-#include "grid_readback.hpp"
-#include "test_check.hpp"
+#include "volumetric_kit/core/testing/buffer_readback.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
+#include "volumetric_kit/grid/volume/voxel_grid.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
+#include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_grid.hpp"
 
 namespace vr = volumetric_kit::recon;
+
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
-namespace sensor = vr::sensor;
+namespace sensor = volumetric_kit::sensor;
 constexpr vr::tsdf::IntegrationMode kClassic =
     vr::tsdf::IntegrationMode::Classic;
 constexpr vr::tsdf::IntegrationMode kDynamic =
@@ -53,24 +57,24 @@ sensor::RgbdFrame wall(const std::vector<std::uint16_t>& depth,
   return frame;
 }
 
-int check_retained(const vr_test::Gpu& gpu,
+int check_retained(const vkc::test::Gpu& gpu,
                    vr::texture::ProjectiveTexturer& texturer,
                    const std::optional<sensor::DeviceFrame>& keyframe) {
   CHECK(keyframe && keyframe->has_color());
   CHECK(keyframe->timestamp_ns == 1);
   CHECK(keyframe->depth_camera.cam_to_world == vr::Mat4f(1.0f));
   CHECK(keyframe->color_camera.cam_to_world == vr::Mat4f(1.0f));
-  auto depth = vr_test::read_back<float>(gpu.device, gpu.allocator,
-                                         *keyframe->depth, kPixels);
-  auto color = vr_test::read_back<std::uint32_t>(gpu.device, gpu.allocator,
-                                                 *keyframe->color, kPixels);
+  auto depth = vkc::test::read_back<float>(gpu.device, gpu.allocator,
+                                           *keyframe->depth, kPixels);
+  auto color = vkc::test::read_back<std::uint32_t>(gpu.device, gpu.allocator,
+                                                   *keyframe->color, kPixels);
   CHECK(depth.ok() && color.ok());
   CHECK(*depth == std::vector<float>(kPixels, 1.0f));
   CHECK(*color == std::vector<std::uint32_t>(kPixels, kColor | 0xFF000000u));
 
   // The final/remeshed surface can still use this frame's atlas, including
   // coverage and occlusion, after the source or fusion rejected a later one.
-  vr::mesh::Mesh mesh;
+  vgrid::mesh::Mesh mesh;
   mesh.vertices.resize(3);
   mesh.indices = {0, 1, 2};
   mesh.vertices[0].position = {-0.05f, -0.05f, 1.0f};
@@ -96,7 +100,7 @@ int check_retained(const vr_test::Gpu& gpu,
 // fuse_keyframe fuses in the mode it is given: a wall at 1 m, then the same
 // camera seeing it at 2 m, so the first wall's band is free space well ahead
 // of the second's. Classic leaves weight there; Dynamic clears all of it.
-int check_mode(vr_test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
+int check_mode(vkc::test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
   auto volume = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
                                              0.15f, 256);
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
@@ -105,9 +109,9 @@ int check_mode(vr_test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
   // The weight in blocks wholly nearer than 1.6 m: a block is 8 voxels of
   // 5 cm, so its z coordinate is at most 3.
   const auto near_weight = [&]() -> double {
-    auto blocks = vr_test::blocks_of(*volume);
-    auto weight = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
-                                                 *volume, "weight");
+    auto blocks = vgrid_test::blocks_of(*volume);
+    auto weight = vgrid_test::read_attribute<float>(
+        gpu.device, gpu.allocator, *volume, vgrid::volume::kWeightAttribute);
     if (!blocks.ok() || !weight.ok()) return -1.0;
     double sum = 0.0;
     for (const auto& [coord, ptr] : *blocks) {
@@ -136,7 +140,7 @@ int check_mode(vr_test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
   return 0;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   auto volume = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
                                              0.15f, 256);
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
@@ -156,7 +160,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
                                    20.0f, kClassic, nullptr)
              .ok());
   CHECK(!keyframe);
-  frame.color_to_world = vr::camera::Mat4d(1.0);
+  frame.color_to_world = sensor::camera::Mat4d(1.0);
   CHECK(vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
                                   20.0f, kClassic, nullptr)
             .ok());
@@ -174,15 +178,16 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // Preparation and allocation succeed, but fusion refuses a volume without
   // a colour attribute. Different pixels and pose expose an early replacement
   // or reuse of the retained buffers even if the optional stays engaged.
-  const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                             {"weight", sizeof(float)}};
-  auto depth_only = vr::volume::VoxelBlockGrid::create(
+  const vgrid::volume::AttributeSpec attrs[] = {
+      {vgrid::volume::kTsdfAttribute, sizeof(float)},
+      {vgrid::volume::kWeightAttribute, sizeof(float)}};
+  auto depth_only = vgrid::volume::VoxelBlockGrid::create(
       gpu.device, gpu.allocator,
-      vr::volume::block_grid_params(0.05f, 0.15f, 256), attrs, 2);
+      vgrid::volume::block_grid_params(0.05f, 0.15f, 256), attrs, 2);
   CHECK(depth_only.ok());
   std::fill(raw_depth.begin(), raw_depth.end(), 2000);
   std::fill(raw_color.begin(), raw_color.end(), 0x001122CCu);
-  frame.color_to_world = vr::camera::Mat4d(1.0);
+  frame.color_to_world = sensor::camera::Mat4d(1.0);
   frame.color_to_world[3][0] = 0.25;
   // A second fuser: the first remembers the grid it fuses.
   auto depth_only_fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
@@ -201,10 +206,10 @@ int gpu_main(vr_test::GpuContext& gpu) {
             .ok());
   CHECK(keyframe && keyframe->timestamp_ns == 2);
   CHECK(keyframe->color_camera.cam_to_world[3][0] == 0.25f);
-  auto depth = vr_test::read_back<float>(gpu.device, gpu.allocator,
-                                         *keyframe->depth, kPixels);
-  auto color = vr_test::read_back<std::uint32_t>(gpu.device, gpu.allocator,
-                                                 *keyframe->color, kPixels);
+  auto depth = vkc::test::read_back<float>(gpu.device, gpu.allocator,
+                                           *keyframe->depth, kPixels);
+  auto color = vkc::test::read_back<std::uint32_t>(gpu.device, gpu.allocator,
+                                                   *keyframe->color, kPixels);
   CHECK(depth.ok() && *depth == std::vector<float>(kPixels, 2.0f));
   CHECK(color.ok() &&
         *color == std::vector<std::uint32_t>(kPixels, 0xFF1122CCu));
@@ -220,5 +225,5 @@ int gpu_main(vr_test::GpuContext& gpu) {
 int main() {
   CHECK(vr_example::integration_mode(true) == kDynamic);
   CHECK(vr_example::integration_mode(false) == kClassic);
-  return vr_test::run_on_gpu(gpu_main);
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
 }
