@@ -5234,8 +5234,8 @@ writes a mask (`PixelChange`: none, nearer, farther). Per pixel:
   noise floor (`DepthNoise`, Femto Mega: b = 0.95 mm/m);
 - `S+- = max(0, S+- +- r - k)` on `r = (d - d_hist) / sigma_r`; an alarm
   when either passes h, or one frame has `|r| > 6`; k 0.5, h 8;
-- a pixel tests once it holds 30 samples; an invalid sample changes
-  nothing.
+- a camera's pixels test after its first 30 frames; an invalid sample
+  changes nothing.
 
 **Why.** Change is a camera disagreeing with its own past; comparing a
 camera with itself cancels its calibration error. Measured on the rig's
@@ -5251,9 +5251,16 @@ static takes with injected changes (CPU, both takes, four cameras):
 - without the freeze, sustained motion trains `sigma_r` up and doubles the
   lag at 10 mm a frame.
 h is the one knob: h 5 is 1-2 frames faster on 5-10 mm steps and resets
-0.145% of rays a frame. The warm-up counts a pixel's own samples, not the
-camera's frames, so a pixel first seen late learns before it tests, and the
-state is all on the device: a gated-off pass changes nothing.
+0.145% of rays a frame. As measured, the floor is taken at the sample's
+depth, and a restarted history is tested from its next sample at the
+pixel's `sigma_r`, not inflated by the one-sample history's own error: 5.9%
+of alarms follow another on the same pixel within 3 frames, part of the
+rates above; inflating by sqrt(1 + 1/n) is untried. The warm-up counts the
+camera's frames, as measured, not each pixel's samples: counted per pixel, a
+pixel a mover first made valid over a background with no return never left
+its warm-up before the mover did, so its later intermittent returns flagged
+nothing, and a Dynamic replay of the 1 m/s sphere kept 382 cm² of ghost
+there against main's 85 (take1, lab RTX 4090).
 
 **Cost.** 24 bytes a pixel per camera, 8.8 MB at 640 x 576; one dispatch a
 camera a frame.

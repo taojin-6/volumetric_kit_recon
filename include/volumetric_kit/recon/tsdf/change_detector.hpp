@@ -52,7 +52,8 @@ enum class PixelChange : std::uint32_t {
 ///        the frame they happen, 98%).
 ///
 /// A pixel's residual is `r = (d - d_hist) / sigma_r`, with `d_hist` its
-/// history and `sigma_r` its own temporal noise, floored by @ref noise. Two
+/// history and `sigma_r` its own temporal noise, floored by the sensor's
+/// @ref DepthNoise at the sample's depth. Two
 /// cumulative sums, `S+ = max(0, S+ + r - k)` for farther and
 /// `S- = max(0, S- - r - k)` for nearer, alarm past @ref h; one frame with
 /// `|r|` past @ref one_frame alarms too.
@@ -69,7 +70,10 @@ struct ChangeDetectorConfig {
   /// `memory` samples, then an exponential average of weight 1/`memory`;
   /// the noise estimate follows the same schedule. In [1, 1023].
   std::uint32_t memory = 30;
-  /// Samples a pixel learns from before it tests; at most @ref memory.
+  /// The camera's frames (records) before its pixels test: each then tests
+  /// every sample after the one that started its history, as measured. A
+  /// pixel first seen later, such as one a mover makes valid over a
+  /// background with no return, tests from its second sample.
   std::uint32_t warm_up = 30;
   /// Samples after an alarm the noise estimate does not learn from, so a
   /// sustained motion cannot train it upward; at most 4095.
@@ -160,8 +164,10 @@ class VR_TSDF_API ChangeDetector {
   /// @param noise   The camera's noise floor.
   /// @param gate    Optional word; 0 tests nothing and leaves the camera's
   ///                history and mask as they were (a set its allocation
-  ///                left incomplete, fused again later). Must be a complete,
-  ///                aligned word in a known device-local storage buffer.
+  ///                left incomplete, fused again later), but for a first
+  ///                frame at a new size, whose zeroing does not wait for
+  ///                the gate. Must be a complete, aligned word in a known
+  ///                device-local storage buffer.
   /// @param stage   Optional tag for the pass's device time.
   /// @return OK, with the pass recorded; or, with nothing recorded,
   ///         `Status::Code::InvalidArgument` for a moved-from detector, a
@@ -219,6 +225,7 @@ class VR_TSDF_API ChangeDetector {
     core::Buffer mask;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+    std::uint64_t frames = 0;  // records since the history started
   };
 
   ChangeDetector() = default;

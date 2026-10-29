@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 
+#include "gate_word.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
@@ -49,7 +50,7 @@ struct Push {
   float h;
   float one_frame;
   std::uint32_t memory;
-  std::uint32_t warm_up;
+  std::uint32_t testing;  // 1 once the camera has had config.warm_up frames
   std::uint32_t freeze;
   std::uint32_t gate_word;
 };
@@ -77,7 +78,6 @@ core::Status check_config(const ChangeDetectorConfig& c) {
   if (c.memory < 1 || c.memory > kMaxMemory) {
     return bad("memory must be in [1, 1023]");
   }
-  if (c.warm_up > c.memory) return bad("warm_up must be at most memory");
   if (c.freeze > kMaxFreeze) return bad("freeze must be at most 4095");
   return {};
 }
@@ -177,23 +177,8 @@ core::Status ChangeDetector::record_detect(
   VKC_TRY(depth.check("ChangeDetector::record_detect: depth", depth_bytes));
   std::uint32_t gate_word = kNoGate;
   if (gate != nullptr) {
-    constexpr VkDeviceSize word_bytes = sizeof(std::uint32_t);
-    if (gate->buffer == nullptr || gate->offset % word_bytes != 0 ||
-        gate->buffer->size() < word_bytes ||
-        gate->offset > gate->buffer->size() - word_bytes) {
-      return core::Status::invalid_argument(
-          std::string(kWhat) +
-          ": the gate's word is missing, misaligned or past its buffer");
-    }
-    VKC_TRY(core::StorageInput(*gate->buffer)
-                .check("ChangeDetector::record_detect: gate",
-                       gate->offset + word_bytes));
-    // The binding takes the whole buffer, which also keeps the word's index
-    // below the no-gate sentinel.
-    VKC_TRY(core::check_storage_buffer_range(
-        "ChangeDetector::record_detect: gate", gate->buffer->size(),
-        max_storage_buffer_range_));
-    gate_word = static_cast<std::uint32_t>(gate->offset / word_bytes);
+    VKC_ASSIGN(gate_word,
+               detail::gate_word(*gate, kWhat, max_storage_buffer_range_));
   }
 
   // A camera's first frame, or one of a new size, starts its history: both
@@ -220,6 +205,7 @@ core::Status ChangeDetector::record_detect(
     cam.mask = std::move(mask);
     cam.width = params.width;
     cam.height = params.height;
+    cam.frames = 0;
   }
 
   // A host image's device copy, which the batch keeps.
@@ -250,9 +236,10 @@ core::Status ChangeDetector::record_detect(
                   config_.h,
                   config_.one_frame,
                   config_.memory,
-                  config_.warm_up,
+                  cam.frames >= config_.warm_up ? 1u : 0u,
                   config_.freeze,
                   gate_word};
+  ++cam.frames;
   const std::uint32_t groups = std::min(
       core::group_count(static_cast<std::uint32_t>(pixels), kLocalSize),
       max_workgroup_count_x_);
