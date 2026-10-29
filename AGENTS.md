@@ -32,9 +32,8 @@ geometry and compressed bitstreams → renderer handoff.
   (`sensor_package_boundary`), recon's libraries link its `sensor_frame`
   alone (`recon_library_sensor_links`), and recon's examples assemble any of
   its tiers.
-- The tiers work on any data. `io` may offer opt-in, generic unit,
-  orientation and scale helpers, but a tier still never applies dataset
-  preprocessing on its own: the caller opts in, as an example does for its
+- The tiers work on any data. A tier never applies dataset preprocessing on
+  its own: the caller opts in, as an example does for its
   demo asset, and a tier's tests use synthetic data.
 
 ## Read what the task needs

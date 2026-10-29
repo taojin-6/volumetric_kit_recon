@@ -44,9 +44,8 @@ if(VR_BUILD_TESTS)
     endif()
   endforeach()
   # The colour frame of the Replica runs below: the sensor package's JPEG
-  # fixture (project() caches the package's source directory).
-  set(_vr_color_fixture
-      "${volumetric_kit_sensor_SOURCE_DIR}/tests/data/jpeg/patches_256x144.jpg")
+  # fixture (VS_TEST_DATA_DIR, which the package sets).
+  set(_vr_color_fixture "${VS_TEST_DATA_DIR}/jpeg/patches_256x144.jpg")
   # fuse_replica on a device: two frames of a wall, each meshed on the device,
   # then the PLY.
   add_test(

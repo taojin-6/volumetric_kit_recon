@@ -98,8 +98,8 @@ package includes anything of recon's ([grid's tiers](https://github.com/taojin-6
   recon's libraries link its `frame` tier alone: `DeviceFrame`, the pinhole
   cameras, `ColorEncoding` and the GLSL pinhole.
 - **`core`** — recon's own vocabulary every tier trades in: the GLM math
-  aliases, `device_requirements()` and `log_message`. The Vulkan foundation under it (instance, device, VMA
-  allocator, buffers and images, `CommandBatch`, `ComputeKernel` and
+  aliases, `device_requirements()` and `log_message`. The Vulkan foundation
+  under it (instance, device, VMA allocator, buffers and images, `CommandBatch`, `ComputeKernel` and
   `KernelSetBuilder`, timers) and the `Status`/`Result` idiom are
   volumetric_kit_core's, used under its names. Vulkan is reached through the
   core's one umbrella header (`core/vulkan/vulkan.hpp`) — no other code
