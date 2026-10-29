@@ -113,15 +113,17 @@ if(VR_BUILD_TESTS)
   set_tests_properties(recon_example_viewer_atlas
                        PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 
-  # The device both live viewers adopt (viewer_common.hpp). Host only.
+  # The device both live viewers adopt (viewer_common.hpp), for recon's and the
+  # sensor package's requirements (examples/common/fuse_device.hpp). Host only.
   add_executable(recon_example_viewer_device_test
                  "${PROJECT_SOURCE_DIR}/tests/example_viewer_device_test.cpp")
   target_link_libraries(
     recon_example_viewer_device_test
     PRIVATE volumetric_kit::core_test_base volumetric_kit::recon_mesh
-            volumetric_kit::gfx_glfw Vulkan::Vulkan)
+            volumetric_kit::sensor_frame volumetric_kit::gfx_glfw
+            Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_device_test
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+                             PRIVATE ${_viewer_common_inc})
   vr_target_warnings(recon_example_viewer_device_test)
   add_test(NAME recon_example_viewer_device
            COMMAND recon_example_viewer_device_test)
@@ -150,9 +152,10 @@ if(VR_BUILD_TESTS)
   target_link_libraries(
     recon_example_viewer_pass_test
     PRIVATE volumetric_kit::core_test_base volumetric_kit::core_test_policy
-            volumetric_kit::recon_mesh volumetric_kit::gfx_glfw Vulkan::Vulkan)
+            volumetric_kit::recon_mesh volumetric_kit::sensor_frame
+            volumetric_kit::gfx_glfw Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_pass_test
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+                             PRIVATE ${_viewer_common_inc})
   vr_target_warnings(recon_example_viewer_pass_test)
   add_test(NAME recon_example_viewer_pass
            COMMAND recon_example_viewer_pass_test)
