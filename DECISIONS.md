@@ -16594,7 +16594,8 @@ consumer's kernel reads stamps with.
 
 **Bit-identical.** The kernels compute what they computed: the structs
 are the same declarations, the colour functions are the expressions they
-replace, and the in-block index tsdf wrote inline is `vrLocalBase`'s.
+replace, and the in-block index tsdf and voxelize wrote inline is
+`vrLocalIndex`'s and `vrLocalBase`'s integer arithmetic.
 
 **Tests.** `recon_volume_grid_types` runs `grid_types.glsl` on the device,
 built through `INCLUDE_TARGETS`: `vrTickAfter` against `tick_after` across
@@ -16602,13 +16603,14 @@ the wrap, the in-block index for every voxel of five block sizes, and every
 field of the three structs read from the host PODs. `recon_volume_voxel_color`
 (was `recon_core_color_space_gpu`) runs `voxel_color.glsl` over every grey
 code, the unobserved word and 255 others against `voxel_color.hpp`, and holds
-`voxel_color.hpp` to `color_space.hpp` bit for bit on the host.
+`voxel_color.hpp` to `color_space.hpp` bit for bit on the host, the
+unobserved word to opaque white.
 `recon_io_ply` writes 5,892 linear channels, every code's rounding edge
 among them, and reads back `color_space.hpp`'s codes. The subproject
 consumer checks that each export root holds exactly its exported files,
 compiles both kernels through `INCLUDE_TARGETS`, and fails if
 `VoxelHashMap` names either entries accessor or `Internal` is complete in a
-public header. Mutation-checked: of 19 mutants 18 fail a test; the one
+public header. Mutation-checked: of 20 mutants 19 fail a test; the one
 left is equivalent (the decode toe moved from 0.04045 to 0.04, between
 which no 8-bit code lies).
 

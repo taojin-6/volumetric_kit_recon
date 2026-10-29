@@ -895,11 +895,12 @@ preserves block indices, so per-voxel data survives a grow.
 attribute arrays (`tsdf`, `weight`, `color`, …), each
 `num_blocks·voxels_per_block`, so a consumer materialises only what it
 needs; the three the tiers share are named by `kTsdfAttribute`,
-`kWeightAttribute` and `kColorAttribute`. Every buffer of both is device-local, reached through a
-`CommandBatch`: `create`, `clear` and `remove` zero on the device (`clear`
-and `remove` before any index is freed, `remove` by a kernel that finds
-each coord's block itself, so its cost is the count's, not the grid's),
-`resize` copies there, and a call's inputs are uploaded in its batch.
+`kWeightAttribute` and `kColorAttribute`. Every buffer of both is
+device-local, reached through a `CommandBatch`: `create`, `clear` and
+`remove` zero on the device (`clear` and `remove` before any index is freed,
+`remove` by a kernel that finds each coord's block itself, so its cost is
+the count's, not the grid's), `resize` copies there, and a call's inputs
+are uploaded in its batch.
 `VoxelHashMap::allocate` and `remove`, and `VoxelBlockGrid::remove`, take
 a device buffer of `BlockIndex`, bound where its producer wrote it; a test
 uploads its own coordinates first (`tests/device_blocks.hpp`). Their work

@@ -860,10 +860,10 @@ target_link_libraries(
 vr_target_warnings(recon_texture_device_mesh_test)
 add_test(NAME recon_texture_device_mesh COMMAND recon_texture_device_mesh_test)
 
-# Color-space vocabulary: the exact piecewise sRGB curve, the packed helpers the
-# fusion kernels mirror, and the primaries matrices. Pure host math over core,
-# so it always runs -- no device, no platform. That portability is the reason
-# the curve lives in `core` rather than in whichever tier decodes with it.
+# Color-space vocabulary: the exact piecewise sRGB curve, the sensor boundary's
+# packed helpers, and the primaries matrices. Pure host math over core, so it
+# always runs -- no device, no platform. The kernels' colour format is volume's
+# (voxel_color.glsl / voxel_color.hpp), pinned by recon_volume_voxel_color.
 add_executable(recon_core_color_space_test core_color_space_test.cpp)
 target_link_libraries(recon_core_color_space_test
                       PRIVATE volumetric_kit::recon_core)
