@@ -28,9 +28,10 @@ float vanished_depth(uint word) {
 }
 
 // The Vanished word for a surface that left at depth d (m), rounded to the
-// unit and capped at 30 bits; d is valid, so positive and finite.
+// unit and capped at 1073741760, the largest fp32 below 2^30, so the units
+// fit the word's 30 bits (107 km); d is valid, so positive and finite.
 uint vanished_word(float d) {
-  uint units = uint(min(d / kVanishedDepthUnit + 0.5, 1073741823.0));
+  uint units = uint(min(d / kVanishedDepthUnit + 0.5, 1073741760.0));
   return (units << 2) | kChangeVanished;
 }
 
