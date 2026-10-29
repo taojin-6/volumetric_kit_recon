@@ -5415,10 +5415,12 @@ scene is still or one camera misses a set; a card 2.5 cm in front of the
 wall, inside its band, and a box 0.5 m in front, leave no triangle in the
 set they leave, and the wall meshes there at once; the box meshes in the set
 it arrives and the wall it hides keeps every voxel's weight.
-A second scene puts the box where nothing returns behind it, the wall only
-on the left: the set it goes changes nothing, as a single-frame dropout
-there does not, and in the next nothing of it meshes, by its cameras'
-`Vanished` rays alone; no weight falls in any other set.
+A second scene puts the box where nothing returns behind most of it, the
+wall only on the left: the part a camera sees the wall past goes in the set
+the box goes, flagged `Farther`; where nothing returns behind it, that set
+changes nothing, as a single-frame dropout there does not, and in the next
+nothing of the box meshes, by its cameras' `Vanished` rays alone; no weight
+falls in any other set.
 `recon_tsdf_integrate_dynamic_set` gives the grazing camera a colour of its
 own, which the frontal camera's band must not take, and requires that band
 to keep at least the weight the frontal camera alone gives it (the former

@@ -24,12 +24,14 @@
 //
 // Then a second scene, a fuser of its own, over no return: the wall only
 // left of x = -0.3 m, nothing returning elsewhere, the same two cameras. The
-// box is there over sets 40-49, where nothing returns behind it, and goes at
-// 50. Its cameras flag Vanished on the second set with no return, so set 50
-// changes nothing -- the box still meshes, as after a single-frame dropout --
-// and in set 51 nothing of it meshes and no voxel of its band reads as
-// inside a surface (no camera ever sees past it, so only its cameras'
-// Vanished rays can clear it); no weight falls in any other set.
+// box is there over sets 40-49 and goes at 50. B, to the side, sees the wall
+// past the box's left part, so that part goes in set 50, flagged Farther.
+// Right of x = -0.05 m nothing returns behind it for either camera, so only
+// its cameras' Vanished rays can clear it, and they flag on the second set
+// with no return: in set 50 no weight falls there and every triangle of it
+// stays, as after a single-frame dropout; in set 51 nothing of the box
+// meshes and no voxel of its band reads as inside a surface. No weight falls
+// in any other set.
 //
 // And the refusals: two frames of a set with one slot, a slot past the
 // detector's, a noise model the detector refuses -- Dynamic only, as
@@ -177,16 +179,17 @@ bool inside(const vr::Vec3f& p) {
 }
 
 // Triangles every corner of which lies inside the rectangle within 1 cm of
-// z = `z`.
+// z = `z`, right of x = `x_min`.
 vkc::Result<std::size_t> triangles_at(mesh::MarchingCubes& mc,
-                                      vol::VoxelBlockGrid& grid, float z) {
+                                      vol::VoxelBlockGrid& grid, float z,
+                                      float x_min = -1.0f) {
   VKC_ASSIGN(const mesh::Mesh m, mc.extract_host(grid));
   std::size_t n = 0;
   for (std::size_t t = 0; t < m.triangle_count(); ++t) {
     bool on = true;
     for (std::size_t c = 0; c < 3; ++c) {
       const vr::Vec3f& p = m.vertices[m.indices[3 * t + c]].position;
-      on = on && inside(p) && std::fabs(p.z - z) < kVoxel;
+      on = on && inside(p) && std::fabs(p.z - z) < kVoxel && p.x > x_min;
     }
     n += on ? 1 : 0;
   }
@@ -218,6 +221,9 @@ int refusals(vkc::test::GpuContext& gpu, tsdf::Fuser& fuser,
 
 // The second scene: a box over no return, gone at set 50, cleared at 51.
 int no_return_case(vkc::test::GpuContext& gpu) {
+  // Right of this, no camera has anything behind the box: B's rays past its
+  // band there meet z = 2 right of x = -0.22, where the wall is gone.
+  constexpr float kNoReturnX = -0.05f;
   vkc::Device& dev = gpu.device;
   vkc::Allocator& alloc = gpu.allocator;
   auto fuser = tsdf::Fuser::create(dev, alloc);
@@ -230,6 +236,7 @@ int no_return_case(vkc::test::GpuContext& gpu) {
   const sensor::DepthCameraParams a = camera_a();
   const sensor::DepthCameraParams b = camera_b();
   std::vector<float> weights_before;
+  std::size_t stays_49 = 0;  // the box's triangles right of kNoReturnX
   for (int set = 0; set <= 51; ++set) {
     const Thing thing = set >= 40 && set < 50 ? Thing::Box : Thing::None;
     const std::vector<float> da = render(a, thing, 0.0f, true);
@@ -244,9 +251,20 @@ int no_return_case(vkc::test::GpuContext& gpu) {
     CHECK(w.ok());
     const std::vector<float>& weights = w.value();
     if (!weights_before.empty() && set != 51) {
+      // In set 50, only where a camera sees the wall past the box.
+      std::vector<bool> may_fall(weights_before.size(), false);
+      if (set == 50) {
+        auto vox = voxels_of(grid);
+        CHECK(vox.ok());
+        for (const Voxel& x : vox.value()) {
+          if (x.index < may_fall.size()) {
+            may_fall[x.index] = x.world.x <= kNoReturnX;
+          }
+        }
+      }
       std::size_t fell = 0;
       for (std::size_t i = 0; i < weights_before.size(); ++i) {
-        fell += weights[i] < weights_before[i] ? 1 : 0;
+        fell += weights[i] < weights_before[i] && !may_fall[i] ? 1 : 0;
       }
       if (fell != 0) {
         std::fprintf(stderr, "over no return, set %d: %zu weights fell\n", set,
@@ -256,10 +274,17 @@ int no_return_case(vkc::test::GpuContext& gpu) {
     }
     if (set >= 49) {
       auto box = triangles_at(mc.value(), grid, kBox);
-      CHECK(box.ok());
-      std::printf("over no return, set %d: %zu triangles on the box\n", set,
-                  box.value());
-      if (set < 51) CHECK(box.value() > 500);
+      auto stays = triangles_at(mc.value(), grid, kBox, kNoReturnX);
+      CHECK(box.ok() && stays.ok());
+      std::printf(
+          "over no return, set %d: %zu triangles on the box, %zu right of "
+          "x = %.2f m\n",
+          set, box.value(), stays.value(), double(kNoReturnX));
+      if (set == 49) {
+        stays_49 = stays.value();
+        CHECK(stays_49 > 500);
+      }
+      if (set == 50) CHECK(stays.value() == stays_49);
       if (set == 51) CHECK(box.value() == 0);
     }
     if (set == 51) {
