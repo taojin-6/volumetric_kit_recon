@@ -120,7 +120,7 @@ jobs:
       # changes their objects: the compiler, the host's OS release, the
       # installed versions of the headers and the shader compiler they build
       # on, this workflow (the sanitizer and build settings below) and
-      # vr_sanitizers.cmake; and grid/'s pins, which fetch tinyply. The checkout's path is in it as in _build.yml,
+      # vr_sanitizers.cmake. The checkout's path is in it as in _build.yml,
       # since FetchContent bakes it in. No restore-keys: a stale match would
       # link objects built for something else.
       - name: Dependency cache key
@@ -140,7 +140,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: sanitizers/build/_deps
-          key: ${{ steps.deps.outputs.key }}-${{ hashFiles('sanitizers/third_party/CMakeLists.txt', 'sanitizers/CMakeLists.txt', 'sanitizers/grid/third_party/CMakeLists.txt', 'sanitizers/grid/CMakeLists.txt', 'sanitizers/cmake/vr_sanitizers.cmake', 'sanitizers/.github/workflows/sanitizers.yml') }}
+          key: ${{ steps.deps.outputs.key }}-${{ hashFiles('sanitizers/third_party/CMakeLists.txt', 'sanitizers/CMakeLists.txt', 'sanitizers/cmake/vr_sanitizers.cmake', 'sanitizers/.github/workflows/sanitizers.yml') }}
 
       # Debug + clang gives the most reliable sanitizer + mesa interop. The
       # examples are built for their tests: lavapipe's maxStorageBufferRange is

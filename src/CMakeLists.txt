@@ -14,7 +14,7 @@ add_subdirectory(volumetric_kit/recon/camera)
 set(_vr_tiers recon_camera)
 if(NOT VR_CAMERA_ONLY)
   add_subdirectory(volumetric_kit/recon/core)
-  # tsdf fuses into grid's VoxelBlockGrid (volumetric_kit_grid, grid/).
+  # tsdf fuses into grid's VoxelBlockGrid (volumetric_kit_grid).
   add_subdirectory(volumetric_kit/recon/tsdf)
   # Host image I/O, on the family core's base tier alone.
   add_subdirectory(volumetric_kit/recon/io)

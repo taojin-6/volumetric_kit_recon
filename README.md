@@ -11,8 +11,8 @@ interop seam: `recon` builds the volume, `gfx` renders it.
 
 The voxel grid and what reads it -- voxel hashing, marching cubes, mesh files,
 quality measurement, the codec and the `.vrst` stream and its live serving --
-are [`volumetric_kit_grid`](grid/README.md), a package of its own in `grid/`
-that recon builds on, on the core alone.
+are [`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid),
+a repository of its own that recon builds on, on the core alone.
 
 > Start with [AGENTS.md](AGENTS.md) for shared working conventions and commands.
 > [DESIGN.md](DESIGN.md) describes the architecture, current implementation,
@@ -72,7 +72,7 @@ A consumer's kernels include recon's exported GLSL as recon's own do,
 through the core's `INCLUDE_TARGETS`: `volumetric_kit::recon_core` exports
 the pinhole (`volumetric_kit/recon/core/shaders/pinhole.glsl`) with
 `vkc_export_glsl`, under a root that holds it alone. The voxel grid's
-contract is grid's ([its README](grid/README.md#building)).
+contract is grid's ([its README](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#building)).
 
 ```cmake
 vkc_compile_shaders(my_kernels INCLUDE_TARGETS volumetric_kit::recon_core
@@ -84,11 +84,12 @@ core's `vkc_require_sibling(volumetric_kit::recon <min-version>)` after
 `FetchContent_MakeAvailable(volumetric_kit_recon)`: the umbrella carries
 recon's `project(VERSION)` as `VKC_PACKAGE_VERSION`.
 
-recon builds on grid (`grid/`), declared after the core and checked with
-`vkc_require_sibling(volumetric_kit::grid ...)` at `VR_GRID_MIN_VERSION`
-(0.1.0); in this build grid's tests, examples and `-Werror` follow recon's.
-An application that fetches grid itself declares it first, by URL, SHA and
-`SOURCE_SUBDIR grid`; to build against a local grid checkout, pass
+recon builds on grid, fetched pinned by commit after the core and checked
+with `vkc_require_sibling(volumetric_kit::grid ...)` at
+`VR_GRID_MIN_VERSION` (0.1.0). grid's own CI tests grid, so its tests and
+`-Werror` stay off here; recon's tests and examples turn on its test support
+and its examples' helpers. An application that fetches grid itself declares
+it first; to build against a local grid checkout, pass
 `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_GRID=<path>`.
 
 recon builds on [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core),
@@ -120,13 +121,13 @@ grayscale PNG writing (`io/image_io.hpp`); it links the core's base tier
 alone, with no Vulkan. These are host file operations; they allocate no
 Vulkan resources and do not download a live GPU volume. Mesh files -- PLY
 export and the optional Assimp import (`VGRID_WITH_ASSIMP`) -- are grid's
-([its README](grid/README.md#mesh-files)).
+([its README](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#mesh-files)).
 
 ## Codec evaluation
 
 `codec_replica` runs grid's codec on a fused room sequence; grid's
 `codec_mesh` codes a mesh or a sequence of them, and grid's README documents
-the `codec` section both read ([its codec evaluation](grid/README.md#codec-evaluation)).
+the `codec` section both read ([its codec evaluation](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#codec-evaluation)).
 
 ```sh
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release
@@ -143,7 +144,7 @@ next set as a key for a viewer that joins or falls behind, through
 `volumetric_kit::recon_sender`: each set fused and its frame coded in two
 batches ([the sender contract](DESIGN.md#sender)), then written and served
 by grid's codec stream. The server, the client, `serve_stream` and what they
-print are grid's ([its live streaming](grid/README.md#live-streaming)).
+print are grid's ([its live streaming](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#live-streaming)).
 
 ## License
 

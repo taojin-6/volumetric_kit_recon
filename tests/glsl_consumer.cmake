@@ -7,7 +7,7 @@
 # (volumetric_kit::recon_core; shaders/pinhole_cases.comp). The
 # recon_subproject_glsl test builds the target, vr_glsl_consumer. The include
 # root holds exactly the GLSL recon_core exports, none of recon's own. grid's
-# consumer checks grid's roots the same way (grid/tests/glsl_consumer.cmake).
+# consumer checks grid's roots the same way (its tests/glsl_consumer.cmake).
 get_target_property(_roots volumetric_kit::recon_core VKC_SHADER_INCLUDE_DIRS)
 set(_held "")
 foreach(_root IN LISTS _roots)

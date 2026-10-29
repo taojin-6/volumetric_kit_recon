@@ -12,7 +12,7 @@ configuration file, not the shell's current directory; environment variables
 and home-directory shortcuts are not expanded.
 The examples need the core recon needs, with its config tier (README,
 Building). grid's `codec_mesh` reads the same format; its templates and the
-mesh-source notes are grid's ([grid/config/README.md](../grid/config/README.md)).
+mesh-source notes are grid's ([its config/README.md](https://github.com/taojin-6/volumetric_kit_grid/blob/main/config/README.md)).
 
 | Executable | Starting configuration | Work |
 | --- | --- | --- |

@@ -6,6 +6,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **grid is fetched from its own repository**
+  ([`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid),
+  pinned at 0.1.0, `cbf7a6e`), and `grid/` is gone from this one, with the
+  CI job that tested it alone: grid's own CI tests it, so recon builds
+  neither grid's tests nor its `-Werror`, and its ThreadSanitizer pass runs
+  recon's threaded tests alone. Targets, headers and bytes are unchanged. A
+  consumer that declared grid from this repository (`SOURCE_SUBDIR grid`)
+  declares it from grid's at its re-pin, by URL and SHA.
+
 ## [0.1.0] - 2026-10-28
 
 ### Changed

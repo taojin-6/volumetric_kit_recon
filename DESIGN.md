@@ -8,7 +8,7 @@ to the task, and update them with the code when a contract changes.
 
 - [Tiered architecture](#tiered-architecture) and [package names](#naming-conventions-use-these-consistently)
 - [Interop and device ownership](#the-interop-seam), [Vulkan gotchas](#key-gotchas-verified), and [color](#color-space)
-- Implementation: [core](#core), [tsdf](#tsdf), [texture](#texture), [camera](#camera), [sensor](#sensor), [io](#io), [sender](#sender); the voxel grid, meshing, the codec and streaming are grid's ([grid/DESIGN.md](grid/DESIGN.md))
+- Implementation: [core](#core), [tsdf](#tsdf), [texture](#texture), [camera](#camera), [sensor](#sensor), [io](#io), [sender](#sender); the voxel grid, meshing, the codec and streaming are grid's ([its DESIGN.md](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md))
 - [Examples](#examples) and [next work](#next-work)
 
 The tier descriptions and next-work notes below retain the implementation
@@ -26,9 +26,8 @@ bitstream → handoff to a renderer.**
 The voxel grid and what reads it -- voxel hashing, a mesh's distance field,
 marching cubes and the mesh containers, mesh files, quality measurement, the
 codec, the `.vrst` container, live serving and the codec stream -- are
-`volumetric_kit_grid`'s, a package of its own in this repository
-([grid/](grid/README.md)) that recon builds on; recon fuses depth into its
-grid, textures its meshes and sends what it codes.
+`volumetric_kit_grid`'s, a repository of its own that recon builds on;
+recon fuses depth into its grid, textures its meshes and sends what it codes.
 
 It is deliberately *not* a renderer. Rendering is owned by the sibling library
 `volumetric_kit_gfx` (Vulkan/MoltenVK). Keeping them separate means each is
@@ -42,7 +41,7 @@ renderer. They meet only at the interop seam.
   compression as **Vulkan compute** (GLSL → SPIR-V; MoltenVK on Apple), one code
   path across Linux / Android / macOS / iOS. Produces meshes / volumes
   / compressed TSDF bitstreams.
-- **`volumetric_kit_grid`** (`grid/`, a package of its own) — the voxel grid,
+- **[`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid)** — the voxel grid,
   meshing, mesh files, quality measurement, the codec and the `.vrst`
   stream and its live serving, on volumetric_kit_core alone.
 - **`volumetric_kit_gfx`** — the Vulkan/MoltenVK renderer. Consumes meshes /
@@ -80,7 +79,7 @@ conventions and Vulkan setup.
 - grid's names are its own: `volumetric_kit::grid`, `vgrid::` in docs,
   `include/volumetric_kit/grid/<tier>/…`, `VGRID_` macros and
   `volumetric_kit::grid_<tier>` targets ([grid's
-  conventions](grid/DESIGN.md#naming-conventions)).
+  conventions](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#naming-conventions)).
 
 ## Tiered architecture
 
@@ -94,7 +93,7 @@ left. No upward includes.
 `sensor` and beside `core`: it links the family core's base tier and GLM,
 and no other recon tier. `sender` comes last: it links grid's
 `codec_stream`, `tsdf` and `sensor`'s GPU pass (`sensor_utils`). grid
-includes nothing of recon's ([grid's tiers](grid/DESIGN.md#tiered-architecture)).
+includes nothing of recon's ([grid's tiers](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#tiered-architecture)).
 
 - **`camera`** — the camera vocabulary the drivers and the sensor tier
   share: the double-precision `CameraModel` (image size, intrinsics, OpenCV's
@@ -661,7 +660,7 @@ start, not retrofitted.
 ## Implementation reference
 
 Landed and proven on MoltenVK, left to right: `core` → `tsdf` → `texture`,
-on grid's `volume` and `mesh` ([grid's reference](grid/DESIGN.md#implementation-reference)),
+on grid's `volume` and `mesh` ([grid's reference](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#implementation-reference)),
 plus `sensor` (the contract and the Orbbec driver) and **interop seam B** —
 gfx drawing grid's mesh buffers with no host round trip.
 [DECISIONS.md](DECISIONS.md) carries the *why* behind anything here that looks
@@ -1325,7 +1324,7 @@ and translate backend exceptions that reach them into `Status`/`Result`;
 private third-party types never appear in public headers. The backend is the
 pinned stb source, a private implementation dependency of `recon_image_io`.
 Mesh files (PLY export, Assimp import, the normalization helpers) are grid's
-[`mesh_io`](grid/DESIGN.md#mesh_io).
+[`mesh_io`](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#mesh_io).
 
 ### sender
 
@@ -1518,7 +1517,7 @@ coverage and the F-score at half a voxel, since a fused TSDF is projective
 and sampling it would measure the fusion's bias too. `codec.sweep` prints the
 rate–distortion table the defaults are chosen from. Its codec stream, report,
 sweep and quantization tables are grid's ([grid's
-examples](grid/DESIGN.md#examples)), as are `codec_mesh` and `serve_stream`.
+examples](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#examples)), as are `codec_mesh` and `serve_stream`.
 
 ## Next work
 
@@ -1562,7 +1561,7 @@ set (the dispatch, the arena; `readback_ms` and `descriptor_ms` are per-call
 constants and will read flat, and the frustum compaction still scans every
 hash slot), and quote nothing until a run on a large scan says so. Beside that:
 the gfx-vertex converter; grid's next work holds meshing's and mesh files'
-([grid/DESIGN.md](grid/DESIGN.md#next-work)). On `texture`,
+([its next work](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#next-work)). On `texture`,
 the `TODO(texture)`s: keeping a static keyframe set's
 depth and coverage in the pass between calls, blending views at their seams,
 and a per-triangle tile

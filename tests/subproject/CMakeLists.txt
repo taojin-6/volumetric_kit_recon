@@ -7,7 +7,7 @@
 # builds the library tiers alone, under its own compiler's warnings. With all of
 # recon, image I/O links the core's base tier alone, and recon_subproject_glsl
 # builds its kernel on recon's exported GLSL (glsl_consumer.cmake). grid's own
-# consumer (grid/tests/subproject) checks grid's.
+# consumer (its tests/subproject) checks grid's.
 #
 # With -DVR_CORE_FIRST=ON it makes the core available first, as an application
 # that also fetches calib or gfx does, with VKC_WITH_VULKAN as given, so recon's
