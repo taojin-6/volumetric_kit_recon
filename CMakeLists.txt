@@ -83,12 +83,16 @@ endif()
 # sensor_frame recon's libraries link.
 set(VR_CORE_MIN_VERSION 0.29.0)
 set(VR_SENSOR_MIN_VERSION 0.1.0)
+# Testing is on before third_party/ adds the sensor package, so its tests
+# (VS_BUILD_TESTS) join this build's CTest tree.
+if(VR_BUILD_TESTS OR VS_BUILD_TESTS)
+  enable_testing()
+endif()
 add_subdirectory(third_party)
 
 add_subdirectory(src)
 
 if(VR_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
-  enable_testing()
   add_subdirectory(tests)
 endif()
 
