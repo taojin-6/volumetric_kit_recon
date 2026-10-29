@@ -25,14 +25,14 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/scratch_dir.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
-#include "volumetric_kit/recon/io/image_io.hpp"
-#include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
-#include "volumetric_kit/recon/sensor/utils/picture_readback.hpp"
+#include "volumetric_kit/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/sensor/io/image_io.hpp"
+#include "volumetric_kit/sensor/prep/picture_readback.hpp"
+#include "volumetric_kit/sensor/rgbd_frame.hpp"
 
 namespace vkc = volumetric_kit::core;
 namespace io = volumetric_kit::recon::io;
-namespace sensor = volumetric_kit::recon::sensor;
+namespace sensor = volumetric_kit::sensor;
 
 namespace {
 

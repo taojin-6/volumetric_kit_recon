@@ -57,6 +57,7 @@
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 
 #if defined(__unix__) || defined(__APPLE__)
@@ -160,8 +161,8 @@ bool row_reports_both_halves(const vkc::StageMetrics& m, const char* stage,
 
 // A camera looking down +Z at a plane 1 m away -- enough surface to allocate
 // blocks, fuse them, and mesh something.
-vr::DepthCameraParams plane_camera() {
-  vr::DepthCameraParams cam{};
+sensor::DepthCameraParams plane_camera() {
+  sensor::DepthCameraParams cam{};
   cam.width = kWidth;
   cam.height = kHeight;
   cam.fx = 64.0f;
@@ -198,7 +199,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       vr::texture::ProjectiveTexturer::create(gpu.device, gpu.allocator);
   CHECK(texturer);
 
-  const vr::DepthCameraParams cam = plane_camera();
+  const sensor::DepthCameraParams cam = plane_camera();
   const std::vector<float> depth(kWidth * kHeight, 1.0f);
 
   // Whether THIS device can time at all, asked directly rather than inferred
@@ -302,7 +303,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // over a large image makes the round far longer than the fuse, so a
   // compaction row that still held the round would overrun "integrate".
   {
-    vr::DepthCameraParams narrow = cam;
+    sensor::DepthCameraParams narrow = cam;
     narrow.width = narrow.height = 1024;
     narrow.fx = narrow.fy = 16384.0f;
     narrow.cx = narrow.cy = 512.0f;

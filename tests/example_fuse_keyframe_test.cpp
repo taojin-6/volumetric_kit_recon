@@ -27,7 +27,7 @@
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
-namespace sensor = vr::sensor;
+namespace sensor = volumetric_kit::sensor;
 constexpr vr::tsdf::IntegrationMode kClassic =
     vr::tsdf::IntegrationMode::Classic;
 constexpr vr::tsdf::IntegrationMode kDynamic =
@@ -157,7 +157,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
                                    20.0f, kClassic, nullptr)
              .ok());
   CHECK(!keyframe);
-  frame.color_to_world = vr::camera::Mat4d(1.0);
+  frame.color_to_world = sensor::camera::Mat4d(1.0);
   CHECK(vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
                                   20.0f, kClassic, nullptr)
             .ok());
@@ -184,7 +184,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(depth_only.ok());
   std::fill(raw_depth.begin(), raw_depth.end(), 2000);
   std::fill(raw_color.begin(), raw_color.end(), 0x001122CCu);
-  frame.color_to_world = vr::camera::Mat4d(1.0);
+  frame.color_to_world = sensor::camera::Mat4d(1.0);
   frame.color_to_world[3][0] = 0.25;
   // A second fuser: the first remembers the grid it fuses.
   auto depth_only_fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);

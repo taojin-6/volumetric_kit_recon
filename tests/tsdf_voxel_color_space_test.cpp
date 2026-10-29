@@ -2,12 +2,12 @@
 // Copyright (c) 2026 Tao Jin
 
 // The sensor boundary's curve and the voxel colour format's, held together.
-// core/color_space.hpp converts a camera's colour into the working space, and
-// volume/voxel_color.hpp is what fusion stores and the mesher reads; each is a
-// copy of the published sRGB curve (the 2026-08-02 colour-space decision),
-// pinned to it on its own side. This test holds the two copies to each other,
-// bit for bit, and lives in recon because recon is what links both: the voxel
-// grid takes no colour vocabulary from the sensor side.
+// sensor/frame/color_space.hpp converts a camera's colour into the working
+// space, and volume/voxel_color.hpp is what fusion stores and the mesher reads;
+// each is a copy of the published sRGB curve (the 2026-08-02 colour-space
+// decision), pinned to it on its own side. This test holds the two copies to
+// each other, bit for bit, and lives in recon because recon is what links both:
+// the voxel grid takes no colour vocabulary from the sensor side.
 //
 // Host only: the decode over every code, the voxel word's decode against
 // color_space's unpack, and the encode and running-mean pack over a sweep of
@@ -21,11 +21,12 @@
 #include <vector>
 
 #include "volumetric_kit/core/testing/test_check.hpp"
-#include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_color.hpp"
+#include "volumetric_kit/sensor/frame/color_space.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vol = volumetric_kit::recon::volume;
 
 namespace {
@@ -47,10 +48,10 @@ bool same_bits(const vr::Vec3f& a, const vr::Vec3f& b) {
 int main() {
   for (std::uint32_t c = 0; c < 256; ++c) {
     const float e = static_cast<float>(c) / 255.0f;
-    CHECK(same_bits(vol::srgb_to_linear(e), vr::srgb_to_linear(e)));
+    CHECK(same_bits(vol::srgb_to_linear(e), sensor::srgb_to_linear(e)));
     const std::uint32_t word = c | (c << 8) | (c << 16) | 0xFF000000u;
     CHECK(same_bits(vol::voxel_color_to_linear(word),
-                    vr::unpack_srgb_to_linear(word)));
+                    sensor::unpack_srgb_to_linear(word)));
   }
   const float specials[] = {-0.0f,
                             -1.0f,
@@ -65,9 +66,9 @@ int main() {
   }
   for (const float l : linear) {
     CHECK(std::isnan(l) ||
-          same_bits(vol::linear_to_srgb(l), vr::linear_to_srgb(l)));
+          same_bits(vol::linear_to_srgb(l), sensor::linear_to_srgb(l)));
     const vr::Vec3f v(l, 1.0f - l, 0.5f * l);
-    CHECK(vol::voxel_color_from_linear(v) == vr::pack_linear_to_srgb(v));
+    CHECK(vol::voxel_color_from_linear(v) == sensor::pack_linear_to_srgb(v));
   }
   std::puts(
       "recon tsdf voxel colour space: volume's curve matched color_space's");

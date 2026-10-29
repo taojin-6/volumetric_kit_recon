@@ -4,11 +4,11 @@
 # A stand-in for a sibling that fetches recon's source from VR_SOURCE_DIR, as
 # the recon_subproject_* tests configure it: recon is then not the top-level
 # project, so its tests, examples and -Werror must default off, and the consumer
-# builds the library tiers alone, under its own compiler's warnings. With all of
-# recon, image I/O links the core's base tier alone, recon_subproject_glsl
-# builds its kernel on recon's exported GLSL (glsl_consumer.cmake), and
-# recon_subproject_headers compiles the public headers that reach the volume
-# tier, none of which may hold the hash table's internals (internal_names.cpp).
+# builds the library tiers alone, under its own compiler's warnings.
+# recon_subproject_glsl builds its kernels on recon's exported GLSL
+# (glsl_consumer.cmake), and recon_subproject_headers compiles the public
+# headers that reach the volume tier, none of which may hold the hash table's
+# internals (internal_names.cpp).
 #
 # With -DVR_CORE_FIRST=ON it makes the core available first, as an application
 # that also fetches calib or gfx does, with VKC_WITH_VULKAN as given, so recon's
@@ -40,42 +40,6 @@ endforeach()
 # checks it as a sibling does, with the core's vkc_require_sibling.
 if(VR_REQUIRE_RECON)
   vkc_require_sibling(volumetric_kit::recon ${VR_REQUIRE_RECON})
-endif()
-
-# A camera-only recon (VR_CAMERA_ONLY) makes no core vulkan tier and no other
-# recon tier, and fetches no dependency of the other tiers. That it finds no
-# Vulkan is the caller's CMAKE_DISABLE_FIND_PACKAGE_Vulkan, as Vulkan's target
-# would be local to recon's directory, not visible here.
-if(VR_EXPECT_CAMERA_ONLY)
-  foreach(_target volumetric_kit::core_vulkan volumetric_kit::recon_core)
-    if(TARGET ${_target})
-      message(FATAL_ERROR "a camera-only recon made ${_target}")
-    endif()
-  endforeach()
-  include(FetchContent)
-  foreach(_dependency stb tinyply)
-    FetchContent_GetProperties(${_dependency})
-    if(${_dependency}_POPULATED)
-      message(FATAL_ERROR "a camera-only recon fetched ${_dependency}")
-    endif()
-  endforeach()
-endif()
-
-# The umbrella reaches recon_camera, so it must name only tiers that exist.
-add_executable(vr_camera_consumer camera_consumer.cpp)
-target_link_libraries(vr_camera_consumer PRIVATE volumetric_kit::recon)
-
-if(NOT TARGET volumetric_kit::recon_core)
-  return()
-endif()
-
-# Image I/O, which a capture app links to write its images, links the core's
-# base tier alone: no Vulkan and no mesh tier.
-get_target_property(_image_io volumetric_kit::recon_image_io ALIASED_TARGET)
-get_target_property(_image_io_links ${_image_io} LINK_LIBRARIES)
-if(NOT _image_io_links STREQUAL "volumetric_kit::core_base")
-  message(FATAL_ERROR "recon_image_io links ${_image_io_links}, "
-                      "not volumetric_kit::core_base alone")
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../glsl_consumer.cmake")

@@ -22,6 +22,7 @@
 #include "volumetric_kit/recon/volume/grid_growth.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace vol = vr::volume;
 namespace tsdf = vr::tsdf;
@@ -47,10 +48,10 @@ void fail_allocation(std::size_t bytes, const void* site = nullptr) {
 }
 
 int gpu_main(vkc::test::GpuContext& gpu) {
-  std::vector<vr_test::SphereView<vr::DepthCameraParams>> views;
+  std::vector<vr_test::SphereView<sensor::DepthCameraParams>> views;
   views.reserve(3);
   for (int c = 0; c < 3; ++c) {
-    views.push_back(vr_test::sphere_view<vr::DepthCameraParams>(c));
+    views.push_back(vr_test::sphere_view<sensor::DepthCameraParams>(c));
   }
   std::vector<tsdf::FrameInput> frames;
   for (auto& view : views) {

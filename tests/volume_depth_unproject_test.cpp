@@ -5,7 +5,8 @@
 // depth allocation places every sample by, is a copy of the pinhole recon
 // exports, held to it here on the device (shaders/depth_unproject_cases.comp):
 //
-//   * bit for bit core/shaders/pinhole.glsl's vr_unproject_pinhole, on every
+//   * bit for bit sensor/frame/shaders/pinhole.glsl's vs_unproject_pinhole, on
+//   every
 //     case, so the copy allocates the blocks the shared one did;
 //   * the published formula, x = (u - cx) z / fx and y = (v - cy) z / fy,
 //     against the host's double within float rounding (a relative 5e-7, the

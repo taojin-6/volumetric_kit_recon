@@ -37,6 +37,7 @@
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
@@ -45,7 +46,7 @@ namespace {
 
 constexpr int kCameras = 3;
 
-using View = vr_test::SphereView<vr::DepthCameraParams>;
+using View = vr_test::SphereView<sensor::DepthCameraParams>;
 
 vol::VoxelGridParams params(std::int32_t num_buckets) {
   vol::VoxelGridParams grid{};
@@ -150,7 +151,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // The set: three cameras, depth and colour on the host.
   std::vector<View> views;
   for (int c = 0; c < kCameras; ++c) {
-    views.push_back(vr_test::sphere_view<vr::DepthCameraParams>(c));
+    views.push_back(vr_test::sphere_view<sensor::DepthCameraParams>(c));
   }
   std::vector<tsdf::ColorFrame> colors;
   for (const View& v : views) {

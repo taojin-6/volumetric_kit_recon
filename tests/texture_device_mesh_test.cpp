@@ -49,6 +49,7 @@
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace mesh = volumetric_kit::recon::mesh;
@@ -59,7 +60,7 @@ namespace {
 // The coordinate the single-camera pass gives `world` in colour camera `k`:
 // the kernel's arithmetic -- the pixel centre as a fraction of the image,
 // clamped half a texel inside it.
-vr::Vec2f color_uv(const vr::ColorCameraParams& k, vr::Vec3f world) {
+vr::Vec2f color_uv(const sensor::ColorCameraParams& k, vr::Vec3f world) {
   const vr::Vec3f d = world - vr::Vec3f(k.cam_to_world[3]);
   const vr::Vec3f p(vr::dot(vr::Vec3f(k.cam_to_world[0]), d),
                     vr::dot(vr::Vec3f(k.cam_to_world[1]), d),
@@ -199,7 +200,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   constexpr std::uint32_t kWidth = 128;
   constexpr std::uint32_t kHeight = 128;
   constexpr float kCameraDistance = 2.0f;
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = 120.0f;
   cam.fy = 120.0f;
   cam.cx = static_cast<float>(kWidth) * 0.5f;
@@ -308,7 +309,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
               .ok());
     const auto device_depth =
         std::make_shared<const vkc::Buffer>(std::move(depth_result).value());
-    const auto view_from = [&](const vr::ColorCameraParams& k) {
+    const auto view_from = [&](const sensor::ColorCameraParams& k) {
       rtex::TextureView view;
       view.cam = cam;
       view.depth_buffer = device_depth;
@@ -323,9 +324,9 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     for (const mesh::Vertex& v : blind.value().vertices) {
       CHECK(v.uv0.x < 0.0f);
     }
-    const vr::ColorCameraParams same{cam.fx,          cam.fy,    cam.cx,
-                                     cam.cy,          cam.width, cam.height,
-                                     cam.cam_to_world};
+    const sensor::ColorCameraParams same{cam.fx,          cam.fy,    cam.cx,
+                                         cam.cy,          cam.width, cam.height,
+                                         cam.cam_to_world};
     CHECK(texturer.texture(device_mesh, view_from(same)).ok());
     vkc::Result<mesh::Mesh> as_same = extractor.download(device_mesh);
     CHECK(as_same.ok());
@@ -336,7 +337,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       CHECK(near(got, want, 1e-6f));
     }
 
-    vr::ColorCameraParams aside{};
+    sensor::ColorCameraParams aside{};
     aside.fx = 200.0f;
     aside.fy = 200.0f;
     aside.cx = 129.5f;
@@ -436,7 +437,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     // its image. A vertex outside it is carried, though the depth camera
     // proves its line of sight. Within a hundredth of a pixel of the border
     // either answer is the float's to give, so those are not held to one.
-    vr::ColorCameraParams narrow = aside;
+    sensor::ColorCameraParams narrow = aside;
     narrow.cx = 7.5f;
     narrow.cy = 7.5f;
     narrow.width = 16;
@@ -471,7 +472,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     CHECK(inside > 0 && outside > 0);
 
     // Half a turn about y, so it looks back past the sphere's far side.
-    vr::ColorCameraParams away = aside;
+    sensor::ColorCameraParams away = aside;
     away.cam_to_world[0] = -aside.cam_to_world[0];
     away.cam_to_world[2] = -aside.cam_to_world[2];
     CHECK(texturer.texture(device_mesh, view_from(away)).ok());
@@ -483,7 +484,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
     // Refused: a colour camera with no image, a view giving its depth on the
     // host and the device both, and one giving it on neither.
-    vr::ColorCameraParams blank = aside;
+    sensor::ColorCameraParams blank = aside;
     blank.height = 0;
     CHECK(texturer.texture(device_mesh, view_from(blank)).domain() ==
           vkc::Status::Code::InvalidArgument);
@@ -522,7 +523,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // depth of the sphere's nearest point, so each textures the patch facing it
   // and the two tiles share the mesh. The device pass must equal the host one
   // vertex for vertex, and both views must win triangles.
-  vr::DepthCameraParams side = cam;
+  sensor::DepthCameraParams side = cam;
   {
     const vr::Vec3f side_eye =
         sphere_center() + vr::Vec3f(kCameraDistance, 0.0f, 0.0f);

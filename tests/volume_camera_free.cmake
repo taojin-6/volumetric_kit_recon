@@ -3,10 +3,10 @@
 
 # The volume tier is camera-free (DECISIONS.md, 2026-10-28): nothing in its
 # headers or sources, shaders included, includes the camera vocabulary,
-# core/camera_params.hpp or core/shaders/pinhole.glsl. Its depth allocation
-# takes volume::DepthPinhole and unprojects through depth_pinhole.glsl. Run as
-# `cmake -DSOURCE_DIR=<recon root> -P volume_camera_free.cmake`; fails naming
-# every such include.
+# sensor/frame/camera_params.hpp or sensor/frame/shaders/pinhole.glsl. Its depth
+# allocation takes volume::DepthPinhole and unprojects through
+# depth_pinhole.glsl. Run as `cmake -DSOURCE_DIR=<recon root> -P
+# volume_camera_free.cmake`; fails naming every such include.
 foreach(_vr_dir include/volumetric_kit/recon/volume
                 src/volumetric_kit/recon/volume)
   if(NOT IS_DIRECTORY "${SOURCE_DIR}/${_vr_dir}")

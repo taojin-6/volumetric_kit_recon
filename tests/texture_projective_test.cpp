@@ -46,15 +46,16 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
+#include "volumetric_kit/sensor/frame/camera_params.hpp"
 
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace tex = volumetric_kit::recon::texture;
 namespace rmesh = volumetric_kit::recon::mesh;
@@ -110,7 +111,7 @@ vr::Vec2f effective_uv(const vr::Vec2f& uv) {
 // u = fx*x/z + cx; then the +0.5 half-texel normalized by the image size and
 // clamped half a texel inside.
 vr::Vec2f expected_uv(const vr::Vec3f& world,
-                      const vr::DepthCameraParams& cam) {
+                      const sensor::DepthCameraParams& cam) {
   const vr::Vec3f d = world - vr::Vec3f(cam.cam_to_world[3]);
   const vr::Vec3f cam_x(cam.cam_to_world[0]);  // camera X axis in world
   const vr::Vec3f cam_y(cam.cam_to_world[1]);  // camera Y axis in world
@@ -153,7 +154,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
   // Camera at the world origin looking down +Z (identity pose), 640x480
   // pinhole.
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = 500.0f;
   cam.fy = 500.0f;
   cam.cx = 320.0f;
@@ -245,7 +246,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   mesh2.vertices = {vtx(-0.1f, -0.1f, 1.0f), vtx(0.1f, -0.1f, 1.0f),
                     vtx(0.0f, 0.1f, 1.0f)};
   mesh2.indices = {0, 1, 2};
-  vr::DepthCameraParams cam_t = cam;
+  sensor::DepthCameraParams cam_t = cam;
   const vr::Vec3f t(0.2f, 0.0f, 0.0f);
   cam_t.cam_to_world = vr::Mat4f(1.0f);
   cam_t.cam_to_world[3] = vr::Vec4f(t, 1.0f);
@@ -312,7 +313,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
                     vtx(2.0f, 0.1f, 0.0f, toward_r),
                     vtx(2.0f, 0.0f, 0.1f, toward_r)};
   mesh3.indices = {0, 1, 2};
-  vr::DepthCameraParams cam_r = cam;
+  sensor::DepthCameraParams cam_r = cam;
   cam_r.cam_to_world = vr::Mat4f(1.0f);
   cam_r.cam_to_world[0] =
       vr::Vec4f(0.0f, 0.0f, -1.0f, 0.0f);  // camX -> world -Z
@@ -530,9 +531,9 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     sheet.indices = {0, 1, 2, 3, 4, 5};
     tex::TextureView registered{depth.data(), cam};
     tex::TextureView beside = registered;
-    beside.color_camera =
-        vr::ColorCameraParams{cam.fx,    cam.fy,     cam.cx,          cam.cy,
-                              cam.width, cam.height, cam.cam_to_world};
+    beside.color_camera = sensor::ColorCameraParams{
+        cam.fx,    cam.fy,     cam.cx,          cam.cy,
+        cam.width, cam.height, cam.cam_to_world};
     beside.color_camera->cam_to_world[3] = vr::Vec4f(0.05f, 0.0f, 0.0f, 1.0f);
     for (const tex::TextureView* view : {&registered, &beside}) {
       rmesh::Mesh m = sheet;
@@ -553,13 +554,13 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // refused, as the several-view pass refuses it, rather than returning OK
   // with every vertex carried.
   {
-    vr::DepthCameraParams no_range = cam;
+    sensor::DepthCameraParams no_range = cam;
     no_range.min_depth = 0.0f;
     no_range.max_depth = 0.0f;
-    vr::DepthCameraParams inverted = cam;
+    sensor::DepthCameraParams inverted = cam;
     inverted.min_depth = 2.0f;
     inverted.max_depth = 1.0f;
-    for (const vr::DepthCameraParams& bad : {no_range, inverted}) {
+    for (const sensor::DepthCameraParams& bad : {no_range, inverted}) {
       rmesh::Mesh m = mesh2;
       CHECK(texturer.texture(m, depth.data(), bad).domain() ==
             vkc::Status::Code::InvalidArgument);
@@ -571,7 +572,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // A frame twice the size after the smaller ones: the texturer's depth copy
   // is kept across calls, so it has to grow rather than take a short one.
   {
-    vr::DepthCameraParams cam_big = cam;
+    sensor::DepthCameraParams cam_big = cam;
     cam_big.fx *= 2.0f;
     cam_big.fy *= 2.0f;
     cam_big.cx *= 2.0f;

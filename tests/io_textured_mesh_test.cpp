@@ -22,9 +22,9 @@
 
 #include "volumetric_kit/core/testing/scratch_dir.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
-#include "volumetric_kit/recon/io/image_io.hpp"
 #include "volumetric_kit/recon/io/mesh_io.hpp"
 #include "volumetric_kit/recon/io/textured_mesh.hpp"
+#include "volumetric_kit/sensor/io/image_io.hpp"
 
 namespace vkc = volumetric_kit::core;
 namespace io = volumetric_kit::recon::io;

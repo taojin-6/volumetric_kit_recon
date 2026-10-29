@@ -37,6 +37,7 @@
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
@@ -77,7 +78,7 @@ vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
 // A camera looking down world +z from `eye`, seeing a wall at depth `z`, in
 // one colour.
 struct Frame {
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   std::vector<float> depth;
   std::vector<std::uint32_t> color;
 };
@@ -120,7 +121,7 @@ Frame witness() {
 }
 
 // The frustum integrate culls `cam` to.
-vol::FrustumPlanes reach(const vr::DepthCameraParams& cam) {
+vol::FrustumPlanes reach(const sensor::DepthCameraParams& cam) {
   return vol::make_frustum_planes(cam.fx, cam.fy, cam.cx, cam.cy, cam.width,
                                   cam.height, 0.0f, cam.max_depth + kTrunc,
                                   cam.cam_to_world);
@@ -200,8 +201,9 @@ int run(const vkc::test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
           {vkc::StorageInput(f.depth.data()), tsdf::to_depth_pinhole(f.cam)});
       colors.push_back(tsdf::ColorFrame{
           f.color.data(),
-          vr::ColorCameraParams{f.cam.fx, f.cam.fy, f.cam.cx, f.cam.cy,
-                                f.cam.width, f.cam.height, f.cam.cam_to_world},
+          sensor::ColorCameraParams{f.cam.fx, f.cam.fy, f.cam.cx, f.cam.cy,
+                                    f.cam.width, f.cam.height,
+                                    f.cam.cam_to_world},
           {}});
     }
     CHECK(settle(a.value(), depths) == 0);

@@ -63,7 +63,6 @@
 #include "volumetric_kit/core/testing/scratch_dir.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
-#include "volumetric_kit/recon/camera/array_calibration.hpp"
 #include "volumetric_kit/recon/codec/decode_grid.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
@@ -73,18 +72,19 @@
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/sender/fuse_inputs.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
-#include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/recon/stream/stream_reader.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
+#include "volumetric_kit/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/sensor/camera/array_calibration.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
-namespace camera = volumetric_kit::recon::camera;
+namespace camera = volumetric_kit::sensor::camera;
 namespace codec = volumetric_kit::recon::codec;
 namespace codec_stream = volumetric_kit::recon::codec_stream;
 namespace sender = volumetric_kit::recon::sender;
-namespace sensor = volumetric_kit::recon::sensor;
+namespace sensor = volumetric_kit::sensor;
 namespace stream = volumetric_kit::recon::stream;
 namespace networking = volumetric_kit::recon::networking;
 namespace net = vr_test::net;
