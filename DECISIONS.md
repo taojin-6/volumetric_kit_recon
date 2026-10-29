@@ -493,6 +493,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-08**](#2026-10-08--a-dynamic-set-clears-with-every-camera-before-it-fuses-with-any-amends-the-2026-09-30-one-batch-entry) —
   A Dynamic set clears with every camera before it fuses with any, through a
   clear kernel of its own; a single frame and Classic are unchanged.
+  *Superseded 2026-10-29:* Dynamic no longer clears on one sample; a set
+  tests every camera for change, resets along changed rays, then fuses.
 - [**2026-10-10**](#2026-10-10--recon-keeps-exception-handlers-shares-frame-preparation-and-leaves-warning-policy-to-consumers) —
   recon keeps exception handlers and the normal CI configuration;
   `GpuFramePrep` shares one preparation path, and `-Werror` defaults on
@@ -896,7 +898,15 @@ entries relevant to your task; later amendments supersede earlier rules.
   `DepthNoise`, and alarms on a two-sided CUSUM (k 0.5, h 8) or one frame
   past 6 sigma, the operating point measured on the rig's static takes; a
   surface first seen over no return that gives way to no return again
-  flags `Vanished`.
+  flags `Vanished`, on the second invalid sample in a row: a lone dropout
+  changes nothing.
+- [**2026-10-29**](#2026-10-29--dynamic-fusion-evicts-on-change-and-averages-conflict-supersedes-the-2026-10-08-dynamic-set-entry) —
+  Dynamic fusion evicts on change and averages conflict: a set tests each
+  fixed camera for change (`FrameInput::slot`), resets along the changed
+  rays (the new surface's band and the free space in front, keeping the
+  history behind), then fuses in slot order; free space averages in at a
+  tenth of the weight, only into voxels that hold weight. Nothing is
+  cleared on one sample any more. Classic is unchanged.
 
 ## Decision record
 
@@ -5230,10 +5240,13 @@ writes a mask (`PixelChange`: none, nearer, farther, vanished). Per pixel:
 - a camera's pixels test after its first 30 frames; an invalid sample
   changes nothing,
 - but over no return: a pixel first valid once its camera tests had
-  returned nothing, so its history lasts only while it returns. Its first
-  invalid sample ends it, and flags `Vanished` if it had three valid samples
-  in a row; the mask word's high 30 bits carry the depth that left (0.1 mm),
-  so a reader needs nothing else.
+  returned nothing, so its history lasts only while it returns. A lone
+  invalid sample there is a dropout and changes nothing: the history, its
+  sums and its count of valid samples go on as if it never happened. The
+  second invalid sample in a row ends the history, and flags `Vanished` if
+  it had three valid samples, a lone dropout skipped; the mask word's high
+  30 bits carry the depth that left (0.1 mm), so a reader needs nothing
+  else.
 
 **Why.** Change is a camera disagreeing with its own past; comparing a
 camera with itself cancels its calibration error. Measured on the rig's
@@ -5266,18 +5279,40 @@ after it is that surface leaving, and no other evidence of it will come:
 with the camera's warm-up fixed, Dynamic still kept 102 / 121 cm² of the
 1 m/s / 0.1 m/s sphere where no camera returns (main: 85 / 68), and 1.27 m²
 of a walking column (main: 2.16 m²; take1 and take3, lab RTX 4090). The
-three-in-a-row condition is what keeps the rule quiet on still scenes. On
-the recorded takes' validity (four cameras, sets 60 on), ending such a
-history on its first invalid sample would flag 14-23 times a second
-without it (take3, take1), 1.8-2.6k times a second with three samples in
-total rather than in a row, and 6.6k times a second over the 1 m/s sphere's
-replay with it: the background's sporadic returns end silently. 2 in a row
-flags 210-319 times a second on the still takes, 5 none, and misses 6% of
-the sphere's 3-in-a-row flags. Such a pixel's dropouts end its history too,
-so a still surface over no return re-learns there after each, and each
-dropout after three valid samples flags `Vanished`: 30 p (1 - p)^3 times a
-pixel a second at dropout rate p, 2.2 at 10% (tested). What Dynamic does
-with those flags is measured in the next entry.
+three-sample condition is what keeps the rule quiet on still scenes: a
+background's sporadic returns end silently. On the recorded takes'
+validity (four cameras, sets 60 on), with a history ended on its first
+invalid sample, three valid samples in a row flagged 14-23 times a second
+(take3, take1), three in total 1.8-2.6k, two in a row 210-319 and five
+none; over the 1 m/s sphere's replay three in a row flagged 6.6k times a
+second, of which two in a row would miss 6%.
+
+**A dropout is not a departure** (the owner's call, measured on Dynamic in
+the next entry). Ended on its first invalid sample, a still surface over no
+return re-learned after each dropout, and each one after three valid
+samples flagged `Vanished`, 30 p (1 - p)^3 times a pixel a second at
+dropout rate p (2.2 at 10%), each resetting its ray's band under Dynamic: a
+column standing over no return with 15% i.i.d. dropouts was flagged 41k
+times a second, pinholes spread over its face. So the second invalid sample
+in a row ends the history, and a lone one is as if it never happened. A
+history then lasts (1 + p) / p^2 frames on average and flags if two more
+valid samples came first, each with probability (1 - p)(1 + p): p^2
+(1 - p)^3 (1 + p)^2 flags a pixel a frame, 0.26 a second at 10% (tested)
+and 0.55 at 15%, 8 and 5 times fewer. A real departure is flagged one
+frame (33 ms) later. The mark takes a bit, so the history's three counts
+are 9 bits each and `memory`, like `freeze`, is at most 511 samples (17 s;
+the default is 30). On the takes' validity, the rule flags 42-69 times a
+second on the still takes (14-23 before: sporadic returns a frame apart now
+add up), against 1.8-3.0k ordinary false alarms; the walking column
+110-113k times a second while it walks, without and with 15% dropouts on
+it (112k before, without them); the standing column with them 8.1k (41k
+before). Restarting
+the count at a lone dropout instead (three valid samples literally in a
+row) flags 13-21 times a second still and 6.2k on the standing column, but
+misses a departure wherever one of its last three samples dropped out,
+1 - (1 - p)^3 of the pixels: the walking column with 15% dropouts then
+flagged 86k times a second against 110k without them. Eviction comes
+first, so the count skips the dropout.
 
 **Cost.** 24 bytes a pixel per camera, 8.8 MB at 640 x 576; one dispatch a
 camera a frame.
@@ -5292,11 +5327,142 @@ leaves and returns compares with its own history. Over no return, a mover's
 departure flags `Vanished` on every pixel with its depth (to the noise of
 the history's mean, under 7 mm), a step
 while it is there notwithstanding; a 2-sample sporadic return ends
-silently, a 3-sample one flags; a still surface there with 10% dropouts
-flags 2.15 times a pixel a second; a depth past the word's 30 bits keeps
-the largest they hold (107 km). The noise freeze holds a 10 mm a frame
+silently, a 3-sample one flags; single-frame dropouts there change
+nothing (a twin that skipped them matches bit for bit, through a step and
+the departure, flagged on its second frame); a still surface there with
+10% dropouts flags 0.256 times a pixel a second (the rule's 0.265; with a
+lone dropout ending the history, 2.15, which fails, as do the twin and the
+departure's frame); a depth past the word's 30 bits keeps the largest they
+hold (107 km). The noise freeze holds a 10 mm a frame
 ramp's drift before its history restarts to 30 mm at p95 (bound 60 mm;
 80-90 mm with the freeze off, which fails).
+
+### 2026-10-29 — Dynamic fusion evicts on change and averages conflict (supersedes the 2026-10-08 Dynamic set entry).
+
+**The rule.** A Dynamic set, one instant, three passes a frame:
+1. **Detect.** Each frame's camera, by its slot (`FrameInput::slot`), runs
+   the integrator's `ChangeDetector` on its depth (the entry above).
+2. **Reset.** On a ray its camera flagged -- read at a voxel's nearest
+   pixel -- every voxel in front of the new sample and in its band goes
+   back to unobserved (tsdf, weight and colour 0); history behind the band,
+   which the new surface occludes, stays. A `Vanished` ray has no new
+   sample: it resets up to the band of the surface that left, the depth its
+   mask word carries, the set after the surface left (the entry above).
+   Every frame's reset runs before any frame's fuse.
+3. **Fuse,** in slot order. Free space past the band averages in as +trunc
+   at a tenth of a sample's weight, geometry only (no colour), and only into
+   a voxel that already holds weight.
+
+**Why.** The former Dynamic cleared a voxel whenever any camera's one
+sample put it past the band. That let noise near the band's front edge
+flicker the surface, let cameras erase each other at rims, and never
+cleared debris within 4 cm of a surface after an object left (measured:
+the moving sphere's 80 / 72 cm² ghost, fast / slow, stays). Change is a
+camera disagreeing with its own past; conflict is cameras disagreeing with
+each other. Only change evicts; conflict averages.
+- **Reset rule:** an earlier prototype's, tested there (an object that
+  approaches and recedes leaves no older layer; occluded history survives).
+- **Free space only into weighted voxels.** It wears away a surface no
+  change removed, at a tenth of a sample's weight, so a camera seeing past
+  another's rim shifts that surface by about a tenth of the band at equal
+  depth, more when the camera seeing past is nearer (weights go as 1/z^2):
+  one 1.6 times nearer or more carves the other's rim, as the former clear
+  did (the shader's arithmetic run to equilibrium). Never
+  making an unobserved voxel observed keeps space a reset cleared, and a
+  mover's blocks, unobserved, so the free pass frees them, as before. The
+  A/B's other arm fused free space into every voxel (known-empty at a tenth
+  of a sample's weight). On the box that enters, stays and leaves (take3,
+  lab RTX 4090) it evicted the same -- no ghost, cleared in the set it left
+  -- with 0.3 points fewer silhouette holes (2.50% against 2.83%), but 20%
+  more bitrate (13.7 against 11.4 Mbps) and 33 MB more allocator memory, as
+  free space then holds weight wherever a camera looks. Unknown it stays.
+- **Slot order.** Whether one camera's free space meets a voxel another
+  camera's band first weights in the same set depends on the order; in slot
+  order the grid is the same bit for bit whatever order the frames come in.
+  The dependence on the slots themselves stays, in a voxel's first weighted
+  set only; removing it would take a weight snapshot or a free-space pass of
+  its own.
+- **Noise.** `sender::fuse_inputs` gives every camera the default
+  `DepthNoise` (the Femto's): the sensor package's frame does not carry its
+  noise yet, which is a sensor change.
+
+**Measured** on replays of the rig's recorded takes with synthetic movers
+drawn into the depth (lab RTX 4090, against main):
+- Still scenes: silhouette holes 3.9% to 2.7% (take1) and 4.5% to 2.9%
+  (take3), edge flicker 11.5% to 1.1% and 9.2% to 0.85%, the stream 74.8 to
+  15.0 and 64.9 to 11.3 Mbps; 1.8-3.0k rays a second reset over four
+  cameras, 0.007-0.010% of valid samples.
+- A box that enters, stays 10 s and leaves (take3): whole in the set it
+  arrives, and nothing of it left the set it goes (main: a 169 cm² ring at
+  its foot, 9 sets to clear).
+- A sphere at 0.1 m/s (take1): 38 cm² of ghost stays (main 68). At 1 m/s:
+  46.5 cm² while it moves, 50.2 the set after it leaves, 46.4 for good
+  (main 77.9 / 81.3 / 84.8); shown while moving 98.6% (main 90.5%).
+- A walking column that vanishes mid-walk (take3): 0.48 m² stays along its
+  last pose and in slivers at its first (main 2.16 m²; 1.27 m² before the
+  `Vanished` reset).
+- `Vanished` on the second invalid sample in a row (the entry above), at the
+  final code against the build before it: the vanishing column leaves
+  0.474 m² the set after it goes (0.468), a sheet at its last pose that the
+  next set clears, then 0.467 (0.467) and 0.465 (0.466) two and five sets
+  on; while it walks, 0.455 m² (0.444). The 1 m/s sphere and the box are
+  unchanged (46.6 / 50.2 / 46.4 cm²; nothing left, cleared in one set).
+  Rays reset outside the movers rise 2-4% (55-102 a second).
+- A column that walks in and stands still, its pixels dropping out i.i.d. at
+  15% (take3): while it stands, flagged 8.1k times a second (41k when a lone
+  dropout ended a history; 14 without dropouts), and 97.4% of its surface
+  shown at 4.3 mm rms (97.0% and 4.4 mm before; main with the same dropouts
+  97.5% and 4.8 mm; without them 97.5% and 4.1 mm). The lit crops show a
+  few scattered pinholes where there were many; main's sit at the rim. It
+  leaves a little more of its walk-in behind than before: 0.66 m² of ghost
+  while it stands (0.60; main 2.93), level throughout, and background missing
+  near its path 64 cm² on average (47.5; main 28), nearly all during the
+  walk-in, where it comes back a few sets later. On the walking column
+  without dropouts the missing background is unchanged (80 cm²); the cause
+  is not traced.
+- A moving surface shows 99% of its visible area while it moves (main 90%).
+
+**Cost.** Release, take1 replay (four Femto cameras, 1 cm), sets 40-119,
+interleaved with main: integrate 1.62-1.63 ms a set on the RTX 4090 against
+main's 1.54-1.55 (the change tests 0.07 ms, the resets 0.63 ms in place of
+the former clears), and 4.62-4.63 ms on the M5 Max against 4.58-4.70 (0.11
+and 1.46 ms; testing a voxel's weight before projecting it, as the former
+clear did, took the resets from 2.02). The dropout mark costs nothing
+measurable: the change tests 0.073 ms against 0.072, integrate 1.688-1.692
+against 1.686-1.689 ms (RTX 4090, interleaved with the build before it).
+Memory: the detector's 35.4 MB for the rig. Classic is unchanged (40 take1
+sets: the codec stream byte-identical, the set-39 mesh the same
+triangles).
+
+**Tests.** `recon_tsdf_dynamic_change` fuses two cameras that disagree by
+8 mm on a wall through the `Fuser`: no voxel's weight falls while the
+scene is still or one camera misses a set; a card 2.5 cm in front of the
+wall, inside its band, and a box 0.5 m in front, leave no triangle in the
+set they leave, and the wall meshes there at once; the box meshes in the set
+it arrives and the wall it hides keeps every voxel's weight.
+A second scene puts the box where nothing returns behind most of it, the
+wall only on the left: the part a camera sees the wall past goes in the set
+the box goes, flagged `Farther`; where nothing returns behind it, that set
+changes nothing, as a single-frame dropout there does not, and in the next
+nothing of the box meshes, by its cameras' `Vanished` rays alone; no weight
+falls in any other set.
+`recon_tsdf_integrate_dynamic_set` gives the grazing camera a colour of its
+own, which the frontal camera's band must not take, and requires that band
+to keep at least the weight the frontal camera alone gives it (the former
+clear left one sample's).
+`recon_tsdf_integrate_set` now compares a Dynamic set with its reverse bit
+for bit. Run on the M5 Max (MoltenVK) and the RTX 4090, with validation and
+synchronization validation.
+
+**Open.** A surface that leaves to no return flags nothing where its pixel
+returned anything in its camera's warm-up (a surface there from the start,
+or a background's sporadic return) or where it returned for under three
+samples (`TODO(tsdf)`); partial evidence lowering the weight cap so slow
+motion slides; the noise model's edge and incidence terms; and two dropouts
+in a row on a still surface over no return, which still flag and reset
+(the standing column's 8.1k a second; a real sensor's dropouts cluster on
+hair and silhouettes, so there they come in a row more often than
+i.i.d.).
 
 ## Measured lessons
 

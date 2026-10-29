@@ -20,10 +20,13 @@
 // |d - d_hist| clipped at 3 sigma_r. An invalid sample changes nothing, but
 // over no return: a history that began once the camera was testing began
 // where the pixel had returned nothing (kOverNoReturn), and lasts only while
-// the pixel returns. Its first invalid sample ends it, and flags Vanished,
-// with the depth that left, if it had kVanishAfter valid samples in a row:
-// what a mover leaves where nothing behind it returns. Shorter runs, a
-// background's sporadic returns, end silently.
+// the pixel returns. A lone invalid sample there is a dropout: it only marks
+// the history (kDropped), and a valid sample next clears the mark, so the
+// history, its sums and its run go on as if the dropout never happened. A
+// second invalid sample in a row ends the history, and flags Vanished, with
+// the depth that left, if its run reached kVanishAfter valid samples: what a
+// mover leaves where nothing behind it returns, one frame after it left.
+// Shorter runs, a background's sporadic returns, end silently.
 
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require
@@ -38,11 +41,14 @@ struct PixelHistory {
   float mean_abs;  // running mean of the clipped |d - d_hist| (m)
   float far_sum;   // S+, in sigma
   float near_sum;  // S-, in sigma
-  // bits 0-9: the history's samples, capped at memory (0 = no history);
-  // bits 10-19: the noise estimate's, capped at memory;
-  // bits 20-28: samples the noise estimate still skips after an alarm;
+  // bits 0-8: the history's samples, capped at memory (0 = no history);
+  // bits 9-17: the noise estimate's, capped at memory;
+  // bits 18-26: samples the noise estimate still skips after an alarm;
+  // bit 27: unused, 0;
+  // bit 28: over no return, the last sample was invalid (kDropped);
   // bit 29: the history began over no return (kOverNoReturn);
-  // bits 30-31: valid samples in a row since it began, capped at 3.
+  // bits 30-31: its valid samples since it began, a lone dropout skipped,
+  // capped at 3.
   uint counts;
 };
 
@@ -72,10 +78,13 @@ layout(push_constant, scalar) uniform Push {
   uint gate_word;  // the gate's word index; 0xFFFFFFFF for no gate
 } pc;
 
+// A count's field in counts: 9 bits, so memory and freeze are at most 511.
+const uint kCount = 0x1FFu;
+const uint kDropped = 1u << 28;
 const uint kOverNoReturn = 1u << 29;
-// Valid samples in a row an over-no-return history needs before its end
-// flags Vanished: on the rig's static takes, 3 leaves 14-23 such flags a
-// second over four cameras, against 6.6k where a sphere crossed.
+// Valid samples (a lone dropout skipped) an over-no-return history needs
+// before its end flags Vanished: on the rig's static takes, 3 leaves 42-69
+// such flags a second over four cameras, against 6.5k where a sphere crossed.
 const uint kVanishAfter = 3u;
 const float kAbsToSigma = 1.2533141;  // sqrt(pi / 2): E|x| = sigma sqrt(2/pi)
 const float kClip = 3.0;
@@ -92,23 +101,28 @@ void main() {
     float d = depth[i];
     // The negated compare drops NaN; +inf fails d <= max_depth, finite.
     if (!(d > 0.0 && d >= pc.min_depth && d <= pc.max_depth)) {
-      // An invalid sample changes nothing, but ends a history over no return
-      // (and flags Vanished after a run). Its depth stays: it is the word's.
+      // An invalid sample changes nothing, but over no return: the first in
+      // a row only marks the history; the second ends it (and flags Vanished
+      // after a run). Its depth stays: it is the word's.
       uint counts = history[i].counts;
       uint change = kChangeNone;
-      if ((counts & kOverNoReturn) != 0u && (counts & 0x3FFu) != 0u) {
-        if ((counts >> 30) >= kVanishAfter) {
-          change = vanished_word(history[i].depth);
+      if ((counts & kOverNoReturn) != 0u && (counts & kCount) != 0u) {
+        if ((counts & kDropped) == 0u) {
+          history[i].counts = counts | kDropped;
+        } else {
+          if ((counts >> 30) >= kVanishAfter) {
+            change = vanished_word(history[i].depth);
+          }
+          history[i].counts = 0u;
         }
-        history[i].counts = 0u;
       }
       mask[i] = change;
       continue;
     }
     PixelHistory s = history[i];
-    uint n = s.counts & 0x3FFu;
-    uint learned = (s.counts >> 10) & 0x3FFu;
-    uint frozen = (s.counts >> 20) & 0x1FFu;
+    uint n = s.counts & kCount;
+    uint learned = (s.counts >> 9) & kCount;
+    uint frozen = (s.counts >> 18) & kCount;
     uint over_no_return = s.counts & kOverNoReturn;
     uint run = s.counts >> 30;
     uint change = kChangeNone;
@@ -159,7 +173,8 @@ void main() {
         s.depth += (d - s.depth) / float(n);
       }
     }
-    s.counts = n | (learned << 10) | (frozen << 20) | over_no_return |
+    // A valid sample clears kDropped: a lone dropout leaves no trace.
+    s.counts = n | (learned << 9) | (frozen << 18) | over_no_return |
                (run << 30);
     history[i] = s;
     mask[i] = change;

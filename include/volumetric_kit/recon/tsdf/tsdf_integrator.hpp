@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
@@ -21,20 +22,28 @@
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
+#include "volumetric_kit/recon/tsdf/change_detector.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/sensor/frame/camera_params.hpp"
 #include "volumetric_kit/sensor/frame/color_space.hpp"
 
 namespace volumetric_kit::recon::tsdf {
 
-/// @brief How @ref TsdfIntegrator::integrate treats a voxel that projects into
-///        free space ahead of the surface (its projective SDF exceeds
-///        `trunc_dist`).
+/// @brief How @ref TsdfIntegrator::integrate follows a scene: a still one, or
+///        one that moves.
 enum class IntegrationMode : std::uint32_t {
-  Classic = 0,  ///< Keep it: clamp to +`trunc_dist` and fuse a smooth field
-                ///< ahead of surfaces.
-  Dynamic = 1,  ///< Clear it: reset stale geometry there, so a receded surface
-                ///< leaves no ghost (moving scenes).
+  /// Accumulate: a voxel in free space ahead of the surface (its projective
+  /// SDF exceeds `trunc_dist`) is fused as +`trunc_dist` at a surface
+  /// sample's weight, a smooth field ahead of surfaces.
+  Classic = 0,
+  /// Change evicts, conflict averages: each fixed camera's
+  /// @ref ChangeDetector finds the rays whose depth changed for real, and a
+  /// set resets along them -- the newly exposed free space and the new
+  /// surface's band -- before any camera fuses; everything else accumulates.
+  /// Free space past the band averages in at a tenth of a sample's weight,
+  /// only into a voxel that holds weight, so it never evicts and cameras that
+  /// disagree average into one surface (moving scenes, fixed cameras).
+  Dynamic = 1,
 };
 
 /// @brief An optional color frame to fuse alongside depth: packed-RGB pixels
@@ -97,6 +106,15 @@ struct FrameInput {
   /// Optional colour, as @ref TsdfIntegrator::integrate takes it; borrowed
   /// for the call.
   const ColorFrame* color = nullptr;
+  /// The fixed camera the frame comes from, a slot below
+  /// @ref ChangeDetector::kMaxCameras: @ref IntegrationMode::Dynamic keeps
+  /// each camera's change history under its slot, so a slot names the same
+  /// camera every set, and a set's frames have slots of their own. Classic
+  /// reads neither this nor @ref noise.
+  std::uint32_t slot = 0;
+  /// The camera's depth noise, which @ref IntegrationMode::Dynamic's change
+  /// test is floored by.
+  DepthNoise noise{};
 };
 
 /// @brief @p camera as the voxel layer's depth camera, for
@@ -121,10 +139,12 @@ VR_TSDF_API volumetric_kit::grid::volume::DepthPinhole to_depth_pinhole(
 /// `BlockIndex::ptr + local`), so the fusion needs no atomics but the one
 /// shared write per block: its `changed` stamp (see @ref integrate).
 ///
-/// @ref IntegrationMode::Dynamic instead clears stale geometry ahead of a
-/// receded surface (classic keeps a smooth field there). Depth is sampled
-/// bilinearly, falling back to nearest-neighbour at image edges and across
-/// depth discontinuities or taps that are non-positive or non-finite.
+/// @ref IntegrationMode::Dynamic resets stale geometry along the rays whose
+/// depth changed for real, which a @ref ChangeDetector the integrator owns
+/// finds a camera at a time, and fuses free space at a tenth of the weight
+/// (classic fuses it whole). Depth is sampled bilinearly, falling back to
+/// nearest-neighbour at image edges and across depth discontinuities or taps
+/// that are non-positive or non-finite.
 ///
 /// @warning The `Device` and `Allocator` passed to @ref create must
 ///          outlive this object; it stores references to them.
@@ -134,14 +154,19 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param device     The compute device (must outlive this object).
   /// @param allocator  The allocator its transient buffers come from (must
   ///                   outlive this).
-  /// @return The integrator, or a non-OK `Status` if a pipeline or
-  ///         descriptor object fails to build.
-  static core::Result<TsdfIntegrator> create(core::Device& device,
-                                             core::Allocator& allocator);
+  /// @param change     How @ref IntegrationMode::Dynamic's change detector
+  ///                   tests a pixel (@ref ChangeDetectorConfig).
+  /// @return The integrator; `Status::Code::InvalidArgument` for a @p change
+  ///         @ref ChangeDetector::create refuses; or a non-OK `Status` if a
+  ///         pipeline or descriptor object fails to build.
+  static core::Result<TsdfIntegrator> create(
+      core::Device& device, core::Allocator& allocator,
+      const ChangeDetectorConfig& change = {});
 
   // Rule of zero: every owned pipeline / layout / pool self-frees and self-
-  // resets on move; device_ / allocator_ are borrowed, so the defaulted moves
-  // leave a moved-from integrator empty (valid() == false).
+  // resets on move, the change detector is owned through a pointer;
+  // device_ / allocator_ are borrowed, so the defaulted moves leave a
+  // moved-from integrator empty (valid() == false).
   ~TsdfIntegrator() = default;
   TsdfIntegrator(TsdfIntegrator&&) noexcept = default;
   TsdfIntegrator& operator=(TsdfIntegrator&&) noexcept = default;
@@ -155,7 +180,7 @@ class VR_TSDF_API TsdfIntegrator {
   /// the call changed (`vgrid::volume::BlockStamp`). Only a store that
   /// leaves a
   /// **different** value counts, so a scan revisiting converged surface at
-  /// `max_weight` stamps nothing, and Dynamic's clear of a weighted voxel
+  /// `max_weight` stamps nothing, and Dynamic's reset of a weighted voxel
   /// counts as a change. A consumer keeps the tick it last read at and asks
   /// which blocks are newer.
   /// @param grid        The block grid; must carry `float` `tsdf` + `weight`
@@ -183,8 +208,9 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    coordinates, the camera tier's convention.
   /// @param max_weight  The running-average weight cap (the ported default is
   ///                    5.0).
-  /// @param mode        Classic keeps free space ahead of the surface; dynamic
-  ///                    clears stale geometry there (see @ref IntegrationMode).
+  /// @param mode        Classic accumulates; dynamic resets along the rays that
+  ///                    changed (see @ref IntegrationMode). A single frame is
+  ///                    slot 0's, with the default noise.
   /// @param color       Optional @ref ColorFrame fused into the grid's `color`
   ///                    attribute (a `uint32` packed-RGB attribute the grid
   ///                    must then carry); `nullptr` integrates depth only. A
@@ -192,11 +218,14 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    RGB; later ones running-average it with the SDF
   ///                    weights.
   /// @note  Integrate a given grid with one consistent mode across a sequence:
-  ///        a dynamic frame clears every weighted free-space voxel past the
-  ///        band, including one a prior classic frame fused there -- not only
-  ///        genuinely receded geometry. Dynamic also clears the `color` of a
-  ///        receded voxel whenever the grid carries the attribute, including on
-  ///        a depth-only (`color == nullptr`) frame.
+  ///        only a dynamic frame updates the cameras' change histories, so a
+  ///        change seen in a classic frame is never reset; and classic's free
+  ///        space makes voxels observed that dynamic would have left
+  ///        unobserved. Dynamic's reset also clears a voxel's `color` whenever
+  ///        the grid carries the attribute, including on a depth-only
+  ///        (`color == nullptr`) frame. Each camera's first
+  ///        @ref ChangeDetectorConfig::warm_up frames build its history and
+  ///        reset nothing.
   /// @note  A **separate/unregistered** color camera (a @p color with its own
   ///        pose or intrinsics) carries the usual projective-color limits the
   ///        registered case avoids: a voxel occluded in the color view but
@@ -223,7 +252,10 @@ class VR_TSDF_API TsdfIntegrator {
   ///         moved-from, @p depth is null, @p cam or @p color's camera has a
   ///         non-finite intrinsic, depth bound or pose entry, @p grid lacks a
   ///         `float` `tsdf`/`weight` attribute, or @p color is set but empty
-  ///         or @p grid lacks a `uint32` `color` attribute; otherwise a buffer
+  ///         or @p grid lacks a `uint32` `color` attribute; under Dynamic, also
+  ///         for a frame's slot past @ref ChangeDetector::kMaxCameras, two
+  ///         frames of a set with one slot, or a noise model
+  ///         @ref ChangeDetector::record_detect refuses; otherwise a buffer
   ///         or dispatch failure.
   core::Status integrate(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
                          const float* depth,
@@ -261,12 +293,10 @@ class VR_TSDF_API TsdfIntegrator {
   /// any of the frames reaches, compacted in one scan -- in order. Under
   /// Classic every voxel takes the frames in turn as integrating them one
   /// after another does: the same arithmetic in the same order. Under Dynamic
-  /// the frames are one instant: every frame's clear runs before any frame's
-  /// fuse, a second dispatch a frame, so a voxel one camera sees as free space
-  /// past the band and another inside it loses its history and takes this
-  /// set's observations, whatever the cameras' order. A Dynamic set therefore
-  /// differs from its frames integrated one after another, where a later
-  /// camera's clear erases what an earlier one fused. In either mode the order
+  /// the frames are one instant: every frame's change test (its slot's
+  /// @ref ChangeDetector pass) and reset run before any frame's fuse, so a
+  /// camera's change resets only history, never what another camera fuses
+  /// in the same set, whatever the cameras' order. In either mode the order
   /// changes only the running average's arithmetic. A frame changes no block
   /// outside its own reach, so the shared list costs it only idle threads. The
   /// set is compacted once, so allocate every frame's band first
@@ -282,7 +312,9 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param max_weight  As @ref integrate, for every frame.
   /// @param mode        As @ref integrate, for every frame.
   /// @param metrics     As @ref integrate: one `"integrate"` row, a device span
-  ///                    per dispatch, over one `"  ..active set"` sub-row.
+  ///                    per dispatch, over one `"  ..active set"` sub-row,
+  ///                    and under Dynamic `"  ..detect"` and `"  ..reset"`
+  ///                    sub-rows.
   /// @return As @ref integrate.
   core::Status integrate(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
                          const std::vector<FrameInput>& frames,
@@ -299,8 +331,9 @@ class VR_TSDF_API TsdfIntegrator {
   /// Advances the map's tick now, whatever @p gate holds. The passes are
   /// bounded by the grid's block slots, since the device decides how many
   /// blocks the compaction lists; every camera goes in one inline write
-  /// ahead of the compaction. The blocking forms are this, one submit and its
-  /// wait.
+  /// ahead of the compaction. A closed @p gate also stops Dynamic's change
+  /// tests, so a set fused again later is tested once. The blocking forms
+  /// are this, one submit and its wait.
   /// @param batch       Records the work; the caller submits it.
   /// @param grid        As @ref integrate; nothing but @p batch changes it
   ///                    until the batch has resolved.
@@ -315,11 +348,12 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    size fits the device's storage-buffer binding limit.
   /// @param stage       Optional: the caller's scope, whose tile every pass
   ///                    counts to; the compaction is its `"  ..active set"`
-  ///                    breakdown, the device half alone, from
-  ///                    `PendingBatch::device_rows`.
+  ///                    breakdown, and under Dynamic the change tests its
+  ///                    `"  ..detect"` and the resets its `"  ..reset"`, the
+  ///                    device half alone, from `PendingBatch::device_rows`.
   /// @param metrics     Optional: @p stage's own rows, in which the
-  ///                    breakdown's row is placed now, after the stage's
-  ///                    rows before it, its host half 0.
+  ///                    breakdown's rows are placed now, after the stage's
+  ///                    rows before them, their host halves 0.
   /// @return OK; or, with nothing recorded, @ref integrate's refusals.
   core::Status record_integrate(
       core::CommandBatch& batch,
@@ -335,10 +369,13 @@ class VR_TSDF_API TsdfIntegrator {
   ///        ahead of @ref record_integrate and refuses before either.
   /// @param grid    As @ref integrate.
   /// @param frames  As the set form of @ref integrate.
+  /// @param mode    As @ref integrate: Dynamic checks the frames' slots and
+  ///                noise too.
   /// @return OK; or @ref integrate's refusals.
   core::Status check_frames(
       const volumetric_kit::grid::volume::VoxelBlockGrid& grid,
-      const std::vector<FrameInput>& frames) const;
+      const std::vector<FrameInput>& frames,
+      IntegrationMode mode = IntegrationMode::Classic) const;
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
@@ -350,7 +387,7 @@ class VR_TSDF_API TsdfIntegrator {
   struct Checked;
   core::Result<Checked> check(
       const volumetric_kit::grid::volume::VoxelBlockGrid& grid,
-      const std::vector<FrameInput>& frames) const;
+      const std::vector<FrameInput>& frames, IntegrationMode mode) const;
   // record_integrate's and integrate's body, over at most `max_blocks`
   // listed blocks.
   core::Status record_checked(
@@ -374,11 +411,11 @@ class VR_TSDF_API TsdfIntegrator {
   VkDeviceSize max_storage_buffer_range_ = 0;
 
   // The integrate kernel's bundled layout + pipeline + descriptor set, and the
-  // clear kernel's, which a Dynamic set of several frames runs for every frame
-  // before any frame's fuse; their sets allocated from pool_ (which must
-  // outlive them) by KernelSetBuilder at create().
+  // reset kernel's, which a Dynamic set runs for every frame before any
+  // frame's fuse; their sets allocated from pool_ (which must outlive them) by
+  // KernelSetBuilder at create().
   core::ComputeKernel kernel_;
-  core::ComputeKernel clear_kernel_;
+  core::ComputeKernel reset_kernel_;
   // recon's count-to-slices kernel, sizing their dispatches from the
   // compaction's device count into args_, a VkDispatchIndirectCommand a
   // dispatch, grown to the most a call has had.
@@ -390,7 +427,9 @@ class VR_TSDF_API TsdfIntegrator {
   // dispatches, which bind the kernel's set. Grown to the most frames a call
   // has had; every set a call dispatches is written whole first.
   core::KernelSets frame_sets_;
-  core::KernelSets clear_sets_;
+  core::KernelSets reset_sets_;
+  // Dynamic's per-camera change histories, a slot a camera.
+  std::unique_ptr<ChangeDetector> detector_;
   // The device-span collector, created once rather than per call: a query pool
   // of a few timestamps is negligible, and a lazily-created one would need a
   // mutable member and a failure path on a diagnostic. Idle -- no query

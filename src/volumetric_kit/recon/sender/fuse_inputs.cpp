@@ -3,6 +3,9 @@
 
 #include "volumetric_kit/recon/sender/fuse_inputs.hpp"
 
+#include <cstddef>
+#include <cstdint>
+
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 
 namespace volumetric_kit::recon::sender {
@@ -26,15 +29,18 @@ FuseInputs fuse_inputs(
     const std::vector<std::optional<sensor::DeviceFrame>>& frames) {
   FuseInputs in;
   in.colors.reserve(frames.size());  // the inputs point into it
-  for (const std::optional<sensor::DeviceFrame>& frame : frames) {
+  for (std::size_t c = 0; c < frames.size(); ++c) {
+    const std::optional<sensor::DeviceFrame>& frame = frames[c];
     if (!frame) continue;
     const tsdf::ColorFrame* color = nullptr;
     if (frame->has_color()) {
       in.colors.push_back(device_color(*frame));
       color = &in.colors.back();
     }
-    in.frames.push_back(
-        {core::StorageInput(*frame->depth), frame->depth_camera, color});
+    // The camera's place in the set is its slot, the same every set, so a
+    // camera missing from one leaves the others' change histories theirs.
+    in.frames.push_back({core::StorageInput(*frame->depth), frame->depth_camera,
+                         color, static_cast<std::uint32_t>(c)});
   }
   return in;
 }

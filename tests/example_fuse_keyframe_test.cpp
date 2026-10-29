@@ -99,11 +99,14 @@ int check_retained(const vkc::test::Gpu& gpu,
 
 // fuse_keyframe fuses in the mode it is given: a wall at 1 m, then the same
 // camera seeing it at 2 m, so the first wall's band is free space well ahead
-// of the second's. Classic leaves weight there; Dynamic clears all of it.
+// of the second's. Classic leaves weight there; Dynamic, its change test
+// running from a pixel's second sample, resets all of it.
 int check_mode(vkc::test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
   auto volume = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
                                              0.15f, 256);
-  auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
+  vr::tsdf::FuserConfig config;
+  config.change.warm_up = 1;
+  auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator, config);
   auto prep = sensor::GpuFramePrep::create(gpu.device, gpu.allocator);
   CHECK(volume.ok() && fuser.ok() && prep.ok());
   // The weight in blocks wholly nearer than 1.6 m: a block is 8 voxels of

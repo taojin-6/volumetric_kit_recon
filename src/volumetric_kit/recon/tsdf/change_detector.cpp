@@ -59,9 +59,10 @@ static_assert(offsetof(Push, noise_a) == 12, "Push layout drift");
 static_assert(offsetof(Push, memory) == 36, "Push layout drift");
 static_assert(offsetof(Push, gate_word) == 48, "Push layout drift");
 
-// The counts' fields (tsdf_change_detect.comp): 10, 10 and 9 bits, then a
-// flag and a 2-bit run.
-constexpr std::uint32_t kMaxMemory = 1023;
+// The counts' fields (tsdf_change_detect.comp): three 9-bit counts, then two
+// flags (a dropout over no return, the history over no return) and a 2-bit
+// run.
+constexpr std::uint32_t kMaxMemory = 511;
 constexpr std::uint32_t kMaxFreeze = 511;
 
 core::Status check_config(const ChangeDetectorConfig& c) {
@@ -77,16 +78,10 @@ core::Status check_config(const ChangeDetectorConfig& c) {
   }
   if (!(c.one_frame > 0.0f)) return bad("one_frame must be positive");
   if (c.memory < 1 || c.memory > kMaxMemory) {
-    return bad("memory must be in [1, 1023]");
+    return bad("memory must be in [1, 511]");
   }
   if (c.freeze > kMaxFreeze) return bad("freeze must be at most 511");
   return {};
-}
-
-bool usable(const DepthNoise& n) {
-  const auto term = [](float x) { return std::isfinite(x) && x >= 0.0f; };
-  return term(n.a) && term(n.b) && term(n.c) &&
-         (n.a > 0.0f || n.b > 0.0f || n.c > 0.0f);
 }
 
 }  // namespace
@@ -131,12 +126,9 @@ core::Result<ChangeDetector> ChangeDetector::create(
   return out;
 }
 
-core::Status ChangeDetector::record_detect(
-    core::CommandBatch& batch, std::uint32_t camera,
-    const core::StorageInput& depth, const sensor::DepthCameraParams& params,
-    const DepthNoise& noise,
-    const volumetric_kit::grid::volume::DeviceCount* gate,
-    core::GpuStageScope* stage) {
+core::Status ChangeDetector::check(std::uint32_t camera,
+                                   const sensor::DepthCameraParams& params,
+                                   const DepthNoise& noise) const {
   constexpr const char* kWhat = "ChangeDetector::record_detect";
   if (!valid()) {
     return core::Status::invalid_argument(std::string(kWhat) +
@@ -153,23 +145,38 @@ core::Status ChangeDetector::record_detect(
     return core::Status::invalid_argument(std::string(kWhat) +
                                           ": empty or oversized image");
   }
+  VKC_TRY(core::check_storage_buffer_range(
+      "ChangeDetector::record_detect: the history",
+      VkDeviceSize(pixels) * sizeof(PixelHistory), max_storage_buffer_range_));
   if (!(std::isfinite(params.min_depth) && std::isfinite(params.max_depth))) {
     return core::Status::invalid_argument(std::string(kWhat) +
                                           ": a non-finite depth bound");
   }
-  if (!usable(noise)) {
+  const auto term = [](float x) { return std::isfinite(x) && x >= 0.0f; };
+  if (!(term(noise.a) && term(noise.b) && term(noise.c) &&
+        (noise.a > 0.0f || noise.b > 0.0f || noise.c > 0.0f))) {
     return core::Status::invalid_argument(
         std::string(kWhat) +
         ": the noise model needs finite terms of at least 0, not all 0");
   }
+  return {};
+}
+
+core::Status ChangeDetector::record_detect(
+    core::CommandBatch& batch, std::uint32_t camera,
+    const core::StorageInput& depth, const sensor::DepthCameraParams& params,
+    const DepthNoise& noise,
+    const volumetric_kit::grid::volume::DeviceCount* gate,
+    core::GpuStageScope* stage) {
+  constexpr const char* kWhat = "ChangeDetector::record_detect";
+  VKC_TRY(check(camera, params, noise));
+  const std::uint64_t pixels =
+      std::uint64_t(params.width) * std::uint64_t(params.height);
   const VkDeviceSize depth_bytes = VkDeviceSize(pixels) * sizeof(float);
   const VkDeviceSize history_bytes =
       VkDeviceSize(pixels) * sizeof(PixelHistory);
   const VkDeviceSize mask_bytes = VkDeviceSize(pixels) * sizeof(std::uint32_t);
   VKC_TRY(depth.check("ChangeDetector::record_detect: depth", depth_bytes));
-  VKC_TRY(core::check_storage_buffer_range(
-      "ChangeDetector::record_detect: the history", history_bytes,
-      max_storage_buffer_range_));
   std::uint32_t gate_word = kNoGate;
   if (gate != nullptr) {
     VKC_ASSIGN(gate_word,

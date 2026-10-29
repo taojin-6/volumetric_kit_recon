@@ -43,7 +43,7 @@
 // decode's rows and the sweep's grid. output.serve serves each frame live, as
 // it is recorded, on that port on every interface (networking::StreamServer),
 // to a player that connects, and prints each viewer joining and leaving.
-// fusion.dynamic, true by default, clears a surface the cameras see past, so
+// fusion.dynamic, true by default, resets where a camera sees change, so
 // the stream and the PLY follow a changing scene, and every fusion.free_after
 // sets the grid frees the blocks such a surface left, as rig_viewer's does.
 //

@@ -87,6 +87,15 @@ sensor::ColorCameraParams color_cam_of(const sensor::DepthCameraParams& d) {
 // ahead of the surface is fused too (that is the point of classic), so the
 // first fuse legitimately changes the bz=12 blocks as well and the fixture
 // loses the separation it is built on.
+// An integrator whose Dynamic change test runs from a pixel's second sample,
+// so a fixture's second frame can already be a change.
+vkc::Result<tsdf::TsdfIntegrator> dynamic_integrator(
+    vkc::Device& device, vkc::Allocator& allocator) {
+  tsdf::ChangeDetectorConfig change;
+  change.warm_up = 1;
+  return tsdf::TsdfIntegrator::create(device, allocator, change);
+}
+
 int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   const vkc::test::Gpu ctx{device, allocator};
   vol::VoxelGridParams gp{};
@@ -134,10 +143,10 @@ int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   const std::size_t px = static_cast<std::size_t>(cam.width) * cam.height;
   const std::vector<float> depth_band(px, 0.54f);  // band lands in bz = 13
   const std::vector<float> depth_near(px, 0.50f);  // band lands in bz = 12
-  const std::vector<float> depth_far(px, 0.60f);   // both recede -> clear
+  const std::vector<float> depth_far(px, 0.60f);   // both recede -> reset
 
   vkc::Result<tsdf::TsdfIntegrator> integ_result =
-      tsdf::TsdfIntegrator::create(device, allocator);
+      dynamic_integrator(device, allocator);
   CHECK(integ_result.ok());
   tsdf::TsdfIntegrator integ = std::move(integ_result).value();
   const auto fuse = [&](vol::VoxelBlockGrid& g, const std::vector<float>& d,
@@ -184,12 +193,12 @@ int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   CHECK(a.resize(gp.num_buckets * 2).ok());
   CHECK(changed_z(a, t0).size() == 8);
 
-  // --- The dynamic clear stamps too ----------------------------------------
+  // --- The dynamic reset stamps too ----------------------------------------
   //
   // A receded surface that leaves a stale mesh behind is the whole reason
-  // dynamic mode exists, so the clear has to report itself. The band at
+  // dynamic mode exists, so the reset has to report itself. The band at
   // 0.60 m falls in blocks nobody allocated, so every stamp below is the
-  // clear's.
+  // reset's.
   const std::uint32_t t2 = a.map().tick();
   CHECK(fuse(a, depth_far, 5.0f).ok());
   CHECK(changed_z(a, t2).size() == 8);
@@ -804,10 +813,15 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   }
   CHECK(cross_checked > 0);
 
-  // Dynamic integration clears stale free-space voxels. A voxel at world z=0.48
-  // sits just in front of a plane at 0.5 (sdf = +0.02, fused with weight). Move
-  // the plane to 0.6: that voxel is now free space well in front of the surface
-  // (sdf = 0.12 > trunc). Dynamic clears it; classic keeps it (clamped).
+  // Dynamic integration resets stale free-space voxels. A voxel at world
+  // z=0.48 sits just in front of a plane at 0.5 (sdf = +0.02, fused with
+  // weight). Move the plane to 0.6: that voxel is now free space well in front
+  // of the surface (sdf = 0.12 > trunc), on rays whose depth changed. Dynamic
+  // resets it, and its free space then leaves it unobserved; classic keeps it
+  // (clamped). A Dynamic integrator of its own, so its change history is this
+  // fixture's.
+  auto dyn_integ = dynamic_integrator(gpu.device, gpu.allocator);
+  CHECK(dyn_integ.ok());
   std::vector<float> depth_far(depth.size(), 0.6f);
   const std::size_t corner_local =
       static_cast<std::size_t>(local_index(0, 0, 0, bs));
@@ -823,22 +837,23 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   const std::int32_t pd = find_ptr(dyn_active.value(), vr::Vec3i(0, 0, 12));
   CHECK(pd >= 0);
   const std::size_t vd = static_cast<std::size_t>(pd) + corner_local;
-  CHECK(integ.integrate(vbg_dyn, depth.data(), cam, 5.0f).ok());
+  CHECK(dyn_integ
+            ->integrate(vbg_dyn, depth.data(), cam, 5.0f,
+                        tsdf::IntegrationMode::Dynamic)
+            .ok());
   std::vector<float> dyn_weight = floats(vbg_dyn, vol::kWeightAttribute);
   CHECK(dyn_weight[vd] > 0.0f);  // fused at sdf = +0.02
-  CHECK(integ
-            .integrate(vbg_dyn, depth_far.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Dynamic)
+  CHECK(dyn_integ
+            ->integrate(vbg_dyn, depth_far.data(), cam, 5.0f,
+                        tsdf::IntegrationMode::Dynamic)
             .ok());
   dyn_weight = floats(vbg_dyn, vol::kWeightAttribute);
   const std::vector<float> dyn_tsdf = floats(vbg_dyn, vol::kTsdfAttribute);
-  CHECK(dyn_weight[vd] == 0.0f && dyn_tsdf[vd] == 0.0f);  // stale voxel cleared
+  CHECK(dyn_weight[vd] == 0.0f && dyn_tsdf[vd] == 0.0f);  // stale voxel reset
 
-  // Dynamic clears only free space *past* the band, never near-surface
-  // geometry: a voxel at world z=0.58 is 0.02 m in front of the receded 0.6 m
-  // plane (sdf < trunc), so the dynamic frame fuses it rather than clearing it.
-  // An over-clearing regression keyed on sdf>0 instead of sdf>trunc would hit
-  // the clear branch and early-return, leaving this voxel at weight 0.
+  // The reset clears the new surface's band too, which the frame then fuses:
+  // a voxel at world z=0.58 is 0.02 m in front of the receded 0.6 m plane
+  // (sdf < trunc), so it holds this frame's sample.
   const std::int32_t pd14 = find_ptr(dyn_active.value(), vr::Vec3i(0, 0, 14));
   CHECK(pd14 >= 0);
   const std::size_t vn = static_cast<std::size_t>(pd14) +
@@ -956,9 +971,12 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   std::vector<std::uint32_t> color_img(depth.size(), rgb);
   const tsdf::ColorFrame frame{color_img.data(),
                                color_cam_of(cam)};  // registered (= depth)
-  CHECK(integ
-            .integrate(vbg_c, depth.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Classic, &frame)
+  // Dynamic throughout, its own integrator, for the recede below.
+  auto c_integ = dynamic_integrator(gpu.device, gpu.allocator);
+  CHECK(c_integ.ok());
+  CHECK(c_integ
+            ->integrate(vbg_c, depth.data(), cam, 5.0f,
+                        tsdf::IntegrationMode::Dynamic, &frame)
             .ok());
   std::vector<std::uint32_t> c_color = words(vbg_c, vol::kColorAttribute);
   std::vector<float> c_weight = floats(vbg_c, vol::kWeightAttribute);
@@ -968,18 +986,17 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(((c_color[c_front] >> 16) & 0xFFu) == 50u);  // B
   CHECK(c_color[c_occ] == 0u);  // occluded: never fused, color untouched
 
-  // A dynamic frame that recedes the surface clears the fused color along with
-  // the geometry (the shader zeroes color in the same stale-clear branch):
-  // re-fuse the front voxel as free space well past the band (plane at 0.6 m,
-  // voxel at 0.485). Its weight, tsdf, and color all reset to the pristine
-  // zero.
-  CHECK(integ
-            .integrate(vbg_c, depth_far.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Dynamic, &frame)
+  // A dynamic frame that recedes the surface resets the fused color along with
+  // the geometry: the front voxel is now free space well past the band (plane
+  // at 0.6 m, voxel at 0.485) on changed rays. Its weight, tsdf, and color all
+  // reset to the pristine zero.
+  CHECK(c_integ
+            ->integrate(vbg_c, depth_far.data(), cam, 5.0f,
+                        tsdf::IntegrationMode::Dynamic, &frame)
             .ok());
   c_color = words(vbg_c, vol::kColorAttribute);
   c_weight = floats(vbg_c, vol::kWeightAttribute);
-  CHECK(c_weight[c_front] == 0.0f && c_color[c_front] == 0u);  // color cleared
+  CHECK(c_weight[c_front] == 0.0f && c_color[c_front] == 0u);  // color reset
 
   // Separate color camera: shift it 10 m off in +X so the same voxel projects
   // out of the color frame. Depth still fuses it; color is skipped (stays
@@ -1133,9 +1150,9 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     CHECK(sensor::is_canonical(tsdf::ColorFrame{}.encoding));
   }
 
-  // Regression: dynamic mode clears stale color whenever the grid carries a
+  // Regression: dynamic mode resets stale color whenever the grid carries a
   // `color` attribute -- even on a depth-only (color == nullptr) frame -- so a
-  // receded surface leaves no color ghost. (Gating the clear on a color frame
+  // receded surface leaves no color ghost. (Gating the reset on a color frame
   // being supplied stranded the old color on a depth-only recede.)
   vkc::Result<vol::VoxelBlockGrid> zg =
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
@@ -1149,16 +1166,18 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(dzp12 >= 0);
   const std::size_t dz_front =
       static_cast<std::size_t>(dzp12) + local_index(0, 0, 1, bs);
-  CHECK(integ
-            .integrate(vbg_dz, depth.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Classic, &frame)
+  auto dz_integ = dynamic_integrator(gpu.device, gpu.allocator);
+  CHECK(dz_integ.ok());
+  CHECK(dz_integ
+            ->integrate(vbg_dz, depth.data(), cam, 5.0f,
+                        tsdf::IntegrationMode::Dynamic, &frame)
             .ok());  // fuse depth + color
   std::vector<std::uint32_t> dz_color = words(vbg_dz, vol::kColorAttribute);
   std::vector<float> dz_weight = floats(vbg_dz, vol::kWeightAttribute);
   CHECK(dz_weight[dz_front] > 0.0f && dz_color[dz_front] != 0u);  // fused
-  CHECK(integ
-            .integrate(vbg_dz, depth_far.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Dynamic)
+  CHECK(dz_integ
+            ->integrate(vbg_dz, depth_far.data(), cam, 5.0f,
+                        tsdf::IntegrationMode::Dynamic)
             .ok());  // depth-only recede
   dz_color = words(vbg_dz, vol::kColorAttribute);
   dz_weight = floats(vbg_dz, vol::kWeightAttribute);
@@ -1167,10 +1186,10 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
   std::printf(
       "recon tsdf integrate test passed: classic fusion of a 0.5 m plane (%zu "
-      "voxels), %zu cross-checked under a rotated pose, dynamic cleared a "
+      "voxels), %zu cross-checked under a rotated pose, dynamic reset a "
       "stale "
       "voxel, bilinear blended a step + fell back, color fused via a separate "
-      "camera, first-obs assigned after a depth-only warmup, dynamic cleared "
+      "camera, first-obs assigned after a depth-only warmup, dynamic reset "
       "color depth-only\n",
       touched, cross_checked);
   return 0;

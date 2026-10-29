@@ -366,8 +366,8 @@ add_test(NAME recon_tsdf_recorded_integrate
 
 # tsdf integrate set: several cameras allocated and fused in one call each must
 # give, under classic, the grid fusing them one at a time gives, bit for bit,
-# and under dynamic the grid the same set in the other order gives. Skips where
-# no device is present.
+# and under dynamic the grid the same set in the other order gives, each camera
+# keeping its slot, bit for bit too. Skips where no device is present.
 add_executable(recon_tsdf_integrate_set_test tsdf_integrate_set_test.cpp)
 target_link_libraries(
   recon_tsdf_integrate_set_test
@@ -389,11 +389,23 @@ vr_target_warnings(recon_tsdf_change_detector_test)
 add_test(NAME recon_tsdf_change_detector
          COMMAND recon_tsdf_change_detector_test)
 
+# tsdf dynamic change: two fixed cameras that disagree by 8 mm on a wall, a card
+# inside the wall's band that leaves, a box that arrives, stays and leaves, a
+# set one camera misses, through the Fuser under Dynamic: no weight falls while
+# the scene is still, each change clears in the set it is seen, and the hidden
+# wall keeps its history. Skips (exit 0) where no device is present.
+add_executable(recon_tsdf_dynamic_change_test tsdf_dynamic_change_test.cpp)
+target_link_libraries(
+  recon_tsdf_dynamic_change_test
+  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_tsdf
+          volumetric_kit::grid_mesh)
+vr_target_warnings(recon_tsdf_dynamic_change_test)
+add_test(NAME recon_tsdf_dynamic_change COMMAND recon_tsdf_dynamic_change_test)
+
 # tsdf integrate dynamic set: a frontal camera and a grazing one that sees past
 # its band, fused as a Dynamic set in either order, must give the same grid and
-# mesh, the grid fusing the grazing one and then the frontal one a call each
-# gives, and keep the frontal camera's surface whole. Skips (exit 0) where no
-# device is present.
+# mesh and keep the frontal camera's surface whole; the frontal wall receding is
+# reset in the set it is seen. Skips (exit 0) where no device is present.
 add_executable(recon_tsdf_integrate_dynamic_set_test
                tsdf_integrate_dynamic_set_test.cpp)
 target_link_libraries(

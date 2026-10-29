@@ -1183,7 +1183,7 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         ImGui::Separator();
         bool dynamic = dynamic_on.load();
-        if (ImGui::Checkbox("fusion clears free space (dynamic)", &dynamic)) {
+        if (ImGui::Checkbox("fusion resets on change (dynamic)", &dynamic)) {
           dynamic_on.store(dynamic);
         }
         float weight = max_weight.load();

@@ -34,7 +34,8 @@ namespace volumetric_kit::recon::sender {
 ///        half in a batch of its own, wait, and write, serve and decode the
 ///        frame (`vgrid::codec_stream::CodecStream::finish_frame`). A coded
 ///        set is two submits and two waits, none a readback; a set not coded,
-///        one.
+///        one. Under Dynamic, a camera's first set adds one of each, which
+///        zeroes its change history (@ref tsdf::ChangeDetector).
 ///
 /// The free pass runs before the frame's front half, so the coder scans the
 /// smaller set; the frame is the same either way, since the pass frees only

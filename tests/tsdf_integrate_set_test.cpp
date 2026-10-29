@@ -6,10 +6,10 @@
 // sphere, fused twice into one grid one frame at a time and into another as a
 // set, must give, classic, the same blocks and the same tsdf, weight and colour
 // bit for bit: each frame is a dispatch of its own in both, in the same order.
-// Dynamic, a set is one instant, every frame's clear before any frame's fuse,
-// and the cameras disagree near their silhouettes, so the reference is the set
-// in the other order: the same blocks, the same voxels observed and coloured,
-// and the same field but for the running average's rounding. The frames mix
+// Dynamic, a set is one instant, every frame's change test and reset before
+// any frame's fuse, the fuses in slot order, so the reference is the set in
+// the other order, each camera keeping its slot: the same grid, bit for bit.
+// The frames mix
 // host arrays and storage buffers, colour and none, and the set carries an
 // empty frame, which both calls skip. The set grows the map's and the
 // integrator's sets past an earlier call's, and stamps changed the blocks the
@@ -17,11 +17,9 @@
 // bad frame is refused before anything is fused. Skips where no
 // device is present.
 
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
@@ -90,32 +88,16 @@ vkc::Result<std::uint32_t> changed_after(const vol::VoxelBlockGrid& g,
   return n;
 }
 
-// A float attribute's element from its bits.
-float bits_float(std::uint32_t bits) {
-  float f = 0.0f;
-  std::memcpy(&f, &bits, sizeof(f));
-  return f;
-}
-
 // The same blocks, and in each the same bits of weight, tsdf and colour in
-// every voxel; or, not `exact`, the same voxels observed and coloured, and
-// weight and tsdf within rounding. A slot can differ: allocation order is the
-// GPU's.
+// every voxel. A slot can differ: allocation order is the GPU's.
 int check_same(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& a,
-               vol::VoxelBlockGrid& b, bool exact) {
+               vol::VoxelBlockGrid& b) {
   std::size_t observed = 0;
   std::size_t blocks = 0;
   CHECK(vgrid_test::compare_grids(
       ctx, a, b,
-      [exact](vgrid_test::VoxelWords x, vgrid_test::VoxelWords y) {
-        if (exact) {
-          return x.weight == y.weight && x.tsdf == y.tsdf && x.color == y.color;
-        }
-        return (x.weight == 0) == (y.weight == 0) &&
-               (x.color == 0) == (y.color == 0) &&
-               std::fabs(bits_float(x.weight) - bits_float(y.weight)) <=
-                   1e-5f * bits_float(x.weight) &&
-               std::fabs(bits_float(x.tsdf) - bits_float(y.tsdf)) <= 1e-6f;
+      [](vgrid_test::VoxelWords x, vgrid_test::VoxelWords y) {
+        return x.weight == y.weight && x.tsdf == y.tsdf && x.color == y.color;
       },
       &observed, &blocks));
   std::printf("  %zu blocks, %zu voxels observed\n", blocks, observed);
@@ -177,15 +159,16 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   tsdf::ColorFrame c1{views[1].color.data(), color_cam(views[1]), {}};
 
   const std::vector<tsdf::FrameInput> frames{
-      {vkc::StorageInput(depth_bufs[0]), views[0].cam, &c0},
-      {vkc::StorageInput(views[1].depth.data()), views[1].cam, &c1},
-      {vkc::StorageInput(depth_bufs[2]), views[2].cam, nullptr}};
-  // The set, with an empty frame second, and the list it allocates from.
+      {vkc::StorageInput(depth_bufs[0]), views[0].cam, &c0, 0},
+      {vkc::StorageInput(views[1].depth.data()), views[1].cam, &c1, 1},
+      {vkc::StorageInput(depth_bufs[2]), views[2].cam, nullptr, 2}};
+  // The set, with an empty frame second, and the list it allocates from. The
+  // empty frame shares a slot, as it is skipped before slots are checked.
   sensor::DepthCameraParams empty_cam = views[1].cam;
   empty_cam.width = 0;
   const std::vector<tsdf::FrameInput> set_frames{
       frames[0],
-      {vkc::StorageInput(views[1].depth.data()), empty_cam, &c1},
+      {vkc::StorageInput(views[1].depth.data()), empty_cam, &c1, 0},
       frames[1],
       frames[2]};
   const std::vector<vol::DepthInput> depths = vr_test::depth_inputs(set_frames);
@@ -196,14 +179,14 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   const std::vector<vol::DepthInput> reversed_depths =
       vr_test::depth_inputs(reversed);
 
-  auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
-  CHECK(integrator.ok());
   for (const tsdf::IntegrationMode mode :
        {tsdf::IntegrationMode::Classic, tsdf::IntegrationMode::Dynamic}) {
     const bool classic = mode == tsdf::IntegrationMode::Classic;
-    // The other order moves the running average wherever the weight cap cuts
-    // it, so dynamic's cap lies past what two passes reach.
-    const float max_weight = classic ? 5.0f : 100.0f;
+    const float max_weight = 5.0f;
+    // An integrator a grid, so each keeps its own change histories.
+    auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
+    auto set_integrator = tsdf::TsdfIntegrator::create(dev, alloc);
+    CHECK(integrator.ok() && set_integrator.ok());
     auto one = make_grid(dev, alloc);  // the reference
     auto set = make_grid(dev, alloc);
     CHECK(one.ok() && set.ok());
@@ -256,7 +239,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       CHECK(settle([&](vol::AllocFailures* why) {
               return set->map().allocate_from_depth(depths, why);
             }) == 0);
-      CHECK(integrator->integrate(set.value(), set_frames, max_weight, mode)
+      CHECK(set_integrator->integrate(set.value(), set_frames, max_weight, mode)
                 .ok());
       CHECK(set->map().tick() == set_since + 1);
       auto dirty_set = changed_after(set.value(), set_since);
@@ -264,7 +247,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       CHECK(dirty_set.value() == dirty_one.value());
     }
     std::printf("%s:\n", classic ? "classic" : "dynamic");
-    if (check_same(gpu, one.value(), set.value(), classic) != 0) return 1;
+    if (check_same(gpu, one.value(), set.value()) != 0) return 1;
   }
 
   // A set with one bad frame -- here the last, its depth smaller than its
@@ -286,7 +269,9 @@ int gpu_main(vkc::test::GpuContext& gpu) {
             return grid->map().allocate_from_depth(depths, why);
           }) == 0);
     std::vector<tsdf::FrameInput> bad = frames;
-    bad[2] = {vkc::StorageInput(small.value()), views[2].cam, nullptr};
+    bad[2] = {vkc::StorageInput(small.value()), views[2].cam, nullptr, 2};
+    auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
+    CHECK(integrator.ok());
     CHECK(integrator->integrate(grid.value(), bad).domain() ==
           vkc::Status::Code::InvalidArgument);
     auto weight = vgrid_test::read_attribute<float>(dev, alloc, grid.value(),

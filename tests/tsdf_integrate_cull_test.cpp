@@ -8,7 +8,7 @@
 // active set, which is what every call fused before the cull. The grids must
 // then agree bit for bit: tsdf, weight, colour and block stamps, by block, and
 // the tick. The scenarios are the reach's edges: a surface receding under
-// dynamic (cleared free space) and classic, a block past max_depth but within
+// dynamic (reset free space) and classic, a block past max_depth but within
 // the band, free space nearer than min_depth, two cameras seeing different
 // places, and a principal point outside the image. Skips where no
 // device is present.
@@ -185,12 +185,19 @@ constexpr int kZ = 2;
 // Fuse `steps` -- each a set of frames, allocated and then integrated as one
 // call -- into A and B, and compare. `fused` is a layer that must end up with
 // weighted voxels, which pins that the scenario reaches the edge it is about.
-int run(const vkc::test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
-        const char* name, tsdf::IntegrationMode mode,
+// Each grid has an integrator of its own, so each its own Dynamic change
+// histories, whose test runs from a pixel's second sample: a scenario's second
+// step is already a change.
+int run(const vkc::test::Gpu& ctx, const char* name, tsdf::IntegrationMode mode,
         const std::vector<std::vector<Frame>>& steps, Layer fused) {
   auto a = make_grid(ctx.device, ctx.allocator);
   auto b = make_grid(ctx.device, ctx.allocator);
   CHECK(a.ok() && b.ok());
+  tsdf::ChangeDetectorConfig change;
+  change.warm_up = 1;
+  auto ia = tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator, change);
+  auto ib = tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator, change);
+  CHECK(ia.ok() && ib.ok());
   const Frame all = witness();
   for (const std::vector<Frame>& frames : steps) {
     std::vector<vol::DepthInput> depths;
@@ -209,22 +216,25 @@ int run(const vkc::test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
     CHECK(settle(a.value(), depths) == 0);
     CHECK(settle(b.value(), depths) == 0);
     // First and last, so a cull built from the first or the last frame's
-    // frustum alone is the witness's.
+    // frustum alone is the witness's; a slot each, the frames' the same in
+    // both calls.
+    const auto slots = static_cast<std::uint32_t>(frames.size());
     std::vector<tsdf::FrameInput> fa;
     std::vector<tsdf::FrameInput> fb{
-        {vkc::StorageInput(all.depth.data()), all.cam, nullptr}};
-    for (std::size_t i = 0; i < frames.size(); ++i) {
-      fa.push_back({depths[i].depth, frames[i].cam, &colors[i]});
-      fb.push_back({depths[i].depth, frames[i].cam, &colors[i]});
+        {vkc::StorageInput(all.depth.data()), all.cam, nullptr, 0}};
+    for (std::uint32_t i = 0; i < slots; ++i) {
+      fa.push_back({depths[i].depth, frames[i].cam, &colors[i], i + 1});
+      fb.push_back({depths[i].depth, frames[i].cam, &colors[i], i + 1});
     }
     fb.push_back(fb.front());
+    fb.back().slot = slots + 1;
     auto active = b->map().compact_active_blocks();
     auto reached =
         b->map().compact_active_blocks_in_frusta_on_device({reach(all.cam)});
     CHECK(active.ok() && reached.ok());
     CHECK(reached.value().count == active.value().size());
-    CHECK(integrator.integrate(a.value(), fa, 5.0f, mode).ok());
-    CHECK(integrator.integrate(b.value(), fb, 5.0f, mode).ok());
+    CHECK(ia->integrate(a.value(), fa, 5.0f, mode).ok());
+    CHECK(ib->integrate(b.value(), fb, 5.0f, mode).ok());
   }
   CHECK(a->map().tick() == b->map().tick());
   auto ba = blocks_of(ctx, a.value());
@@ -255,20 +265,17 @@ int run(const vkc::test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
 }
 
 int gpu_main(vkc::test::GpuContext& gpu) {
-  auto integrator = tsdf::TsdfIntegrator::create(gpu.device, gpu.allocator);
-  CHECK(integrator.ok());
-  tsdf::TsdfIntegrator& integ = integrator.value();
   using Mode = tsdf::IntegrationMode;
 
   // A wall fused twice in place.
-  if (run(gpu, integ, "static", Mode::Classic, {{wall(1.0f)}, {wall(1.0f)}},
+  if (run(gpu, "static", Mode::Classic, {{wall(1.0f)}, {wall(1.0f)}},
           Layer{kZ, 12}) != 0) {
     return 1;
   }
-  // The wall recedes from 0.6 m to 1.2 m: dynamic clears the free space it
+  // The wall recedes from 0.6 m to 1.2 m: dynamic resets the free space it
   // left, classic fuses it.
   for (const Mode mode : {Mode::Dynamic, Mode::Classic}) {
-    if (run(gpu, integ,
+    if (run(gpu,
             mode == Mode::Dynamic ? "receding, dynamic" : "receding, classic",
             mode, {{wall(0.6f)}, {wall(1.2f)}}, Layer{kZ, 15}) != 0) {
       return 1;
@@ -276,13 +283,13 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   }
   // A wall at 1.03 m with max_depth 1.032: layer 13 starts at 1.035, past
   // max_depth, and its first voxels, 1 cm behind the wall, are fused.
-  if (run(gpu, integ, "past max_depth", Mode::Classic,
+  if (run(gpu, "past max_depth", Mode::Classic,
           {{wall(1.03f, vr::Vec3f(0.0f), 0.1f, 1.032f)}}, Layer{kZ, 13}) != 0) {
     return 1;
   }
   // A wall at 0.3 m, then one at 1.0 m seen with min_depth 0.5: the free space
-  // at 0.3 m, nearer than min_depth, is still cleared.
-  if (run(gpu, integ, "nearer than min_depth", Mode::Dynamic,
+  // at 0.3 m, nearer than min_depth, is still reset.
+  if (run(gpu, "nearer than min_depth", Mode::Dynamic,
           {{wall(0.3f)}, {wall(1.0f, vr::Vec3f(0.0f), 0.5f)}},
           Layer{kZ, 12}) != 0) {
     return 1;
@@ -291,8 +298,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // layer 17, which the first camera's frustum does not reach.
   const std::vector<Frame> pair{wall(1.0f),
                                 wall(1.4f, vr::Vec3f(2.0f, 0.0f, 0.0f))};
-  if (run(gpu, integ, "two cameras", Mode::Classic, {pair, pair},
-          Layer{kZ, 17}) != 0) {
+  if (run(gpu, "two cameras", Mode::Classic, {pair, pair}, Layer{kZ, 17}) !=
+      0) {
     return 1;
   }
   // A principal point 30 px left of the image, which the side widening does
@@ -300,7 +307,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // only x >= 0.556 z, which culls block (5, y, 11) -- x up to 0.48, z from
   // 0.875 -- whose free space at x 0.47, z 0.88 the camera sees. So the
   // integrate fuses every block.
-  if (run(gpu, integ, "principal point outside", Mode::Classic,
+  if (run(gpu, "principal point outside", Mode::Classic,
           {{wall(1.0f, vr::Vec3f(0.0f), 0.1f, 5.0f, -30.0f)}},
           Layer{kX, 5}) != 0) {
     return 1;
@@ -338,13 +345,15 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     auto missed =
         g->map().compact_active_blocks_in_frusta_on_device({reach(away.cam)});
     CHECK(missed.ok() && missed.value().count == 0);
+    auto integ = tsdf::TsdfIntegrator::create(gpu.device, gpu.allocator);
+    CHECK(integ.ok());
     const std::uint32_t tick = g->map().tick();
-    CHECK(integ.integrate(g.value(), lone).ok());
+    CHECK(integ->integrate(g.value(), lone).ok());
     CHECK(g->map().tick() == tick + 1);
     auto empty = make_grid(gpu.device, gpu.allocator);
     CHECK(empty.ok());
     const std::uint32_t empty_tick = empty->map().tick();
-    CHECK(integ.integrate(empty.value(), lone).ok());
+    CHECK(integ->integrate(empty.value(), lone).ok());
     CHECK(empty->map().tick() == empty_tick);
   }
 

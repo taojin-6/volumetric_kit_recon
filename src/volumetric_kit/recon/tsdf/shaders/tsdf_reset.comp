@@ -1,0 +1,9 @@
+#version 450
+
+// The reset kernel: dynamic integration's reset along one camera's changed
+// rays, which a dynamic set runs for every frame before any frame's fuse. The
+// body is tsdf_integrate.glsl, shared with tsdf_integrate.comp.
+
+#extension GL_GOOGLE_include_directive : require
+#define VR_TSDF_RESET
+#include "tsdf_integrate.glsl"

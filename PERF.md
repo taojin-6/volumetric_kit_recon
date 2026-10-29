@@ -131,8 +131,8 @@ kernels.
 - **No GPU wait between recon and gfx.** The mesh ring is released by the
   host's report (the 2026-08-03 decision).
 - **A batched path computes what the per-camera path computes** (a Dynamic
-  set what its clears and then its fuses compute). Show it with a test,
-  voxel by voxel or block by block.
+  set what its change tests, resets and then fuses compute). Show it with a
+  test, voxel by voxel or block by block.
 - **Changing a tier's contract or a locked decision** means updating
   its description in DESIGN.md and its index entry and rationale in
   DECISIONS.md in the same PR, plus AGENTS.md if an essential shared rule changes.
@@ -150,6 +150,7 @@ kernels.
 | P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | step 1 landed (#268); step 2, a strict set in the caller's batch, landed (2026-10-25); landed for the senders (2026-10-25): prep, fusion, the free pass and the frame's front half in one batch, its rANS half in a second, 2 submits a coded set (the 2026-10-25 decision); one camera's set on the RTX 4090 no faster with a cached frame slot, faster with a write-combined one (below) |
 | P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | landed (#132); device-list follow-up landed (#146); recorded into the set's batch (`record_free_stale`, 2026-10-25) |
 | P9 | Allocate only the band blocks a sample can weight | ~60% of a static room's active set holds no weight; compaction, integrate and meshing scale with it | M | — | open, measure first |
+| P10 | Reset a Dynamic set's cameras in one dispatch | up to ~0.45 ms/set on the RTX 4090 and ~1.1 on the M5 Max (three of four sweeps; an upper bound, unmeasured) | M | — | open, measure first |
 | D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | superseded: the decoders hand out device pictures only |
 | D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | landed (#130) |
 | D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed (#130) |
@@ -228,9 +229,9 @@ is measured.
     feature. A fixed set of `kMaxCameras` bindings with a switch is the
     alternative that needs no feature.
 - **Semantics.** The per-voxel arithmetic is the same, in the same camera
-  order, as today's dispatches (under Dynamic every camera's clear, then
-  every camera's fuse: DECISIONS.md, 2026-10-08), since each voxel belongs
-  to one thread. The one difference is that a block first allocated by a
+  order, as today's dispatches (under Dynamic every camera's reset, then
+  every camera's fuse in slot order: DECISIONS.md, 2026-10-29), since each
+  voxel belongs to one thread. The one difference is that a block first allocated by a
   later camera in the set is also fused by the earlier ones: more
   observations, not fewer.
 - **Measure and accept.**
@@ -500,9 +501,9 @@ improvement awaits measurement; the figures below describe the original GC.
 >   reaches new space. These are what P7 frees.
 
 - **Problem.**
-  - Dynamic integration clears a receded surface's voxels to weight 0 (the
-    free-space branch in `tsdf_integrate.glsl`) but never frees their
-    blocks, and nothing on the live path calls `remove`.
+  - Dynamic integration resets a receded surface's voxels to weight 0 (the
+    reset kernel, `tsdf_reset.comp`) but never frees their blocks, and
+    nothing on the live path calls `remove`.
   - The active set therefore grows with the history of motion, and so does
     every per-set pass over it: compaction, integrate, marching cubes.
   - Eventually a resize doubles the map.
@@ -528,7 +529,7 @@ improvement awaits measurement; the figures below describe the original GC.
   - Depth allocation dilates every surface block into the (2tb+1)³ cube,
     27 blocks at the defaults. With 8 cm blocks and 4 cm of truncation, a
     sample reaches only the neighbours within 4 cm of it. Dynamic
-    integration clears free space ahead of the surface to weight 0, so the
+    integration fuses free space only into voxels that hold weight, so the
     cube's far blocks never take weight.
   - Every pass over the active set pays for them: compaction, integrate (a
     workgroup a block a camera) and marching cubes.
@@ -546,6 +547,19 @@ improvement awaits measurement; the figures below describe the original GC.
     `eval` tier.
 - **Expected.** Up to ~2.5x fewer blocks on a static scene, and integrate's
   work with them; an estimate until measured.
+
+### P10 — Reset a Dynamic set's cameras in one dispatch
+
+- **Problem.** A Dynamic set's reset sweeps the whole active set once a
+  camera: 0.63 of integrate's 1.62 ms on the RTX 4090 and 1.46 of 4.63 ms
+  on the M5 Max (four Femtos, take1, 2026-10-29), each sweep reading every
+  voxel's weight and projecting the weighted ones.
+- **Change.** One dispatch reads each voxel's weight once and loops over the
+  set's cameras for the weighted voxels alone. Every mask word carries its
+  sample's depth, as a `Vanished` one does, so the reset binds no depth
+  image; every camera's mask lives in one buffer, at an offset a slot.
+- **Expected.** Three of the four sweeps go: up to ~0.45 ms a set on the
+  RTX 4090 and ~1.1 ms on the M5 Max, an upper bound until measured.
 
 ### D1 — Report a decoder's fallback to host pictures
 
