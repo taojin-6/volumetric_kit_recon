@@ -58,8 +58,8 @@ Dependencies flow left to right:
 
 ```text
 core → volume → tsdf → mesh → texture → interop
-  │        └→ codec     ├→ eval
-  │                    └→ io
+  │        ├→ codec     ├→ eval
+  │        └→ voxelize  └→ io (mesh files)
   └→ sensor ← camera          (later: track)
 stream → networking → codec_stream → sender
   (stream on the family core's base tier alone)
@@ -67,12 +67,13 @@ stream → networking → codec_stream → sender
 
 - No upward includes. `camera` depends on the family core's base tier and GLM
   only, `stream` on that base tier alone, `networking` on `stream`, `sensor`
-  on `camera` and `core`, `codec` on `volume`, `eval` and `io` on `mesh`,
+  on `camera` and `core`, `codec` and `voxelize` on `volume`, `eval` and
+  `io`'s mesh files on `mesh`, `io`'s images on the base tier alone,
   `codec_stream` on `codec` and `networking`, and `sender` on
   `codec_stream`, `tsdf` and `sensor`'s GPU pass;
   driver/decoder/pre-processing targets stay separate.
   Asset I/O is host-side at file boundaries; Assimp is an optional private
-  backend of `recon_io_assimp`, never a dependency of GPU kernels.
+  backend of `recon_mesh_io_assimp`, never a dependency of GPU kernels.
 - C++17, no compiler extensions. Namespace `volumetric_kit::recon` (`vr::` in
   docs), nested per tier except `core`, which stays in `volumetric_kit::recon`:
   recon declares no `core` namespace, so `core::` always means the core's.

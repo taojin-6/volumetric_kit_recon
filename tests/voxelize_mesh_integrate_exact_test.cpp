@@ -39,12 +39,12 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/tsdf/mesh_integrator.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/triangle_candidates.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
+#include "volumetric_kit/recon/voxelize/mesh_integrator.hpp"
 
 #include "gpu_test.hpp"
 #include "grid_readback.hpp"
@@ -53,7 +53,7 @@
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
-namespace ts = volumetric_kit::recon::tsdf;
+namespace vx = volumetric_kit::recon::voxelize;
 
 namespace {
 
@@ -102,7 +102,7 @@ struct RefResult {
 vkc::Result<RefResult> run_reference(const vr_test::Gpu& gpu, Reference& ref,
                                      vol::VoxelBlockGrid& grid, const Mesh& m,
                                      const std::vector<vol::BlockIndex>& blocks,
-                                     const ts::MeshSdfParams& params) {
+                                     const vx::MeshSdfParams& params) {
   const vol::VoxelGridParams& g = grid.grid();
   const std::uint32_t nt = m.triangle_count();
   const auto nb = static_cast<std::uint32_t>(blocks.size());
@@ -164,7 +164,7 @@ vkc::Result<RefResult> run_reference(const vr_test::Gpu& gpu, Reference& ref,
   ref.kernel.set.write_storage_buffer(7, grid.map().entries_buffer(), 0,
                                       grid.map().entries_buffer_size());
   bind(8, slots);
-  const float shell = params.mode == ts::MeshSdfMode::Shell
+  const float shell = params.mode == vx::MeshSdfMode::Shell
                           ? params.shell_voxels * g.voxel_size
                           : 0.0f;
   const auto mode = static_cast<std::uint32_t>(params.mode);
@@ -335,7 +335,7 @@ Mesh icosphere(Vec3f centre, float radius, int subdivisions) {
 struct Fixture {
   std::string name;
   Mesh mesh;
-  ts::MeshSdfMode mode = ts::MeshSdfMode::Signed;
+  vx::MeshSdfMode mode = vx::MeshSdfMode::Signed;
   int block_size = 8;
   float trunc = 0.08f;  // a 16-voxel band
   // Check the bins reach past the kernel's sort.
@@ -501,11 +501,11 @@ std::vector<Fixture> fixtures() {
     out.push_back(std::move(f));
   }
   // Hundreds of metres from the origin, signed and shell.
-  for (const ts::MeshSdfMode mode :
-       {ts::MeshSdfMode::Signed, ts::MeshSdfMode::Shell}) {
+  for (const vx::MeshSdfMode mode :
+       {vx::MeshSdfMode::Signed, vx::MeshSdfMode::Shell}) {
     Fixture f;
     f.name =
-        mode == ts::MeshSdfMode::Signed ? "far sphere" : "far sphere, shell";
+        mode == vx::MeshSdfMode::Signed ? "far sphere" : "far sphere, shell";
     f.mesh = icosphere(Vec3f(312.37f, -207.11f, 151.93f), 0.21f, 3);
     f.mode = mode;
     out.push_back(std::move(f));
@@ -536,7 +536,7 @@ std::vector<Fixture> fixtures() {
   {
     Fixture f;
     f.name = "fan and duplicates, shell";
-    f.mode = ts::MeshSdfMode::Shell;
+    f.mode = vx::MeshSdfMode::Shell;
     append(f.mesh, out[0].mesh);
     append(f.mesh, out[3].mesh);
     out.push_back(std::move(f));
@@ -564,7 +564,7 @@ vkc::Result<vol::VoxelBlockGrid> make_grid(const vr_test::Gpu& gpu,
 
 // Convert `f` into `grid`, cleared, run the reference over the blocks
 // written, and compare every voxel's bits.
-int check_fixture(vr_test::GpuContext& gpu, ts::MeshIntegrator& integ,
+int check_fixture(vr_test::GpuContext& gpu, vx::MeshIntegrator& integ,
                   Reference& ref, vol::VoxelBlockGrid& grid, const Fixture& f) {
   const vol::VoxelGridParams& gp = grid.grid();
   const Mesh& m = f.mesh;
@@ -572,8 +572,8 @@ int check_fixture(vr_test::GpuContext& gpu, ts::MeshIntegrator& integ,
   vkc::Result<std::uint32_t> failed = grid.map().allocate_from_triangles(
       m.v.data(), m.vertex_count(), m.i.data(), m.triangle_count());
   CHECK(failed.ok() && failed.value() == 0);
-  const ts::MeshSdfParams params{f.mode, 1.5f};
-  vkc::Result<ts::MeshIntegrateStats> stats =
+  const vx::MeshSdfParams params{f.mode, 1.5f};
+  vkc::Result<vx::MeshIntegrateStats> stats =
       integ.integrate(grid, m.v.data(), m.vertex_count(), m.i.data(),
                       m.triangle_count(), params);
   if (!stats.ok()) {
@@ -667,10 +667,10 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(pool.ok());
     ref.pool = std::move(pool).value();
   }
-  vkc::Result<ts::MeshIntegrator> integ_r =
-      ts::MeshIntegrator::create(gpu.device, gpu.allocator);
+  vkc::Result<vx::MeshIntegrator> integ_r =
+      vx::MeshIntegrator::create(gpu.device, gpu.allocator);
   CHECK(integ_r.ok());
-  ts::MeshIntegrator integ = std::move(integ_r).value();
+  vx::MeshIntegrator integ = std::move(integ_r).value();
 
   // One grid per block size and band, cleared for each fixture.
   std::map<std::pair<int, float>, vol::VoxelBlockGrid> grids;
@@ -686,7 +686,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     failures += check_fixture(gpu, integ, ref, it->second, f);
   }
   CHECK(failures == 0);
-  std::printf("tsdf_mesh_integrate_exact: OK\n");
+  std::printf("voxelize_mesh_integrate_exact: OK\n");
   return 0;
 }
 

@@ -358,8 +358,8 @@ int nonfinite_camera_case(const vr_test::Gpu& ctx) {
   for (const vr::DepthCameraParams& bad : bad_depth) {
     CHECK(refused(integrator->integrate(grid, depth.data(), bad)));
     const std::vector<tsdf::FrameInput> list = {
-        {{vkc::StorageInput(depth.data()), cam}, &good_color},
-        {{vkc::StorageInput(depth.data()), bad}, nullptr}};
+        {vkc::StorageInput(depth.data()), cam, &good_color},
+        {vkc::StorageInput(depth.data()), bad, nullptr}};
     CHECK(refused(integrator->integrate(grid, list)));
   }
   for (const vr::ColorCameraParams& bad : bad_color) {
@@ -559,7 +559,9 @@ int zero_depth_case(const vr_test::Gpu& ctx) {
   cam.max_depth = 5.0f;
   cam.cam_to_world = vr::Mat4f(1.0f);
   const std::vector<float> depth(9, 0.0f);
-  CHECK(grid.map().allocate_from_depth(depth.data(), cam).ok());
+  CHECK(grid.map()
+            .allocate_from_depth(depth.data(), tsdf::to_depth_pinhole(cam))
+            .ok());
   auto none = grid.map().compact_active_blocks();
   CHECK(none.ok() && none->empty());
 

@@ -223,6 +223,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest
   triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh
   — binned per block over the allocation's own candidates, with no topology.
+  *Amended 2026-10-28:* in a tier of its own, `voxelize`.
 - [**2026-09-28**](#2026-09-28--the-orbbec-driver-streams-colour-as-h265-on-request-every-colour-frame-is-decoded-in-order-on-a-thread-per-camera-ahead-of-the-mailbox-a-lost-frame-is-read-off-the-frame-index-not-the-clock-and-the-femto-megas-stream-is-decoded-as-bt601-full-range-which-it-codes-and-does-not-say) —
   The Orbbec driver streams colour as H.265 on request: every colour frame is
   decoded, in order, on a thread per camera ahead of the mailbox; a lost frame
@@ -633,7 +634,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   both call it; recon's kernels project through it, keeping only their own
   acceptance rules; and `recon_core`'s `VR_SHADER_INCLUDE_DIR` names the root
   a consumer includes it under, fetched or installed. *Amended 2026-10-22:*
-  fetched only; recon installs nothing.
+  fetched only; recon installs nothing. *Amended 2026-10-28:* volume
+  unprojects through a copy of its own, held to it bit for bit.
 - [**2026-10-16**](#2026-10-16--a-brew-upgrade-needs-no-cache-clearing-the-mac-jobs-install-nothing-and-the-dependency-cache-keys-on-the-cores-homebrew-key) —
   A brew upgrade needs no cache clearing: the Mac jobs install nothing, and
   the dependency cache keys on the core's Homebrew key.
@@ -832,6 +834,22 @@ entries relevant to your task; later amendments supersede earlier rules.
   exposure), written at each open where the camera differs, auto white
   balance always on, checked before the first write and read back after the
   last; an array refuses a sensor opened at another.
+- [**2026-10-28**](#2026-10-28--the-voxel-layer-is-camera-free-volume-owns-its-depth-camera-depthpinhole-and-the-one-line-of-unprojection-it-needs-tsdf-copies-its-camera-in-amends-the-2026-10-16-glsl-pinhole-entry) —
+  The voxel layer is camera-free: `volume::DepthPinhole`, the fields and
+  96 bytes of `DepthCameraParams`, is what depth allocation takes, and its
+  kernel unprojects through a copy of the pinhole's one line; tsdf's
+  `FrameInput` keeps `DepthCameraParams` and `to_depth_pinhole` copies it
+  field by field. Allocation is main's, bit for bit.
+- [**2026-10-28**](#2026-10-28--io-is-two-targets-images-on-the-family-cores-base-tier-alone-mesh-files-on-mesh-amends-the-2026-10-03-asset-io-entry) —
+  `io` is two targets: `recon_image_io` (images, stb) links the family
+  core's base tier alone; `recon_mesh_io` (PLY, the triangle containers,
+  normalization, tinyply) links `mesh`, and `recon_mesh_io_assimp` replaces
+  `recon_io_assimp`. Headers and namespace are unchanged; `recon_io` is
+  gone.
+- [**2026-10-28**](#2026-10-28--a-triangle-meshs-distance-field-is-a-tier-of-its-own-voxelize-on-volume-alone-amends-the-2026-09-27-mesh-to-tsdf-entry) —
+  A triangle mesh's distance field is a tier of its own, `voxelize`
+  (`recon_voxelize`), on `volume` alone: `MeshIntegrator` and its kernels
+  leave `tsdf`, and the closest-point GLSL moves to `volume`.
 - [**2026-10-28**](#2026-10-28--the-codec-stream-is-a-tier-of-its-own-codec_stream-on-codec-and-networking-and-its-frame-in-halves-is-public-amends-the-2026-10-26-sender-entry) —
   The codec stream is a tier of its own, `codec_stream`
   (`recon_codec_stream`), on `codec` and `networking`: `CodecStream`,
@@ -6136,6 +6154,9 @@ both ways, on the shared M5 Max in Release: 1.6 to 1.9 s on one core, 0.25
 to 0.32 s threaded, every figure identical.
 
 ### 2026-09-27 — A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh — binned per block over the allocation's own candidates, with no topology.
+
+*Amended 2026-10-28 (below):* `MeshIntegrator` is
+`voxelize::MeshIntegrator`, in a tier of its own on `volume`.
 
 The second stage of mesh → TSDF (S1), on top of the 2026-08-31 block
 allocation (S0). It lands `tsdf::MeshIntegrator`, which writes a mesh's
@@ -13843,6 +13864,12 @@ UBSan (CI runs them).
 *Amended 2026-10-22 (the install entry):* recon installs nothing, so the
 root is the build tree's copy alone.
 
+*Amended 2026-10-28 (the camera-free volume entry):* volume's depth
+allocation no longer goes through this file; it unprojects through
+`volume/shaders/depth_pinhole.glsl`, a copy of `vr_unproject_pinhole`,
+operation for operation, that `recon_volume_depth_unproject` holds to it
+bit for bit.
+
 calib's depth checks run kernels of their own over recon's prepared depth,
 and they must project and unproject it by recon's rules. A copy in calib
 would be a second pinhole. The core cannot hold it, since its decisions lock
@@ -16266,6 +16293,133 @@ device; on a rig, `SensorArray::open` then refuses every camera. Three more
 each failed a test: the array checking the controls only where the
 calibration lists sensors, the step check dropped, and a rig's cameras
 opened without the options' controls. No camera was opened.
+
+### 2026-10-28 — The voxel layer is camera-free: volume owns its depth camera, `DepthPinhole`, and the one line of unprojection it needs; tsdf copies its camera in (amends the 2026-10-16 GLSL pinhole entry).
+
+**The rule.** Nothing in `volume`, headers, sources or shaders, includes
+the camera vocabulary (`core/camera_params.hpp`, `core/shaders/pinhole.glsl`);
+`recon_volume_camera_free` fails naming any such include. Depth allocation
+takes `volume::DepthPinhole` (`voxel_hash_map.hpp`): `DepthCameraParams`'
+fields in its 96-byte layout, uploaded verbatim as before. Its kernel's
+camera block is `volume/shaders/depth_pinhole.glsl`'s mirror of it, with
+`vrUnprojectDepth`, `vr_unproject_pinhole`'s one line copied operation for
+operation.
+
+**Why.** The voxel layer leaves with the codec for a repository of its own,
+and the camera vocabulary goes with the sensors to another. A volume that
+took `DepthCameraParams` would make the voxel layer depend on the sensors'
+repository, and every consumer of the codec would pull sensor code. The
+coupling was thin: the kernel already declared its own camera struct and
+borrowed one line of `pinhole.glsl`, and the host only copied the bytes.
+
+**tsdf keeps the camera vocabulary.** `tsdf::FrameInput` no longer derives
+from `DepthInput`: it holds the depth, its `DepthCameraParams` and its
+colour, built as `{depth, camera, color}`, so fusion, the sender and the
+sensor pass are unchanged. `tsdf::to_depth_pinhole` copies a camera field by
+field, beside `static_assert`s that the two types share every offset and
+their size; the `Fuser` allocates through it. A list of `FrameInput`s no
+longer slices into `DepthInput`s.
+
+**Bit-identical, so measured once.** The same bytes reach the same kernel
+arithmetic: allocation gives main's blocks, heap count and stamps. The
+kernel's cost is unchanged, so no timing was run. Rejected: a matrix
+unprojection (`world = M (u d, v d, d, 1)`), which moves a sample by a
+rounding and so a block at a face, for a generality nothing needs; moving
+`allocate_from_depth` up into tsdf, which would publish the hash table's
+insert protocol; and volume taking the sensors' frame contract, which the
+codec's consumers would then pull. The copy is the published formula in a
+second place, pinned to the first by a test.
+
+**Tests.** `recon_volume_allocate` pins three posed frames' blocks, heap
+count and stamps (FNV-1a over the sorted coordinates and each block's
+stamp), one frame alone from a host array and a device buffer and two as a
+set, blocking and recorded, to values recorded on main at d8b8bda1, the
+same on an Apple M5 Max (MoltenVK), an RTX 5090 and lavapipe: every
+sample is at least a hundredth of a voxel from a block boundary, so no device's
+rounding moves a block. `recon_volume_depth_unproject` holds
+`vrUnprojectDepth` to `vr_unproject_pinhole` bit for bit and to the host's
+double within float rounding on 9780 cases; it is the one test that reads
+both copies. `recon_tsdf_depth_pinhole` checks the copy field for field and
+byte for byte. The volume tests take `DepthPinhole`, and `sphere_scene.hpp`
+is camera-free, its camera type a template parameter. Mutation-checked: a
+swapped principal point fails the golden and parity tests, a field copied
+from its neighbour the converter test, a reordered field the converter's
+asserts at compile time, and a restored camera include the include check.
+Reassociating the unprojection, `(px - c) (z / f)`, fails the parity test
+on lavapipe; on MoltenVK and the RTX 5090 both forms gave the same bits on
+every case, so there it passes.
+
+**Validation.** Apple M5 Max, MoltenVK, Release with warnings as errors,
+under the validation layer: the 119 tests pass. RTX 5090 and lavapipe,
+Ubuntu, Release: the new and rewritten volume and tsdf tests pass. Replica
+`room0` (400 frames, 2 cm), fused on main and on this change on the M5 Max:
+every frame's allocated block count and block-set hash are the same, and so
+is the final mesh.
+
+### 2026-10-28 — `io` is two targets: images on the family core's base tier alone, mesh files on `mesh` (amends the 2026-10-03 asset I/O entry).
+
+**The rule.** `recon_image_io` holds image decoding and PNG encoding
+(`io/image_io.hpp`, with stb's implementation private) and links
+`volumetric_kit::core_base` alone: no Vulkan and no recon tier.
+`recon_mesh_io` holds the mesh files: PLY export (`io/ply_writer.hpp`), the
+host triangle containers (`io/triangle_mesh.hpp`) and the opt-in
+normalization helpers (`io/mesh_normalization.hpp`), with tinyply's
+implementation private. It links `recon_mesh` PUBLIC, because `write_ply`
+takes a `mesh::Mesh`. `recon_mesh_io_assimp` replaces `recon_io_assimp` on
+top of it (`io/mesh_io.hpp`, `io/textured_mesh.hpp`). The headers stay in
+`io/` and the namespace stays `vr::io`. Each target's export header and
+macro are named after it (`image_io_export.hpp` and `VR_IMAGE_IO_API`, and
+likewise for the other two). No `recon_io` target remains, and no alias.
+
+**Why.** `recon_io` linked `recon_mesh` PUBLIC for `write_ply` alone. So
+every image user pulled in `volume`, `recon_core` and Vulkan: the Replica
+sensor, and a calibration capture that only writes PNGs. The two halves also
+have different users, images on the capture side and mesh files on the mesh
+and codec side. With separate targets, each consumer names the half it uses
+once; the files can move later without a second rename. The 2026-10-03
+entry's "depends on `mesh`" now holds for `recon_mesh_io` alone.
+
+**Tests.** `recon_io_image` links `recon_image_io` alone, and
+`recon_subproject_defaults` fails when `recon_image_io` links anything but
+the core's base tier. `recon_io_ply` and `recon_io_mesh_normalization` link
+`recon_mesh_io`; `recon_io_mesh_file` and `recon_io_textured_mesh` link
+`recon_mesh_io_assimp`, the latter with `recon_image_io` for the PNG it
+writes. The examples link the half they call: `vr_example_common` links
+images; `fuse_replica`, `codec_replica` and `fuse_orbbec` link mesh files
+for their PLY.
+
+**Validation.** Apple M5 Max, macOS 27.2, Release with warnings as errors
+and Assimp 6.0.5: the build is warning-clean, and the 23 affected tests
+(`io`, the examples that read images or write PLY, the subproject consumer)
+pass under the validation layer with a device required.
+`recon_io_image_test` links `librecon_image_io.a` and the core's base tier,
+nothing else. Adding `recon_mesh` to `recon_image_io`'s links fails
+`recon_subproject_defaults`.
+
+### 2026-10-28 — A triangle mesh's distance field is a tier of its own, `voxelize`, on `volume` alone (amends the 2026-09-27 mesh-to-TSDF entry).
+
+**The rule.** `MeshIntegrator`, `MeshSdfMode`, `MeshSdfParams` and
+`MeshIntegrateStats` are `voxelize::`, in `voxelize/mesh_integrator.hpp`
+and the target `recon_voxelize`, which links `recon_volume` alone and sits
+right after it in the tier order. Its seven kernels and `mesh_scan.glsl`
+move with it, so `recon_tsdf` builds only the fusion kernels. The
+closest-point GLSL both mesh-driven passes share moves from `core` to
+`volume/shaders/triangle_common.glsl`, the lowest tier either is in. No
+header forwards and no namespace aliases the old names.
+
+**Why.** The conversion fuses no depth. Its header and source include no
+`tsdf` header and its kernels only `volume`'s GLSL and the closest point;
+it needs the grid, the triangle allocation's candidates and `recon_core`'s
+dispatch helper. In `tsdf` it made every fusing caller build seven mesh
+kernels it never runs, and every mesh caller -- `codec_mesh` and the
+consumers' stream writers -- link the fuser. It is the prep step that lets
+the voxel layer leave recon without depth fusion.
+
+**What stays.** The code, the kernels' bytes and every field it writes; the
+2026-09-27, 2026-10-02 and 2026-10-21 rules hold as written. Only the
+debug names change, `tsdf_mesh_*` and `tsdf.mesh_*` to `voxelize_mesh_*`
+and `voxelize.mesh_*`. The tests move with it: `recon_voxelize_mesh_integrate`
+and `recon_voxelize_mesh_integrate_exact`, unchanged but for their names.
 
 ### 2026-10-28 — The codec stream is a tier of its own, `codec_stream`, on `codec` and `networking`, and its frame in halves is public (amends the 2026-10-26 sender entry).
 

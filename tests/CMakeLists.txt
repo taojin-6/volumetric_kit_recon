@@ -132,6 +132,28 @@ target_link_libraries(recon_volume_hash_test
 vr_target_warnings(recon_volume_hash_test)
 add_test(NAME recon_volume_hash COMMAND recon_volume_hash_test)
 
+# The volume tier is camera-free: no header, source or shader of it includes the
+# camera vocabulary, core/camera_params.hpp or core/shaders/pinhole.glsl
+# (volume_camera_free.cmake).
+add_test(NAME recon_volume_camera_free
+         COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}" -P
+                 "${CMAKE_CURRENT_SOURCE_DIR}/volume_camera_free.cmake")
+
+# Volume's depth unprojection (volume/shaders/depth_pinhole.glsl) on the device
+# against core/shaders/pinhole.glsl's, bit for bit, and the host's pinhole in
+# double (shaders/depth_unproject_cases.comp). Skips where no device is present.
+add_executable(recon_volume_depth_unproject_test
+               volume_depth_unproject_test.cpp)
+vr_embed_shaders(recon_volume_depth_unproject_test SHADERS
+                 shaders/depth_unproject_cases.comp)
+target_link_libraries(
+  recon_volume_depth_unproject_test
+  PRIVATE volumetric_kit::recon_core Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_volume_depth_unproject_test)
+add_test(NAME recon_volume_depth_unproject
+         COMMAND recon_volume_depth_unproject_test)
+
 # volume GPU hash map: build a VoxelHashMap, allocate a cube of block coords,
 # compact, and verify the active set round-trips on the real driver (MoltenVK /
 # NVIDIA). The table's entry layout is internal (hash.hpp), reached by include
@@ -173,6 +195,15 @@ target_include_directories(recon_volume_block_stamps_test
 vr_target_warnings(recon_volume_block_stamps_test)
 add_test(NAME recon_volume_block_stamps COMMAND recon_volume_block_stamps_test)
 
+# tsdf::to_depth_pinhole: fusion's DepthCameraParams becomes volume's
+# DepthPinhole field for field, byte for byte, the two layouts asserted equal.
+# Host-only, so it always runs.
+add_executable(recon_tsdf_depth_pinhole_test tsdf_depth_pinhole_test.cpp)
+target_link_libraries(recon_tsdf_depth_pinhole_test
+                      PRIVATE volumetric_kit::recon_tsdf)
+vr_target_warnings(recon_tsdf_depth_pinhole_test)
+add_test(NAME recon_tsdf_depth_pinhole COMMAND recon_tsdf_depth_pinhole_test)
+
 # tsdf integrate: fuse a synthetic constant-depth plane into a VoxelBlockGrid
 # and verify the classic projective TSDF math per voxel (sdf, truncation, weight
 # + cap), and a split dispatch (core/dispatch.hpp's test seam, by src/). It also
@@ -190,40 +221,42 @@ vr_embed_shaders(recon_tsdf_integrate_test SHADERS
 vr_target_warnings(recon_tsdf_integrate_test)
 add_test(NAME recon_tsdf_integrate COMMAND recon_tsdf_integrate_test)
 
-# tsdf mesh integrate: write a mesh's truncated distance field (signed through
-# pseudonormals, or as a shell) and check every voxel of every written block
-# against a brute-force host reference -- an independent closest point, and the
-# winding number for inside/outside -- on a sharp tetrahedron, a dented cube, an
-# open quad and a triangle soup, plus determinism (a split binning among it) and
-# every refusal. Skips with no device.
-add_executable(recon_tsdf_mesh_integrate_test tsdf_mesh_integrate_test.cpp)
+# voxelize mesh integrate: write a mesh's truncated distance field (signed
+# through pseudonormals, or as a shell) and check every voxel of every written
+# block against a brute-force host reference -- an independent closest point,
+# and the winding number for inside/outside -- on a sharp tetrahedron, a dented
+# cube, an open quad and a triangle soup, plus determinism (a split binning
+# among it) and every refusal. Skips with no device.
+add_executable(recon_voxelize_mesh_integrate_test
+               voxelize_mesh_integrate_test.cpp)
 target_link_libraries(
-  recon_tsdf_mesh_integrate_test
-  PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
+  recon_voxelize_mesh_integrate_test
+  PRIVATE volumetric_kit::recon_voxelize Vulkan::Vulkan
           volumetric_kit::core_test_policy)
-target_include_directories(recon_tsdf_mesh_integrate_test
+target_include_directories(recon_voxelize_mesh_integrate_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/src)
-vr_target_warnings(recon_tsdf_mesh_integrate_test)
-add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
+vr_target_warnings(recon_voxelize_mesh_integrate_test)
+add_test(NAME recon_voxelize_mesh_integrate
+         COMMAND recon_voxelize_mesh_integrate_test)
 
-# tsdf mesh integrate, exactly: the kernel's early exit writes, bit for bit,
+# voxelize mesh integrate, exactly: the kernel's early exit writes, bit for bit,
 # what a brute force (shaders/mesh_integrate_reference.comp) writes measuring
 # every triangle of each voxel's bin -- on shared vertices with opposite
 # windings, duplicates, near-coincident sheets, slivers, metre-long triangles, a
 # far sphere, bins past the kernel's sort, three block sizes, both modes. Skips
 # with no device.
-add_executable(recon_tsdf_mesh_integrate_exact_test
-               tsdf_mesh_integrate_exact_test.cpp)
+add_executable(recon_voxelize_mesh_integrate_exact_test
+               voxelize_mesh_integrate_exact_test.cpp)
 target_link_libraries(
-  recon_tsdf_mesh_integrate_exact_test
-  PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
+  recon_voxelize_mesh_integrate_exact_test
+  PRIVATE volumetric_kit::recon_voxelize Vulkan::Vulkan
           volumetric_kit::core_test_policy)
 vr_embed_shaders(
-  recon_tsdf_mesh_integrate_exact_test SHADERS
+  recon_voxelize_mesh_integrate_exact_test SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_integrate_reference.comp")
-vr_target_warnings(recon_tsdf_mesh_integrate_exact_test)
-add_test(NAME recon_tsdf_mesh_integrate_exact
-         COMMAND recon_tsdf_mesh_integrate_exact_test)
+vr_target_warnings(recon_voxelize_mesh_integrate_exact_test)
+add_test(NAME recon_voxelize_mesh_integrate_exact
+         COMMAND recon_voxelize_mesh_integrate_exact_test)
 # GPU pre-processing (recon_sensor_utils) on synthetic frames: undistortion in
 # the right direction, the colour matrix, a host reference of the sampling, the
 # refusals, the outputs' sharing, read on another queue family, and fusing the
@@ -312,13 +345,14 @@ if(TARGET volumetric_kit::recon_sensor_orbbec)
   target_compile_definitions(recon_example_config_test
                              PRIVATE VR_TEST_ORBBEC_CONFIG=1)
 endif()
-# codec_config.hpp maps the outputs into the codec stream's CodecOutputs, and
-# the sweep's report compares with eval's. recon_sender brings the codec and the
-# sensor tiers: naming them too would repeat their archives on the link line.
+# codec_config.hpp maps the outputs into the codec stream's CodecOutputs and a
+# mesh source into voxelize's MeshSdfParams, and the sweep's report compares
+# with eval's. recon_sender brings the codec and the sensor tiers: naming them
+# too would repeat their archives on the link line.
 target_link_libraries(
   recon_example_config_test
   PRIVATE volumetric_kit::core_config volumetric_kit::recon_eval
-          volumetric_kit::recon_sender)
+          volumetric_kit::recon_sender volumetric_kit::recon_voxelize)
 target_compile_definitions(
   recon_example_config_test
   PRIVATE VR_CONFIG_FIXTURES="${PROJECT_SOURCE_DIR}/config/examples")
@@ -363,7 +397,7 @@ target_include_directories(recon_example_set_dump_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
 target_link_libraries(
   recon_example_set_dump_test PRIVATE volumetric_kit::recon_sensor_array
-                                      volumetric_kit::recon_io)
+                                      volumetric_kit::recon_image_io)
 vr_target_warnings(recon_example_set_dump_test)
 add_test(NAME recon_example_set_dump COMMAND recon_example_set_dump_test)
 
@@ -425,7 +459,7 @@ target_link_libraries(
   recon_example_codec_report_test
   PRIVATE volumetric_kit::core_config volumetric_kit::core_test_policy
           volumetric_kit::recon_eval volumetric_kit::recon_sender
-          Vulkan::Vulkan)
+          volumetric_kit::recon_voxelize Vulkan::Vulkan)
 vr_target_warnings(recon_example_codec_report_test)
 add_test(NAME recon_example_codec_report
          COMMAND recon_example_codec_report_test)
@@ -437,7 +471,7 @@ add_test(NAME recon_example_codec_report
 # cleared grid, and code_frame's records and the transform in the stream.
 # examples/ defines vr_example_mesh after this directory. The device part skips
 # with no device.
-if(VR_BUILD_EXAMPLES AND TARGET recon_io_assimp)
+if(VR_BUILD_EXAMPLES AND TARGET recon_mesh_io_assimp)
   add_executable(recon_example_mesh_sequence_test
                  example_mesh_sequence_test.cpp)
   target_link_libraries(
@@ -605,7 +639,8 @@ add_test(NAME recon_volume_grid_growth COMMAND recon_volume_grid_growth_test)
 # volume allocate-from-depth: unproject a synthetic one-pixel depth frame and
 # verify exactly the expected (2*tb+1)^3 truncation-band block cube is allocated
 # on the real driver -- the camera unprojection + band dilation, plus the
-# DepthCameraParams scalar-layout upload. Skips where no device is present.
+# DepthPinhole scalar-layout upload -- and pin the blocks, heap count and stamps
+# three posed frames allocate. Skips where no device is present.
 add_executable(recon_volume_allocate_test volume_allocate_test.cpp)
 target_link_libraries(
   recon_volume_allocate_test
@@ -1431,15 +1466,18 @@ if(VR_WITH_ORBBEC)
   add_test(NAME recon_sensor_orbbec_jpeg COMMAND recon_sensor_orbbec_jpeg_test)
 endif()
 
-# Host asset I/O remains testable without creating a Vulkan device.
+# Host asset I/O remains testable without creating a Vulkan device. Each test
+# links its own target alone: image I/O, on the family core's base tier, with no
+# mesh tier and no Vulkan (subproject/ checks its links).
 add_executable(recon_io_image_test io_image_test.cpp
                                    test_allocation_failure.cpp)
-target_link_libraries(recon_io_image_test PRIVATE volumetric_kit::recon_io)
+target_link_libraries(recon_io_image_test
+                      PRIVATE volumetric_kit::recon_image_io)
 vr_target_warnings(recon_io_image_test)
 add_test(NAME recon_io_image COMMAND recon_io_image_test)
 
 add_executable(recon_io_ply_test io_ply_test.cpp)
-target_link_libraries(recon_io_ply_test PRIVATE volumetric_kit::recon_io)
+target_link_libraries(recon_io_ply_test PRIVATE volumetric_kit::recon_mesh_io)
 vr_target_warnings(recon_io_ply_test)
 add_test(NAME recon_io_ply COMMAND recon_io_ply_test)
 
@@ -1447,24 +1485,26 @@ add_test(NAME recon_io_ply COMMAND recon_io_ply_test)
 add_executable(recon_io_mesh_normalization_test io_mesh_normalization_test.cpp
                                                 test_allocation_failure.cpp)
 target_link_libraries(recon_io_mesh_normalization_test
-                      PRIVATE volumetric_kit::recon_io)
+                      PRIVATE volumetric_kit::recon_mesh_io)
 vr_target_warnings(recon_io_mesh_normalization_test)
 add_test(NAME recon_io_mesh_normalization
          COMMAND recon_io_mesh_normalization_test)
 
 # io::check_mesh_file, the one home of a mesh path's checks, and load_mesh
 # answering through it. Host only; built with the Assimp backend.
-if(TARGET recon_io_assimp)
+if(TARGET recon_mesh_io_assimp)
   add_executable(recon_io_mesh_file_test io_mesh_file_test.cpp)
   target_link_libraries(recon_io_mesh_file_test
-                        PRIVATE volumetric_kit::recon_io_assimp)
+                        PRIVATE volumetric_kit::recon_mesh_io_assimp)
   vr_target_warnings(recon_io_mesh_file_test)
   add_test(NAME recon_io_mesh_file COMMAND recon_io_mesh_file_test)
 
-  # io::load_textured_mesh on a procedural OBJ + MTL + PNG cube it writes.
+  # io::load_textured_mesh on a procedural OBJ + MTL + PNG cube it writes, the
+  # PNG with image I/O.
   add_executable(recon_io_textured_mesh_test io_textured_mesh_test.cpp)
-  target_link_libraries(recon_io_textured_mesh_test
-                        PRIVATE volumetric_kit::recon_io_assimp)
+  target_link_libraries(
+    recon_io_textured_mesh_test PRIVATE volumetric_kit::recon_mesh_io_assimp
+                                        volumetric_kit::recon_image_io)
   vr_target_warnings(recon_io_textured_mesh_test)
   add_test(NAME recon_io_textured_mesh COMMAND recon_io_textured_mesh_test)
 endif()
@@ -1650,10 +1690,11 @@ endif()
 
 # What a sibling that fetches recon gets (subproject/): its configure, from a
 # clean tree, with each dependency this build fetched as a local source, so it
-# needs no network. The defaults hold, and recon refuses a core the sibling made
-# available first that is older than VR_CORE_MIN_VERSION or lacks the vulkan
-# tier. The old core is this one stamped 0.0.1, standing in for one below a
-# later floor: a real core older than 0.1.0 has no vkc_require_core at all.
+# needs no network. The defaults hold, image I/O links the core's base tier
+# alone, and recon refuses a core the sibling made available first that is older
+# than VR_CORE_MIN_VERSION or lacks the vulkan tier. The old core is this one
+# stamped 0.0.1, standing in for one below a later floor: a real core older than
+# 0.1.0 has no vkc_require_core at all.
 #
 # TODO: move this core-requirement harness -- the message helper and
 # subproject/'s version stamp, which gfx and calib repeat -- into the core's
@@ -1729,11 +1770,11 @@ endif()
 # only the order matters.
 set_tests_properties(recon_codec_inter PROPERTIES COST 115)
 set_tests_properties(recon_codec_decoder PROPERTIES COST 96)
-set_tests_properties(recon_tsdf_mesh_integrate_exact PROPERTIES COST 56)
+set_tests_properties(recon_voxelize_mesh_integrate_exact PROPERTIES COST 56)
 set_tests_properties(recon_eval_mesh_distance PROPERTIES COST 55)
 set_tests_properties(recon_codec_device_frame PROPERTIES COST 52)
 set_tests_properties(recon_codec_stream PROPERTIES COST 49)
-set_tests_properties(recon_tsdf_mesh_integrate PROPERTIES COST 36)
+set_tests_properties(recon_voxelize_mesh_integrate PROPERTIES COST 36)
 set_tests_properties(recon_codec_encoder PROPERTIES COST 30)
 set_tests_properties(recon_sender_set_sender PROPERTIES COST 29)
 # Waits out RigSets' 10-s silence limit, under any build.

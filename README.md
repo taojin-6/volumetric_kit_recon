@@ -25,8 +25,8 @@ clean, independently consumable tiers.
 ## Design at a glance
 
 - **Tiered, like gfx:** `core` → `volume` → `tsdf` → `mesh` → `texture` →
-  `interop`, with `sensor` off `core`, `codec` off `volume`, and `eval`/`io` off
-  `mesh`. A tier may depend only on tiers to its left.
+  `interop`, with `sensor` off `core`, `voxelize` and `codec` off `volume`, and
+  `eval`/`io` off `mesh`. A tier may depend only on tiers to its left.
 - **One Vulkan path everywhere:** compute runs as Vulkan compute shaders
   (GLSL → SPIR-V), with MoltenVK on Apple — Linux / Android / macOS / iOS
   from one source, mirroring `volumetric_kit_gfx`. No Metal/CUDA split. GCC or
@@ -96,16 +96,17 @@ core version they and the viewers' pinned gfx (`VR_BUILD_VIEWER`) need.
 
 ### Asset I/O
 
-`volumetric_kit::recon_io` provides encoded RGB image loading, 16-bit
-grayscale depth PNG loading with explicit units, RGBA8 and 16-bit grayscale
-PNG writing, and binary PLY mesh export. Include `io/image_io.hpp` or
-`io/ply_writer.hpp` under `volumetric_kit/recon/`. These are host file
-operations; they allocate no Vulkan resources and do not download a live GPU
-volume.
+`volumetric_kit::recon_image_io` provides encoded RGB image loading, 16-bit
+grayscale depth PNG loading with explicit units, and RGBA8 and 16-bit
+grayscale PNG writing (`io/image_io.hpp`); it links the core's base tier
+alone, with no Vulkan. `volumetric_kit::recon_mesh_io` provides binary PLY
+mesh export (`io/ply_writer.hpp`) over the mesh tier. Both headers are under
+`volumetric_kit/recon/`. These are host file operations; they allocate no
+Vulkan resources and do not download a live GPU volume.
 
 Static mesh import is a separate optional target,
-`volumetric_kit::recon_io_assimp`, with Assimp as a private implementation
-dependency. Install Assimp and enable it explicitly:
+`volumetric_kit::recon_mesh_io_assimp`, with Assimp as a private
+implementation dependency. Install Assimp and enable it explicitly:
 
 ```sh
 brew install assimp                       # macOS
@@ -121,7 +122,7 @@ OBJ, PLY and glTF are covered by tests; other formats depend on the installed
 Assimp build. Materials/textures are discarded and animated/skinned/morphed
 assets are refused. Import does not impose physical units or a target height:
 normalization such as Rafa2's 1.7 m convention is a caller operation, with
-the opt-in helpers of `io/mesh_normalization.hpp` (in `recon_io`).
+the opt-in helpers of `io/mesh_normalization.hpp` (in `recon_mesh_io`).
 
 `io::load_textured_mesh(path)` in `io/textured_mesh.hpp` loads the same
 triangles with one UV per vertex, a position repeated at UV seams, and the
@@ -218,7 +219,7 @@ VR_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
 
 `codec_replica` runs the grid codec on a fused room sequence. `codec_mesh`
 codes one triangle mesh or a numbered sequence of them: it loads each through
-`io::load_mesh`, uses `tsdf::MeshIntegrator` to convert it to a TSDF,
+`io::load_mesh`, uses `voxelize::MeshIntegrator` to convert it to a TSDF,
 compresses and decodes that grid, then extracts the decoded surface with
 marching cubes. Build the mesh example with `VR_WITH_ASSIMP=ON` after
 installing the [asset I/O prerequisites](#asset-io).

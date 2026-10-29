@@ -203,6 +203,52 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nothing forwards from the old names. Tests: `recon_sender_codec_stream` is
   `recon_codec_stream`, and its case through `SetSender` is in
   `recon_sender_set_sender`.
+- `voxelize`, `tsdf`, `volume`: **`MeshIntegrator` moves to a tier of its
+  own, `voxelize`** (the 2026-10-28 voxelize decision):
+  `voxelize::MeshIntegrator`, `MeshSdfMode`, `MeshSdfParams` and
+  `MeshIntegrateStats` (`voxelize/mesh_integrator.hpp`) in the new target
+  `volumetric_kit::recon_voxelize`, which links `recon_volume` alone;
+  `recon_tsdf` no longer builds the 7 mesh kernels. The closest-point GLSL
+  moves from `core/shaders/` to `volume/shaders/triangle_common.glsl`. The
+  code, the kernels and what they write are unchanged. Migration: include
+  `volumetric_kit/recon/voxelize/mesh_integrator.hpp`, name
+  `voxelize::` for `tsdf::`, and link `recon_voxelize`; nothing forwards
+  from the old names. Tests: `recon_tsdf_mesh_integrate` and
+  `recon_tsdf_mesh_integrate_exact` are `recon_voxelize_mesh_integrate` and
+  `recon_voxelize_mesh_integrate_exact`.
+- `io`, examples: **`recon_io` splits into `recon_image_io` and
+  `recon_mesh_io`** (the 2026-10-28 decision). `recon_image_io` holds
+  `io/image_io.hpp` and links the family core's base tier alone, with no
+  Vulkan and no mesh tier. `recon_mesh_io` holds `io/ply_writer.hpp`,
+  `io/triangle_mesh.hpp` and `io/mesh_normalization.hpp`, and links
+  `recon_mesh`. `recon_mesh_io_assimp` replaces `recon_io_assimp`. Headers
+  and `vr::io` are unchanged; the export headers and macros follow the
+  targets (`VR_IMAGE_IO_API`, `VR_MESH_IO_API`, `VR_MESH_IO_ASSIMP_API`).
+  The umbrella `volumetric_kit::recon` links all three. Migration: link
+  `recon_image_io` for images, `recon_mesh_io` for PLY and normalization and
+  `recon_mesh_io_assimp` for import; `recon_io` and `recon_io_assimp` are
+  gone. Tests: `recon_io_image` (now `recon_image_io` alone),
+  `recon_io_ply`, `recon_io_mesh_normalization`, `recon_io_mesh_file`,
+  `recon_io_textured_mesh`, `recon_example_set_dump`,
+  `recon_subproject_defaults` (`recon_image_io` links the core's base tier
+  alone).
+- `volume`, `tsdf`: **the voxel layer takes its own depth camera** (the
+  2026-10-28 camera-free volume decision): `volume::DepthPinhole`
+  (`voxel_hash_map.hpp`), the fields and 96-byte layout of
+  `DepthCameraParams`, is `DepthInput::camera` and the camera the one-frame
+  `allocate_from_depth` overloads take, and the depth kernel unprojects
+  through a copy of its own; nothing in `volume` includes `camera_params.hpp`
+  or `pinhole.glsl`. `tsdf::FrameInput` no longer derives from `DepthInput`:
+  it holds the depth, its `DepthCameraParams` and its colour, and
+  `tsdf::to_depth_pinhole` copies a camera field by field. Allocation gives
+  main's blocks, heap count and stamps, bit for bit. Migration: pass
+  `tsdf::to_depth_pinhole(camera)` to `allocate_from_depth`; build a
+  `FrameInput` as `{depth, camera, color}`, not `{{depth, camera}, color}`;
+  a list of them no longer slices into `DepthInput`s. Tests:
+  `recon_volume_allocate`, `recon_volume_depth_unproject` (new),
+  `recon_volume_camera_free` (new), `recon_tsdf_depth_pinhole` (new),
+  `recon_volume_block_stamps`, `recon_volume_recorded`, and the tsdf,
+  sensor and stage-metrics tests that allocate from depth.
 - `sensor`: **the Orbbec driver defaults to H.265 at 3840x2160 and 25 fps**
   (the 2026-10-27 colour-controls decision), depth 640x576 as before: the
   streams core 0.25.0's Orbbec scenarios default to, which recon now needs

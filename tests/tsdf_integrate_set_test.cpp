@@ -35,6 +35,7 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
+#include "depth_inputs.hpp"
 #include "gpu_test.hpp"
 #include "grid_readback.hpp"
 #include "sphere_scene.hpp"
@@ -49,6 +50,8 @@ namespace {
 constexpr std::uint32_t kWidth = vr_test::kSphereWidth;
 constexpr std::uint32_t kHeight = vr_test::kSphereHeight;
 constexpr int kCameras = 3;
+
+using View = vr_test::SphereView<vr::DepthCameraParams>;
 
 vol::VoxelGridParams grid_params() {
   vol::VoxelGridParams grid{};
@@ -135,8 +138,10 @@ int gpu_main(vr_test::GpuContext& gpu) {
   vkc::Device& dev = gpu.device;
   vkc::Allocator& alloc = gpu.allocator;
 
-  std::vector<vr_test::SphereView> views;
-  for (int c = 0; c < kCameras; ++c) views.push_back(vr_test::sphere_view(c));
+  std::vector<View> views;
+  for (int c = 0; c < kCameras; ++c) {
+    views.push_back(vr_test::sphere_view<vr::DepthCameraParams>(c));
+  }
   // Camera 0 marks its coverage: a band of its colour says it has none.
   for (std::uint32_t row = 0; row < kHeight; ++row) {
     for (std::uint32_t col = 60; col < 80; ++col) {
@@ -157,7 +162,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       dev, alloc, views[0].color.data(),
       views[0].color.size() * sizeof(std::uint32_t));
   CHECK(color0.ok());
-  const auto color_cam = [&](const vr_test::SphereView& v) {
+  const auto color_cam = [&](const View& v) {
     return vr::ColorCameraParams{v.cam.fx,          v.cam.fy,    v.cam.cx,
                                  v.cam.cy,          v.cam.width, v.cam.height,
                                  v.cam.cam_to_world};
@@ -169,25 +174,24 @@ int gpu_main(vr_test::GpuContext& gpu) {
   tsdf::ColorFrame c1{views[1].color.data(), color_cam(views[1]), {}};
 
   const std::vector<tsdf::FrameInput> frames{
-      {{vkc::StorageInput(depth_bufs[0]), views[0].cam}, &c0},
-      {{vkc::StorageInput(views[1].depth.data()), views[1].cam}, &c1},
-      {{vkc::StorageInput(depth_bufs[2]), views[2].cam}, nullptr}};
+      {vkc::StorageInput(depth_bufs[0]), views[0].cam, &c0},
+      {vkc::StorageInput(views[1].depth.data()), views[1].cam, &c1},
+      {vkc::StorageInput(depth_bufs[2]), views[2].cam, nullptr}};
   // The set, with an empty frame second, and the list it allocates from.
   vr::DepthCameraParams empty_cam = views[1].cam;
   empty_cam.width = 0;
   const std::vector<tsdf::FrameInput> set_frames{
       frames[0],
-      {{vkc::StorageInput(views[1].depth.data()), empty_cam}, &c1},
+      {vkc::StorageInput(views[1].depth.data()), empty_cam, &c1},
       frames[1],
       frames[2]};
-  const std::vector<vol::DepthInput> depths(set_frames.begin(),
-                                            set_frames.end());
+  const std::vector<vol::DepthInput> depths = vr_test::depth_inputs(set_frames);
 
   // The set in the other order, dynamic's reference.
   const std::vector<tsdf::FrameInput> reversed(set_frames.rbegin(),
                                                set_frames.rend());
-  const std::vector<vol::DepthInput> reversed_depths(reversed.begin(),
-                                                     reversed.end());
+  const std::vector<vol::DepthInput> reversed_depths =
+      vr_test::depth_inputs(reversed);
 
   auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
   CHECK(integrator.ok());
@@ -210,10 +214,12 @@ int gpu_main(vr_test::GpuContext& gpu) {
       if (classic) {
         for (int c = 0; c < kCameras; ++c) {
           CHECK(settle([&](vol::AllocFailures* why) {
+                  const vol::DepthPinhole cam =
+                      tsdf::to_depth_pinhole(views[c].cam);
                   return c == 1 ? one->map().allocate_from_depth(
-                                      views[1].depth.data(), views[1].cam, why)
-                                : one->map().allocate_from_depth(
-                                      depth_bufs[c], views[c].cam, why);
+                                      views[1].depth.data(), cam, why)
+                                : one->map().allocate_from_depth(depth_bufs[c],
+                                                                 cam, why);
                 }) == 0);
         }
         for (int c = 0; c < kCameras; ++c) {
@@ -266,8 +272,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
     auto small = vr_test::upload_device_buffer(
         dev, alloc, views[2].depth.data(), sizeof(float) * kWidth);
     CHECK(small.ok());
-    std::vector<vol::DepthInput> bad_depths(frames.begin(), frames.end());
-    bad_depths[2] = {vkc::StorageInput(small.value()), views[2].cam};
+    std::vector<vol::DepthInput> bad_depths = vr_test::depth_inputs(frames);
+    bad_depths[2].depth = vkc::StorageInput(small.value());
     CHECK(grid->map().allocate_from_depth(bad_depths).status().domain() ==
           vkc::Status::Code::InvalidArgument);
     auto none = vr_test::blocks_of(grid.value());
@@ -277,7 +283,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
             return grid->map().allocate_from_depth(depths, why);
           }) == 0);
     std::vector<tsdf::FrameInput> bad = frames;
-    bad[2] = {{vkc::StorageInput(small.value()), views[2].cam}, nullptr};
+    bad[2] = {vkc::StorageInput(small.value()), views[2].cam, nullptr};
     CHECK(integrator->integrate(grid.value(), bad).domain() ==
           vkc::Status::Code::InvalidArgument);
     auto weight =
