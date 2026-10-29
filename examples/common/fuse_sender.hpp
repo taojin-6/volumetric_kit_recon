@@ -21,6 +21,8 @@
 
 namespace vr_example {
 
+namespace config = volumetric_kit::core::config;
+
 /// @return @p opt's sender config (`sender::SetSender::Config`): fusion as
 ///         `fusion` says, and every @p code_every-th set coded.
 inline volumetric_kit::recon::sender::SetSender::Config sender_config(
@@ -38,10 +40,11 @@ inline volumetric_kit::recon::sender::SetSender::Config sender_config(
 ///        fusion did to the grid (@ref print_fuse_report), the set's row
 ///        stamped -- fused again, its frame's type and tail -- and its
 ///        frame's row added to @p report, when given.
-/// @return OK, or @ref CodecReport::add's error.
+/// @return OK, or `vgrid_example::CodecReport::add`'s error.
 inline vkc::Status report_sent(const vr::sender::SetSender::Sent& sent,
                                std::uint64_t index, const char* program,
-                               SetLog::Set& set, CodecReport* report) {
+                               SetLog::Set& set,
+                               vgrid_example::CodecReport* report) {
   if (!sent.freed.ok()) {
     std::fprintf(stderr, "%s: free blocks: %s\n", program,
                  sent.freed.message().c_str());

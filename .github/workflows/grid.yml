@@ -1,0 +1,79 @@
+name: grid (reusable)
+
+# The grid package alone: grid/ configured as its own project (cmake -S grid),
+# built and tested with nothing of recon's, which proves the package boundary
+# the build legs cannot -- they add grid/ beside recon's tiers. Its tests are
+# grid's suite, the package-boundary check (no grid file includes recon or
+# sensor) and the subproject consumer among them. Release with -Werror and the
+# Assimp loader, on the self-hosted Mac, whose formulae the macOS build leg
+# already needs. Invoked by ci.yml, which owns the push / pull_request triggers
+# and the concurrency group.
+on:
+  workflow_call:
+
+jobs:
+  grid:
+    name: grid alone
+    runs-on: mac
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A job on the self-hosted Mac installs nothing (DECISIONS.md,
+      # 2026-10-16): a missing formula fails it. This job caches nothing, so
+      # it needs no Homebrew key.
+      - name: Check dependencies
+        run: |
+          command -v brew >/dev/null || {
+            echo "::error::brew is not on this runner's PATH"
+            exit 1
+          }
+          missing=""
+          for pkg in cmake glm molten-vk vulkan-headers vulkan-loader \
+              vulkan-tools vulkan-validationlayers shaderc spirv-tools assimp; do
+            brew list --formula "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::install by hand on this self-hosted runner's host, while CI is idle:${missing}"
+            exit 1
+          fi
+
+      # Retry rides out transient FetchContent clone blips, as in _build.yml.
+      - name: Configure
+        run: |
+          ok=0
+          for attempt in 1 2 3; do
+            if cmake -S grid -B build-grid -DCMAKE_BUILD_TYPE=Release \
+                -DVGRID_WITH_ASSIMP=ON; then
+              ok=1
+              break
+            fi
+            echo "::warning::cmake configure attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          [ "${ok}" = 1 ] || {
+            echo "::error::cmake configure failed after 3 attempts"
+            exit 1
+          }
+
+      # The level is explicit, as in _build.yml's Build step.
+      - name: Build
+        run: |
+          cmake --build build-grid \
+            --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
+
+      # On the core's test policy, as in _build.yml's Test step: a device and
+      # the validation layer required.
+      - name: Test
+        env:
+          VKC_REQUIRE_VULKAN_DEVICE: '1'
+          VKC_TEST_VALIDATION: '1'
+        run: |
+          prefix=$(brew --prefix)
+          export VK_LAYER_PATH="${prefix}/share/vulkan/explicit_layer.d"
+          export DYLD_LIBRARY_PATH="${prefix}/lib"
+          ctest --test-dir build-grid --output-on-failure --no-tests=error \
+            --parallel "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"

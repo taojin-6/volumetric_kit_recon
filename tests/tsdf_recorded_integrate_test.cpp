@@ -10,17 +10,17 @@
 #include <optional>
 #include <vector>
 
-#include "device_blocks.hpp"
-#include "grid_readback.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/grid/testing/device_blocks.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
-namespace vol = vr::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = vr::tsdf;
 
 namespace {
@@ -34,7 +34,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   auto integrator = tsdf::TsdfIntegrator::create(gpu.device, gpu.allocator);
   CHECK(grid.ok() && integrator.ok());
   const vol::BlockIndex block{vr::Vec3i(0, 0, 6), 0};
-  auto placed = vr_test::allocate_blocks(gpu, grid->map(), &block, 1);
+  auto placed = vgrid_test::allocate_blocks(gpu, grid->map(), &block, 1);
   CHECK(placed.ok() && *placed == 0);
   vr::DepthCameraParams camera{};
   camera.fx = camera.fy = 32.0f;
@@ -83,7 +83,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       {&unknown, 0, 1},
       {&nonlocal, 0, 1},
       {&oversized, 0, 1}};
-  const auto before = vr_test::read_attribute<float>(
+  const auto before = vgrid_test::read_attribute<float>(
       gpu.device, gpu.allocator, *grid, vol::kWeightAttribute);
   CHECK(before.ok());
   for (const auto& gate : invalid) {
@@ -96,8 +96,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     CHECK(grid->map().tick() == tick);
     CHECK(batch.submit().ok());
     CHECK(gpu.device.counters().dispatches == counters.dispatches);
-    auto after = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
-                                                *grid, vol::kWeightAttribute);
+    auto after = vgrid_test::read_attribute<float>(
+        gpu.device, gpu.allocator, *grid, vol::kWeightAttribute);
     CHECK(after.ok() && *after == *before);
   }
   for (const auto offset : {8u, 4u}) {
@@ -108,8 +108,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
                                  tsdf::IntegrationMode::Classic, &gate)
               .ok());
     CHECK(batch.submit().ok());
-    auto after = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
-                                                *grid, vol::kWeightAttribute);
+    auto after = vgrid_test::read_attribute<float>(
+        gpu.device, gpu.allocator, *grid, vol::kWeightAttribute);
     CHECK(after.ok());
     if (offset == 8) {
       CHECK(*after == *before);

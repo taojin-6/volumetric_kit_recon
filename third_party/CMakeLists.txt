@@ -3,12 +3,12 @@
 
 # Vendored dependencies (pinned FetchContent). recon takes Vulkan and glm from
 # the system (find_package in the root + core CMakeLists). Besides the family's
-# volumetric_kit_core, what is vendored here is header-only with no system
-# package to rely on across our targets (Linux/Android/macOS/iOS):
-# nlohmann/json, stb and tinyply below. The root CMakeLists adds this
-# subdirectory unconditionally and the fetches below run on the first configure
-# (a network is required then; afterwards the FetchContent cache serves it);
-# VR_CAMERA_ONLY stops after the core and nlohmann/json.
+# volumetric_kit_core and grid, what is vendored here is header-only with no
+# system package to rely on across our targets (Linux/Android/macOS/iOS):
+# nlohmann/json and stb below. The root CMakeLists adds this subdirectory
+# unconditionally and the fetches below run on the first configure (a network is
+# required then; afterwards the FetchContent cache serves it); VR_CAMERA_ONLY
+# stops after the core and nlohmann/json.
 
 include(FetchContent)
 
@@ -102,10 +102,44 @@ if(VR_CAMERA_ONLY)
   return()
 endif()
 
+# --- volumetric_kit_grid: voxel hashing, meshing and the codec ----------------
+# grid/ in this repository, a package of its own (project(volumetric_kit_grid),
+# on the core alone; DECISIONS.md, the package rule), declared after the core
+# and before recon's tiers, which link it. An application that also fetches grid
+# declares it first, by URL + SHA + SOURCE_SUBDIR grid, and FetchContent keeps
+# that declaration, as with the core; vkc_require_sibling then refuses a grid
+# older than VR_GRID_MIN_VERSION. Work on both checkouts at once with
+# -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_GRID=<grid checkout>. In this build
+# grid's tests, examples and -Werror follow recon's, and grid's test support and
+# example helpers are built for recon's own. It builds in grid/ under the build
+# tree, not in _deps/, which CI caches for the fetched dependencies alone.
+FetchContent_Declare(
+  volumetric_kit_grid SOURCE_DIR "${PROJECT_SOURCE_DIR}/grid" BINARY_DIR
+                      "${CMAKE_BINARY_DIR}/grid")
+set(VGRID_BUILD_TESTS ${VR_BUILD_TESTS})
+set(VGRID_BUILD_TEST_SUPPORT ${VR_BUILD_TESTS})
+set(VGRID_BUILD_EXAMPLES ${VR_BUILD_EXAMPLES})
+set(VGRID_WARNINGS_AS_ERRORS ${VR_WARNINGS_AS_ERRORS})
+FetchContent_MakeAvailable(volumetric_kit_grid)
+vkc_require_sibling(volumetric_kit::grid ${VR_GRID_MIN_VERSION})
+if(VR_BUILD_TESTS AND NOT TARGET volumetric_kit::grid_test_support)
+  message(
+    FATAL_ERROR
+      "recon's tests need volumetric_kit_grid's test support: set "
+      "VGRID_BUILD_TEST_SUPPORT ON before the first FetchContent_MakeAvailable "
+      "of grid")
+endif()
+if((VR_BUILD_EXAMPLES OR VR_BUILD_TESTS) AND NOT TARGET grid_example_common)
+  message(
+    FATAL_ERROR
+      "recon's examples and their tests need volumetric_kit_grid's example "
+      "helpers: set VGRID_BUILD_EXAMPLES or VGRID_BUILD_TESTS ON before the "
+      "first FetchContent_MakeAvailable of grid")
+endif()
+
 # --- Asset I/O implementation headers (never exported to consumers) --------
-# stb supplies image decoding and PNG writing. tinyply supplies PLY writing.
-# Their implementation TUs live in recon_image_io and recon_mesh_io; no helper
-# target leaks through either's link interface.
+# stb supplies image decoding and PNG writing. Its implementation TU lives in
+# recon_image_io; no helper target leaks through its link interface.
 FetchContent_Declare(
   stb
   GIT_REPOSITORY https://github.com/nothings/stb.git
@@ -114,15 +148,4 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(stb)
 set(VR_STB_INCLUDE_DIR
     "${stb_SOURCE_DIR}"
-    PARENT_SCOPE)
-
-FetchContent_Declare(
-  tinyply
-  GIT_REPOSITORY https://github.com/ddiakopoulos/tinyply.git
-  GIT_TAG c9bb690dfe5e9105961e9e28120c48c9ae084bc6 # 3.0
-  GIT_SHALLOW FALSE
-  SOURCE_SUBDIR do-not-add-tinyply-cmake)
-FetchContent_MakeAvailable(tinyply)
-set(VR_TINYPLY_INCLUDE_DIR
-    "${tinyply_SOURCE_DIR}/source"
     PARENT_SCOPE)

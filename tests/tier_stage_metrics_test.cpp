@@ -45,18 +45,20 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 #include "volumetric_kit/core/testing/buffer_readback.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
 
 #if defined(__unix__) || defined(__APPLE__)
@@ -175,19 +177,19 @@ vr::DepthCameraParams plane_camera() {
 }
 
 int gpu_main(vkc::test::GpuContext& gpu) {
-  const vr::volume::VoxelGridParams params{
+  const vgrid::volume::VoxelGridParams params{
       /*voxel_size=*/0.02f,     /*block_size=*/8,
       /*voxels_per_block=*/512,
       /*trunc_dist=*/0.04f,     /*bucket_size=*/8,
       /*num_buckets=*/64,
       /*num_blocks=*/512,       /*max_chain=*/128};
 
-  const vr::volume::AttributeSpec attrs[] = {
-      {vr::volume::kTsdfAttribute, sizeof(float)},
-      {vr::volume::kWeightAttribute, sizeof(float)}};
-  vkc::Result<vr::volume::VoxelBlockGrid> grid =
-      vr::volume::VoxelBlockGrid::create(gpu.device, gpu.allocator, params,
-                                         attrs, 2);
+  const vgrid::volume::AttributeSpec attrs[] = {
+      {vgrid::volume::kTsdfAttribute, sizeof(float)},
+      {vgrid::volume::kWeightAttribute, sizeof(float)}};
+  vkc::Result<vgrid::volume::VoxelBlockGrid> grid =
+      vgrid::volume::VoxelBlockGrid::create(gpu.device, gpu.allocator, params,
+                                            attrs, 2);
   CHECK(grid);
 
   vkc::Result<vr::tsdf::TsdfIntegrator> integrator =
@@ -251,7 +253,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // A mesh the texturer can chew on: three vertices is enough, since what is
   // under test is that the tier *reports*, not what it computes (that is
   // texture_projective_test's job).
-  vr::mesh::Mesh mesh;
+  vgrid::mesh::Mesh mesh;
   mesh.vertices.resize(3);
   mesh.vertices[0].position = {0.0f, 0.0f, 1.0f};
   mesh.vertices[1].position = {0.1f, 0.0f, 1.0f};
@@ -354,8 +356,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
   // --- the mesh tier: an extract over its compaction and its dispatch --------
   {
-    vkc::Result<vr::mesh::MarchingCubes> mc =
-        vr::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
+    vkc::Result<vgrid::mesh::MarchingCubes> mc =
+        vgrid::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
     CHECK(mc);
     // The fuses above moved the active set, so this one compacts.
     vkc::StageMetrics first;
@@ -389,7 +391,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     // its one dispatch's submit, which is the stage's tile.
     CHECK(grid.value().map().compact_active_blocks_on_device());
     vkc::StageMetrics again;
-    vr::mesh::ExtractTimings timings;
+    vgrid::mesh::ExtractTimings timings;
     CHECK(mc.value().extract_device(grid.value(), 0.0f, &timings, &again));
     CHECK(find(again, "  ..compact") == nullptr);
     const vkc::StageRow* steady = find(again, "  ..dispatch");
@@ -453,9 +455,9 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   {
     vkc::StageMetrics frustum;
     CHECK(grid.value().map().compact_active_blocks_in_frusta_on_device(
-        {vr::volume::make_frustum_planes(cam.fx, cam.fy, cam.cx, cam.cy,
-                                         cam.width, cam.height, cam.min_depth,
-                                         cam.max_depth, cam.cam_to_world)},
+        {vgrid::volume::make_frustum_planes(
+            cam.fx, cam.fy, cam.cx, cam.cy, cam.width, cam.height,
+            cam.min_depth, cam.max_depth, cam.cam_to_world)},
         &frustum));
     CHECK(row_reports_both_halves(frustum, "active set", device_can_time,
                                   "frustum compaction"));

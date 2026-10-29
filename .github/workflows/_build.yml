@@ -53,8 +53,8 @@ on:
         default: false
       assimp:
         description: >-
-          Install Assimp and build the optional mesh loader with
-          VR_WITH_ASSIMP=ON.
+          Install Assimp and build grid's optional mesh loader with
+          VGRID_WITH_ASSIMP=ON.
         required: false
         type: boolean
         default: false
@@ -328,18 +328,19 @@ jobs:
       # subsumes the `ctr` special case: containerised legs all see the same
       # /__w/… path, so they hash alike and share one key exactly as before.
       #
-      # The key also hashes the conventional dep-pin home
-      # (third_party/CMakeLists.txt) and the root list, so a FetchContent version
-      # bump in either busts the cache; hashFiles skips whichever of those paths
-      # does not exist yet. And it carries the Homebrew key (`none` off macOS),
-      # in the restore prefix too, so no tree built on other Homebrew versions
-      # is restored (DECISIONS.md, 2026-10-16, says why).
+      # The key also hashes the conventional dep-pin homes
+      # (third_party/CMakeLists.txt, grid/'s too) and the root lists, so a
+      # FetchContent version bump in any busts the cache; hashFiles skips
+      # whichever of those paths does not exist yet. And it carries the
+      # Homebrew key (`none` off macOS), in the restore prefix too, so no tree
+      # built on other Homebrew versions is restored (DECISIONS.md, 2026-10-16,
+      # says why). grid/ builds in build/grid, outside the cached tree.
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/_deps
-          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-brew${{ steps.brew.outputs.key || 'none' }}-ws${{ steps.ws.outputs.hash }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt') }}
+          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-brew${{ steps.brew.outputs.key || 'none' }}-ws${{ steps.ws.outputs.hash }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt', 'grid/third_party/CMakeLists.txt', 'grid/CMakeLists.txt') }}
           restore-keys: |
             deps-${{ inputs.os }}-${{ matrix.build_type }}-brew${{ steps.brew.outputs.key || 'none' }}-ws${{ steps.ws.outputs.hash }}-
 
@@ -383,7 +384,7 @@ jobs:
                 -DVR_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
                 -DVR_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
                 -DVR_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }} \
-                -DVR_WITH_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}; then
+                -DVGRID_WITH_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}; then
               ok=1
               break
             fi
@@ -428,7 +429,8 @@ jobs:
       # address and undefined only and with no Orbbec SDK, never runs. In a
       # tree of their own that reuses the sources FetchContent fetched for
       # build/, built for those tests alone (recon_tsan_tests,
-      # tests/CMakeLists.txt), with the Orbbec SDK as this leg has it. Debug
+      # tests/CMakeLists.txt, which builds grid's grid_tsan_tests), with the
+      # Orbbec SDK as this leg has it. Debug
       # only: the races do not depend on the build type.
       - name: Threaded tests under ThreadSanitizer (macOS)
         if: >-
@@ -451,12 +453,12 @@ jobs:
           cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=Debug \
             -DVR_SANITIZE=thread -DVR_BUILD_EXAMPLES=OFF \
             -DVR_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
-            -DVR_WITH_ASSIMP=OFF "${flags[@]}"
+            -DVGRID_WITH_ASSIMP=OFF "${flags[@]}"
           cmake --build build-tsan \
             --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
             --target recon_tsan_tests
           ctest --test-dir build-tsan --output-on-failure --no-tests=error \
-            -R '^recon_(networking_|stream_container$|mesh_exchange$|example_info_log$|sensor_orbbec_(decode_worker|jpeg|hevc|open_sensors)$)'
+            -R '^(grid_(networking_|stream_container$|mesh_exchange$|example_info_log$)|recon_sensor_orbbec_(decode_worker|jpeg|hevc|open_sensors)$)'
 
       # recon_sensor_apple and recon_sensor_video, with the H.265 syntax it
       # reads (recon_sensor_video_syntax), promise an iOS build (DECISIONS.md,

@@ -71,9 +71,9 @@ if(NOT TARGET volumetric_kit::gfx_glfw)
 endif()
 
 # Name only the tiers that are not already pulled in transitively. recon_texture
-# PUBLIC-links recon_mesh + recon_volume and recon_sender (the fuser's inputs,
-# fuse_frame.hpp's) PUBLIC-links recon_tsdf + recon_sensor_utils, so listing
-# those again repeats their archives on the link line and Apple's linker warns
+# PUBLIC-links grid_mesh and recon_sender (the fuser's inputs, fuse_frame.hpp's)
+# PUBLIC-links recon_tsdf (grid_volume) + recon_sensor_utils, so listing those
+# again repeats their archives on the link line and Apple's linker warns
 # "ignoring duplicate libraries". Same for gfx_core, which gfx_app /
 # gfx_pipelines / gfx_ui all PUBLIC-link -- gfx_camera does not link it, which
 # is why that one is named. Resist re-adding the covered tiers for readability's
@@ -118,7 +118,7 @@ if(VR_BUILD_TESTS)
                  "${PROJECT_SOURCE_DIR}/tests/example_viewer_device_test.cpp")
   target_link_libraries(
     recon_example_viewer_device_test
-    PRIVATE volumetric_kit::core_test_base volumetric_kit::recon_mesh
+    PRIVATE volumetric_kit::core_test_base volumetric_kit::grid_mesh
             volumetric_kit::gfx_glfw Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_device_test
                              PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -128,7 +128,8 @@ if(VR_BUILD_TESTS)
 
   # What rig_viewer prints at the end (rig_report.hpp): the atlas copies' device
   # time from the profiler's late snapshots, and a count's rate. Host only;
-  # gfx_glfw for ImGui's headers, which the report's panel includes.
+  # gfx_glfw for ImGui's headers, which the report's panel includes, and
+  # grid_example_common for its stage table.
   add_executable(
     recon_example_viewer_rig_report_test
     "${PROJECT_SOURCE_DIR}/tests/example_viewer_rig_report_test.cpp")
@@ -136,7 +137,7 @@ if(VR_BUILD_TESTS)
     recon_example_viewer_rig_report_test
     PRIVATE volumetric_kit::core_test_base volumetric_kit::recon_sensor_array
             volumetric_kit::recon_texture volumetric_kit::gfx_glfw
-            Vulkan::Vulkan)
+            grid_example_common Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_rig_report_test
                              PRIVATE ${_viewer_common_inc})
   vr_target_warnings(recon_example_viewer_rig_report_test)
@@ -150,7 +151,7 @@ if(VR_BUILD_TESTS)
   target_link_libraries(
     recon_example_viewer_pass_test
     PRIVATE volumetric_kit::core_test_base volumetric_kit::core_test_policy
-            volumetric_kit::recon_mesh volumetric_kit::gfx_glfw Vulkan::Vulkan)
+            volumetric_kit::grid_mesh volumetric_kit::gfx_glfw Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_pass_test
                              PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   vr_target_warnings(recon_example_viewer_pass_test)

@@ -29,20 +29,20 @@
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/glfw/shared_device.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
+#include "volumetric_kit/grid/mesh/device_mesh.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/volume/frustum.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/mesh/device_mesh.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/volume/frustum.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 namespace fuse_viewer {
 
 namespace vg = volumetric_kit::gfx;
 namespace vkc = volumetric_kit::core;
 namespace vr = volumetric_kit::recon;
-namespace rmesh = volumetric_kit::recon::mesh;
-namespace vol = volumetric_kit::recon::volume;
+namespace rmesh = volumetric_kit::grid::mesh;
+namespace vol = volumetric_kit::grid::volume;
 
 /// @brief The instance and renderer settings a viewer's device is built with.
 /// @param app         The config gfx's app is adopted with: its name, and the

@@ -19,11 +19,11 @@
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/fwd.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 namespace volumetric_kit::recon::tsdf {
 
@@ -84,8 +84,9 @@ struct ColorFrame {
 ///        its colour.
 ///
 /// Its depth and camera, the camera through @ref to_depth_pinhole, are the
-/// `volume::DepthInput` @ref volume::VoxelHashMap::allocate_from_depth
-/// allocates the frame's band from.
+/// `vgrid::volume::DepthInput`
+/// `vgrid::volume::VoxelHashMap::allocate_from_depth` allocates the frame's
+/// band from.
 struct FrameInput {
   /// Row-major depth in **metres**, `camera.width * camera.height` samples:
   /// a host array, staged in the call's batch, or a storage buffer, bound in
@@ -98,9 +99,10 @@ struct FrameInput {
 };
 
 /// @brief @p camera as the voxel layer's depth camera, for
-///        @ref volume::VoxelHashMap::allocate_from_depth: every field copied
-///        into the same field, the two types' layouts asserted identical.
-VR_TSDF_API volume::DepthPinhole to_depth_pinhole(
+///        `vgrid::volume::VoxelHashMap::allocate_from_depth`: every field
+///        copied into the same field, the two types' layouts asserted
+///        identical.
+VR_TSDF_API volumetric_kit::grid::volume::DepthPinhole to_depth_pinhole(
     const DepthCameraParams& camera) noexcept;
 
 /// @brief Fuses posed depth frames into a @ref VoxelBlockGrid's `tsdf` +
@@ -147,9 +149,10 @@ class VR_TSDF_API TsdfIntegrator {
 
   /// @brief Integrate one posed depth frame into @p grid's active blocks.
   ///
-  /// Advances the map's tick (@ref volume::VoxelHashMap::tick) and stamps
-  /// `changed` with it on every block whose `tsdf`, `weight` or `color` the
-  /// call changed (@ref volume::BlockStamp). Only a store that leaves a
+  /// Advances the map's tick (`vgrid::volume::VoxelHashMap::tick`) and
+  /// stamps `changed` with it on every block whose `tsdf`, `weight` or `color`
+  /// the call changed (`vgrid::volume::BlockStamp`). Only a store that
+  /// leaves a
   /// **different** value counts, so a scan revisiting converged surface at
   /// `max_weight` stamps nothing, and Dynamic's clear of a weighted voxel
   /// counts as a change. A consumer keeps the tick it last read at and asks
@@ -159,9 +162,9 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    blocks of its active set the frame can change are
   ///                    fused: those inside the camera's frustum, from the
   ///                    camera to `max_depth + trunc_dist`, side planes
-  ///                    widened as @ref volume::make_frustum_planes widens
-  ///                    them (@ref
-  ///                    volume::VoxelHashMap::compact_active_blocks_in_frusta_on_device).
+  ///                    widened as `vgrid::volume::make_frustum_planes`
+  ///                    widens them
+  ///                    (`vgrid::volume::VoxelHashMap::compact_active_blocks_in_frusta_on_device`).
   ///                    The result is the one fusing every active block gives,
   ///                    bit for bit; a camera whose focal lengths are not
   ///                    positive, whose principal point lies outside its image,
@@ -211,9 +214,9 @@ class VR_TSDF_API TsdfIntegrator {
   ///                  calls).
   ///
   ///                  The submit also compacts the blocks the frame reaches
-  ///                  (@ref volume::VoxelHashMap::record_compaction), whose
-  ///                  device half alone is a `"  ..active set"` breakdown row
-  ///                  beneath this one.
+  ///                  (`vgrid::volume::VoxelHashMap::record_compaction`),
+  ///                  whose device half alone is a `"  ..active set"` breakdown
+  ///                  row beneath this one.
   /// @return OK on success, or a non-OK `Status`:
   ///         `Status::Code::InvalidArgument` if the integrator is
   ///         moved-from, @p depth is null, @p cam or @p color's camera has a
@@ -221,8 +224,9 @@ class VR_TSDF_API TsdfIntegrator {
   ///         `float` `tsdf`/`weight` attribute, or @p color is set but empty
   ///         or @p grid lacks a `uint32` `color` attribute; otherwise a buffer
   ///         or dispatch failure.
-  core::Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
-                         const DepthCameraParams& cam, float max_weight = 5.0f,
+  core::Status integrate(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+                         const float* depth, const DepthCameraParams& cam,
+                         float max_weight = 5.0f,
                          IntegrationMode mode = IntegrationMode::Classic,
                          const ColorFrame* color = nullptr,
                          core::StageMetrics* metrics = nullptr);
@@ -240,7 +244,7 @@ class VR_TSDF_API TsdfIntegrator {
   ///         a @p depth that is empty, not a storage buffer, has unknown or
   ///         non-device-local memory, or is smaller than
   ///         the image.
-  core::Status integrate(volume::VoxelBlockGrid& grid,
+  core::Status integrate(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
                          const core::Buffer& depth,
                          const DepthCameraParams& cam, float max_weight = 5.0f,
                          IntegrationMode mode = IntegrationMode::Classic,
@@ -262,21 +266,22 @@ class VR_TSDF_API TsdfIntegrator {
   /// camera's clear erases what an earlier one fused. In either mode the order
   /// changes only the running average's arithmetic. A frame changes no block
   /// outside its own reach, so the shared list costs it only idle threads. The
-  /// set is compacted once, so allocate every frame's band first (@ref
-  /// volume::VoxelHashMap::allocate_from_depth takes them together too); a
-  /// block first allocated for a later frame is then fused from the earlier
-  /// ones as well. The call is one tick, so a rig's set ages as one fuse.
+  /// set is compacted once, so allocate every frame's band first
+  /// (`vgrid::volume::VoxelHashMap::allocate_from_depth` takes them together
+  /// too); a block first allocated for a later frame is then fused from the
+  /// earlier ones as well. The call is one tick, so a rig's set ages as one
+  /// fuse.
   /// @param grid        As @ref integrate.
   /// @param frames      The frames, each checked as @ref integrate checks one
   ///                    before any work. One with no pixels fuses nothing, as
-  ///                    @ref volume::VoxelHashMap::allocate_from_depth
+  ///                    `vgrid::volume::VoxelHashMap::allocate_from_depth`
   ///                    allocates nothing for it, and so does an empty list.
   /// @param max_weight  As @ref integrate, for every frame.
   /// @param mode        As @ref integrate, for every frame.
   /// @param metrics     As @ref integrate: one `"integrate"` row, a device span
   ///                    per dispatch, over one `"  ..active set"` sub-row.
   /// @return As @ref integrate.
-  core::Status integrate(volume::VoxelBlockGrid& grid,
+  core::Status integrate(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
                          const std::vector<FrameInput>& frames,
                          float max_weight = 5.0f,
                          IntegrationMode mode = IntegrationMode::Classic,
@@ -313,13 +318,14 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    breakdown's row is placed now, after the stage's
   ///                    rows before it, its host half 0.
   /// @return OK; or, with nothing recorded, @ref integrate's refusals.
-  core::Status record_integrate(core::CommandBatch& batch,
-                                volume::VoxelBlockGrid& grid,
-                                const std::vector<FrameInput>& frames,
-                                float max_weight, IntegrationMode mode,
-                                const volume::DeviceCount* gate = nullptr,
-                                core::GpuStageScope* stage = nullptr,
-                                core::StageMetrics* metrics = nullptr);
+  core::Status record_integrate(
+      core::CommandBatch& batch,
+      volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+      const std::vector<FrameInput>& frames, float max_weight,
+      IntegrationMode mode,
+      const volumetric_kit::grid::volume::DeviceCount* gate = nullptr,
+      core::GpuStageScope* stage = nullptr,
+      core::StageMetrics* metrics = nullptr);
 
   /// @brief The checks @ref integrate makes of @p frames before any work,
   ///        alone: for a caller that records the set's allocation round
@@ -327,8 +333,9 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param grid    As @ref integrate.
   /// @param frames  As the set form of @ref integrate.
   /// @return OK; or @ref integrate's refusals.
-  core::Status check_frames(const volume::VoxelBlockGrid& grid,
-                            const std::vector<FrameInput>& frames) const;
+  core::Status check_frames(
+      const volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+      const std::vector<FrameInput>& frames) const;
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
@@ -338,14 +345,17 @@ class VR_TSDF_API TsdfIntegrator {
 
   // A set checked before anything is recorded (tsdf_integrator.cpp).
   struct Checked;
-  core::Result<Checked> check(const volume::VoxelBlockGrid& grid,
-                              const std::vector<FrameInput>& frames) const;
+  core::Result<Checked> check(
+      const volumetric_kit::grid::volume::VoxelBlockGrid& grid,
+      const std::vector<FrameInput>& frames) const;
   // record_integrate's and integrate's body, over at most `max_blocks`
   // listed blocks.
   core::Status record_checked(
-      core::CommandBatch& batch, volume::VoxelBlockGrid& grid,
+      core::CommandBatch& batch,
+      volumetric_kit::grid::volume::VoxelBlockGrid& grid,
       const std::vector<FrameInput>& frames, const Checked& checked,
-      float max_weight, IntegrationMode mode, const volume::DeviceCount* gate,
+      float max_weight, IntegrationMode mode,
+      const volumetric_kit::grid::volume::DeviceCount* gate,
       std::uint32_t max_blocks, core::GpuStageScope* stage,
       core::StageMetrics* metrics);
 
