@@ -25,7 +25,7 @@
 // before it moved go with it -- and in the first set it is still again, its
 // side outlines take their distances.
 //
-// Dynamic, three cameras around a sphere 0.2 m across that moves at 1 m/s
+// Dynamic, three cameras around a sphere 0.4 m across that moves at 1 m/s
 // past a wall, stops and leaves: while it moves, the mesh covers 97% of its
 // visible surface in every set; once it stops, 99.5%; and in the set it
 // leaves, nothing of it meshes and no voxel off the wall's band holds weight.
@@ -487,7 +487,9 @@ std::vector<float> render_moving(const sensor::DepthCameraParams& cam, int s) {
 
 // The share of the sphere's surface the cameras see -- every 4th pixel's --
 // with a vertex within 1 cm: the vertices binned by 1 cm cell, so a point
-// looks in the 27 cells around its own.
+// looks in the 27 cells around its own. Only a vertex within 1 cm of the
+// sphere's surface can be within 1 cm of a point on it, so only those are
+// binned, not the wall's.
 float sphere_cover(const std::vector<sensor::DepthCameraParams>& cams,
                    const vr::Vec3f& c, const mesh::Mesh& m) {
   const auto cell = [](const vr::Vec3f& p) {
@@ -497,6 +499,7 @@ float sphere_cover(const std::vector<sensor::DepthCameraParams>& cams,
   };
   std::map<std::tuple<int, int, int>, std::vector<vr::Vec3f>> bins;
   for (const mesh::Vertex& vtx : m.vertices) {
+    if (std::abs(glm::length(vtx.position - c) - kSphereR) > 0.011f) continue;
     bins[cell(vtx.position)].push_back(vtx.position);
   }
   std::size_t seen = 0;
