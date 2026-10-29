@@ -164,7 +164,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   std::vector<tsdf::FrameInput> set;
   for (int c = 0; c < kCameras; ++c) {
     set.push_back({vkc::StorageInput(views[c].depth.data()), views[c].cam,
-                   &colors[std::size_t(c)]});
+                   &colors[std::size_t(c)], static_cast<std::uint32_t>(c)});
   }
 
   // The reference: the tier calls on a grid with room for the set, twice, so
@@ -389,7 +389,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       device_colors[std::size_t(c)].pixels = nullptr;
       device_colors[std::size_t(c)].buffer = &color_buffers[std::size_t(c)];
       device_set.push_back({vkc::StorageInput(depth_buffers[std::size_t(c)]),
-                            views[c].cam, &device_colors[std::size_t(c)]});
+                            views[c].cam, &device_colors[std::size_t(c)],
+                            static_cast<std::uint32_t>(c)});
     }
     auto fuser = make_fuser(dev, alloc);
     auto grid = make_grid(dev, alloc, params(1024));

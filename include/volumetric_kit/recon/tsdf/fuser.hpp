@@ -18,6 +18,7 @@
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
+#include "volumetric_kit/recon/tsdf/change_detector.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 
@@ -38,6 +39,9 @@ struct FuserConfig {
   /// (@ref Fuser::record_fuse), ungated, and a grow for a capacity limit made
   /// after it, so what the set could not allocate lands with the next.
   bool allow_partial = false;
+  /// How @ref IntegrationMode::Dynamic's change detector tests a pixel
+  /// (@ref TsdfIntegrator::create).
+  ChangeDetectorConfig change{};
 };
 
 /// @brief The result of a successful @ref Fuser::fuse or @ref Fuser::finish.
@@ -106,7 +110,9 @@ class VR_TSDF_API Fuser {
   /// @param device     Compute device; must outlive this object.
   /// @param allocator  Its allocator; must outlive this object.
   /// @param config     Growth bound and explicit partial-coverage choice.
-  /// @return The fuser; `Status::Code::InvalidArgument` for a negative bound;
+  /// @return The fuser; `Status::Code::InvalidArgument` for a negative bound
+  ///         or a change detector configuration
+  ///         @ref ChangeDetector::create refuses;
   ///         `Status::Code::OutOfMemory` on host allocation failure; or
   ///         @ref TsdfIntegrator::create's error.
   static core::Result<Fuser> create(core::Device& device,

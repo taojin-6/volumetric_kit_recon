@@ -70,7 +70,7 @@ core::Result<Fuser> Fuser::create(core::Device& device,
         "Fuser::create: max_grows_per_set must be >= 0");
   }
   VKC_ASSIGN(TsdfIntegrator integrator,
-             TsdfIntegrator::create(device, allocator));
+             TsdfIntegrator::create(device, allocator, config.change));
   Fuser fuser(device, allocator, std::move(integrator), config);
   VKC_ASSIGN(fuser.gate_,
              core::device_storage_buffer(allocator, sizeof(std::uint32_t)));
@@ -179,7 +179,7 @@ core::Result<PendingFuse> Fuser::record_fuse(
   }
   // The fuse's refusals before the round is recorded, or a grow run: a
   // refused set changes neither the batch nor the grid.
-  VKC_TRY(integrator_.check_frames(grid, frames));
+  VKC_TRY(integrator_.check_frames(grid, frames, mode));
   // Made before an unfinished record is superseded, so a host allocation
   // failure leaves that token finishable.
   auto recorded = std::make_unique<Recorded>();

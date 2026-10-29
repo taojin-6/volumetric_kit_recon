@@ -4,7 +4,7 @@
 // Shared definitions for the TSDF compute kernels: the device struct layouts
 // (scalar block layout, byte-identical to the host POD structs) and the
 // push-constant block. #included by tsdf_integrate.glsl, the body of the
-// integrate and clear kernels.
+// integrate and reset kernels.
 //
 // VoxelGridParams / BlockIndex are the voxel grid's, from the GLSL grid_volume
 // exports (grid_types.glsl); the cameras mirror the host structs. Under scalar
@@ -76,9 +76,10 @@ bool project_to_image(ColorCameraParams c, vec3 world, out vec2 px,
                          c.height, world, px, zc);
 }
 
-// Integration mode (mirrors tsdf::IntegrationMode): for free space ahead of the
-// surface (sdf > trunc_dist), classic keeps the voxel (clamped to +trunc) while
-// dynamic clears any stale geometry there.
+// Integration mode (mirrors tsdf::IntegrationMode): free space ahead of the
+// surface (sdf > trunc_dist) is fused as +trunc, by classic at full weight into
+// every voxel, by dynamic at a share of it into weighted voxels alone; dynamic
+// also resets along each camera's changed rays (tsdf_reset.comp).
 const uint kModeClassic = 0u;
 const uint kModeDynamic = 1u;
 
@@ -87,11 +88,8 @@ layout(push_constant, scalar) uniform PushConstants {
   float max_weight;
   uint mode;
   uint has_color;       // 0 = depth only; 1 = also fuse the color frame
-  uint has_color_attr;  // 1 = binding 6 is the grid's color attribute (clearable)
+  uint has_color_attr;  // 1 = binding 6 is the grid's color attribute (resettable)
   uint tick;            // the map's tick, which a changed block is stamped with
   uint coverage_in_alpha;  // 1 = a colour word with a zero high byte is no colour
-  // 1 = a Dynamic set's fuse, whose clears tsdf_clear.comp ran for every frame
-  // of the set first: free space past the band is left alone.
-  uint fuse_only;
   uint item_base;  // the first thread this dispatch covers
 } pc;

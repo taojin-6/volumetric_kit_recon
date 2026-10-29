@@ -192,6 +192,12 @@ class VR_TSDF_API ChangeDetector {
   ///         records after the pass in the same batch, or in a later one.
   const core::Buffer* mask(std::uint32_t camera) const noexcept;
 
+  /// @brief Whether @ref record_detect takes @p noise: every term finite and
+  ///        at least 0, not all 0.
+  /// @param noise  The noise model.
+  /// @return OK; or `Status::Code::InvalidArgument`.
+  static core::Status check_noise(const DepthNoise& noise);
+
   /// @return The configuration this was created with.
   const ChangeDetectorConfig& config() const noexcept { return config_; }
   /// @return Whether this owns a live kernel; false when moved-from.

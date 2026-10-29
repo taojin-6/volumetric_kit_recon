@@ -5,23 +5,27 @@
 // listed block (the active blocks the frames' frusta reach): project the voxel
 // centre into the depth camera, compute the truncated signed distance
 // (sdf = depth - Zc, positive in front of the surface), and fuse it into the
-// tsdf/weight attributes by a weighted running average. Dynamic mode
-// additionally hard-clears a voxel that projects into free space past the
-// truncation band (a surface that has receded). Ported from classic_tsdf.metal
-// / classic_tsdf.cu (the neural/triplane channels are out of scope). Each voxel
+// tsdf/weight attributes by a weighted running average. Free space past the
+// band is fused as +trunc: under classic at a surface sample's weight, into
+// every voxel; under dynamic at kFreeSpaceWeight of it, and only into a voxel
+// that holds weight already, so it averages and never evicts, and never makes
+// an unobserved voxel observed. Ported from classic_tsdf.metal /
+// classic_tsdf.cu (the neural/triplane channels are out of scope). Each voxel
 // is owned by exactly one thread (a unique block ptr + local index), so the
 // tsdf/weight/color read-modify-write needs no atomics. The one exception is
 // the block's `changed` stamp at binding 8, which every thread of a block
 // shares -- see there.
 //
-// The body of the integrate kernel (tsdf_integrate.comp) and the clear kernel
-// (tsdf_clear.comp), which #include it after their #version, with one
-// descriptor layout. VR_TSDF_CLEAR_ONLY builds the clear kernel: Dynamic's
-// clear alone, which a Dynamic set of several frames runs for every frame
-// before any frame's fuse (the integrate kernel with fuse_only), so the set's
-// cameras act as one instant. It skips a voxel holding no weight before
-// projecting it, as most of what a set reaches holds none, a test the
-// integrate kernel does not pay for (DECISIONS.md, 2026-10-08).
+// The body of the integrate kernel (tsdf_integrate.comp) and the reset kernel
+// (tsdf_reset.comp), which #include it after their #version, with one
+// descriptor layout. VR_TSDF_RESET builds the reset kernel: dynamic
+// integration's reset along one camera's changed rays, which a dynamic set runs
+// for every frame before any frame's fuse, so the set's cameras act as one
+// instant. A ray its camera's change detector flagged this set
+// (tsdf::ChangeDetector's mask, at binding 5) resets every voxel in front of
+// its new sample and in that sample's band -- the newly exposed free space and
+// the new surface -- to the unobserved state, and keeps the history behind the
+// band, which the new surface occludes (DECISIONS.md, 2026-10-29).
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_basic : require
@@ -36,11 +40,11 @@
 
 layout(local_size_x = 256) in;
 
-#ifdef VR_TSDF_CLEAR_ONLY
-const bool kClearOnly = true;
-#else
-const bool kClearOnly = false;
-#endif
+// Dynamic's free space past the band, as a share of a surface sample's weight
+// at the same depth: enough to wear away, over seconds, a surface no change
+// removed, little enough that a camera seeing past another's rim shifts that
+// surface by under a tenth of the band (DECISIONS.md, 2026-10-29).
+const float kFreeSpaceWeight = 0.1;
 
 layout(set = 0, binding = 0, scalar) buffer Tsdf { float tsdf[]; };
 layout(set = 0, binding = 1, scalar) buffer Weight { float weight[]; };
@@ -53,19 +57,27 @@ layout(set = 0, binding = 4, scalar) readonly buffer Camera {
 };
 // Color path. The color image is read only when pc.has_color != 0; the color
 // attribute is read/written when pc.has_color (fuse) or pc.has_color_attr (the
-// dynamic clear); each falls back to a 1-element dummy when unbound. RGB packed
+// dynamic reset); each falls back to a 1-element dummy when unbound. RGB packed
 // in a uint's low three bytes -- the mesh tier's `colors[]` layout, so meshing
 // reads the fused color attribute directly. `scalar` like every other data
 // binding (a uint[] is stride 4 under scalar and std430 alike, so this is not a
 // live layout change, but it keeps the scalar-block-layout ABI uniform, as the
 // mesh tier's identical color binding does).
+layout(set = 0, binding = 6, scalar) buffer ColorAttr { uint color_attr[]; };
+#ifdef VR_TSDF_RESET
+// The reset reads no colour: slot 5 is the camera's change mask, a uint a pixel
+// (tsdf::PixelChange; 0 = no change), and slot 7 is unused.
+layout(set = 0, binding = 5, scalar) readonly buffer ChangeMask {
+  uint change_mask[];
+};
+#else
 layout(set = 0, binding = 5, scalar) readonly buffer ColorImage {
   uint color_image[];
 };
-layout(set = 0, binding = 6, scalar) buffer ColorAttr { uint color_attr[]; };
 layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
   ColorCameraParams color_cam;
 };
+#endif
 // The map's block stamps (volume::BlockStamp): this dispatch stamps `changed`
 // with the map's tick on a block when it actually CHANGES a voxel of it.
 //
@@ -176,9 +188,6 @@ void main() {
   // constant, so the divide is a real reciprocal sequence -- it used to be
   // recomputed inline at each mark site.
   uint block_slot = uint(block.ptr) / vpb;
-  if (kClearOnly && !(weight[uint(block.ptr) + local] > 0.0)) {
-    return;  // nothing to clear
-  }
 
   // Voxel world position: node convention (voxel * voxel_size), matching
   // volume/voxel_coords.hpp::voxel_to_world and the prior engine.
@@ -193,6 +202,33 @@ void main() {
   if (!project_to_image(cam, world, px, zc)) {
     return;
   }
+  float trunc_dist = pc.grid.trunc_dist;
+  uint idx = uint(block.ptr) + local;
+#ifdef VR_TSDF_RESET
+  // A changed ray resets what lies in front of its new sample and in that
+  // sample's band, read at the voxel's nearest pixel, as the mask is per
+  // pixel: change is never interpolated across a silhouette. The mask is
+  // tested before the voxel is read, as most rays did not change; a flagged
+  // pixel's sample is valid (the detector flags only valid samples).
+  uvec2 n = nearest_pixel(px, cam.width, cam.height);
+  uint pixel = n.y * cam.width + n.x;
+  if (change_mask[pixel] == 0u) {
+    return;
+  }
+  if (depth[pixel] - zc < -trunc_dist) {
+    return;  // behind the new surface's band: occluded history stays
+  }
+  if (weight[idx] > 0.0) {
+    tsdf[idx] = 0.0;
+    weight[idx] = 0.0;
+    if (pc.has_color_attr != 0u) {
+      color_attr[idx] = kVoxelColorUnobserved;
+    }
+    // The weight > 0.0 guard is the "did anything change" test: a voxel at
+    // weight 0 is in the state the reset writes.
+    stamp_changed(block_slot);
+  }
+#else
   float u = px.x;
   float v = px.y;
   float d = sample_depth(u, v);  // bilinear, with nearest-neighbour fallback
@@ -204,51 +240,26 @@ void main() {
   }
 
   // Truncated projective SDF.
-  float trunc_dist = pc.grid.trunc_dist;
   float sdf = d - zc;
   if (sdf < -trunc_dist) {
     return;  // occluded: well behind the surface
   }
-  uint idx = uint(block.ptr) + local;
-  if (sdf > trunc_dist && (kClearOnly || pc.mode == kModeDynamic)) {
-    // Free space in front of the surface, past the band: under dynamic
-    // integration the surface has receded past this voxel, so hard-clear any
-    // stale geometry back to the pristine unobserved state (tsdf 0 / weight 0 --
-    // the zeroed initial state), which weight-gated readers treat as empty. Free
-    // space is never fused here (classic instead clamps to +trunc, keeping a
-    // smooth field ahead of the surface). Matches the prior engine's
-    // classic_tsdf.cu stale-clearing branch, which zeroes color here too --
-    // whenever the grid carries a color attribute (has_color_attr), not only on
-    // a frame that supplies a color image, so a depth-only recede leaves no
-    // color ghost either. A Dynamic set's fuse (fuse_only) leaves it alone: the
-    // clear kernel has run for every frame of the set first, so a camera that
-    // sees past a voxel another camera of the set places in its band clears
-    // only the voxel's history, and the set's fuse follows.
-    // TODO(tsdf): clear on evidence -- a weight decrement, an incidence term --
-    // and behind a pixel with no return, each judged on the lab rig
-    // (DECISIONS.md, 2026-10-08).
-    if (pc.fuse_only == 0u && weight[idx] > 0.0) {
-      tsdf[idx] = 0.0;
-      weight[idx] = 0.0;
-      if (pc.has_color_attr != 0u) {
-        // drop stale color along with the geometry
-        color_attr[idx] = kVoxelColorUnobserved;
-      }
-      // A clear changes the field exactly as a fuse does -- a receded surface
-      // that leaves a stale mesh behind is the whole reason dynamic mode exists.
-      // The weight > 0.0 guard above is already the "did anything change" test
-      // on this path: a voxel at weight 0 is in the state the clear writes.
-      stamp_changed(block_slot);
-    }
-    return;
-  }
-  if (kClearOnly) {
+  // Dynamic's free space past the band averages in at a share of the weight,
+  // and only into a voxel that holds weight: it wears a surface no change
+  // removed away over time but never evicts it, and never turns an unobserved
+  // voxel -- one a reset left, or one no surface sample reached -- observed.
+  // The weight is read here and again below; both are the same load.
+  bool free_space = sdf > trunc_dist;
+  if (free_space && pc.mode == kModeDynamic && !(weight[idx] > 0.0)) {
     return;
   }
   sdf = clamp(sdf, -trunc_dist, trunc_dist);
 
   // Inverse-square observation weight with a linear behind-surface dropoff.
   float w_obs = (zc > 0.01) ? (1.0 / (zc * zc)) : 1.0;
+  if (free_space && pc.mode == kModeDynamic) {
+    w_obs *= kFreeSpaceWeight;
+  }
   if (zc > d) {
     // Behind the surface but within the band -- the earlier sdf < -trunc_dist
     // return already guarantees behind <= trunc_dist. Fade linearly to zero at
@@ -339,4 +350,5 @@ void main() {
   if (changed) {
     stamp_changed(block_slot);
   }
+#endif
 }

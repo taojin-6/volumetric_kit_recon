@@ -82,13 +82,18 @@ core::Status check_config(const ChangeDetectorConfig& c) {
   return {};
 }
 
-bool usable(const DepthNoise& n) {
-  const auto term = [](float x) { return std::isfinite(x) && x >= 0.0f; };
-  return term(n.a) && term(n.b) && term(n.c) &&
-         (n.a > 0.0f || n.b > 0.0f || n.c > 0.0f);
-}
-
 }  // namespace
+
+core::Status ChangeDetector::check_noise(const DepthNoise& n) {
+  const auto term = [](float x) { return std::isfinite(x) && x >= 0.0f; };
+  if (term(n.a) && term(n.b) && term(n.c) &&
+      (n.a > 0.0f || n.b > 0.0f || n.c > 0.0f)) {
+    return {};
+  }
+  return core::Status::invalid_argument(
+      "ChangeDetector: the noise model needs finite terms of at least 0, not "
+      "all 0");
+}
 
 ChangeDetector::~ChangeDetector() = default;
 ChangeDetector::ChangeDetector(ChangeDetector&&) noexcept = default;
@@ -156,11 +161,7 @@ core::Status ChangeDetector::record_detect(
     return core::Status::invalid_argument(std::string(kWhat) +
                                           ": a non-finite depth bound");
   }
-  if (!usable(noise)) {
-    return core::Status::invalid_argument(
-        std::string(kWhat) +
-        ": the noise model needs finite terms of at least 0, not all 0");
-  }
+  VKC_TRY(check_noise(noise));
   const VkDeviceSize depth_bytes = VkDeviceSize(pixels) * sizeof(float);
   const VkDeviceSize history_bytes =
       VkDeviceSize(pixels) * sizeof(PixelHistory);

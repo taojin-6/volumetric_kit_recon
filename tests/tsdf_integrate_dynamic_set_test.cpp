@@ -7,15 +7,16 @@
 // colour. G sits 2 mm in front of that wall's surface and looks along it, at
 // a far wall: its rays pass through F's band on the near side, which G sees
 // as free space far past the band, and never reach F's wall. Each order is
-// fused as a set twice, so the second set clears the first's history. The two
-// grids must agree bit for bit, so their meshes must too, and F's surface
-// must be whole: as many triangles on it as F fused alone gives, and F's
-// colour in it. Fusing each camera after the other, G erased F's band where it
-// looked and the mesh had a hole there in one order only. Both grids must also
-// match, bit for bit, G and then F fused one call each: F and G never fuse the
-// same voxel and F clears nothing G fuses, so that is every clear before every
-// fuse, computed without the set's split. And G's far wall must mesh. A third
-// set, F's wall receded 10 cm, must clear the old surface in a set as well.
+// fused as a set twice, each camera keeping its slot. The two grids must
+// agree bit for bit, so their meshes must too, and F's surface must be whole:
+// as many triangles on it as F fused alone gives, and F's colour in it. G's
+// free space only averages into F's band, at a tenth of the weight, so it
+// moves F's surface by under a millimetre and evicts nothing; the former
+// Dynamic cleared F's band there each set, and fused one camera after the
+// other erased it, leaving a hole in one order only. And G's far wall must
+// mesh. A third set, F's wall receded 10 cm, is a change on every one of F's
+// rays (the change test runs from a pixel's second sample here): the set
+// resets the old surface, in either order and in the set it is seen.
 // Skips where no device is present.
 
 #include <algorithm>
@@ -144,27 +145,30 @@ int allocate(vol::VoxelBlockGrid& grid, const std::vector<View>& views) {
   return 1;
 }
 
-// Allocate for `views`, then fuse them under Dynamic as one set or, `each`,
-// one call a frame in turn; F (always the one with the frontal camera's pose)
-// brings its colour.
+// Allocate for `views`, then fuse them under Dynamic as one set; F (always
+// the one with the frontal camera's pose) brings its colour and has slot 0,
+// G slot 1.
 int fuse(tsdf::TsdfIntegrator& integrator, vol::VoxelBlockGrid& grid,
-         const std::vector<View>& views, const tsdf::ColorFrame& color,
-         bool each = false) {
+         const std::vector<View>& views, const tsdf::ColorFrame& color) {
   constexpr tsdf::IntegrationMode kDynamic = tsdf::IntegrationMode::Dynamic;
   if (allocate(grid, views) != 0) return 1;
   std::vector<tsdf::FrameInput> frames;
   for (const View& v : views) {
     const bool is_f = v.cam.cam_to_world == vr::Mat4f(1.0f);
-    const tsdf::ColorFrame* c = is_f ? &color : nullptr;
-    if (each) {
-      CHECK(integrator.integrate(grid, v.depth.data(), v.cam, 5.0f, kDynamic, c)
-                .ok());
-    } else {
-      frames.push_back({vkc::StorageInput(v.depth.data()), v.cam, c});
-    }
+    frames.push_back({vkc::StorageInput(v.depth.data()), v.cam,
+                      is_f ? &color : nullptr, is_f ? 0u : 1u});
   }
-  if (!each) CHECK(integrator.integrate(grid, frames, 5.0f, kDynamic).ok());
+  CHECK(integrator.integrate(grid, frames, 5.0f, kDynamic).ok());
   return 0;
+}
+
+// An integrator a grid, so each keeps its own change histories, whose test
+// runs from a pixel's second sample.
+vkc::Result<tsdf::TsdfIntegrator> make_integrator(vkc::Device& device,
+                                                  vkc::Allocator& allocator) {
+  tsdf::ChangeDetectorConfig change;
+  change.warm_up = 1;
+  return tsdf::TsdfIntegrator::create(device, allocator, change);
 }
 
 // The same nonempty block set and every attribute bit, regardless of slots.
@@ -231,8 +235,6 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::Device& dev = gpu.device;
   vkc::Allocator& alloc = gpu.allocator;
 
-  auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
-  CHECK(integrator.ok());
   auto mc = mesh::MarchingCubes::create(dev, alloc);
   CHECK(mc.ok());
 
@@ -246,27 +248,27 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
   // F alone, the surface G must leave whole.
   auto alone = make_grid(dev, alloc);
-  CHECK(alone.ok());
+  auto alone_integrator = make_integrator(dev, alloc);
+  CHECK(alone.ok() && alone_integrator.ok());
   for (int set = 0; set < 2; ++set) {
-    CHECK(fuse(integrator.value(), alone.value(), {f}, color) == 0);
+    CHECK(fuse(alone_integrator.value(), alone.value(), {f}, color) == 0);
   }
   auto reference = summarize(mc.value(), alone.value(), kWall);
   CHECK(reference.ok());
   std::printf("F alone: %zu triangles on its wall\n", reference->on_wall);
   CHECK(reference->on_wall > 1000);
 
-  // The set in both orders, twice, and G then F one call each, the reference.
+  // The set in both orders, twice.
   auto fg = make_grid(dev, alloc);
   auto gf = make_grid(dev, alloc);
-  auto seq = make_grid(dev, alloc);
-  CHECK(fg.ok() && gf.ok() && seq.ok());
+  auto fg_integrator = make_integrator(dev, alloc);
+  auto gf_integrator = make_integrator(dev, alloc);
+  CHECK(fg.ok() && gf.ok() && fg_integrator.ok() && gf_integrator.ok());
   for (int set = 0; set < 2; ++set) {
-    CHECK(fuse(integrator.value(), fg.value(), {f, g}, color) == 0);
-    CHECK(fuse(integrator.value(), gf.value(), {g, f}, color) == 0);
-    CHECK(fuse(integrator.value(), seq.value(), {g, f}, color, true) == 0);
+    CHECK(fuse(fg_integrator.value(), fg.value(), {f, g}, color) == 0);
+    CHECK(fuse(gf_integrator.value(), gf.value(), {g, f}, color) == 0);
   }
   if (check_same(dev, alloc, fg.value(), gf.value()) != 0) return 1;
-  if (check_same(dev, alloc, fg.value(), seq.value()) != 0) return 1;
   auto mesh_fg = summarize(mc.value(), fg.value(), kWall);
   auto mesh_gf = summarize(mc.value(), gf.value(), kWall);
   CHECK(mesh_fg.ok() && mesh_gf.ok());
@@ -294,13 +296,11 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     }
   }
 
-  // F's wall recedes: the set clears the old surface, in both orders.
+  // F's wall recedes: the set resets the old surface, in both orders.
   const View back = frontal(kWall + kRecede);
-  CHECK(fuse(integrator.value(), fg.value(), {back, g}, color) == 0);
-  CHECK(fuse(integrator.value(), gf.value(), {g, back}, color) == 0);
-  CHECK(fuse(integrator.value(), seq.value(), {g, back}, color, true) == 0);
+  CHECK(fuse(fg_integrator.value(), fg.value(), {back, g}, color) == 0);
+  CHECK(fuse(gf_integrator.value(), gf.value(), {g, back}, color) == 0);
   if (check_same(dev, alloc, fg.value(), gf.value()) != 0) return 1;
-  if (check_same(dev, alloc, fg.value(), seq.value()) != 0) return 1;
   auto old_wall = summarize(mc.value(), fg.value(), kWall);
   auto new_wall = summarize(mc.value(), fg.value(), kWall + kRecede);
   CHECK(old_wall.ok() && new_wall.ok());

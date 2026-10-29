@@ -22,7 +22,8 @@
 // voxel. The back walls stay in every frame and grid either way, and a
 // free_after of 0 frees nothing. The grid holds the same near blocks with a
 // stream and without. A coded set is 2 submits and at most 2 host waits, a
-// set fused alone 1 and 1, a free pass's adding none, a set fused again 3
+// set fused alone 1 and 1, a Dynamic first set one more of each a camera, a
+// free pass's adding none, a set fused again 3
 // more or 2 and one for each further round its allocation takes, warm sets
 // no staging buffer but a payload buffer's growth, at most two, and the front
 // batch's dispatches stay below 80, at two cameras and at a rig's four; the
@@ -108,6 +109,14 @@ struct Fusion {
 vr::tsdf::IntegrationMode mode_of(const Fusion& fusion) {
   return fusion.dynamic ? vr::tsdf::IntegrationMode::Dynamic
                         : vr::tsdf::IntegrationMode::Classic;
+}
+
+// A fuser whose Dynamic change test runs from a pixel's second sample, so the
+// set after the near walls' last already sees them gone.
+vkc::Result<vr::tsdf::Fuser> make_fuser(vkc::test::GpuContext& gpu) {
+  vr::tsdf::FuserConfig config;
+  config.change.warm_up = 1;
+  return vr::tsdf::Fuser::create(gpu.device, gpu.allocator, config);
 }
 
 // A stream's session: one Geometry track at 30 a second.
@@ -419,7 +428,7 @@ int code_sets(vkc::test::GpuContext& gpu, const Fusion& fusion,
                                            fusion.voxel_size_m,
                                            fusion.truncation_m, run.buckets);
   CHECK(grid.ok());
-  auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
+  auto fuser = make_fuser(gpu);
   CHECK(fuser.ok());
   auto extractor =
       vgrid::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
@@ -639,9 +648,10 @@ int same_streams(const std::string& a, const std::string& b) {
 // adds its blocking allocation, a submit a round while lost races remain,
 // and its fuse, and a coded one its front half again, whose wait it times.
 // The first set's round, into an empty grid, can lose a race, and the set is
-// then fused again.
+// then fused again. A Dynamic sender's first set zeroes each camera's change
+// history first, a submit and a wait a camera (`first_extra`).
 int counts_case(const std::vector<SetCounts>& counts, bool coded,
-                const char* what) {
+                const char* what, std::uint64_t first_extra = 0) {
   std::uint64_t warm_staging = 0;
   for (std::size_t s = 0; s < counts.size(); ++s) {
     const SetCounts& c = counts[s];
@@ -656,7 +666,8 @@ int counts_case(const std::vector<SetCounts>& counts, bool coded,
         c.redone ? ", fused again" : "", c.tail ? ", a payload tail" : "");
     CHECK(c.redo_waited == (coded && c.redone));
     const std::uint64_t tail = c.tail ? 1 : 0;
-    const std::uint64_t batches = (coded ? 2 : 1) + tail;
+    const std::uint64_t batches =
+        (coded ? 2 : 1) + tail + (s == 0 ? first_extra : 0);
     if (s >= 3) {
       CHECK(c.staging <= 1);
       warm_staging += c.staging;
@@ -710,7 +721,7 @@ int keyed_sets(vkc::test::GpuContext& gpu, const Keyed& run,
                                            fusion.voxel_size_m,
                                            fusion.truncation_m, run.buckets);
   CHECK(grid.ok());
-  auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
+  auto fuser = make_fuser(gpu);
   CHECK(fuser.ok());
   codec::EncoderConfig config;
   config.intra_period = run.period;
@@ -856,7 +867,7 @@ int moved_from(vkc::test::GpuContext& gpu) {
   auto grid = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator,
                                            fusion.voxel_size_m,
                                            fusion.truncation_m, 1024);
-  auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
+  auto fuser = make_fuser(gpu);
   auto made = codec_stream::CodecStream::create(gpu.device, gpu.allocator, {},
                                                 geometry_session());
   CHECK(grid.ok() && fuser.ok() && made.ok());
@@ -909,8 +920,7 @@ int halves(vkc::test::GpuContext& gpu, vgrid::volume::VoxelBlockGrid& source,
       gpu.device, gpu.allocator, config, geometry_session(), by_code);
   vkc::Result<codec_stream::CodecStream> b = codec_stream::CodecStream::create(
       gpu.device, gpu.allocator, config, geometry_session(), by_halves);
-  vkc::Result<vr::tsdf::Fuser> fuser =
-      vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
+  vkc::Result<vr::tsdf::Fuser> fuser = make_fuser(gpu);
   CHECK(a.ok() && b.ok() && fuser.ok());
   const auto send = [&](vgrid::volume::VoxelBlockGrid& grid, std::size_t frame,
                         vkc::StageMetrics* rows, int* published) {
@@ -973,7 +983,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     std::vector<SetCounts> counts;
     CHECK(code_sets(gpu, fusion, path, &coded, Run{true, 1024, &counts}) == 0);
     CHECK(check_stream(gpu, path, dynamic, coded) == 0);
-    CHECK(counts_case(counts, true, name.c_str()) == 0);
+    const std::uint64_t zeroing = dynamic ? 2 : 0;  // two cameras
+    CHECK(counts_case(counts, true, name.c_str(), zeroing) == 0);
     // The blocking calls code the same frames.
     const std::string blocking =
         (scratch.path / (name + "_blocking.vrst")).string();
@@ -984,7 +995,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     std::vector<Walls> alone;
     std::vector<SetCounts> fused;
     CHECK(code_sets(gpu, fusion, "", &alone, Run{true, 1024, &fused}) == 0);
-    CHECK(counts_case(fused, false, (name + " fused").c_str()) == 0);
+    CHECK(counts_case(fused, false, (name + " fused").c_str(), zeroing) == 0);
     for (std::size_t s = 0; s < kSets; ++s) {
       CHECK(alone[s].near_blocks == coded[s].near_blocks);
     }
@@ -1001,7 +1012,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     std::vector<SetCounts> counts;
     CHECK(code_sets(gpu, fusion, path, &grids, Run{true, 1024, &counts, 4}) ==
           0);
-    CHECK(counts_case(counts, true, "dynamic rig") == 0);
+    CHECK(counts_case(counts, true, "dynamic rig", 4) == 0);
   }
   // A grid of 32 buckets: the first set's round meets the capacity limit, so
   // its fusion is done again and grown, and its frame's front half after it,

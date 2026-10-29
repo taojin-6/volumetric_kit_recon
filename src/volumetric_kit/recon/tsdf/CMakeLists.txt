@@ -68,7 +68,7 @@ vr_embed_shaders(
   volumetric_kit::grid_volume
   SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_clear.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_reset.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_change_detect.comp")
 
 vr_target_warnings(recon_tsdf)
