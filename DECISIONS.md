@@ -5330,8 +5330,10 @@ while it is there notwithstanding; a 2-sample sporadic return ends
 silently, a 3-sample one flags; single-frame dropouts there change
 nothing (a twin that skipped them matches bit for bit, through a step and
 the departure, flagged on its second frame); a still surface there with
-10% dropouts flags within 15% of the rule's 0.265 times a pixel a second;
-a depth past the word's 30 bits keeps the largest they hold (107 km). The noise freeze holds a 10 mm a frame
+10% dropouts flags 0.256 times a pixel a second (the rule's 0.265; with a
+lone dropout ending the history, 2.15, which fails, as do the twin and the
+departure's frame); a depth past the word's 30 bits keeps the largest they
+hold (107 km). The noise freeze holds a 10 mm a frame
 ramp's drift before its history restarts to 30 mm at p95 (bound 60 mm;
 80-90 mm with the freeze off, which fails).
 
@@ -5345,7 +5347,8 @@ ramp's drift before its history restarts to 30 mm at p95 (bound 60 mm;
    back to unobserved (tsdf, weight and colour 0); history behind the band,
    which the new surface occludes, stays. A `Vanished` ray has no new
    sample: it resets up to the band of the surface that left, the depth its
-   mask word carries. Every frame's reset runs before any frame's fuse.
+   mask word carries, the set after the surface left (the entry above).
+   Every frame's reset runs before any frame's fuse.
 3. **Fuse,** in slot order. Free space past the band averages in as +trunc
    at a tenth of a sample's weight, geometry only (no colour), and only into
    a voxel that already holds weight.
@@ -5395,9 +5398,22 @@ drawn into the depth (lab RTX 4090, against main):
 - A sphere at 0.1 m/s (take1): 38 cm² of ghost stays (main 68). At 1 m/s:
   46.5 cm² while it moves, 50.2 the set after it leaves, 46.4 for good
   (main 77.9 / 81.3 / 84.8); shown while moving 98.6% (main 90.5%).
-- A walking column that vanishes mid-walk (take3): 0.49 m² stays along its
+- A walking column that vanishes mid-walk (take3): 0.48 m² stays along its
   last pose and in slivers at its first (main 2.16 m²; 1.27 m² before the
   `Vanished` reset).
+- `Vanished` on the second invalid sample in a row (the entry above), at the
+  final code against the build before it: the vanishing column leaves
+  0.474 m² the set after it goes (0.468), a sheet at its last pose that the
+  next set clears, then 0.467 (0.467) and 0.465 (0.466) two and five sets
+  on; while it walks, 0.455 m² (0.444). The 1 m/s sphere and the box are
+  unchanged (46.6 / 50.2 / 46.4 cm²; nothing left, cleared in one set).
+  Rays reset outside the movers rise 2-4% (55-102 a second).
+- A column that walks in and stands still, its pixels dropping out i.i.d. at
+  15% (take3): while it stands, flagged 8.1k times a second (41k when a lone
+  dropout ended a history; 14 without dropouts), and 97.4% of its surface
+  shown at 4.3 mm rms (97.0% and 4.4 mm before; main with the same dropouts
+  97.5% and 4.8 mm; without them 97.5% and 4.1 mm). The lit crops show a
+  few scattered pinholes where there were many; main's sit at the rim.
 - A moving surface shows 99% of its visible area while it moves (main 90%).
 
 **Cost.** Release, take1 replay (four Femto cameras, 1 cm), sets 40-119,
@@ -5405,8 +5421,10 @@ interleaved with main: integrate 1.62-1.63 ms a set on the RTX 4090 against
 main's 1.54-1.55 (the change tests 0.07 ms, the resets 0.63 ms in place of
 the former clears), and 4.62-4.63 ms on the M5 Max against 4.58-4.70 (0.11
 and 1.46 ms; testing a voxel's weight before projecting it, as the former
-clear did, took the resets from 2.02). Memory: the detector's 35.4 MB for
-the rig. Classic is unchanged (40 take1 sets: the codec stream
+clear did, took the resets from 2.02). The dropout mark costs nothing
+measurable: the change tests 0.072 against 0.073 ms, integrate 1.686-1.689
+against 1.688-1.692 ms (RTX 4090, interleaved with the build before it).
+Memory: the detector's 35.4 MB for the rig. Classic is unchanged (40 take1 sets: the codec stream
 byte-identical, the set-39 mesh the same triangles).
 
 **Tests.** `recon_tsdf_dynamic_change` fuses two cameras that disagree by
@@ -5432,17 +5450,12 @@ synchronization validation.
 **Open.** A surface that leaves to no return flags nothing where its pixel
 returned anything in its camera's warm-up (a surface there from the start,
 or a background's sporadic return) or where it returned for under three
-samples in a row (`TODO(tsdf)`); partial evidence lowering the weight cap
-so slow motion slides; the noise model's edge and incidence terms; and
-pixels that drop in and out over no return. A still surface there flags
-`Vanished` at each dropout after three valid samples (the entry above), and
-each resets its ray's band. A column that walks in and stands still, its
-pixels dropping out i.i.d. at 15% (take3, lab RTX 4090), was flagged 41k
-times a second while it stood, and kept 97.0% of its surface against 97.5%
-both on main with the same dropouts and here without them, at 4.4 mm rms
-(main 4.8): pinholes spread over its face, where main's are at its rim.
-The candidate, the owner's call: flag on the second invalid sample in a
-row, 33 ms later on a real departure, for one more state bit.
+samples (`TODO(tsdf)`); partial evidence lowering the weight cap so slow
+motion slides; the noise model's edge and incidence terms; and two dropouts
+in a row on a still surface over no return, which still flag and reset
+(the standing column's 8.1k a second; a real sensor's dropouts cluster on
+hair and silhouettes, so there they come in a row more often than
+i.i.d.).
 
 ## Measured lessons
 
