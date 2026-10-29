@@ -5656,7 +5656,23 @@ depth from its infrared pair by stereo matching, as one more depth source.
   another `IRgbdSensor`, with a scenario key to choose it, the loop
   unchanged.
 
-**Validation.** VALIDATION_TBD
+**Validation.** On the lab RTX 4090 (Ubuntu 26.04, Release, the Orbbec,
+RealSense and video drivers): the full suite, 44 tests, under the
+validation layer, and core's 528 with the profile and its consumer check.
+Three planted bugs were killed: the counters' order, a clock check that
+ignores a camera's clock, and the options' colour width. Checked by hand,
+not a test:
+- `fuse_realsense` on the D455 (1 cm voxels): 900 frames in 31.7 s, 30 fps
+  after the camera's first 1.6 s; 37 start-up framesets refused, none
+  dropped. A frame costs 1.20 ms of prep and 5.05 ms of integration on the
+  device, 0.22 ms on the host, 7.2 ms from arrival to published; the
+  process peaked at 895 MiB of GPU memory.
+- `fuse_orbbec` on the four-Femto rig, 25 sets, twice each against main:
+  prep 0.42 against 0.40 ms and integration 1.33 against 1.34 ms on the
+  device (the means of both runs), the same rate, and meshes within 0.2% in the second pair. In the
+  first pair one camera's H.265 joined a second before its first key frame
+  (24 lost), which left the branch's mesh 11% smaller; the driver is
+  unchanged by the re-pin.
 
 ## Measured lessons
 
