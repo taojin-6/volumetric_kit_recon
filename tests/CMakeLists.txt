@@ -215,8 +215,10 @@ if(TARGET volumetric_kit::sensor_orbbec)
                              PRIVATE VR_TEST_ORBBEC_CONFIG=1)
 endif()
 if(TARGET volumetric_kit::sensor_realsense)
-  target_link_libraries(recon_example_fuse_config_test
-                        PRIVATE volumetric_kit::sensor_realsense)
+  # realsense_camera.hpp opens the camera as an array.
+  target_link_libraries(
+    recon_example_fuse_config_test PRIVATE volumetric_kit::sensor_realsense
+                                           volumetric_kit::sensor_array)
   target_compile_definitions(recon_example_fuse_config_test
                              PRIVATE VR_TEST_REALSENSE_CONFIG=1)
 endif()
