@@ -71,13 +71,15 @@ find_package(Vulkan REQUIRED)
 # Pinned dependencies: volumetric_kit_core and volumetric_kit_grid, linked
 # PUBLIC, and the in-tree sensor package. The oldest core recon's libraries
 # build with is checked in the core that arrives (third_party/, which also
-# checks the config tier the examples and tests need): 0.29.0, whose
-# vulkan/fwd.hpp the public headers include, and whose 0.28.0 test support the
-# tests run on. The oldest sensor package is 0.1.0, its first, whose
-# sensor_frame recon's libraries link; the oldest grid is VR_GRID_MIN_VERSION.
-set(VR_CORE_MIN_VERSION 0.29.0)
+# checks the config tier the examples and tests need): 0.30.0, whose
+# output.max_viewers fuse_orbbec serves by; 0.29.0 brought the vulkan/fwd.hpp
+# the public headers include, and 0.28.0 the test support the tests run on. The
+# oldest sensor package is 0.1.0, its first, whose sensor_frame recon's
+# libraries link; the oldest grid is VR_GRID_MIN_VERSION: 0.2.1, whose
+# codec_outputs passes output.max_viewers to the server.
+set(VR_CORE_MIN_VERSION 0.30.0)
 set(VR_SENSOR_MIN_VERSION 0.1.0)
-set(VR_GRID_MIN_VERSION 0.1.0)
+set(VR_GRID_MIN_VERSION 0.2.1)
 # Testing is on before third_party/ adds the sensor package, so its tests join
 # this build's CTest tree.
 if(VR_BUILD_TESTS)
