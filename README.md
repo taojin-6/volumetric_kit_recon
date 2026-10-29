@@ -29,9 +29,12 @@ clean, independently consumable tiers.
 
 ## Design at a glance
 
-- **Tiered, like gfx:** `core` → `tsdf` → `texture` → `interop`, with
-  `sensor` off `core`, on grid's tiers below them. A tier may depend only on
-  tiers to its left, and grid on nothing of recon's.
+- **Tiered, like gfx:** `core` → `tsdf` → `texture` → `interop`, on grid's
+  tiers below them. A tier may depend only on tiers to its left, and grid on
+  nothing of recon's.
+- **Cameras in a package of their own:** capture, decoding and frame
+  preparation are the in-tree sensor package ([sensor/](sensor/README.md)),
+  whose frame contract (`sensor_frame`) is all recon's libraries link.
 - **One Vulkan path everywhere:** compute runs as Vulkan compute shaders
   (GLSL → SPIR-V), with MoltenVK on Apple — Linux / Android / macOS / iOS
   from one source, mirroring `volumetric_kit_gfx`. No Metal/CUDA split. GCC or
@@ -63,19 +66,21 @@ Consume it from another CMake project with `FetchContent`, pinned by commit
 (recon has no install rules), then link a tier (e.g.
 `volumetric_kit::recon_core`). Fetched, recon builds its library tiers alone:
 its tests, examples and `-Werror` (`VR_WARNINGS_AS_ERRORS`) default on only
-when it is the top-level project. A consumer with no GPU work, such as calib's
-solver, sets `VR_CAMERA_ONLY` ON to build the camera tier
-(`volumetric_kit::recon_camera`) alone, with no Vulkan SDK; it refuses the
-examples and the optional drivers.
+when it is the top-level project. The camera and sensor tiers are the
+in-tree sensor package (`sensor/`, `volumetric_kit::sensor_*`; its
+[README](sensor/README.md) covers its options, drivers and decoders), which
+recon declares after the core: recon's configure passes it the `VS_`
+options, and its tests and `-Werror` follow recon's.
 
-A consumer's kernels include recon's exported GLSL as recon's own do,
-through the core's `INCLUDE_TARGETS`: `volumetric_kit::recon_core` exports
-the pinhole (`volumetric_kit/recon/core/shaders/pinhole.glsl`) with
-`vkc_export_glsl`, under a root that holds it alone. The voxel grid's
-contract is grid's ([its README](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#building)).
+recon exports no GLSL. A consumer's kernels include the GLSL recon's kernels
+read as they do, through the core's `INCLUDE_TARGETS`: the sensor package's
+`volumetric_kit::sensor_frame` exports the pinhole
+(`volumetric_kit/sensor/frame/shaders/pinhole.glsl`) with `vkc_export_glsl`,
+under a root that holds it alone. The voxel grid's contract is grid's
+([its README](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#building)).
 
 ```cmake
-vkc_compile_shaders(my_kernels INCLUDE_TARGETS volumetric_kit::recon_core
+vkc_compile_shaders(my_kernels INCLUDE_TARGETS volumetric_kit::sensor_frame
                     SHADERS my.comp)
 ```
 
@@ -100,11 +105,11 @@ names (`volumetric_kit::core::Status`, `volumetric_kit::core::Device`) and which
 one `VkDevice` shares with gfx.
 An application that also fetches calib, which builds on the core too, declares
 `volumetric_kit_core` first, so both build against one copy, and sets
-`VKC_WITH_VULKAN ON` before the first `FetchContent_MakeAvailable` of it
-unless recon is camera-only; to build against a local core checkout, pass
+`VKC_WITH_VULKAN ON` before the first `FetchContent_MakeAvailable` of it; to
+build against a local core checkout, pass
 `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`. recon needs the core
-at `VR_CORE_MIN_VERSION` (0.29.0) or newer, with its vulkan tier unless
-`VR_CAMERA_ONLY` is ON, and checks both with the core's `vkc_require_core`:
+at `VR_CORE_MIN_VERSION` (0.29.0) or newer, with its vulkan tier, and checks
+both with the core's `vkc_require_core`:
 on a core older than that or missing a required tier, recon's configure
 fails saying why. A core older than 0.1.0 has no `vkc_require_core`, so the
 configure stops at that call as an unknown command: move the first-declared
@@ -115,13 +120,65 @@ core version they and the viewers' pinned gfx (`VR_BUILD_VIEWER`) need.
 
 ### Asset I/O
 
-`volumetric_kit::recon_image_io` provides encoded RGB image loading, 16-bit
-grayscale depth PNG loading with explicit units, and RGBA8 and 16-bit
-grayscale PNG writing (`io/image_io.hpp`); it links the core's base tier
-alone, with no Vulkan. These are host file operations; they allocate no
-Vulkan resources and do not download a live GPU volume. Mesh files -- PLY
-export and the optional Assimp import (`VGRID_WITH_ASSIMP`) -- are grid's
+recon reads and writes no asset files of its own: image files are the
+sensor package's (`volumetric_kit::sensor_image_io`,
+[its README](sensor/README.md#image-files)), and mesh files -- PLY export
+and the optional Assimp import (`VGRID_WITH_ASSIMP`) -- are grid's
 ([its README](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#mesh-files)).
+
+### Optional: Orbbec SDK
+
+The live example, `fuse_orbbec`, needs the sensor package's Orbbec driver:
+the installed Orbbec SDK and, on Linux, the video decoders
+([the package's README](sensor/README.md#orbbec-driver)).
+
+```sh
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
+    -DVS_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
+# on Linux, add -DVS_WITH_FFMPEG=ON -DVS_WITH_CUDA=ON
+```
+
+Every example takes a core
+scenario file through `--config`; `--help` prints the common entry point.
+The core owns JSON decoding, defaults, units, ranges, source selection and
+operation compatibility. See [example configurations](config/README.md).
+Set `diagnostics.readback` to `true` to read each set's luma back to the
+host through `PictureReadback`, during either streaming or fusion.
+
+```sh
+build/examples/fuse_orbbec/fuse_orbbec --config config/examples/fuse_orbbec.json
+# Stream and decode alone, at 4K MJPEG and 25 fps; 60000 camera frames:
+build/examples/fuse_orbbec/fuse_orbbec --config config/examples/stream_orbbec.json
+# Each fused set coded as one frame of a .vrst:
+build/examples/fuse_orbbec/fuse_orbbec --config config/examples/codec_orbbec.json
+# The same, also served live:
+build/examples/fuse_orbbec/fuse_orbbec --config config/examples/serve_orbbec.json
+```
+
+With `output.stream`, `output.csv` or `output.serve`
+([Live streaming](#live-streaming)), the example codes each fused set as one
+frame, as the [codec examples](#codec-evaluation) do, at the set's time (for
+a rig, on the host's clock); `output.stream` records the frames in a `.vrst`.
+They are geometry only, in the world `source.calibration` defines. Ctrl+C
+ends a run cleanly ([Examples](DESIGN.md#examples)).
+
+Edit `source.serial` for a single camera, or `source.sync_config` for a synced
+rig. A camera wired as a secondary streams only while its primary does; choose
+a primary or standalone camera for a single-camera run. With neither serial nor
+sync file, the example opens the only camera answering in the discovery window
+(8 s).
+
+The sync file stays in the Orbbec SDK's format (`config/femto_mega_sync.json`),
+and `source.calibration` references the family's calibration file for poses,
+each camera's depth offset and the colour cameras' exposure
+(`color_controls`), which every camera is opened at; without it they run at
+auto exposure. Auto white balance is on either way. Colour is H.265 at
+3840x2160 and 25 fps unless the scenario names another mode.
+A camera whose sync settings differ is refused; `source.apply_sync: true`
+explicitly writes those settings. The stream operation refuses fusion, codec
+and output settings before opening any resource. Relative paths are resolved
+from the scenario file's directory, including the sync, calibration and output
+paths.
 
 ## Codec evaluation
 

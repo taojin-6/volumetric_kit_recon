@@ -24,6 +24,7 @@
 
 namespace cfg = volumetric_kit::core::config;
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vgrid = volumetric_kit::grid;
 
 int main() {
@@ -181,7 +182,7 @@ int main() {
                                cfg::Application::FuseOrbbec);
   CHECK(live);
   const auto streams = vr_example::orbbec_stream_options(live.value());
-  CHECK(streams.color_codec == vr::sensor::OrbbecColorCodec::Mjpeg);
+  CHECK(streams.color_codec == sensor::OrbbecColorCodec::Mjpeg);
   CHECK(streams.color_width == 3840 && streams.color_height == 2160);
   CHECK(streams.depth_width == 640 && streams.depth_height == 576);
   CHECK(streams.fps == 25);
@@ -200,8 +201,8 @@ int main() {
         app);
     CHECK(unnamed);
     const auto mapped = vr_example::orbbec_stream_options(unnamed.value());
-    const vr::sensor::OrbbecStreamOptions driver;
-    CHECK(mapped.color_codec == vr::sensor::OrbbecColorCodec::Hevc);
+    const sensor::OrbbecStreamOptions driver;
+    CHECK(mapped.color_codec == sensor::OrbbecColorCodec::Hevc);
     CHECK(mapped.color_width == 3840 && mapped.color_height == 2160);
     CHECK(mapped.depth_width == 640 && mapped.depth_height == 576);
     CHECK(mapped.fps == 25);

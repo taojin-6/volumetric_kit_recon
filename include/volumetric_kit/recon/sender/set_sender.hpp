@@ -22,9 +22,9 @@
 #include "volumetric_kit/grid/codec_stream/codec_stream.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/sender/export.hpp"
-#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/sensor/frame/device_frame.hpp"
 
 namespace volumetric_kit::recon::sender {
 

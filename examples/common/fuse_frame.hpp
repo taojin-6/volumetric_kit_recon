@@ -23,14 +23,14 @@
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/sender/fuse_inputs.hpp"
-#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
 
 namespace vr_example {
 
 namespace vr = volumetric_kit::recon;
-
+namespace sensor = volumetric_kit::sensor;
 namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
 
@@ -78,7 +78,7 @@ inline vr::tsdf::IntegrationMode integration_mode(bool dynamic) {
 /// @return OK, or `Fuser::fuse`'s error.
 inline vkc::Status fuse_set(
     vr::tsdf::Fuser& fuser, vgrid::volume::VoxelBlockGrid& grid,
-    const std::vector<std::optional<vr::sensor::DeviceFrame>>& frames,
+    const std::vector<std::optional<sensor::DeviceFrame>>& frames,
     float max_weight, vr::tsdf::IntegrationMode mode,
     vkc::StageMetrics* metrics) {
   const vr::sender::FuseInputs in = vr::sender::fuse_inputs(frames);
@@ -139,10 +139,10 @@ inline void free_stale_blocks_every(vgrid::volume::VoxelBlockGrid& grid,
 /// @return OK with @p keyframe replaced, or the preparation or fusion error.
 inline vkc::Status fuse_keyframe(
     vr::tsdf::Fuser& fuser, vgrid::volume::VoxelBlockGrid& grid,
-    vr::sensor::GpuFramePrep& prep, const vr::sensor::RgbdFrame& frame,
-    std::optional<vr::sensor::DeviceFrame>& keyframe, float max_weight,
+    sensor::GpuFramePrep& prep, const sensor::RgbdFrame& frame,
+    std::optional<sensor::DeviceFrame>& keyframe, float max_weight,
     vr::tsdf::IntegrationMode mode, vkc::StageMetrics* metrics) {
-  VKC_ASSIGN(vr::sensor::DeviceFrame prepared, prep.prepare(frame, metrics));
+  VKC_ASSIGN(sensor::DeviceFrame prepared, prep.prepare(frame, metrics));
   VKC_TRY(fuse_set(fuser, grid, {prepared}, max_weight, mode, metrics));
   keyframe = std::move(prepared);
   return {};

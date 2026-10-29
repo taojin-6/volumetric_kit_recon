@@ -16,9 +16,11 @@
 #include "volumetric_kit/grid/testing/device_blocks.hpp"
 #include "volumetric_kit/grid/testing/grid_readback.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
+#include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = vr::tsdf;
@@ -36,7 +38,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   const vol::BlockIndex block{vr::Vec3i(0, 0, 6), 0};
   auto placed = vgrid_test::allocate_blocks(gpu, grid->map(), &block, 1);
   CHECK(placed.ok() && *placed == 0);
-  vr::DepthCameraParams camera{};
+  sensor::DepthCameraParams camera{};
   camera.fx = camera.fy = 32.0f;
   camera.cx = camera.cy = 16.0f;
   camera.width = camera.height = 32;

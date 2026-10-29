@@ -70,23 +70,24 @@
 #include "volumetric_kit/grid/testing/grid_readback.hpp"
 #include "volumetric_kit/grid/testing/networking_loopback.hpp"
 #include "volumetric_kit/grid/testing/stage_rows.hpp"
-#include "volumetric_kit/recon/camera/array_calibration.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
+#include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/sender/fuse_inputs.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
-#include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
+#include "volumetric_kit/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/sensor/camera/array_calibration.hpp"
 
 namespace vr = volumetric_kit::recon;
 
 namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
-namespace camera = volumetric_kit::recon::camera;
+namespace camera = volumetric_kit::sensor::camera;
 namespace codec = volumetric_kit::grid::codec;
 namespace codec_stream = volumetric_kit::grid::codec_stream;
 namespace sender = volumetric_kit::recon::sender;
-namespace sensor = volumetric_kit::recon::sensor;
+namespace sensor = volumetric_kit::sensor;
 namespace stream = volumetric_kit::grid::stream;
 namespace networking = volumetric_kit::grid::networking;
 namespace net = vgrid_test::net;

@@ -1,0 +1,377 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+#include "frame_conversion.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <exception>
+#include <iterator>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+
+namespace volumetric_kit::sensor::orbbec {
+
+static_assert(kMaxColorQueueFamilies == core::BufferDesc::kMaxQueueFamilies,
+              "kMaxColorQueueFamilies mirrors BufferDesc::kMaxQueueFamilies");
+
+core::Result<camera::CameraModel> camera_model_from(
+    const OBCameraIntrinsic& intrinsic, const OBCameraDistortion& distortion,
+    const std::string& what, const std::string& who) {
+  if (intrinsic.width <= 0 || intrinsic.height <= 0) {
+    return core::Status::invalid_argument(
+        who + ": " + what + " intrinsics report a " +
+        std::to_string(intrinsic.width) + "x" +
+        std::to_string(intrinsic.height) + " image");
+  }
+  for (const float f : {intrinsic.fx, intrinsic.fy}) {
+    if (!std::isfinite(f) || !(f > 0.0f)) {
+      return core::Status::invalid_argument(
+          who + ": " + what +
+          " intrinsics report a focal length that is not finite and positive");
+    }
+  }
+  if (!std::isfinite(intrinsic.cx) || !std::isfinite(intrinsic.cy)) {
+    return core::Status::invalid_argument(
+        who + ": " + what + " intrinsics report a non-finite principal point");
+  }
+  switch (distortion.model) {
+    case OB_DISTORTION_NONE:
+    case OB_DISTORTION_BROWN_CONRADY:
+    case OB_DISTORTION_BROWN_CONRADY_K6:
+      break;
+    default:
+      return core::Status::unsupported(
+          who + ": " + what + " stream reports lens model " +
+          lens_model_name(distortion.model) +
+          ", which the GPU pass cannot undistort (it takes Brown-Conrady)");
+  }
+  camera::CameraModel cam;
+  cam.size = {static_cast<std::uint32_t>(intrinsic.width),
+              static_cast<std::uint32_t>(intrinsic.height)};
+  cam.intrinsics = {intrinsic.fx, intrinsic.fy, intrinsic.cx, intrinsic.cy};
+  camera::RationalDistortion& lens = cam.distortion;
+  if (distortion.model != OB_DISTORTION_NONE) {
+    lens.k1 = distortion.k1;
+    lens.k2 = distortion.k2;
+    lens.p1 = distortion.p1;
+    lens.p2 = distortion.p2;
+    lens.k3 = distortion.k3;
+  }
+  // Only the K6 model has the rational denominator: the plain one is the
+  // polynomial k1..k3, so whatever the SDK leaves in k4..k6 there is not a
+  // term of it.
+  if (distortion.model == OB_DISTORTION_BROWN_CONRADY_K6) {
+    lens.k4 = distortion.k4;
+    lens.k5 = distortion.k5;
+    lens.k6 = distortion.k6;
+  }
+  const core::Status valid = camera::check_camera_model(cam);
+  if (!valid.ok()) {
+    return core::Status::invalid_argument(who + ": " + what +
+                                          " stream: " + valid.message());
+  }
+  return cam;
+}
+
+std::string lens_model_name(OBCameraDistortionModel model) {
+  switch (model) {
+    case OB_DISTORTION_NONE:
+      return "none";
+    case OB_DISTORTION_MODIFIED_BROWN_CONRADY:
+      return "modified-brown-conrady";
+    case OB_DISTORTION_INVERSE_BROWN_CONRADY:
+      return "inverse-brown-conrady";
+    case OB_DISTORTION_BROWN_CONRADY:
+      return "brown-conrady";
+    case OB_DISTORTION_BROWN_CONRADY_K6:
+      return "brown-conrady-k6";
+    case OB_DISTORTION_KANNALA_BRANDT4:
+      return "kannala-brandt4";
+  }
+  return "unknown-" + std::to_string(static_cast<int>(model));
+}
+
+core::Result<camera::Mat4d> transform_from(const OBExtrinsic& extrinsic,
+                                           const std::string& who) {
+  camera::Mat3d rotation(1.0);  // column-major: rotation[column][row]
+  for (int r = 0; r < 3; ++r) {
+    for (int c = 0; c < 3; ++c) rotation[c][r] = extrinsic.rot[3 * r + c];
+  }
+  // A Femto Mega's factory depth-to-colour rotation has its first row 0.6%
+  // short of unit length (measured 2026-10-06); its nearest rotation is the
+  // tilt the rest of the matrix describes.
+  camera::Mat4d m(camera::nearest_rotation(rotation));
+  for (int r = 0; r < 3; ++r) m[3][r] = extrinsic.trans[r] / 1000.0;
+  // A zeroed or reflected matrix, as an uncalibrated unit can report, comes
+  // out NaN or a reflection: refused here rather than at every frame.
+  const core::Status rigid = camera::check_rigid(m);
+  if (!rigid.ok()) {
+    return core::Status::invalid_argument(who +
+                                          ": extrinsic: " + rigid.message());
+  }
+  return m;
+}
+
+OrbbecSyncMode sync_mode_from(OBMultiDeviceSyncMode mode) noexcept {
+  switch (mode) {
+    case OB_MULTI_DEVICE_SYNC_MODE_FREE_RUN:
+      return OrbbecSyncMode::FreeRun;
+    case OB_MULTI_DEVICE_SYNC_MODE_STANDALONE:
+      return OrbbecSyncMode::Standalone;
+    case OB_MULTI_DEVICE_SYNC_MODE_PRIMARY:
+      return OrbbecSyncMode::Primary;
+    case OB_MULTI_DEVICE_SYNC_MODE_SECONDARY:
+      return OrbbecSyncMode::Secondary;
+    case OB_MULTI_DEVICE_SYNC_MODE_SECONDARY_SYNCED:
+      return OrbbecSyncMode::SecondarySynced;
+    case OB_MULTI_DEVICE_SYNC_MODE_SOFTWARE_TRIGGERING:
+      return OrbbecSyncMode::SoftwareTriggering;
+    case OB_MULTI_DEVICE_SYNC_MODE_HARDWARE_TRIGGERING:
+      return OrbbecSyncMode::HardwareTriggering;
+    default:
+      return OrbbecSyncMode::Other;
+  }
+}
+
+core::Status validate_streams(const OrbbecStreamOptions& streams,
+                              const std::string& who) {
+  if (streams.depth_width == 0 || streams.depth_height == 0 ||
+      streams.color_width == 0 || streams.color_height == 0) {
+    return core::Status::invalid_argument(
+        who + ": depth and colour sizes must be non-zero");
+  }
+  if (streams.fps == 0) {
+    return core::Status::invalid_argument(who + ": fps must be non-zero");
+  }
+  // NaN fails every comparison, so test for the good range rather than the
+  // bad one; a NaN gate would otherwise reject every sample in silence. The
+  // GPU pass gates depth at min_depth > 0, and would refuse every frame.
+  if (!std::isfinite(streams.min_depth) || !std::isfinite(streams.max_depth) ||
+      !(streams.min_depth > 0.0f) || !(streams.min_depth < streams.max_depth)) {
+    return core::Status::invalid_argument(
+        who + ": depth range [" + std::to_string(streams.min_depth) + ", " +
+        std::to_string(streams.max_depth) +
+        "] m must be finite and non-empty, with min_depth > 0, as the GPU "
+        "pass requires");
+  }
+  if (streams.color_controls && (streams.color_controls->exposure == 0 ||
+                                 streams.color_controls->gain == 0)) {
+    return core::Status::invalid_argument(
+        who +
+        ": color_controls' exposure and gain must be above 0; leave it "
+        "empty for auto exposure");
+  }
+  return core::check_queue_family_count(
+      streams.color_queue_family_count,
+      (who + ": color_queue_families").c_str());
+}
+
+ColorQueueFamilies color_queue_families(const OrbbecStreamOptions& streams) {
+  ColorQueueFamilies out;
+  std::copy(std::begin(streams.color_queue_families),
+            std::end(streams.color_queue_families), out.families);
+  out.count = streams.color_queue_family_count;
+  return out;
+}
+
+OBMultiDeviceSyncMode sdk_sync_mode(OrbbecSyncMode mode) noexcept {
+  switch (mode) {
+    case OrbbecSyncMode::FreeRun:
+      return OB_MULTI_DEVICE_SYNC_MODE_FREE_RUN;
+    case OrbbecSyncMode::Primary:
+      return OB_MULTI_DEVICE_SYNC_MODE_PRIMARY;
+    case OrbbecSyncMode::Secondary:
+      return OB_MULTI_DEVICE_SYNC_MODE_SECONDARY;
+    case OrbbecSyncMode::SecondarySynced:
+      return OB_MULTI_DEVICE_SYNC_MODE_SECONDARY_SYNCED;
+    case OrbbecSyncMode::SoftwareTriggering:
+      return OB_MULTI_DEVICE_SYNC_MODE_SOFTWARE_TRIGGERING;
+    case OrbbecSyncMode::HardwareTriggering:
+      return OB_MULTI_DEVICE_SYNC_MODE_HARDWARE_TRIGGERING;
+    case OrbbecSyncMode::Standalone:
+    case OrbbecSyncMode::Other:
+      break;
+  }
+  return OB_MULTI_DEVICE_SYNC_MODE_STANDALONE;
+}
+
+OrbbecSyncSettings sync_settings_from(const OBMultiDeviceSyncConfig& sdk) {
+  OrbbecSyncSettings s;
+  s.mode = sync_mode_from(sdk.syncMode);
+  s.depth_delay_us = sdk.depthDelayUs;
+  s.color_delay_us = sdk.colorDelayUs;
+  s.trigger_to_image_delay_us = sdk.trigger2ImageDelayUs;
+  s.trigger_out_enable = sdk.triggerOutEnable;
+  s.trigger_out_delay_us = sdk.triggerOutDelayUs;
+  s.frames_per_trigger = sdk.framesPerTrigger;
+  return s;
+}
+
+OBMultiDeviceSyncConfig sdk_sync_config(const OrbbecSyncSettings& s) {
+  OBMultiDeviceSyncConfig sdk{};
+  sdk.syncMode = sdk_sync_mode(s.mode);
+  sdk.depthDelayUs = s.depth_delay_us;
+  sdk.colorDelayUs = s.color_delay_us;
+  sdk.trigger2ImageDelayUs = s.trigger_to_image_delay_us;
+  sdk.triggerOutEnable = s.trigger_out_enable;
+  sdk.triggerOutDelayUs = s.trigger_out_delay_us;
+  sdk.framesPerTrigger = s.frames_per_trigger;
+  return sdk;
+}
+
+std::vector<std::string> sync_differences(const OrbbecSyncSettings& wanted,
+                                          const OrbbecSyncSettings& actual) {
+  const auto role = [](OrbbecSyncMode m) -> std::string {
+    return m == OrbbecSyncMode::SecondarySynced
+               ? to_string(OrbbecSyncMode::Secondary)
+               : to_string(m);
+  };
+  std::vector<std::string> out;
+  const auto differ = [&out](const char* field, const std::string& have,
+                             const std::string& want) {
+    if (have != want) {
+      out.push_back(std::string(field) + " is " + have + ", configured " +
+                    want);
+    }
+  };
+  differ("syncMode", role(actual.mode), role(wanted.mode));
+  differ("depthDelayUs", std::to_string(actual.depth_delay_us),
+         std::to_string(wanted.depth_delay_us));
+  differ("colorDelayUs", std::to_string(actual.color_delay_us),
+         std::to_string(wanted.color_delay_us));
+  differ("triggerOutEnable", actual.trigger_out_enable ? "true" : "false",
+         wanted.trigger_out_enable ? "true" : "false");
+  differ("triggerOutDelayUs", std::to_string(actual.trigger_out_delay_us),
+         std::to_string(wanted.trigger_out_delay_us));
+  if (wanted.mode == OrbbecSyncMode::SoftwareTriggering ||
+      wanted.mode == OrbbecSyncMode::HardwareTriggering) {
+    differ("framesPerTrigger", std::to_string(actual.frames_per_trigger),
+           std::to_string(wanted.frames_per_trigger));
+  }
+  return out;
+}
+
+namespace {
+
+// A colour control as the camera's write and read-back name it.
+struct ColorControl {
+  OBPropertyID id;
+  const char* name;
+};
+constexpr ColorControl kAutoExposure{OB_PROP_COLOR_AUTO_EXPOSURE_BOOL,
+                                     "auto exposure"};
+constexpr ColorControl kExposure{OB_PROP_COLOR_EXPOSURE_INT, "exposure"};
+constexpr ColorControl kGain{OB_PROP_COLOR_GAIN_INT, "gain"};
+constexpr ColorControl kAutoWhiteBalance{OB_PROP_COLOR_AUTO_WHITE_BALANCE_BOOL,
+                                         "auto white balance"};
+
+const char* on_off(bool on) { return on ? "on" : "off"; }
+
+}  // namespace
+
+core::Result<std::optional<camera::ColorControls>> write_color_controls(
+    CameraProperties& camera,
+    const std::optional<camera::ColorControls>& wanted,
+    const std::string& who) {
+  try {
+    const bool manual = wanted.has_value();
+    // 1. Every control a manual exposure needs, and its values in range,
+    //    before anything is written.
+    if (manual) {
+      for (const ColorControl& c :
+           {kAutoExposure, kExposure, kGain, kAutoWhiteBalance}) {
+        if (!camera.writable(c.id)) {
+          return core::Status::unsupported(
+              who + " has no colour " + c.name +
+              " to read and write, which a manual exposure needs");
+        }
+      }
+      for (const auto& [c, value] : {std::pair{kExposure, wanted->exposure},
+                                     std::pair{kGain, wanted->gain}}) {
+        const OBIntPropertyRange range = camera.int_range(c.id);
+        const std::int64_t v = value;
+        if (v < range.min || v > range.max) {
+          return core::Status::unsupported(
+              who + ": colour " + c.name + " " + std::to_string(value) +
+              " is outside the camera's range [" + std::to_string(range.min) +
+              ", " + std::to_string(range.max) + "]");
+        }
+        if (range.step > 1 && (v - range.min) % range.step != 0) {
+          return core::Status::unsupported(
+              who + ": colour " + c.name + " " + std::to_string(value) +
+              " is off the camera's steps of " + std::to_string(range.step) +
+              " from " + std::to_string(range.min));
+        }
+      }
+    }
+    const bool has_auto_exposure = camera.writable(kAutoExposure.id);
+    const bool has_auto_white_balance = camera.writable(kAutoWhiteBalance.id);
+
+    // 2. Written where the camera differs, in this order.
+    bool was_auto = false;
+    if (has_auto_exposure) {
+      was_auto = camera.get_bool(kAutoExposure.id);
+      if (was_auto == manual) camera.set_bool(kAutoExposure.id, !manual);
+    }
+    if (manual) {
+      for (const auto& [c, value] : {std::pair{kExposure, wanted->exposure},
+                                     std::pair{kGain, wanted->gain}}) {
+        const auto v = static_cast<std::int32_t>(value);  // in range
+        if (was_auto || camera.get_int(c.id) != v) camera.set_int(c.id, v);
+      }
+    }
+    if (has_auto_white_balance && !camera.get_bool(kAutoWhiteBalance.id)) {
+      camera.set_bool(kAutoWhiteBalance.id, true);
+    }
+
+    // 3. Read back.
+    std::vector<std::string> differences;
+    const auto flag = [&](const ColorControl& c, bool want) {
+      const bool have = camera.get_bool(c.id);
+      if (have != want) {
+        differences.push_back(std::string(c.name) + " is " + on_off(have) +
+                              ", configured " + on_off(want));
+      }
+    };
+    if (has_auto_exposure) flag(kAutoExposure, !manual);
+    std::optional<camera::ColorControls> read;
+    if (manual) {
+      camera::ColorControls got;
+      for (const auto& [c, value, out] :
+           {std::tuple{kExposure, wanted->exposure, &got.exposure},
+            std::tuple{kGain, wanted->gain, &got.gain}}) {
+        const std::int32_t have = camera.get_int(c.id);
+        if (std::int64_t{have} != std::int64_t{value}) {
+          differences.push_back(std::string(c.name) + " is " +
+                                std::to_string(have) + ", configured " +
+                                std::to_string(value));
+        }
+        *out = static_cast<std::uint32_t>(have);
+      }
+      read = got;
+    }
+    if (has_auto_white_balance) flag(kAutoWhiteBalance, true);
+    if (!differences.empty()) {
+      std::string fields;
+      for (const std::string& d : differences) {
+        fields += (fields.empty() ? "" : ", ") + d;
+      }
+      return core::Status::unsupported(
+          who +
+          " differs from its colour controls after writing them: " + fields);
+    }
+    return read;
+  } catch (const std::exception& e) {  // ob::Error is one
+    return core::Status::io_error(who +
+                                  ": setting its colour controls: " + e.what());
+  }
+}
+
+}  // namespace volumetric_kit::sensor::orbbec

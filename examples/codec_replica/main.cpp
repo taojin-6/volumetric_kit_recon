@@ -25,6 +25,7 @@
 #include "codec_report.hpp"
 #include "codec_sweep.hpp"
 #include "config.hpp"
+#include "fuse_device.hpp"
 #include "fuse_sender.hpp"
 #include "replica_config.hpp"
 #include "replica_sensor.hpp"
@@ -37,14 +38,13 @@
 #include "volumetric_kit/grid/eval/mesh_distance.hpp"
 #include "volumetric_kit/grid/mesh/marching_cubes.hpp"
 #include "volumetric_kit/grid/mesh_io/ply_writer.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
-#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
+#include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
 
 namespace vr = volumetric_kit::recon;
-
+namespace sensor = volumetric_kit::sensor;
 namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
 namespace codec = volumetric_kit::grid::codec;
@@ -64,10 +64,11 @@ vkc::Status run(const Options& opt) {
   VKC_ASSIGN(const codec::EncoderConfig config,
              vgrid_example::encoder_config(opt.codec));
   VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
+  VKC_ASSIGN(const vkc::DeviceRequirements reqs,
+             vr_example::fuse_device_requirements());
   VKC_ASSIGN(vkc::PhysicalDeviceInfo gpu,
-             instance.select_physical_device(vr::device_requirements()));
-  VKC_ASSIGN(vkc::Device device,
-             vkc::Device::create(instance, gpu, vr::device_requirements()));
+             instance.select_physical_device(reqs));
+  VKC_ASSIGN(vkc::Device device, vkc::Device::create(instance, gpu, reqs));
   VKC_ASSIGN(vkc::Allocator allocator,
              vkc::Allocator::create(instance.handle(), device));
 
@@ -82,8 +83,8 @@ vkc::Status run(const Options& opt) {
       vgrid::volume::VoxelBlockGrid volume,
       vr::tsdf::create_fusion_grid(device, allocator, voxel, trunc, kBuckets));
   VKC_ASSIGN(vr::tsdf::Fuser fuser, vr::tsdf::Fuser::create(device, allocator));
-  VKC_ASSIGN(vr::sensor::GpuFramePrep prep,
-             vr::sensor::GpuFramePrep::create(device, allocator));
+  VKC_ASSIGN(sensor::GpuFramePrep prep,
+             sensor::GpuFramePrep::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator));
   const codec_stream::CodecOutputs outputs =
@@ -132,13 +133,12 @@ vkc::Status run(const Options& opt) {
     s.arrived(vr_example::system_now_ns(), 0);
     vkc::CommandBatch front(device, allocator);
     front.time(out.timer());
-    VKC_ASSIGN(const vr::sensor::DeviceFrame prepared,
+    VKC_ASSIGN(const sensor::DeviceFrame prepared,
                prep.record(front, *frame, &s.rows));
     VKC_ASSIGN(
         const sender::SetSender::Sent sent,
         out.send(front, {prepared},
-                 std::make_shared<vr::sensor::RgbdFrame>(std::move(*frame)),
-                 fused,
+                 std::make_shared<sensor::RgbdFrame>(std::move(*frame)), fused,
                  vgrid_example::frame_pts_ns(fused, vgrid_example::kNominalFps),
                  &s.rows, [&s] { s.published(); }));
     VKC_TRY(vr_example::report_sent(sent, fused, "codec_replica", s, &report));

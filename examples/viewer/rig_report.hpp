@@ -26,12 +26,12 @@
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/grid/mesh/mesh.hpp"
-#include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
+#include "volumetric_kit/sensor/array/sensor_array.hpp"
 
 namespace fuse_viewer {
 
-namespace rsensor = volumetric_kit::recon::sensor;
+namespace rsensor = volumetric_kit::sensor;
 namespace rtex = volumetric_kit::recon::texture;
 
 /// Why a mesh went out without an atlas. Such a mesh draws in fused vertex

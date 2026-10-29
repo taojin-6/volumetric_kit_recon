@@ -42,6 +42,7 @@
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
@@ -52,7 +53,7 @@ constexpr std::uint32_t kWidth = vgrid_test::kSphereWidth;
 constexpr std::uint32_t kHeight = vgrid_test::kSphereHeight;
 constexpr int kCameras = 3;
 
-using View = vgrid_test::SphereView<vr::DepthCameraParams>;
+using View = vgrid_test::SphereView<sensor::DepthCameraParams>;
 
 vol::VoxelGridParams grid_params() {
   vol::VoxelGridParams grid{};
@@ -142,7 +143,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
   std::vector<View> views;
   for (int c = 0; c < kCameras; ++c) {
-    views.push_back(vgrid_test::sphere_view<vr::DepthCameraParams>(c));
+    views.push_back(vgrid_test::sphere_view<sensor::DepthCameraParams>(c));
   }
   // Camera 0 marks its coverage: a band of its colour says it has none.
   for (std::uint32_t row = 0; row < kHeight; ++row) {
@@ -165,9 +166,9 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       views[0].color.size() * sizeof(std::uint32_t));
   CHECK(color0.ok());
   const auto color_cam = [&](const View& v) {
-    return vr::ColorCameraParams{v.cam.fx,          v.cam.fy,    v.cam.cx,
-                                 v.cam.cy,          v.cam.width, v.cam.height,
-                                 v.cam.cam_to_world};
+    return sensor::ColorCameraParams{
+        v.cam.fx,    v.cam.fy,     v.cam.cx,          v.cam.cy,
+        v.cam.width, v.cam.height, v.cam.cam_to_world};
   };
   tsdf::ColorFrame c0{};
   c0.buffer = &color0.value();
@@ -180,7 +181,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       {vkc::StorageInput(views[1].depth.data()), views[1].cam, &c1},
       {vkc::StorageInput(depth_bufs[2]), views[2].cam, nullptr}};
   // The set, with an empty frame second, and the list it allocates from.
-  vr::DepthCameraParams empty_cam = views[1].cam;
+  sensor::DepthCameraParams empty_cam = views[1].cam;
   empty_cam.width = 0;
   const std::vector<tsdf::FrameInput> set_frames{
       frames[0],

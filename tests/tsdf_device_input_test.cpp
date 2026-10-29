@@ -26,6 +26,7 @@
 #include "volumetric_kit/grid/volume/hash_types.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
+#include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 
 #include "volumetric_kit/core/testing/gpu_test.hpp"
@@ -33,6 +34,7 @@
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
@@ -84,7 +86,7 @@ int check_same(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& a,
 // both grids end with the same blocks.
 template <typename Depth>
 int allocate(vol::VoxelBlockGrid& grid, const Depth& depth,
-             const vr::DepthCameraParams& camera) {
+             const sensor::DepthCameraParams& camera) {
   for (int round = 0; round < 5; ++round) {
     vol::AllocFailures why;
     auto failed = grid.map().allocate_from_depth(
@@ -130,7 +132,7 @@ vkc::Result<ColorCounts> color_counts(const vkc::test::Gpu& ctx,
 int test_coverage(vkc::Device& dev, vkc::Allocator& alloc,
                   tsdf::TsdfIntegrator& integrator,
                   const std::vector<float>& depth,
-                  const vr::DepthCameraParams& cam) {
+                  const sensor::DepthCameraParams& cam) {
   const vkc::test::Gpu ctx{dev, alloc};
   std::vector<std::uint32_t> color(kWidth * kHeight);
   for (std::uint32_t v = 0; v < kHeight; ++v) {
@@ -145,7 +147,7 @@ int test_coverage(vkc::Device& dev, vkc::Allocator& alloc,
   CHECK(color_buf.ok());
   tsdf::ColorFrame frame{};
   frame.buffer = &color_buf.value();
-  frame.cam = vr::ColorCameraParams{
+  frame.cam = sensor::ColorCameraParams{
       cam.fx, cam.fy, cam.cx, cam.cy, cam.width, cam.height, cam.cam_to_world};
   ColorCounts counts[2];
   for (int masked = 0; masked < 2; ++masked) {
@@ -177,7 +179,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
   // A tilted, rippled surface 0.6-0.8 m away with a colour gradient over it,
   // so allocation and fusion both vary across the image.
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = 140.0f;
   cam.fy = 140.0f;
   cam.cx = 79.5f;
@@ -198,7 +200,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       color[i] = (u * 255 / kWidth) | ((v * 255 / kHeight) << 8) | (90u << 16);
     }
   }
-  const vr::ColorCameraParams color_cam{
+  const sensor::ColorCameraParams color_cam{
       cam.fx, cam.fy, cam.cx, cam.cy, cam.width, cam.height, cam.cam_to_world};
 
   auto host_grid = make_grid(dev, alloc);

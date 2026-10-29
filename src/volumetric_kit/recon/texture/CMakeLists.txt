@@ -5,8 +5,8 @@
 # Projective texturing: fills a mesh's per-vertex uv0 with a posed camera's
 # image coordinates for the triangles it sees unoccluded (per-vertex color
 # fallback elsewhere), via a GLSL compute kernel. Depends on grid_mesh (the Mesh
-# it textures) and recon_core (DepthCameraParams + the projection ABI), per the
-# strict left-to-right tier rule.
+# it textures) and the sensor package's sensor_frame (DepthCameraParams + the
+# projection ABI), per the strict left-to-right tier rule.
 include(GenerateExportHeader)
 
 set(_vr_texture_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
@@ -40,10 +40,11 @@ endif()
 
 target_compile_features(recon_texture PUBLIC cxx_std_17)
 
-# PUBLIC: the texture public header exposes grid's mesh types (Mesh/Vertex) +
-# recon_core's (DepthCameraParams) + core types (Result), so consumers compile
-# against grid_mesh and recon_core too.
-target_link_libraries(recon_texture PUBLIC recon_core grid_mesh)
+# PUBLIC: the texture public header exposes grid's mesh types (Mesh/Vertex), the
+# sensor package's frame vocabulary (DepthCameraParams) and core types (Result),
+# so consumers compile against grid_mesh, recon_core and sensor_frame too.
+target_link_libraries(recon_texture PUBLIC recon_core grid_mesh
+                                           volumetric_kit::sensor_frame)
 
 target_include_directories(
   recon_texture PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
@@ -52,10 +53,10 @@ target_include_directories(
 # Compile the GLSL view-selection kernel to SPIR-V and embed it as a constexpr
 # byte array (projective_texturer.cpp #includes the generated *.spv.hpp on a
 # PRIVATE path), so recon_texture ships the technique with no runtime shader
-# files. They include the GLSL recon_core exports (pinhole.glsl), not src/.
+# files. They include the GLSL sensor_frame exports (pinhole.glsl), not src/.
 include(vr_embed)
 vr_embed_shaders(
-  recon_texture INCLUDE_TARGETS volumetric_kit::recon_core SHADERS
+  recon_texture INCLUDE_TARGETS volumetric_kit::sensor_frame SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/texture_score.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/texture_multiview.comp")
 

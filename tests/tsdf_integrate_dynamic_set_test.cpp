@@ -44,6 +44,7 @@
 #include "volumetric_kit/grid/testing/grid_readback.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
@@ -86,7 +87,7 @@ vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
 
 // A camera and the constant depth it sees: a wall square to its axis.
 struct View {
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   std::vector<float> depth;
 };
 

@@ -25,11 +25,15 @@ geometry and compressed bitstreams → renderer handoff.
   only. Never build or write in either prior repository.
 - Production only: no triplane/neural code, tiny-cuda-nn, KLT, iQuantizer, or
   Python research/evaluation harnesses. The production C++ `eval` tier is allowed.
-- A sensor driver belongs here only if this repository can build and test it.
-  Platform-only drivers such as ARKit belong with their downstream application.
-- The tiers work on any data. `io` may offer opt-in, generic unit,
-  orientation and scale helpers, but a tier still never applies dataset
-  preprocessing on its own: the caller opts in, as an example does for its
+- The camera side is the in-tree package `volumetric_kit_sensor`
+  (`sensor/`), on the core alone, until it moves to a repository of its own;
+  its [AGENTS.md](sensor/AGENTS.md), docs and CHANGELOG govern work there.
+  Nothing under `sensor/` includes recon or grid
+  (`sensor_package_boundary`), recon's libraries link its `sensor_frame`
+  alone (`recon_library_sensor_links`), and recon's examples assemble any of
+  its tiers.
+- The tiers work on any data. A tier never applies dataset preprocessing on
+  its own: the caller opts in, as an example does for its
   demo asset, and a tier's tests use synthetic data.
 
 ## Read what the task needs
@@ -43,7 +47,7 @@ linked documents.
 | Build, dependencies, optional drivers | [README.md](README.md#building), [CONTRIBUTING.md](CONTRIBUTING.md), relevant CMake files |
 | Architecture, tier APIs, current implementation | [DESIGN.md](DESIGN.md#tiered-architecture), then the affected tier under [Implementation reference](DESIGN.md#implementation-reference) |
 | Vulkan, shader ABI, device ownership, memory | [Key gotchas](DESIGN.md#key-gotchas-verified) and [The interop seam](DESIGN.md#the-interop-seam) |
-| Color or camera conventions | [Color space](DESIGN.md#color-space), the affected sensor/texture section, and its public headers |
+| Color or camera conventions | [Color space](DESIGN.md#color-space), the texture section or [the sensor package's design](sensor/DESIGN.md), and the public headers |
 | Changing a contract or understanding a constraint | [Decision index](DECISIONS.md#decision-index), then the relevant dated entries; newest context wins |
 | Live rig performance | [PERF.md](PERF.md), including its measurement rules and the item's row |
 | Remaining work or an unmeasured claim | [Next work](DESIGN.md#next-work) and [Measured lessons](DECISIONS.md#measured-lessons) |
@@ -63,17 +67,15 @@ repository, under its own AGENTS.md and DECISIONS.md; recon then moves its
 pin. recon's dependencies flow left to right, over grid:
 
 ```text
-core → tsdf → texture → interop      (on grid's volume and mesh)
-  └→ sensor ← camera                  (later: track)
-sender                                (on tsdf, sensor's GPU pass and
-                                       grid's codec_stream)
+core → tsdf → texture → interop      (on grid's volume and mesh;
+                                       later: track)
+sender                                (on tsdf, the sensor package's
+                                       sensor_frame and grid's codec_stream)
 ```
 
-- No upward includes. `camera` depends on the family core's base tier and GLM
-  only, `sensor` on `camera` and `core`, `io`'s images on the base tier
-  alone, and `sender` on grid's `codec_stream`, `tsdf` and `sensor`'s GPU
-  pass; driver/decoder/pre-processing targets stay separate. Asset I/O is
-  host-side at file boundaries.
+- No upward includes. `tsdf` and `texture` link grid's tiers and the sensor
+  package's `sensor_frame`, and `sender` grid's `codec_stream`, `tsdf` and
+  `sensor_frame`. Asset I/O is host-side at file boundaries.
 - C++17, no compiler extensions. Namespace `volumetric_kit::recon` (`vr::` in
   docs), nested per tier except `core`, which stays in `volumetric_kit::recon`:
   recon declares no `core` namespace, so `core::` always means the core's.
@@ -101,7 +103,7 @@ sender                                (on tsdf, sensor's GPU pass and
   BT.709/D65, with exact sRGB as its canonical encoded form. Convert at the
   sensor boundary and encode at presentation.
 - Full Doxygen on public classes/functions, matching
-  `include/volumetric_kit/recon/sensor/rgbd_sensor.hpp`. Deleted
+  `include/volumetric_kit/recon/tsdf/fuser.hpp`. Deleted
   copy/defaulted move declarations already convey ownership; do not repeat
   "move-only" in prose. `@ref` only recon's own names; write the core's in
   backticks (`Status::Code::Unsupported`).
@@ -170,14 +172,13 @@ git -C "$recon_root" diff --check
   contracts or broad changes warrant it. CI also covers Debug and sanitizers.
 - For documentation-only changes, check formatting, links, and consistency;
   a build is unnecessary. The hooks can be scoped with `pre-commit run --files`.
-- `VR_BUILD_VIEWER`, `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG`, `VR_WITH_CUDA`, and
-  grid's `VGRID_WITH_ASSIMP` enable optional paths. Orbbec, FFmpeg and Assimp are
-  installed prerequisites, never fetched by this repository. The video
-  decoders hand out device pictures only: Apple builds them always, on
-  VideoToolbox, and refuses `VR_WITH_FFMPEG`; elsewhere `VR_WITH_FFMPEG`
-  needs `VR_WITH_CUDA`, and `VR_WITH_ORBBEC` needs `VR_WITH_FFMPEG`.
-  `VR_CAMERA_ONLY` builds `recon_camera` alone, with no Vulkan, and refuses
-  the examples and the drivers.
+- `VR_BUILD_VIEWER`, grid's `VGRID_WITH_ASSIMP` and the in-tree sensor
+  package's (`sensor/`) `VS_WITH_ORBBEC`, `VS_WITH_FFMPEG` and `VS_WITH_CUDA`
+  enable optional paths (the package's options: [its
+  README](sensor/README.md#building)); in recon's tree the package's tests
+  and `-Werror` follow recon's, and `cmake -S sensor` builds and tests it
+  alone. Orbbec, FFmpeg and Assimp are installed prerequisites, never fetched
+  by this repository.
 - Tests use no real hardware: a camera is checked by hand through its example
   (`fuse_orbbec`). Report such a check as run or not run, never as a test.
 - Tests are `main()`s of their own on the core's test support

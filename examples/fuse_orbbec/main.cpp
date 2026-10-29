@@ -68,6 +68,7 @@
 #include "codec_report.hpp"
 #include "codec_sweep.hpp"
 #include "config.hpp"
+#include "fuse_device.hpp"
 #include "fuse_orbbec_sets.hpp"
 #include "fuse_sender.hpp"
 #include "info_log.hpp"
@@ -88,13 +89,12 @@
 #include "volumetric_kit/grid/mesh_io/ply_writer.hpp"
 #include "volumetric_kit/grid/networking/stream_server.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
-#include "volumetric_kit/recon/sensor/array/rig_sets.hpp"
-#include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
-#include "volumetric_kit/recon/sensor/utils/picture_readback.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
+#include "volumetric_kit/sensor/array/rig_sets.hpp"
+#include "volumetric_kit/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/sensor/prep/picture_readback.hpp"
 
 namespace vr = volumetric_kit::recon;
 
@@ -103,7 +103,7 @@ namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 namespace mesh = volumetric_kit::grid::mesh;
-namespace sensor = volumetric_kit::recon::sensor;
+namespace sensor = volumetric_kit::sensor;
 namespace eval = volumetric_kit::grid::eval;
 namespace codec_stream = volumetric_kit::grid::codec_stream;
 namespace sender = volumetric_kit::recon::sender;
@@ -130,10 +130,11 @@ vkc::Status run(const Options& opt) {
 
   // --- GPU, first: the cameras' pictures are decoded onto it ---
   VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
+  VKC_ASSIGN(const vkc::DeviceRequirements reqs,
+             vr_example::fuse_device_requirements());
   VKC_ASSIGN(vkc::PhysicalDeviceInfo gpu,
-             instance.select_physical_device(vr::device_requirements()));
-  VKC_ASSIGN(vkc::Device device,
-             vkc::Device::create(instance, gpu, vr::device_requirements()));
+             instance.select_physical_device(reqs));
+  VKC_ASSIGN(vkc::Device device, vkc::Device::create(instance, gpu, reqs));
   VKC_ASSIGN(vkc::Allocator allocator,
              vkc::Allocator::create(instance.handle(), device));
 

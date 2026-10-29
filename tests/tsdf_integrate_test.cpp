@@ -33,16 +33,16 @@
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/grid/volume/voxel_grid.hpp"
 #include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
-#include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/sensor/frame/color_space.hpp"
 
 #include "project_pinhole_comp.spv.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
-
+namespace sensor = volumetric_kit::sensor;
 namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::grid::volume;
@@ -68,9 +68,9 @@ std::int32_t find_ptr(const std::vector<vol::BlockIndex>& active,
 
 // A color camera sharing a depth camera's intrinsics + pose (registered capture
 // in these tests); the color params simply drop the depth-range fields.
-vr::ColorCameraParams color_cam_of(const vr::DepthCameraParams& d) {
-  return vr::ColorCameraParams{d.fx,    d.fy,     d.cx,          d.cy,
-                               d.width, d.height, d.cam_to_world};
+sensor::ColorCameraParams color_cam_of(const sensor::DepthCameraParams& d) {
+  return sensor::ColorCameraParams{d.fx,    d.fy,     d.cx,          d.cy,
+                                   d.width, d.height, d.cam_to_world};
 }
 
 // --- Changed stamps -------------------------------------------------------
@@ -121,7 +121,7 @@ int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   blocks.push_back(far);
   CHECK(vgrid_test::allocate_blocks(ctx, a.map(), blocks).value() == 0);
 
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = 525.0f;
   cam.fy = 525.0f;
   cam.cx = 320.0f;
@@ -283,7 +283,7 @@ int nonfinite_depth_taps_case(const vkc::test::Gpu& ctx) {
             0);
       auto active = grid.map().compact_active_blocks();
       CHECK(active.ok() && active->size() == 1);
-      vr::DepthCameraParams cam{};
+      sensor::DepthCameraParams cam{};
       cam.fx = cam.fy = 1.0f;
       cam.cx = tap == 0 ? 0.75f : 0.25f;
       cam.cy = tap == 0 ? 0.75f : 0.25f;
@@ -332,7 +332,7 @@ int nonfinite_camera_case(const vkc::test::Gpu& ctx) {
   block.coord = vr::Vec3i(0, 0, 1);
   CHECK(vgrid_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
 
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = cam.fy = 1.0f;
   cam.cx = cam.cy = 1.0f;
   cam.width = cam.height = 3;
@@ -342,14 +342,14 @@ int nonfinite_camera_case(const vkc::test::Gpu& ctx) {
   const std::vector<float> depth(9, 1.0f);
   const std::vector<std::uint32_t> pixels(9, 0xFF336699u);
 
-  std::vector<vr::DepthCameraParams> bad_depth(6, cam);
+  std::vector<sensor::DepthCameraParams> bad_depth(6, cam);
   bad_depth[0].cam_to_world[3].x = nan;  // a NaN pose
   bad_depth[1].cam_to_world[0].y = inf;  // and an infinite rotation entry
   bad_depth[2].fx = nan;
   bad_depth[3].cy = -inf;
   bad_depth[4].min_depth = nan;
   bad_depth[5].max_depth = inf;
-  std::vector<vr::ColorCameraParams> bad_color(4, color_cam_of(cam));
+  std::vector<sensor::ColorCameraParams> bad_color(4, color_cam_of(cam));
   bad_color[0].cam_to_world[3].z = nan;  // a NaN colour pose
   bad_color[1].cam_to_world[2].x = -inf;
   bad_color[2].fy = nan;
@@ -361,14 +361,14 @@ int nonfinite_camera_case(const vkc::test::Gpu& ctx) {
            grid.map().tick() == tick;
   };
   const tsdf::ColorFrame good_color{pixels.data(), color_cam_of(cam)};
-  for (const vr::DepthCameraParams& bad : bad_depth) {
+  for (const sensor::DepthCameraParams& bad : bad_depth) {
     CHECK(refused(integrator->integrate(grid, depth.data(), bad)));
     const std::vector<tsdf::FrameInput> list = {
         {vkc::StorageInput(depth.data()), cam, &good_color},
         {vkc::StorageInput(depth.data()), bad, nullptr}};
     CHECK(refused(integrator->integrate(grid, list)));
   }
-  for (const vr::ColorCameraParams& bad : bad_color) {
+  for (const sensor::ColorCameraParams& bad : bad_color) {
     const tsdf::ColorFrame frame{pixels.data(), bad};
     CHECK(
         refused(integrator->integrate(grid, depth.data(), cam, 5.0f,
@@ -395,7 +395,7 @@ int nonfinite_camera_case(const vkc::test::Gpu& ctx) {
 // one: the last case's point and camera are a float range apart, and the
 // rotation's zeros times that infinite offset are NaN.
 struct ProjectionCase {
-  vr::DepthCameraParams cam;
+  sensor::DepthCameraParams cam;
   vr::Vec3f world;
 };
 static_assert(sizeof(ProjectionCase) == 108,
@@ -403,7 +403,7 @@ static_assert(sizeof(ProjectionCase) == 108,
 
 int projection_nan_case(const vkc::test::Gpu& ctx) {
   const float nan = std::numeric_limits<float>::quiet_NaN();
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = cam.fy = 100.0f;
   cam.cx = cam.cy = 50.0f;
   cam.width = cam.height = 100;
@@ -513,7 +513,7 @@ int color_pixel_case(const vkc::test::Gpu& ctx) {
     CHECK(vgrid_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
     auto active = grid.map().compact_active_blocks();
     CHECK(active.ok() && active->size() == 1);
-    vr::DepthCameraParams cam{};
+    sensor::DepthCameraParams cam{};
     cam.fx = cam.fy = 1.0f;
     cam.cx = c.cx;
     cam.cy = c.cy;
@@ -521,7 +521,7 @@ int color_pixel_case(const vkc::test::Gpu& ctx) {
     cam.min_depth = 0.1f;
     cam.max_depth = 5.0f;
     cam.cam_to_world = vr::Mat4f(1.0f);
-    vr::ColorCameraParams color_cam = color_cam_of(cam);
+    sensor::ColorCameraParams color_cam = color_cam_of(cam);
     color_cam.height = c.color_height;
     const tsdf::ColorFrame frame{pixels.data(), color_cam};
     CHECK(integrator
@@ -558,7 +558,7 @@ int zero_depth_case(const vkc::test::Gpu& ctx) {
       vol::VoxelBlockGrid::create(ctx.device, ctx.allocator, gp, attrs, 2);
   CHECK(made.ok());
   auto grid = std::move(made).value();
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = cam.fy = 1.0f;
   cam.cx = cam.cy = 1.25f;
   cam.width = cam.height = 3;
@@ -647,7 +647,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
   // Camera at the world origin looking down +Z (identity pose), a pinhole with
   // a 640x480 image; the plane fills the view at a constant 0.5 m.
-  vr::DepthCameraParams cam{};
+  sensor::DepthCameraParams cam{};
   cam.fx = 525.0f;
   cam.fy = 525.0f;
   cam.cx = 320.0f;
@@ -765,7 +765,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   const float theta = 0.2f;  // ~11 deg about +Y
   const float ct = std::cos(theta);
   const float st = std::sin(theta);
-  vr::DepthCameraParams cam2 = cam;  // same intrinsics, range, and 0.5 m plane
+  sensor::DepthCameraParams cam2 =
+      cam;  // same intrinsics, range, and 0.5 m plane
   cam2.cam_to_world = vr::Mat4f(1.0f);
   cam2.cam_to_world[0] = vr::Vec4f(ct, 0.0f, -st, 0.0f);
   cam2.cam_to_world[2] = vr::Vec4f(st, 0.0f, ct, 0.0f);
@@ -865,7 +866,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // cx = 320.5 puts the on-axis voxel's projection halfway between columns 320
   // and 321: a 50/50 blend, whose nearest pixel is 321. The on-axis voxel is
   // at world z = 0.48.
-  vr::DepthCameraParams bcam = cam;
+  sensor::DepthCameraParams bcam = cam;
   bcam.cx = 320.5f;
   const std::size_t bw = bcam.width;
   const std::size_t on_axis =
@@ -983,7 +984,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // Separate color camera: shift it 10 m off in +X so the same voxel projects
   // out of the color frame. Depth still fuses it; color is skipped (stays
   // zero).
-  vr::DepthCameraParams off_cam = cam;
+  sensor::DepthCameraParams off_cam = cam;
   off_cam.cam_to_world = vr::Mat4f(1.0f);
   off_cam.cam_to_world[3] = vr::Vec4f(10.0f, 0.0f, 0.0f, 1.0f);
   vkc::Result<vol::VoxelBlockGrid> og =
@@ -1082,11 +1083,11 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     // identity pose, in front of the surface so no behind-dropoff applies. It
     // is the same weight the SDF assertions at the top of this test use.
     const float w_obs = 1.0f / (0.485f * 0.485f);
-    const vr::Vec3f prev_lin = vr::unpack_srgb_to_linear(prev_packed);
-    const vr::Vec3f obs_lin = vr::unpack_srgb_to_linear(kDark);
+    const vr::Vec3f prev_lin = sensor::unpack_srgb_to_linear(prev_packed);
+    const vr::Vec3f obs_lin = sensor::unpack_srgb_to_linear(kDark);
     const vr::Vec3f want_lin =
         (prev_lin * w_before + obs_lin * w_obs) / (w_before + w_obs);
-    const std::uint32_t want = vr::pack_linear_to_srgb(want_lin);
+    const std::uint32_t want = sensor::pack_linear_to_srgb(want_lin);
 
     // What the kernel produces: the linear mean, to within float32 rounding.
     // This is the assertion that fails if the blend reverts to encoded values.
@@ -1121,15 +1122,15 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // quiet error the whole decision exists to prevent, so it must be an error.
   {
     tsdf::ColorFrame p3_frame = frame;
-    p3_frame.encoding = {vr::ColorEncoding::Transfer::Srgb,
-                         vr::ColorEncoding::Primaries::DisplayP3};
+    p3_frame.encoding = {sensor::ColorEncoding::Transfer::Srgb,
+                         sensor::ColorEncoding::Primaries::DisplayP3};
     CHECK(!integ
                .integrate(vbg_wu, depth.data(), cam, 5.0f,
                           tsdf::IntegrationMode::Classic, &p3_frame)
                .ok());
     // The default declaration is canonical, so every existing caller is
     // unaffected -- which is what makes this an added guard, not a migration.
-    CHECK(vr::is_canonical(tsdf::ColorFrame{}.encoding));
+    CHECK(sensor::is_canonical(tsdf::ColorFrame{}.encoding));
   }
 
   // Regression: dynamic mode clears stale color whenever the grid carries a

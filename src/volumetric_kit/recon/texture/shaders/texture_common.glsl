@@ -20,11 +20,11 @@
 // Under scalar block layout every field lands at its host offset (no std430
 // vec padding).
 //
-// project_to_image goes through core/shaders/pinhole.glsl, as tsdf's does --
-// vr_world_to_camera, then vr_pinhole_pixel's divide -- but its acceptance is
-// NOT vr_project_pinhole's, and the difference is deliberate: it accepts a
+// project_to_image goes through sensor/frame/shaders/pinhole.glsl, as tsdf's does --
+// vs_world_to_camera, then vs_pinhole_pixel's divide -- but its acceptance is
+// NOT vs_project_pinhole's, and the difference is deliberate: it accepts a
 // point in front of the camera whose pixel lands outside the image and returns
-// the extrapolated coordinate, where vr_project_pinhole rejects it. See the
+// the extrapolated coordinate, where vs_project_pinhole rejects it. See the
 // contract on the function. Do not reconcile the two -- the bounded rule here
 // restores the frustum-edge smear this tier's encoding exists to prevent, and
 // this one in tsdf makes integration fuse depth at pixels the sampler never
@@ -32,7 +32,7 @@
 
 #extension GL_EXT_scalar_block_layout : require
 
-#include "volumetric_kit/recon/core/shaders/pinhole.glsl"
+#include "volumetric_kit/sensor/frame/shaders/pinhole.glsl"
 
 // Camera intrinsics + pose + depth range (mirrors DepthCameraParams:
 // scalars at their 4-byte offsets, the cam_to_world mat4 at 32). world -> camera
@@ -78,7 +78,7 @@ struct Vertex {
 // how texture_multiview.comp calls it, having transformed each vertex once for
 // both the facing test and the projection. `k` is (fx, fy, cx, cy).
 bool camera_to_image(vec4 k, vec3 p_cam, out vec2 px) {
-  // vr_pinhole_pixel's depth test fails a NaN: the direct form would ACCEPT a
+  // vs_pinhole_pixel's depth test fails a NaN: the direct form would ACCEPT a
   // non-finite depth and hand the caller a NaN pixel. That matters more than
   // it used to. The sentinel is computed from `px` now (`-uv - 1`) instead of
   // written as a literal, and a NaN uv is not negative, so `uv0.x < 0` -- the
@@ -86,7 +86,7 @@ bool camera_to_image(vec4 k, vec3 p_cam, out vec2 px) {
   // reach `occluded_ok`, whose bounds test NaN passes for the same reason, and
   // `sample_depth` indexes depth[] off a NaN pixel with no bound left to catch
   // it.
-  if (!vr_pinhole_pixel(p_cam, k, px)) {
+  if (!vs_pinhole_pixel(p_cam, k, px)) {
     return false;  // behind the camera or non-finite: no projection exists
   }
   // A finite depth does not make the pixel finite -- a non-finite x or y in
@@ -98,14 +98,14 @@ bool camera_to_image(vec4 k, vec3 p_cam, out vec2 px) {
   return !isnan(px.x) && !isnan(px.y);
 }
 
-// vr_world_to_camera and the divide above for either camera: one copy of the
+// vs_world_to_camera and the divide above for either camera: one copy of the
 // arithmetic and its NaN handling, which a registered image's colour camera
 // must repeat exactly.
 vec3 world_to_camera(DepthCameraParams c, vec3 world) {
-  return vr_world_to_camera(c.cam_to_world, world);
+  return vs_world_to_camera(c.cam_to_world, world);
 }
 vec3 world_to_camera(ColorCameraParams c, vec3 world) {
-  return vr_world_to_camera(c.cam_to_world, world);
+  return vs_world_to_camera(c.cam_to_world, world);
 }
 bool camera_to_image(DepthCameraParams c, vec3 p_cam, out vec2 px) {
   return camera_to_image(vec4(c.fx, c.fy, c.cx, c.cy), p_cam, px);

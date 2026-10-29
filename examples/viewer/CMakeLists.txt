@@ -71,13 +71,13 @@ if(NOT TARGET volumetric_kit::gfx_glfw)
 endif()
 
 # Name only the tiers that are not already pulled in transitively. recon_texture
-# PUBLIC-links grid_mesh and recon_sender (the fuser's inputs, fuse_frame.hpp's)
-# PUBLIC-links recon_tsdf (grid_volume) + recon_sensor_utils, so listing those
-# again repeats their archives on the link line and Apple's linker warns
-# "ignoring duplicate libraries". Same for gfx_core, which gfx_app /
-# gfx_pipelines / gfx_ui all PUBLIC-link -- gfx_camera does not link it, which
-# is why that one is named. Resist re-adding the covered tiers for readability's
-# sake; the warning comes straight back.
+# PUBLIC-links grid_mesh, recon_sender (the fuser's inputs, fuse_frame.hpp's)
+# PUBLIC-links recon_tsdf (grid_volume) + sensor_frame, and vr_example_common
+# the sensor package's prep, so listing those again repeats their archives on
+# the link line and Apple's linker warns "ignoring duplicate libraries". Same
+# for gfx_core, which gfx_app / gfx_pipelines / gfx_ui all PUBLIC-link --
+# gfx_camera does not link it, which is why that one is named. Resist re-adding
+# the covered tiers for readability's sake; the warning comes straight back.
 set(_viewer_recon_libs volumetric_kit::recon_sender
                        volumetric_kit::recon_texture vr_example_common)
 set(_viewer_gfx_libs volumetric_kit::gfx_app volumetric_kit::gfx_pipelines
@@ -113,15 +113,17 @@ if(VR_BUILD_TESTS)
   set_tests_properties(recon_example_viewer_atlas
                        PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 
-  # The device both live viewers adopt (viewer_common.hpp). Host only.
+  # The device both live viewers adopt (viewer_common.hpp), for recon's and the
+  # sensor package's requirements (examples/common/fuse_device.hpp). Host only.
   add_executable(recon_example_viewer_device_test
                  "${PROJECT_SOURCE_DIR}/tests/example_viewer_device_test.cpp")
   target_link_libraries(
     recon_example_viewer_device_test
     PRIVATE volumetric_kit::core_test_base volumetric_kit::recon_core
-            volumetric_kit::grid_mesh volumetric_kit::gfx_glfw Vulkan::Vulkan)
+            volumetric_kit::grid_mesh volumetric_kit::sensor_frame
+            volumetric_kit::gfx_glfw Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_device_test
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+                             PRIVATE ${_viewer_common_inc})
   vr_target_warnings(recon_example_viewer_device_test)
   add_test(NAME recon_example_viewer_device
            COMMAND recon_example_viewer_device_test)
@@ -135,7 +137,7 @@ if(VR_BUILD_TESTS)
     "${PROJECT_SOURCE_DIR}/tests/example_viewer_rig_report_test.cpp")
   target_link_libraries(
     recon_example_viewer_rig_report_test
-    PRIVATE volumetric_kit::core_test_base volumetric_kit::recon_sensor_array
+    PRIVATE volumetric_kit::core_test_base volumetric_kit::sensor_array
             volumetric_kit::recon_texture volumetric_kit::gfx_glfw
             grid_example_common Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_rig_report_test
@@ -150,11 +152,15 @@ if(VR_BUILD_TESTS)
                  "${PROJECT_SOURCE_DIR}/tests/example_viewer_pass_test.cpp")
   target_link_libraries(
     recon_example_viewer_pass_test
-    PRIVATE volumetric_kit::core_test_base volumetric_kit::core_test_policy
-            volumetric_kit::recon_core volumetric_kit::grid_mesh
-            volumetric_kit::gfx_glfw Vulkan::Vulkan)
+    PRIVATE volumetric_kit::core_test_base
+            volumetric_kit::core_test_policy
+            volumetric_kit::recon_core
+            volumetric_kit::grid_mesh
+            volumetric_kit::sensor_frame
+            volumetric_kit::gfx_glfw
+            Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_pass_test
-                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+                             PRIVATE ${_viewer_common_inc})
   vr_target_warnings(recon_example_viewer_pass_test)
   add_test(NAME recon_example_viewer_pass
            COMMAND recon_example_viewer_pass_test)
@@ -184,17 +190,16 @@ vr_target_warnings(fuse_viewer)
 
 # rig_viewer: fuse_viewer's sibling for a live, synced rig of Orbbec cameras,
 # read as a sensor array, every camera's frame prepared, fused and textured on
-# the GPU. Built only where the Orbbec driver is (VR_WITH_ORBBEC); the viewer CI
+# the GPU. Built only where the Orbbec driver is (VS_WITH_ORBBEC); the viewer CI
 # leg installs the SDK, so it is compiled on every PR with the other two.
-if(TARGET volumetric_kit::recon_sensor_orbbec)
+if(TARGET volumetric_kit::sensor_orbbec)
   add_executable(rig_viewer rig_viewer.cpp)
-  # recon_sensor_array ahead of the list, whose recon_sender links
-  # recon_sensor_utils: a library named before one that links it is named again,
-  # as above.
+  # sensor_array ahead of the list, whose vr_example_common links sensor_prep: a
+  # library named before one that links it is named again, as above.
   target_link_libraries(
     rig_viewer
-    PRIVATE volumetric_kit::recon_sensor_array ${_viewer_recon_libs}
-            volumetric_kit::recon_sensor_orbbec volumetric_kit::gfx_glfw
+    PRIVATE volumetric_kit::sensor_array ${_viewer_recon_libs}
+            volumetric_kit::sensor_orbbec volumetric_kit::gfx_glfw
             volumetric_kit::gfx_pipelines Vulkan::Vulkan)
   target_include_directories(rig_viewer PRIVATE ${_viewer_common_inc})
   vr_target_warnings(rig_viewer)

@@ -1,10 +1,11 @@
 name: camera-only
 
-# recon's camera tier alone (VR_CAMERA_ONLY), built and tested in a bare Ubuntu
-# container holding a compiler, CMake, GLM and git, and no Vulkan loader,
-# headers, glslc or driver. find_package(Vulkan) is disabled too, so a configure
-# that reaches for Vulkan fails rather than finds one. The tests are the camera
-# tier's and recon_subproject_camera_only.
+# The sensor package's camera tier alone (sensor/, VS_CAMERA_ONLY), built and
+# tested in a bare Ubuntu container holding a compiler, CMake, GLM and git, and
+# no Vulkan loader, headers, glslc or driver. find_package(Vulkan) is disabled
+# too, so a configure that reaches for Vulkan fails rather than finds one. The
+# tests are the camera tier's, sensor_package_boundary and
+# sensor_subproject_camera_only.
 # Invoked by ci.yml, which owns the push / pull_request triggers and the
 # concurrency group.
 on:
@@ -35,13 +36,13 @@ jobs:
           if ldconfig -p | grep libvulkan >/dev/null \
              || [ -e /usr/include/vulkan/vulkan.h ] \
              || command -v glslc >/dev/null; then
-            echo "::error::the container has Vulkan; this job proves recon_camera needs none"
+            echo "::error::the container has Vulkan; this job proves sensor_camera needs none"
             exit 1
           fi
 
       - name: Configure
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVR_CAMERA_ONLY=ON \
+          cmake -S sensor -B build -DCMAKE_BUILD_TYPE=Release -DVS_CAMERA_ONLY=ON \
             -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON
 
       - name: Build

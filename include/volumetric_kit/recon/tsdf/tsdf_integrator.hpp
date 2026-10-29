@@ -21,9 +21,9 @@
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
-#include "volumetric_kit/recon/core/camera_params.hpp"
-#include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
+#include "volumetric_kit/sensor/frame/camera_params.hpp"
+#include "volumetric_kit/sensor/frame/color_space.hpp"
 
 namespace volumetric_kit::recon::tsdf {
 
@@ -47,7 +47,7 @@ struct ColorFrame {
   /// The color camera (@ref ColorCameraParams): intrinsics + camera->world pose
   /// + dimensions. May differ from the depth camera (unregistered RGB-D); pass
   /// the depth camera's matching intrinsics + pose for registered capture.
-  ColorCameraParams cam{};
+  sensor::ColorCameraParams cam{};
 
   /// What @ref pixels are encoded as. Defaults to the canonical form -- the
   /// working space (linear BT.709/D65) through the exact piecewise sRGB
@@ -61,7 +61,7 @@ struct ColorFrame {
   /// declaration rather than fusing it: converting is the sensor boundary's
   /// job, once, via `sensor::to_canonical` -- which is what "convert once at
   /// the sensor boundary" means operationally.
-  ColorEncoding encoding{};
+  sensor::ColorEncoding encoding{};
 
   /// The same image already on the device, in the same layout: a storage
   /// buffer of at least `cam.width * cam.height` words, read in place with no
@@ -92,7 +92,8 @@ struct FrameInput {
   /// a host array, staged in the call's batch, or a storage buffer, bound in
   /// place.
   core::StorageInput depth;
-  DepthCameraParams camera;  ///< Intrinsics, depth range, size and pose.
+  sensor::DepthCameraParams
+      camera;  ///< Intrinsics, depth range, size and pose.
   /// Optional colour, as @ref TsdfIntegrator::integrate takes it; borrowed
   /// for the call.
   const ColorFrame* color = nullptr;
@@ -103,7 +104,7 @@ struct FrameInput {
 ///        copied into the same field, the two types' layouts asserted
 ///        identical.
 VR_TSDF_API volumetric_kit::grid::volume::DepthPinhole to_depth_pinhole(
-    const DepthCameraParams& camera) noexcept;
+    const sensor::DepthCameraParams& camera) noexcept;
 
 /// @brief Fuses posed depth frames into a @ref VoxelBlockGrid's `tsdf` +
 ///        `weight` attributes by projective TSDF integration (classic or
@@ -225,7 +226,8 @@ class VR_TSDF_API TsdfIntegrator {
   ///         or @p grid lacks a `uint32` `color` attribute; otherwise a buffer
   ///         or dispatch failure.
   core::Status integrate(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
-                         const float* depth, const DepthCameraParams& cam,
+                         const float* depth,
+                         const sensor::DepthCameraParams& cam,
                          float max_weight = 5.0f,
                          IntegrationMode mode = IntegrationMode::Classic,
                          const ColorFrame* color = nullptr,
@@ -246,7 +248,8 @@ class VR_TSDF_API TsdfIntegrator {
   ///         the image.
   core::Status integrate(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
                          const core::Buffer& depth,
-                         const DepthCameraParams& cam, float max_weight = 5.0f,
+                         const sensor::DepthCameraParams& cam,
+                         float max_weight = 5.0f,
                          IntegrationMode mode = IntegrationMode::Classic,
                          const ColorFrame* color = nullptr,
                          core::StageMetrics* metrics = nullptr);

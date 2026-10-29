@@ -8,7 +8,7 @@ to the task, and update them with the code when a contract changes.
 
 - [Tiered architecture](#tiered-architecture) and [package names](#naming-conventions-use-these-consistently)
 - [Interop and device ownership](#the-interop-seam), [Vulkan gotchas](#key-gotchas-verified), and [color](#color-space)
-- Implementation: [core](#core), [tsdf](#tsdf), [texture](#texture), [camera](#camera), [sensor](#sensor), [io](#io), [sender](#sender); the voxel grid, meshing, the codec and streaming are grid's ([its DESIGN.md](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md))
+- Implementation: [core](#core), [tsdf](#tsdf), [texture](#texture), [sender](#sender); the voxel grid, meshing, the codec and streaming are grid's ([its DESIGN.md](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md)), and the camera side the in-tree sensor package's ([its DESIGN.md](sensor/DESIGN.md))
 - [Examples](#examples) and [next work](#next-work)
 
 The tier descriptions and next-work notes below retain the implementation
@@ -44,6 +44,9 @@ renderer. They meet only at the interop seam.
 - **[`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid)** — the voxel grid,
   meshing, mesh files, quality measurement, the codec and the `.vrst`
   stream and its live serving, on volumetric_kit_core alone.
+- **`volumetric_kit_sensor`** (this repo's `sensor/`, until it has a
+  repository of its own) — cameras, capture and the device-frame contract,
+  on volumetric_kit_core alone.
 - **`volumetric_kit_gfx`** — the Vulkan/MoltenVK renderer. Consumes meshes /
   point clouds / glTF.
 
@@ -62,20 +65,16 @@ conventions and Vulkan setup.
   `volumetric_kit::recon`: recon declares no `core` namespace, which would
   capture every `core::Status` its code writes.
 - Headers: `include/volumetric_kit/recon/<tier>/…`.
-- Macros: `VR_` prefix (`VR_CORE_API`, `VR_WITH_CUDA`); the error and
+- Macros: `VR_` prefix (`VR_CORE_API`, `VR_BUILD_VIEWER`); the error and
   contract macros are volumetric_kit_core's, used under its names (`VKC_TRY`,
   `VKC_ASSIGN`, `VKC_CHECK`, `VKC_VK_TRY`).
   Deliberately *not* the `VK_` prefix — that belongs to Vulkan. (The prior
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: fetched by commit (`FetchContent`); component targets
-  `volumetric_kit::recon_camera`, `…_core`, `…_tsdf`, `…_texture`,
-  `…_sensor`, `…_image_io`, `…_sender`, `…_interop` (+ later `…_track`),
-  plus `…_sensor_utils` (GPU pre-processing), `…_sensor_array` (several
-  sensors read as one), `…_sensor_apple` (Apple's pixel buffers as images),
-  the opt-in `…_sensor_orbbec`
-  driver (`VR_WITH_ORBBEC`), `…_sensor_video` decoders (every Apple build,
-  elsewhere `VR_WITH_FFMPEG`) and `…_sensor_video_syntax` (H.265 syntax
-  read on the host, every build); umbrella alias `volumetric_kit::recon`.
+  `volumetric_kit::recon_core`, `…_tsdf`, `…_texture`, `…_sender`,
+  `…_interop` (+ later `…_track`); umbrella alias `volumetric_kit::recon`.
+  The camera and sensor targets are the sensor package's
+  (`volumetric_kit::sensor_*`, [its names](sensor/DESIGN.md#names)).
 - grid's names are its own: `volumetric_kit::grid`, `vgrid::` in docs,
   `include/volumetric_kit/grid/<tier>/…`, `VGRID_` macros and
   `volumetric_kit::grid_<tier>` targets ([grid's
@@ -86,26 +85,21 @@ conventions and Vulkan setup.
 Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
-`core` → `tsdf` → `texture` → `interop`, with `sensor` branching off
-**`core`** (later: `track`), every tier free to link grid's tiers below it:
-`tsdf` fuses into grid's `volume`, `texture` textures grid's `mesh`. `io`
-(images) links the family core's base tier alone. `camera` sits under
-`sensor` and beside `core`: it links the family core's base tier and GLM,
-and no other recon tier. `sender` comes last: it links grid's
-`codec_stream`, `tsdf` and `sensor`'s GPU pass (`sensor_utils`). grid
-includes nothing of recon's ([grid's tiers](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#tiered-architecture)).
+`core` → `tsdf` → `texture` → `interop` (later: `track`), every tier free
+to link grid's tiers below it and the sensor package's frame tier: `tsdf`
+fuses into grid's `volume`, `texture` textures grid's `mesh`. `sender`
+comes last: it links grid's `codec_stream`, `tsdf` and the sensor
+package's frame contract (`sensor_frame`). Neither grid nor the sensor
+package includes anything of recon's ([grid's tiers](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#tiered-architecture)).
 
-- **`camera`** — the camera vocabulary the drivers and the sensor tier
-  share: the double-precision `CameraModel` (image size, intrinsics, OpenCV's
-  rational lens), the lens as a scalar template, rigid transforms, and the
-  sensor array's calibration file (`camera/array_calibration.hpp`). No
-  Vulkan (the 2026-10-06 decisions).
-
+- **The sensor package** (`sensor/`, its own [DESIGN.md](sensor/DESIGN.md))
+  — the camera vocabulary, the sensor interface and its drivers, the video
+  decoders, GPU frame preparation, the sensor array and image files.
+  recon's libraries link its `frame` tier alone: `DeviceFrame`, the pinhole
+  cameras, `ColorEncoding` and the GLSL pinhole.
 - **`core`** — recon's own vocabulary every tier trades in: the GLM math
-  aliases, the posed pinhole `DepthCameraParams`/`ColorCameraParams` of
-  `core/camera_params.hpp`, the colour space, `device_requirements()` and
-  `log_message`. The Vulkan foundation under it (instance, device, VMA
-  allocator, buffers and images, `CommandBatch`, `ComputeKernel` and
+  aliases, `device_requirements()` and `log_message`. The Vulkan foundation
+  under it (instance, device, VMA allocator, buffers and images, `CommandBatch`, `ComputeKernel` and
   `KernelSetBuilder`, timers) and the `Status`/`Result` idiom are
   volumetric_kit_core's, used under its names. Vulkan is reached through the
   core's one umbrella header (`core/vulkan/vulkan.hpp`) — no other code
@@ -113,35 +107,12 @@ includes nothing of recon's ([grid's tiers](https://github.com/taojin-6/volumetr
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic), the
   `Fuser` that fuses a set of frames (grow, allocate, integrate), and the grid
   it starts from (`create_fusion_grid`).
-- **`io`** — host image loading and export: encoded images, depth PNGs and
-  PNG export in `recon_image_io`, on the family core's base tier alone; mesh
-  files are grid's `mesh_io`. GPU tiers never link back to file I/O. Dataset
-  playback and camera conventions remain with their capture adapters.
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), or with several cameras' coordinates into an atlas of
   their images, a compute pass. A colour image is registered to its depth
   camera or taken by a colour camera of its own, whose line of sight the
   depth map decides too; depth may be on the host or the device.
-- **`sensor`** — the sensor *interface*: `IRgbdSensor`, the `RgbdFrame` it
-  hands out as captured (each camera's `camera::CameraModel`, the pixels it
-  holds), and the boundary conversions a capture integration gets silently
-  wrong — camera conventions (pose handedness, registered-depth intrinsics)
-  and colour (`to_canonical`). Reads `camera`'s models, the
-  `core/camera_params.hpp` pinhole cameras and `ColorEncoding` from
-  `core/color_space.hpp`, so it
-  depends on **`camera` and `core` alone** — it sits beside the fusion tiers,
-  not on top of them — and bundles **no drivers**: one ships here only if this repo can build
-  *and* test it (the 2026-08-02 decision). The one that does, Orbbec, is a
-  target of its own (`sensor/orbbec/`), so `recon_sensor` never links a vendor
-  SDK. The HEVC and JPEG decoders are another target of
-  their own (`sensor/video/`, on the GPU's hardware) and link no camera tier:
-  `core` and, on Apple, the Apple importer (`sensor/apple/`), which links
-  `core` alone. The H.265 syntax they read on the host is a target of its
-  own as well, on the family core's base tier alone, in every build.
-  The GPU pre-processing and the pictures' readback are a fourth
-  (`sensor/utils/`, Vulkan and shaders), so `recon_sensor` itself stays free
-  of all of them.
 - **`sender`** — a sender's set step: a prepared set fused, freed on
   schedule and its frame coded in two batches through the codec stream's
   halves (`SetSender`), and the fuser's inputs for prepared frames
@@ -445,58 +416,9 @@ representation changes and therefore where the conversion belongs.
 
 ### Declaring an encoding, not converting it
 
-A driver states what it produces; it never converts. The declaration is a plain
-value in `core`, because it travels with a frame through every tier:
-
-```cpp
-// core/color_space.hpp
-struct ColorEncoding {
-  enum class Transfer { Srgb, Bt709, Linear, Bt2020Pq };
-  enum class Primaries { Bt709, DisplayP3, Bt2020 };
-
-  Transfer transfer = Transfer::Srgb;
-  Primaries primaries = Primaries::Bt709;
-};
-```
-
-It rides **beside** the camera — a field on `sensor::RgbdFrame` and
-`tsdf::ColorFrame` — and deliberately *not* inside `ColorCameraParams`. That
-struct is uploaded verbatim to the fusion kernels under scalar block layout,
-pinned at 88 bytes by `static_assert`s with GLSL mirrors in `tsdf/shaders/` and
-`texture/shaders/`; putting a field in it would spend a cross-tier shader ABI
-change to carry something the kernel needs at most as a push constant. Both
-frame structs already hold a `ColorCameraParams` by value, so a sibling field
-costs nothing.
-
-There is no `Range` field, and the omission is the point. By the time a frame
-reaches this contract it is packed R'G'B', so the YCbCr matrix and any
-limited-range expansion have already been applied — the contract requires
-full-range R'G'B'. That conversion (de-planarize, the 601-vs-709 matrix, range
-expansion) is the driver's, done before the contract, and it is as easy to get
-silently wrong as the transfer function; what makes it the driver's is that it
-is the one part that varies with the pixel format rather than with the color.
-A field nothing consumes is a label free to drift. `Primaries` earns its place
-because the working space gives it a consumer; `Range` would not have one.
-
-ARKit declares `{Transfer::Bt709, Primaries::Bt709}` — spelled out, because
-scoped enums do not name themselves from an aggregate initializer and this is
-the line an out-of-tree driver copies. Its `capturedImage` is bi-planar YCbCr
-that a BT.601 *matrix* converts to gamma-encoded R'G'B'; the matrix and the
-transfer function are independent, and conflating them is its own silent
-error. Its
-primaries are already the working basis, so only the transfer is in question —
-and BT.709's camera OETF differs from the sRGB EOTF by a couple of codes in the
-toe. **`Transfer::Bt709` 8-bit content is accepted as sRGB rather than
-converted**, which is what display pipelines do in practice (BT.1886) and what
-keeps the common capture path a genuine no-op instead of a per-frame pass over
-1920×1440 pixels. A bounded, stated error beats an unstated one. A depth camera
-emitting linear 16-bit color declares `Transfer::Linear` and is decoded by
-nothing.
-
-Adding a sensor is then a declaration rather than a conversion, which is the
-property that makes this scale: the failure mode of a new integration becomes a
-wrong *label* — inspectable, and testable against a known patch — instead of a
-bespoke curve buried in a platform driver.
+A driver declares the encoding it produces and never converts: the sensor
+package's `ColorEncoding`, which rides beside the camera
+([its design](sensor/DESIGN.md#declaring-an-encoding-not-converting-it)).
 
 ### Encoding at presentation
 
@@ -569,8 +491,8 @@ The color-space contract is implemented across these boundaries:
   like any other. The seam holds because `mesh::Vertex` is already gfx's layout
   and glTF already calls `COLOR_0` linear — the two conventions agreed all along.
 
-The curve's host implementation for the sensor boundary is
-`core/color_space.hpp`. The voxel colour attribute's format, the curve
+The curve's host implementation for the sensor boundary is the sensor
+package's `frame/color_space.hpp`. The voxel colour attribute's format, the curve
 included, is grid's `volume`'s (2026-10-28):
 `volume/shaders/voxel_color.glsl`, which fusion writes and the mesher reads
 through, exported to consumers' kernels, and its host half
@@ -579,17 +501,7 @@ through, exported to consumers' kernels, and its host half
 published curve; `grid_io_ply` holds the PLY copy to `voxel_color.hpp`; and
 `recon_tsdf_voxel_color_space`, in tsdf, which links both, holds
 `voxel_color.hpp` to `color_space.hpp`, so grid takes no colour vocabulary
-from recon's `core`.
-
-The **type and the `is_canonical` predicate go to `core` with the curve**, not
-to `sensor` — implementing this moved them. `TsdfIntegrator::integrate` refuses
-a non-canonical frame rather than fusing it through the wrong curve, and `tsdf`
-cannot include from `sensor`; a property of `ColorEncoding` belongs with
-`ColorEncoding`. `sensor/color_conventions.hpp` keeps what is genuinely the
-boundary's: `to_canonical`, which walks a frame, and the cost and limits of
-doing so. That refusal is what makes "convert once at the sensor boundary" a
-contract rather than a hope — a mislabelled frame is an error, not a quietly
-wrong reconstruction.
+from the sensor package.
 
 Both implementations must be the **exact piecewise sRGB function**, not a
 `pow(x, 2.2)` approximation. Hardware `_SRGB` sampling uses the exact curve, and
@@ -626,8 +538,8 @@ source repos are left untouched on disk — never build or write in them.
   hardcoded paths, and machine-specific config.
 - **Drop:** the prior engine's own renderer (gfx replaces it) and its SwiftUI
   demo app (reference only). Its sensor driver framework is rebuilt behind a
-  clean `IRgbdSensor` in the later `sensor` tier — the **interface** is
-  rebuilt here; each *driver* is placed by the buildable-and-testable rule (see
+  clean `IRgbdSensor`, now the sensor package's — the **interface** is
+  rebuilt there; each *driver* is placed by the buildable-and-testable rule (see
   the 2026-08-02 sensor-tier decision), so a platform-only driver such as ARKit
   lives with the app that can build and run it.
 
@@ -652,7 +564,8 @@ a bitstream is reproducible on the device that wrote it and decodable on any.
 
 A consumer fetches recon by commit (`FetchContent`) and links its per-tier
 targets; recon has no install rules or package config (the 2026-10-22
-decision). `VR_CAMERA_ONLY` builds `recon_camera` alone, with no Vulkan
+decision). recon declares the in-tree sensor package (`sensor/`) after the
+core, and its libraries link the package's `sensor_frame` alone
 ([README](README.md#building)). Quality gates
 (warnings-as-errors, formatting hooks, sanitizer and test CI) are wired from the
 start, not retrofitted.
@@ -661,8 +574,8 @@ start, not retrofitted.
 
 Landed and proven on MoltenVK, left to right: `core` → `tsdf` → `texture`,
 on grid's `volume` and `mesh` ([grid's reference](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#implementation-reference)),
-plus `sensor` (the contract and the Orbbec driver) and **interop seam B** —
-gfx drawing grid's mesh buffers with no host round trip.
+and **interop seam B** — gfx drawing grid's mesh buffers with no host round
+trip.
 [DECISIONS.md](DECISIONS.md) carries the *why* behind anything here that looks
 arbitrary; it usually isn't.
 
@@ -670,8 +583,8 @@ arbitrary; it usually isn't.
 
 The Vulkan foundation below is volumetric_kit_core's vulkan tier
 (DECISIONS.md, 2026-10-04): recon uses its types under the core's names, and
-what is recon's own is `device_requirements()` (what recon's kernels need of a device),
-the camera and colour-space vocabulary and the vector types. The description
+what is recon's own is `device_requirements()` (what recon's kernels need of a device)
+and the vector types. The description
 stays here because recon's tiers are written against it; the contract is the
 core's headers.
 
@@ -730,8 +643,8 @@ device memory). So a batch that dispatches one kernel over several cameras
 binds each dispatch a set of its own, from a grow-only `KernelSets`, through
 `dispatch`'s set overload, which refuses a temporary since the batch binds
 that very object at `submit` (the 2026-09-30 decision).
-Vocabulary: `Status`/`Result`, the GLM aliases, `camera_params.hpp`,
-`color_space.hpp`, and the core's `core/base/stage_metrics.hpp` — the rows
+Vocabulary: `Status`/`Result`, the GLM aliases, and the core's
+`core/base/stage_metrics.hpp` — the rows
 every tier reports timings in: host time (`cpu_ms`), the part of it blocked on
 the device (`wait_ms`, which every core wait reports to the scopes open on its
 thread), and a device half (`gpu_ms`, with `device` saying whether it was
@@ -792,16 +705,11 @@ two of the three entry points reports no labels rather than a region that can
 be opened and not closed. The label is recorded *outside* the `GpuTimer`
 bracket, so no `gpu_ms` measures the markers around the work.
 
-`core/shaders/pinhole.glsl` is recon's GLSL pinhole: the rigid inverse,
-unprojection, divide, in-image projection and nearest pixel that tsdf,
-texture and the sensor prep's colour test go through, and that recon
-exports to its consumers' kernels (README, "Building"). Its functions take
-values, so a scalar-layout camera and a std430 one both pass theirs. The
-acceptance stays two callers' own: texture extrapolates past the image, and
-the colour test bounds the rounded pixel. volume's depth allocation
+The GLSL pinhole tsdf and texture project through is the sensor package's
+(`sensor_frame` exports `pinhole.glsl`). grid's depth allocation
 unprojects through its own copy of the one line it needs (grid's
 `volume/shaders/depth_pinhole.glsl`), which `recon_volume_depth_unproject`
-holds to this one bit for bit.
+holds to it bit for bit.
 
 ### tsdf
 
@@ -947,385 +855,6 @@ a device view's depth and coverage copied into the several-view pass's
 buffers, device to device; a host `Mesh`, the export path, is staged up and
 read back in a batch of its own.
 
-### camera
-
-`recon_camera` links `core_base` and GLM; the drivers, the sensor tier and
-calib build on it. It holds only what a caller uses (the second 2026-10-06
-decision): unprojection and rescaling come with their first caller.
-
-- **`camera/camera_model.hpp`** — `CameraModel`: `ImageSize`,
-  `PinholeIntrinsics` and `RationalDistortion` (OpenCV's eight coefficients),
-  all double, and `check_camera_model`. Conventions: +Z forward, +Y down,
-  pixel centres at integers, intrinsics in pixels of the model's size.
-- **`camera/projection.hpp`** — `distort_rational<T>`, the lens's forward
-  model, which `sensor/utils`' `lens.glsl` mirrors in float; the tests'
-  reference.
-- **`camera/geometry.hpp`** — GLM's double types, `check_rigid`,
-  `rigid_inverse`, `nearest_rotation` (the polar factor, for an SDK's
-  rotation that is not one), and Rodrigues both ways
-  (`rotation_from_rodrigues`, `rodrigues_from_rotation`, accurate near 0 and
-  pi). `RodriguesTransform` is OpenCV's `x' = R(rvec) x + tvec`.
-- **`camera/color_controls.hpp`** — `ColorControls`, a colour camera's
-  manual exposure (an exposure time and a gain in the camera's units, above
-  0; auto exposure off, auto white balance on), which a rig's calibration
-  records and a driver writes and reads back.
-- **`camera/array_calibration.hpp`** — the sensor array's calibration file,
-  version 2 under version 1's `device_calibration` key: per sensor by serial,
-  an optional colour-camera pose, colour and depth `CameraCalibration`s
-  (model and `factory` / `calibrated` source) and `depth_to_color`, and an
-  optional world: a sensor at the origin, or a printed tag
-  (`AprilTagWorld`, in OpenCV's marker axes, z up out of a floor tag).
-  Version 3 adds a correction: a sensor's `depth_offset_m` (metres, + where
-  its depth reads too far, at most 0.05 m), written only when it is not 0,
-  or the array's `color_controls`, the colour cameras' manual exposure,
-  written only when present; the file is version 3 only then, so an
-  uncorrected calibration is written as version 2, byte for byte, and an
-  older reader refuses a corrected one; a correction in a file that says
-  version 2 is refused.
-  `format_` / `write_array_calibration` write it
-  through the core's `write_file`; version 1 is read for its poses.
-
-### sensor
-
-the sensor *interface*: `IRgbdSensor` (below) polled for an `RgbdFrame`
-and asked `exhausted()` after an empty poll, since "nothing this tick" from
-a live device and "nothing, ever" from a replay are the same empty optional
-(2026-09-14; non-pure, `false` by default, so a live driver overrides
-nothing) — plus the boundary math that is silently wrong when guessed —
-`cv_from_gl_camera`, `depth_from_registered_color`, `to_canonical`, which
-only the iOS scanner and the tests call until the scanner moves onto the
-interface (2026-10-07). Links `recon_camera` and `recon_core` alone;
-drivers live with the platform that can build *and* test them. The
-implementer every dataset example runs is
-`examples/common/replica_sensor.hpp`, which plays a Replica sequence back
-through the interface, its frames prepared on the GPU as a camera's.
-**`sensor/orbbec`** (`VR_WITH_ORBBEC`, which
-needs the colour decoders, `VR_WITH_FFMPEG` off Apple, and the Orbbec SDK
-2.10.6 or later) is the live Femto Mega, through the sensor interface below:
-**`OrbbecSensor`**, one camera. A synced rig is an `OrbbecSensor` per camera
-in a `SensorArray` (the 2026-10-07 rig decision), opened from its sync file by
-`open_orbbec_sensors`. It hands out every frame
-as captured, for the GPU pass; nothing on the host undistorts, registers or
-converts (the 2026-10-06 raw-frames decision). It reads the camera's rig
-sync role (`waits_for_primary`), and given the camera's entry of the rig's
-**sync configuration** (`Options::sync`; `orbbec_sync_config.hpp`, the
-SDK's `femto_mega_sync.json` layout) refuses a camera whose stored settings
-differ, unless `apply_sync` writes them, only where they differ, since they
-persist in its flash. The SDK's effective settings are compared again after
-the write: normalization that still differs is refused, `Unsupported`;
-its cached response does not verify persistence on the camera. At every
-open it then sets the colour camera's exposure,
-`OrbbecStreamOptions::color_controls` (a manual one, or auto exposure when
-empty; auto white balance on either way, never off): checked against the
-camera's controls and ranges before any write, written only where the
-camera differs, and read back into `SensorInfo::color_controls`, a
-difference refused naming the field (`write_color_controls`, internal; the
-2026-10-27 colour-controls decision).
-The lab rig's is `config/femto_mega_sync.json`, which
-only the examples and tests name. No test opens a camera (the 2026-10-06
-no-hardware decision); `fuse_orbbec` is how one is checked. Behind it is the
-internal `CameraStream`, and the types of `orbbec_stream.hpp`: the stream
-options, the camera's report, and its counters (`OrbbecStreamStats`).
-H.265 at 3840x2160 and 25 fps, depth 640x576, is the default
-(`color_codec = Hevc`; `Mjpeg` stays selectable, for calibration captures
-and diagnostics): each camera's
-`HevcColorDecoder` decodes every colour frame, in order, ahead of the
-mailbox, as BT.601 full range unless the stream names its matrix, and posts
-the picture with its depth, so everything after is MJPEG's path. A frame's
-colour camera is read off the profile of the mode streamed. The SDK hands
-over every colour frame, depth or not; a pair without depth is dropped
-after decoding. A gap in the frame index, or an empty frame, waits for the
-next key frame, where the decoder is reset; pictures come out in display
-order, each settling its own pair. All of it is counted in `stats().lost`
-(the 2026-09-28 decision).
-**`sensor/video`'s decoders** (every Apple build, and elsewhere
-`VR_WITH_FFMPEG`) hand out pictures on the device only (the 2026-10-06
-device-only decoder decision), on the hardware of the device they are given,
-fixed per build: VideoToolbox on Apple, directly, with no FFmpeg (the
-2026-10-25 decision), and through CUDA elsewhere, so `VR_WITH_FFMPEG` needs
-`VR_WITH_CUDA` (the CUDA 13 toolkit's headers; libcuda and libnvjpeg are
-loaded at run time). A **`DecodedPicture`** is a frame's colour as it is: its
-`YuvImage` (`DecodedPicture::yuv`: the planes, the queue family that wrote
-them, the size, the matrix's weights, the range and the chroma siting), with
-the stream's pts and its transfer and primaries as an optional
-`ColorEncoding` (empty when that type cannot name them) beside it.
-**`HevcDecoder`** decodes H.265 access units on the hardware. Off Apple,
-through FFmpeg's hardware decoding: NVDEC's picture copied device to device,
-by one CUDA copy, into two plane images CUDA imported, an R8 luma and an
-R8G8 chroma of the picture's size (`core`'s `create_exported_image`, on a
-device that `exports_memory`), handed out as NV12's `YuvImage::image`, as
-VideoToolbox's are, with `kQueueFamilyExternal` (the 2026-10-26 plane-image
-decision). A set of images is made, mapped and handed over to CUDA in
-`GENERAL` once, and reused only once no picture holds either image; a
-reader takes each picture back from outside Vulkan, and none hands it back.
-The images are shared with `Options::queue_families` as
-`PixelBufferImporter`'s are. Each CUDA mapping is held from the moment it
-exists, so a failed mapping or host allocation releases it, in its context,
-before the Vulkan image it maps. On Apple,
-through a `VTDecompressionSession` of its own
-(`vt_hevc.cpp`): it reads the parameter sets and each picture's slice
-header itself (`hevc_syntax.hpp`, below), hands VideoToolbox the
-picture's slices as one length-prefixed sample of a format made from the
-sequence's VPS, SPS and PPSs (a new session only where a changed set needs
-one), and puts the pictures, which come back in decode order, into display
-order by their picture order count: shown once more wait than the SPS
-reorders, and all at a sequence started afresh and at the end. The two
-IOSurface planes are images in `YuvImage::image`, through `sensor/apple`'s
-`PixelBufferImporter`, written at the range the VUI declares (video range
-without one), so the samples are the stream's own. A picture whose
-reference is missing, after a skipped access unit, VideoToolbox reports as
-bad data, `IoError`.
-`Options::unlabelled_color` stands in for a stream that names no matrix,
-and `reset()` restarts a stream after lost access units (on Apple, on a
-fresh session at the next key frame). A stream the hardware cannot decode
-or hand out -- not 8-bit 4:2:0, or on VideoToolbox a display window off the
-coded corner, which it fills from the corner instead -- is refused,
-`Unsupported`, from then on, after the pictures decoded before it. On
-Apple each SPS is read whole, to its trailing bits, before it can refuse
-the stream: a malformed one is `IoError` and cannot latch a refusal.
-VideoToolbox's decoder sessions for both decoders open in one place
-(`videotoolbox.cpp`): NV12 on Metal-compatible IOSurfaces, on the hardware
-decoder or not at all.
-**`JpegDecoder`** decodes a baseline 8-bit 4:2:0 JPEG, BT.601 full
-range as JFIF defines it, with no FFmpeg: on nvJPEG's hardware JPEG engine
-into the same kind of buffer, I420, or through VideoToolbox's hardware
-decoder (`vt_jpeg.cpp`) into the same images. Another subsampling, or a
-JPEG larger than the hardware takes (16384 a side on nvJPEG's engine, the
-device's image extent on Apple), is `Unsupported`, as is every JPEG on a GPU
-with no hardware JPEG engine (an RTX 4090, say). For both decoders the
-codes are the contract: `IoError` is data that does not decode and costs
-only itself (and, for H.265, the frames to the next key frame);
-`Unsupported` is a stream the hardware refuses, or a `create` with no
-device path (no device or allocator, or a GPU the build's path cannot
-reach); `Backend` or `OutOfMemory` is the device path failing. VideoToolbox
-errors retain that distinction from session creation, the decode call and
-its callback, for both decoders. Its decode-time `kVTParameterErr` also
-denotes corrupt data (including a truncated JPEG fixture), so it is
-`IoError` there. The
-Orbbec driver's colour decoders stop for good on any code but `IoError`, and
-the sensor's `poll` returns it, so a refused stream or a failing device path is
-not quiet. A `Backend` failure names the library that failed
-(`Status::backend()`): VideoToolbox, CUDA or nvJPEG, Vulkan for the hand-over
-onto the device, or FFmpeg for its `AVERROR_EXTERNAL` (a hardware call
-failed); a hardware failure FFmpeg reports otherwise reads as lost frames.
-`VR_TEST_HEVC_BACKEND` makes the decoder tests fail rather than skip where
-no device path opens, which is how CI holds its legs to NVDEC on 24.04 (and
-nvJPEG where the GPU has the engine) and VideoToolbox on the Mac.
-**`sensor/video`'s CUDA interop** (`cuda_interop.hpp`, `VR_WITH_CUDA`) is
-public, and is how both decoders reach CUDA: `cuda_ordinal_of` finds the
-CUDA device whose UUID is the Vulkan device's; `CudaContext` retains that
-GPU's primary context, which every holder shares and none leaves current;
-`CudaStream` is a non-blocking stream of its holder's own;
-`CudaBufferMapping::map` imports a `create_exported_buffer` buffer's memory,
-taking its descriptor (`InvalidArgument` once taken), and maps the whole
-buffer, which stays the caller's; and `CudaImageMapping::map` does the same
-for a `create_exported_image` image of 8-bit `UNORM` with one, two or four
-channels, mapped as a one-level CUDA array of its format and extent,
-flagged as a colour attachment where its usage makes it one, as CUDA
-requires. The one crossing it documents is CUDA writes, Vulkan reads: the writing stream
-or an event is synchronized, then the reader acquires the buffer or image
-from `VK_QUEUE_FAMILY_EXTERNAL`, an image once handed over to CUDA in
-`GENERAL` before its first write.
-**`sensor/video`'s H.265 syntax** (`hevc_syntax.hpp`, target
-`recon_sensor_video_syntax`) is public and builds on every platform: host
-code on the family core's base tier, with no codec, GPU or FFmpeg (the
-2026-10-25 public-syntax decision). It is what VideoToolbox's path reads.
-`split_annex_b` finds an access unit's NAL units (`hevc::Nal`, borrowed,
-emulation prevention left in); `vps_id`, `parse_sps` and `parse_pps` read
-the parameter sets' ids and an SPS's size, conformance window, format,
-reorder depth and VUI colour (`ColorCodes`, `color_codes.hpp`: the H.273
-codes FFmpeg's frames are described from too), each SPS through its
-trailing bits; and `parse_slice_start` reads a slice header as far as its
-picture order count, given the parameter sets by id. Bytes that do not
-parse are `IoError`, naming why; a NAL unit of another type than the call
-reads is `InvalidArgument`; a host allocation failure is `OutOfMemory`,
-never an exception. Every parser reads through `hevc::BitReader`:
-the RBSP's bits, MSB first past the emulation prevention bytes, as u(n),
-ue(v) and se(v), zeros past the end with `overrun()` set, and whether what
-is left is the trailing bits.
-**`sensor/apple`'s `PixelBufferImporter`** (`recon_sensor_apple`, on every
-Apple build, iOS included, with no FFmpeg) hands an 8-bit NV12
-`CVPixelBuffer` on an IOSurface to Vulkan in place: each plane becomes a
-Metal texture imported as an image (`VK_EXT_metal_objects`), with a view and
-`SAMPLED` and `TRANSFER_SRC` usage, so `GpuFramePrep` samples it and
-`PictureReadback` copies it, made once per
-surface and kept while pictures keep arriving on it, the images holding the
-pixel buffer. The images are EXCLUSIVE unless `create` is given the queue
-families that read them, by `BufferDesc::queue_families`' rule with the
-device's own family among them: two or more distinct make them CONCURRENT, so
-a renderer on another family (gfx's, on MoltenVK) reads them in place. The
-decoders' `Options::queue_families` and
-`OrbbecStreamOptions::color_queue_families` pass the families through, and
-NVDEC's plane images take them by the same rule (one check,
-`sharing_families.hpp`); nvJPEG's buffers ignore them and are taken over
-from `kQueueFamilyExternal`. It sets a `YuvImage`'s planes and leaves the
-matrix, range and chroma siting to its caller, who alone knows how the
-samples are coded (a stream's unlabelled colour, say). An iOS camera's
-pictures, such as ARKit's `capturedImage`, can come through it with no
-conversion on the host.
-**`IRgbdSensor`** (`sensor/rgbd_sensor.hpp`) is one sensor: its
-`SensorInfo` from when it opens (id, the cameras' factory models at the
-opened modes, `depth_to_color`, rig role, clock, pose source, rate, the
-colour exposure as read back), and
-frames held up to `set_queue_depth`, the newest taken by `poll` or all,
-oldest first, by `drain`. **`OrbbecSensor`** implements it: `open` refuses
-a `min_depth` of 0, which the GPU pass would, a camera in a sync mode the
-driver does not know, and one whose sync settings differ from
-`Options::sync` without `apply_sync`; `sync_clock_to_host` stamps each frame
-with the SDK's global timestamp, the camera's clock mapped onto the host's
-`std::chrono::system_clock` and re-fitted as the two drift, refusing at
-`open` a camera without one, and sets the camera's clock to the host's once
-at each `start`, before it streams (`timerSyncWithHost`, never the
-process-wide `enableDeviceClockSync`); and its `stats()` counts the driver's
-lost frames failed, a JPEG the decoder had no time for being dropped.
-**`SensorArray`** (`sensor/array/`, target `recon_sensor_array`) reads
-several `IRgbdSensor`s as one: it starts the secondaries before the primary,
-drains every sensor each `poll_set`, groups the frames into a `FrameSet` by
-its internal `TriggerGrouper`, around the primary's frames on the host
-clock within `tolerance_us` (by default 0.4 of the fastest member's frame
-period, 13.3 ms at 30 fps), and stamps each frame with its sensor's pose
-from the `ArrayCalibration`, which must pose every sensor and, where it
-names `color_controls`, find every sensor opened at them
-(`SensorInfo::color_controls`), or the open is refused. `wait_set`
-blocks for a set on one condition variable that every sensor's
-notification wakes (`IRgbdSensor::set_frame_notify`, which `open` asks of
-each; the Orbbec driver notifies from its mailbox as a pair lands, the camera
-goes or the decoder fails), and on the grouping's next deadline, when a
-trigger stops waiting for a late sensor; it never sleeps a fixed time. A
-set's `arrival_ns` is its latest frame's (`RgbdFrame::arrival_ns`, the
-system clock at the driver's frame callback). Opened with a
-device, it makes a pass per sensor from `Options::prep`, each with its
-sensor's `depth_offset_m` from the calibration, the offset's one source (an
-offset in `Options::prep` is refused); its `record_process(batch, set)`
-records a set's preparation into a
-caller's batch through `GpuFramePrep::record_set`: every frame checked, then
-every pass's copies and every pass's kernels; `process(set)` is that, one
-submit and its wait. A `FrameSet`'s
-`skew_ns(i)` is sensor i's frame's time less the trigger's, signed, and its
-`spread_ns()` the latest of its frames' times less the earliest.
-`RigSets(array, frames)` (`sensor/array/rig_sets.hpp`) reads a run of N
-frames from a started array: `next` waits for each set (`wait_set`), keeps
-each secondary's skew to the primary, and cuts the set that reaches N to its
-first frames in the array's order; after `kSilenceLimit` (10 s) with no set
-it returns `IoError`, naming a lone sync secondary's cause. The prep stays
-the caller's, recorded into the caller's batch (2026-10-25).
-**`sensor/utils`'s `GpuFramePrep`** undistorts an `RgbdFrame`
-(`sensor/rgbd_frame.hpp`) on the device: depth sampled at the nearest pixel,
-colour bilinearly and converted from Y'CbCr in the same pass, each camera
-keeping its intrinsics. The frame carries each camera's `camera::CameraModel`
-in double, narrowed to float once for the passes; the colour camera's pose,
-`color_to_world`, and the sensor's `depth_to_color`, both refused unless
-rigid, pose the outputs; a sequence number; and `pixels`, the owner of its
-depth, any host colour and any `color_bitstream` (the colour as the camera
-coded it, when that decodes on its own), so a consumer may keep frames past
-the next poll and past the capture.
-`ChromaLocation` travels in the picture's `YuvImage`: JPEG is centred, and
-HEVC keeps the decoded tag with left alignment when unspecified.
-The GPU samples the location consistently for planes in a buffer and NV12
-images. Existing callers that leave the field unset keep left alignment. The
-resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth`
-(its camera through `to_depth_pinhole`) and `integrate` (and
-`ColorFrame::buffer`, with `coverage_in_alpha`, since a
-pixel the lens maps outside the picture is a 0 word), so nothing is
-uploaded and nothing registered. Y'CbCr colour comes as I420 or NV12 on the
-device only (the 2026-10-06 device-only `GpuFramePrep` decision): planes in a
-buffer (`YuvImage::device`, with per-plane offsets and strides) are bound
-where they are, from
-the first plane, once the batch has taken them over from the queue family
-that owns them (`YuvImage::queue_family`; the 2026-09-28 decoded-frame
-decision). NV12's planes may come as images instead (`YuvImage::image`,
-with `SAMPLED` usage and a view), taken over the same way in the layout they
-are in (an EXCLUSIVE image only from outside Vulkan), which the colour pass
-samples where they are, with no copy: a second entry over the same body
-(`undistort_color_images.comp`, `undistort_color.glsl`) binds them as two
-combined image samplers, reads them at integer coordinates and makes each
-sample its 8-bit code again (`round(v * 255)`), so its words are the buffer
-form's, bit for bit (the 2026-10-25 plane-image decision). A dataset decoded
-on the host hands its colour over as packed R'G'B' words instead
-(`RgbdFrame::color_packed`, `io::load_color_packed`'s layout; the
-2026-10-07 packed-colour decision), copied into the pass's slot after the
-depth; the colour pass samples R, G and B as byte planes four bytes apart,
-through the same bilinear sampler and coverage test. The depth, and any
-packed colour after it at the binding alignment, is copied into the pass's
-one persistent slot (`core::HostRing`), which the batch binds in place where
-mapped device memory is cached and copies once into its device-only mirror
-elsewhere; nothing is allocated per frame (a batch staging per call made VMA
-allocate a block for every set: 46 ms a rig set on an RTX 5090, 4.8 ms
-kept). `record(batch, frame)` records the copy and both passes into a
-caller's batch, and `prepare` is that, one submit and its wait; a record
-before the pass's last batch resolves is refused, as it binds the slot. The
-frame *holds* its device-local
-buffers through a lease, and the pass reuses one only once no frame holds
-it, so a frame kept past the next is still itself; the whole frame is
-checked before anything is recorded or timed, a depth range from 0 and a
-plane's queue family included, and `prepare` is `prepare_batch` over a set
-of one. Both return `OutOfMemory` for a host allocation failure,
-preserving previously returned frames.
-`depth_within_color` (off by
-default; `rig_viewer` turns it on) zeroes depth outside the colour camera's
-view, by the colour pass's own coverage test, so nothing is fused that no
-colour camera can colour. `depth_offset_m` (0 by default) is subtracted
-from every return in the depth pass, before that test: for `z > 0`,
-`z = max(z - offset, 0)`, so 0 stays no return whatever the sign; a
-`SensorArray` sets it per sensor from the calibration.
-**`sensor/utils`' `PictureReadback`** copies a set's colour pictures to the
-host, luma alone or every plane, for calib's detector: NV12 images from
-their corner, and planes in a buffer where they sit, after the batch takes
-either over from `YuvImage::queue_family`, images in the layout they are in;
-every copy in one batch, one submit and one wait. Both read overloads take
-mutable pictures/frames and, after a successful submit and wait, update each
-picture's `queue_family` to the readback's family (EXCLUSIVE) or
-`kQueueFamilyIgnored` (CONCURRENT, and images that needed no transfer).
-Subsequent reads and preparation use the updated picture;
-copies made before readback still carry the old ownership metadata.
-Creation, including the GPU timer, and reading return `OutOfMemory` for
-host allocation failure. The copies land in host memory it keeps (`Staging`,
-cached for reading), grown to the largest read, and each `PictureView` points
-into it until the next read, so the frames may go at once. A picture is
-checked by the rules `GpuFramePrep` applies to one (`yuv_planes.hpp`), with
-`TRANSFER_SRC` where the pass needs a buffer's storage usage, or images'
-`SAMPLED` usage and views.
-An Orbbec frame holds its SDK pair and the SDK
-context, with the models and the depth-to-colour extrinsic from the factory
-calibration (the extrinsic's rotation made one: the Femto Mega's is not, the
-2026-10-06 sensor-frame decision; `open` refuses one that does not come out a
-rotation), the depth frame's index as the sequence, and the planes
-converted by the matrix and range the stream codes them in. Given
-`OrbbecStreamOptions::device`, its H.265 colour is decoded onto that device
-and stays there, the picture carried through the mailbox by an SDK frame
-whose bytes only name it, so a copy of the frame owns nothing
-(`picture_frames.hpp`); for MJPEG it streams the camera's JPEGs, and each
-camera's `JpegColorDecoder` decodes them on a thread of its own onto the
-device, its picture's frame keeping the camera's frame as well, so the
-frame's `color_bitstream` is the camera's JPEG, byte for byte. An H.265 frame
-carries none, since it decodes only after the frames before it.
-`OrbbecDeviceInfo` names each camera's lens model as the SDK reports it at
-the opened mode (`brown-conrady-k6`, say). Each colour decoder, MJPEG's and
-H.265's, decodes on a `DecodeWorker` of its own (`decode_worker.hpp`), which
-owns its queue, what a full one drops, its thread, and the failure that ends
-decoding.
-
-### io
-
-`io::load_color_packed` decodes JPEG/PNG to top-left row-major encoded RGB
-bytes in the existing `R | G<<8 | B<<16` packing. It performs no implicit
-linearization or profile conversion; the capture adapter declares the input
-encoding. `io::load_depth_u16` requires a genuine 16-bit single-channel PNG
-and returns its samples as stored: what a unit is, is the caller's to say
-(the Replica sensor's `RgbdFrame::metres_per_unit`).
-Expected dimensions are explicit so a camera cannot silently use different
-intrinsics. `io::write_png_rgba8` takes already-encoded RGBA8.
-`io::encode_png_u16` encodes 16-bit gray samples as stored, and
-`io::write_png_u16` writes them; stb writes 8-bit only, so it encodes the
-samples' big-endian bytes as two 8-bit channels and IHDR is rewritten to
-16-bit gray. The writers open their output only after encoding succeeds.
-Errors name the file and backend reason. Public functions validate their input
-and translate backend exceptions that reach them into `Status`/`Result`;
-private third-party types never appear in public headers. The backend is the
-pinned stb source, a private implementation dependency of `recon_image_io`.
-Mesh files (PLY export, Assimp import, the normalization helpers) are grid's
-[`mesh_io`](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#mesh_io).
-
 ### sender
 
 `recon_sender` is what a sender does with a prepared set
@@ -1427,7 +956,7 @@ the view moves (2026-10-06). The four dataset examples
 take `source.preload`, which makes the loop measure compute rather than the
 JPEG/PNG decoder.
 The live counterpart is its own example, not a `fuse_replica` flag:
-**`fuse_orbbec`** (`VR_WITH_ORBBEC`) reads one `OrbbecSensor`, or with
+**`fuse_orbbec`** (`VS_WITH_ORBBEC`) reads one `OrbbecSensor`, or with
 `source.sync_config` one per camera of the file on the host's clock
 (`source.apply_sync` writing the settings a camera differs in), as a
 `SensorArray` posed by `source.calibration`; it waits on the cameras'
@@ -1469,8 +998,8 @@ cameras stream, removing the empty stream and releasing the cameras. Once
 they stream, it ends after the set in hand, as `run.frames` would: the
 stream is finished, its viewers closed, the cameras released and the PLY
 written. A second signal of the same kind ends the process.
-**`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC`, and
-`VR_WITH_FFMPEG` off Apple; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
+**`rig_viewer`** (`VR_BUILD_VIEWER` with `VS_WITH_ORBBEC`, and
+`VS_WITH_FFMPEG` off Apple; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file, opened as
 fuse_orbbec opens a rig (`open_orbbec_cameras`, at the calibration's colour
 controls), read as a
@@ -1521,36 +1050,11 @@ examples](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#ex
 
 ## Next work
 
-**Cameras and sensors for the family (the 2026-10-06 plan).** recon is the
-library calib and ios build on for cameras and sensors. The `camera` tier has
-landed; the stack continues:
-1. **The sensor interface.** `RgbdFrame` (each camera's `CameraModel`,
-   `color_to_world` and `depth_to_color`, a sequence number, pixels it holds)
-   and `IRgbdSensor` with `SensorInfo` have landed, the Femto Mega as
-   `OrbbecSensor`, and `OrbbecCapture` and the SDK's host path are gone. The
-   Replica source is an `IRgbdSensor` too, its colour packed host words
-   (`RgbdFrame::color_packed`), and `ICameraCapture` and `CapturedFrame`
-   are gone (2026-10-07). The frame gains no float depth: the iOS scanner,
-   which still calls the host-depth and convention entry points kept for
-   it, quantises ARKit's float depth to 16 bits when it moves onto the
-   interface.
-2. **`SensorArray`**, vendor-neutral, has landed: start order from the sync
-   roles, trigger grouping, poses from the calibration file
-   (nearest-frame and tracked members later), and `process(set)`, every
-   stream of every sensor in one GPU batch. `OrbbecRig` is gone:
-   `fuse_orbbec` and `rig_viewer` open a `SensorArray` of `OrbbecSensor`s on
-   the SDK's global timestamps (2026-10-07), their skew measured flat over a
-   20-minute `fuse_orbbec` run; sessions of hours are still to measure.
-3. **Luma readback** has landed in `sensor/utils` (`PictureReadback`),
-   wherever the decoder left the picture, for calib's detector.
-4. **Pipelined stages**: the core's `CommandBatch` submits without waiting,
-   ordered by timeline semaphores; the per-set host waits go, in
-   `tsdf::Fuser` (an allocation's failure count and occupancy read a set
-   late); then a pipeline over acquire, prep, the grid chain (fuse, mesh,
-   texture, still serial) and consumers.
-5. **Later: mixed arrays** of fixed sensors and tracked ones (iPhones):
-   nearest-frame members, registration of a tracked sensor's world, a network
-   sensor with an ios sender, and clock offsets.
+**Pipelined stages**: the core's `CommandBatch` submits without waiting,
+ordered by timeline semaphores; the per-set host waits go, in
+`tsdf::Fuser` (an allocation's failure count and occupancy read a set
+late); then a pipeline over acquire, prep, the grid chain (fuse, mesh,
+texture, still serial) and consumers.
 
 **View-culled meshing has landed** (2026-10-06): `fuse_viewer` and
 `rig_viewer` publish their render camera's `view_proj` to the fuse thread,
@@ -1583,17 +1087,6 @@ than the rig gets the newest set, so sets drop; that cost is unmeasured.
 weight decrement, an incidence term) and behind a pixel with no return are
 the next steps, each judged on the lab rig (`TODO(tsdf)` in
 `tsdf_integrate.glsl`, 2026-10-08).
-
-**On `sensor`**, each a `TODO(sensor)`: the GPU pre-processing has landed for
-one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
-it takes the host from 15.5 ms of undistortion and registration a frame to
-none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
-and nvJPEG hand their pictures over on the device, and VideoToolbox both
-kinds, and a raw Orbbec frame's colour stays on the device over either
-codec, VideoToolbox's and NVDEC's plane images sampled where they are. For
-H.265: the camera's encoder settings, its key-frame interval above all,
-which sets what a lost frame costs (`camera_stream.cpp`). The rig's next consumer is calib's
-viewer, showing its synchronised sets.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
 decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident,

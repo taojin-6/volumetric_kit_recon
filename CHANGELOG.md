@@ -12,10 +12,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid),
   pinned at 0.1.0, `cbf7a6e`), and `grid/` is gone from this one, with the
   CI job that tested it alone: grid's own CI tests it, so recon builds
-  neither grid's tests nor its `-Werror`, and its ThreadSanitizer pass runs
-  recon's threaded tests alone. Targets, headers and bytes are unchanged. A
+  neither grid's tests nor its `-Werror`. Targets, headers and bytes are unchanged. A
   consumer that declared grid from this repository (`SOURCE_SUBDIR grid`)
   declares it from grid's at its re-pin, by URL and SHA.
+- **The camera and sensor tiers are the in-tree package
+  `volumetric_kit_sensor`** (BREAKING; `sensor/`, 0.1.0; sensor/DECISIONS.md,
+  the 2026-10-29 package entry): `camera`, `sensor` and its drivers, decoders,
+  prep and array, image I/O, and recon_core's `camera_params.hpp`,
+  `color_space.hpp` and `pinhole.glsl` (now the header-only `sensor_frame`,
+  with `DeviceFrame`), with their tests, tools, fixtures and docs. The
+  package has its own `device_requirements()`, GLM aliases and version.
+  recon declares it after the core (`SOURCE_DIR sensor`) and before grid,
+  and requires 0.1.0 with `vkc_require_sibling`; its libraries link
+  `sensor_frame` alone (`recon_library_sensor_links`), and recon exports no
+  GLSL of its own. `VR_CAMERA_ONLY` is gone (the package's `VS_CAMERA_ONLY`
+  builds `sensor_camera` alone), and the `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG`
+  and `VR_WITH_CUDA` options are the package's `VS_` ones. In recon's tree
+  the package's tests and `-Werror` follow recon's (`VR_BUILD_TESTS`,
+  `VR_WARNINGS_AS_ERRORS`), so CI tests it there on every leg, alone on the
+  CUDA leg, and camera-only in its container. The ThreadSanitizer step runs
+  the package's threaded tests (`sensor_tsan_tests`); recon has none left.
+  For consumers, every name
+  moved, with no alias or forwarding header;
+  [sensor/CHANGELOG.md](sensor/CHANGELOG.md)'s 0.1.0 maps each old name to
+  its new one.
 
 ## [0.1.0] - 2026-10-28
 

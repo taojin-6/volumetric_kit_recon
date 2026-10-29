@@ -105,16 +105,15 @@
 #include "volumetric_kit/grid/mesh/mesh_exchange.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
-#include "volumetric_kit/recon/camera/array_calibration.hpp"
-#include "volumetric_kit/recon/camera/camera_model.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
-#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
+#include "volumetric_kit/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/sensor/camera/array_calibration.hpp"
+#include "volumetric_kit/sensor/camera/camera_model.hpp"
+#include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
+#include "volumetric_kit/sensor/rgbd_sensor.hpp"
 
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
@@ -136,8 +135,8 @@ namespace vol = volumetric_kit::grid::volume;
 namespace rtsdf = volumetric_kit::recon::tsdf;
 namespace rmesh = volumetric_kit::grid::mesh;
 namespace rtex = volumetric_kit::recon::texture;
-namespace rsensor = volumetric_kit::recon::sensor;
-namespace rcamera = volumetric_kit::recon::camera;
+namespace rsensor = volumetric_kit::sensor;
+namespace rcamera = volumetric_kit::sensor::camera;
 namespace vg = volumetric_kit::gfx;
 namespace glfw = volumetric_kit::gfx::glfw;
 namespace vgp = volumetric_kit::gfx::pipelines;
@@ -281,8 +280,7 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   vg::app::WindowedApp app = std::move(app_r).value();
 
-  auto recon_device_result =
-      vkc::Device::adopt(shared->compute_payload(), vr::device_requirements());
+  auto recon_device_result = fuse_viewer::adopt_fuse_device(*shared);
   if (!recon_device_result) {
     std::fprintf(stderr, "recon Device::adopt: %s\n",
                  recon_device_result.status().message().c_str());

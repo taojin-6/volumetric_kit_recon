@@ -16,39 +16,39 @@
 
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
-#include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/sensor/frame/camera_params.hpp"
 
-namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
-static_assert(sizeof(vol::DepthPinhole) == sizeof(vr::DepthCameraParams));
+static_assert(sizeof(vol::DepthPinhole) == sizeof(sensor::DepthCameraParams));
 static_assert(offsetof(vol::DepthPinhole, fx) ==
-              offsetof(vr::DepthCameraParams, fx));
+              offsetof(sensor::DepthCameraParams, fx));
 static_assert(offsetof(vol::DepthPinhole, fy) ==
-              offsetof(vr::DepthCameraParams, fy));
+              offsetof(sensor::DepthCameraParams, fy));
 static_assert(offsetof(vol::DepthPinhole, cx) ==
-              offsetof(vr::DepthCameraParams, cx));
+              offsetof(sensor::DepthCameraParams, cx));
 static_assert(offsetof(vol::DepthPinhole, cy) ==
-              offsetof(vr::DepthCameraParams, cy));
+              offsetof(sensor::DepthCameraParams, cy));
 static_assert(offsetof(vol::DepthPinhole, min_depth) ==
-              offsetof(vr::DepthCameraParams, min_depth));
+              offsetof(sensor::DepthCameraParams, min_depth));
 static_assert(offsetof(vol::DepthPinhole, max_depth) ==
-              offsetof(vr::DepthCameraParams, max_depth));
+              offsetof(sensor::DepthCameraParams, max_depth));
 static_assert(offsetof(vol::DepthPinhole, width) ==
-              offsetof(vr::DepthCameraParams, width));
+              offsetof(sensor::DepthCameraParams, width));
 static_assert(offsetof(vol::DepthPinhole, height) ==
-              offsetof(vr::DepthCameraParams, height));
+              offsetof(sensor::DepthCameraParams, height));
 static_assert(offsetof(vol::DepthPinhole, cam_to_world) ==
-              offsetof(vr::DepthCameraParams, cam_to_world));
+              offsetof(sensor::DepthCameraParams, cam_to_world));
 
 namespace {
 
 // A camera whose every field, and every pose entry, holds a value no other
 // does, so a field copied into its neighbour shows.
-vr::DepthCameraParams distinct_camera() {
-  vr::DepthCameraParams c{};
+sensor::DepthCameraParams distinct_camera() {
+  sensor::DepthCameraParams c{};
   c.fx = 101.5f;
   c.fy = 102.25f;
   c.cx = 103.125f;
@@ -65,7 +65,8 @@ vr::DepthCameraParams distinct_camera() {
   return c;
 }
 
-bool same_fields(const vol::DepthPinhole& p, const vr::DepthCameraParams& c) {
+bool same_fields(const vol::DepthPinhole& p,
+                 const sensor::DepthCameraParams& c) {
   return p.fx == c.fx && p.fy == c.fy && p.cx == c.cx && p.cy == c.cy &&
          p.min_depth == c.min_depth && p.max_depth == c.max_depth &&
          p.width == c.width && p.height == c.height &&
@@ -75,14 +76,14 @@ bool same_fields(const vol::DepthPinhole& p, const vr::DepthCameraParams& c) {
 }  // namespace
 
 int main() {
-  const vr::DepthCameraParams camera = distinct_camera();
+  const sensor::DepthCameraParams camera = distinct_camera();
   const vol::DepthPinhole pinhole = tsdf::to_depth_pinhole(camera);
   CHECK(same_fields(pinhole, camera));
   CHECK(std::memcmp(&pinhole, &camera, sizeof(pinhole)) == 0);
 
   // Copied, not checked: a camera the kernel would refuse samples of still
   // arrives as it was, bit for bit.
-  vr::DepthCameraParams odd = camera;
+  sensor::DepthCameraParams odd = camera;
   odd.fx = std::numeric_limits<float>::quiet_NaN();
   odd.max_depth = std::numeric_limits<float>::infinity();
   odd.min_depth = -0.0f;

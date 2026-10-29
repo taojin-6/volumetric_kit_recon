@@ -1,13 +1,13 @@
 #version 450
 
 // Runs volume's vgridUnprojectDepth (volume/shaders/depth_pinhole.glsl) and
-// core/shaders/pinhole.glsl's vr_unproject_pinhole over the cases the host
-// writes: invocation i unprojects case i's pixel at its depth through its
+// sensor/frame/shaders/pinhole.glsl's vs_unproject_pinhole over the cases the
+// host writes: invocation i unprojects case i's pixel at its depth through its
 // camera with both, into volume_point[i].xyz and core_point[i].xyz.
 
 #extension GL_GOOGLE_include_directive : require
 
-#include "volumetric_kit/recon/core/shaders/pinhole.glsl"
+#include "volumetric_kit/sensor/frame/shaders/pinhole.glsl"
 #include "volumetric_kit/grid/volume/shaders/depth_pinhole.glsl"
 
 layout(local_size_x = 64) in;
@@ -36,5 +36,5 @@ void main() {
   }
   Case c = cases[i];
   volume_point[i] = vec4(vgridUnprojectDepth(c.pixel, c.depth, c.k), 0.0);
-  core_point[i] = vec4(vr_unproject_pinhole(c.pixel, c.depth, c.k), 0.0);
+  core_point[i] = vec4(vs_unproject_pinhole(c.pixel, c.depth, c.k), 0.0);
 }
