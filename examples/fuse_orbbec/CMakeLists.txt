@@ -4,8 +4,9 @@
 # fuse_orbbec: live reconstruction from an Orbbec camera, or a rig of them read
 # as a sensor array, to a PLY; output.stream codes each set into a .vrst file,
 # and output.serve serves it live. recon_sender is the set step, and brings its
-# codec stream, the fuser, the codec and sensor/utils's GPU pass with it; eval
-# is the codec sweep's, and voxelize the mesh settings codec_config.hpp maps.
+# codec stream, the fuser and the codec with it; vr_example_common brings the
+# sensor package's GPU pass (sensor_prep); eval is the codec sweep's, and
+# voxelize the mesh settings codec_config.hpp maps.
 add_executable(fuse_orbbec main.cpp)
 
 target_link_libraries(

@@ -878,8 +878,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   recon's `sensor/` until it has a repository of its own: tiers `sensor_*`,
   namespace `volumetric_kit::sensor`, macros and options `VS_`, on the core
   alone. recon's libraries link `sensor_frame` alone, and nothing in the
-  package includes recon. The owner's decisions of 2026-10-28: repositories
-  now, these names, a future stereo depth producer NVIDIA-only at first.
+  package includes recon or grid. The owner's decisions of 2026-10-28:
+  repositories now, these names, a future stereo depth producer NVIDIA-only
+  at first.
 
 ## Decision record
 
