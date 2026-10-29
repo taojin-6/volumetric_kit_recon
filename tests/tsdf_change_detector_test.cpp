@@ -16,14 +16,16 @@
 // - A foreground 0.5 m nearer sweeping in at a pixel a frame, its boundary
 //   column a mixed sample: a clean pixel alarms on the frame the sweep
 //   reaches it or the next.
-// - Dropouts (zero, NaN, infinity, out of range) change nothing: a camera
-//   given 20 invalid frames flags none of them and then matches, mask for
-//   mask, a twin that skipped them.
+// - Dropouts (zero, NaN, infinity, out of range) of pixels valid from the
+//   camera's start change nothing: a camera given 20 invalid frames flags
+//   none of them and then matches, mask for mask, a twin that skipped them.
 // - A camera that leaves and returns compares with its own history; one whose
 //   image changes size starts a new history.
-// - A pixel first seen late -- no return for 60 frames, then a mover nearer
-//   for 5, then no return again -- flags its first return of the far
-//   background: the warm-up is the camera's, not the pixel's.
+// - Over no return (pixels first valid once their camera tests): a mover's
+//   departure flags Vanished, with its depth, whatever alarms it raised
+//   while there; a sporadic return of two samples ends silently, one of
+//   three flags; and such a pixel tests from its second sample, as the
+//   warm-up is the camera's, not the pixel's.
 // - A closed gate word tests nothing: a 5 cm step behind it is flagged on
 //   the next frame the gate opens, as the history never saw it; the word is
 //   found at its offset, and a bad one is refused.
@@ -359,40 +361,109 @@ int gate_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
   return 0;
 }
 
-// Slot 21, 32 x 32: no return for frames 0-59, a mover at 1.5 m over frames
-// 60-64, no return again, and the background at 3 m returning at frame 80.
-int late_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
-  constexpr std::uint32_t kSlot = 21;
+// Pixels first valid once their camera tests, over no return: slots 21 and
+// 22, 32 x 32, no return for frames 0-59.
+// - Slot 21: a mover at 1.5 m over frames 60-62 that steps to 1.3 m at 63
+//   (flagged Nearer), gone at 65, and a background at 3 m returning at 80.
+//   Frame 65 flags Vanished on every pixel, with the depth that left; the
+//   background's first sample starts a new history, which flags nothing.
+// - Slot 22: sporadic returns -- 2.0 m over frames 60-61, none until 70,
+//   2.5 m over 70-72, none after: the 2-sample run ends silently, the
+//   3-sample run flags Vanished at 73 with its depth.
+int no_return_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
+  constexpr std::uint32_t kMover = 21;
+  constexpr std::uint32_t kSporadic = 22;
   constexpr std::uint32_t kLateSide = 32;
+  constexpr std::size_t kLatePixels = kLateSide * kLateSide;
   const sensor::DepthCameraParams cam = camera(kLateSide);
   Noise noise(11u);
-  std::vector<float> depth(kLateSide * kLateSide);
-  std::vector<std::uint32_t> mask(depth.size());
-  for (int t = 0; t <= 80; ++t) {
-    for (float& d : depth) {
-      if (t >= 60 && t < 65) {
-        d = 1.5f + tof_sigma(1.5f) * noise.gauss();
-      } else if (t == 80) {
-        d = 3.0f + tof_sigma(3.0f) * noise.gauss();
-      } else {
-        d = 0.0f;
-      }
+  const auto sample = [&](float z) { return z + tof_sigma(z) * noise.gauss(); };
+  const auto mover_depth = [&](int t) {
+    if (t >= 60 && t < 63) return sample(1.5f);
+    if (t >= 63 && t < 65) return sample(1.3f);
+    if (t >= 80) return sample(3.0f);
+    return 0.0f;
+  };
+  const auto sporadic_depth = [&](int t) {
+    if (t >= 60 && t < 62) return sample(2.0f);
+    if (t >= 70 && t < 73) return sample(2.5f);
+    return 0.0f;
+  };
+  std::vector<float> mover(kLatePixels);
+  std::vector<float> sporadic(kLatePixels);
+  std::vector<std::uint32_t> mover_mask(kLatePixels);
+  std::vector<std::uint32_t> sporadic_mask(kLatePixels);
+  // Per frame: pixels of each kind, and the Vanished depths' worst error.
+  std::size_t nearer_63 = 0;
+  std::size_t vanished_mover = 0;
+  std::size_t vanished_sporadic = 0;
+  std::size_t other_flags = 0;
+  float depth_error = 0.0f;
+  for (int t = 0; t <= 82; ++t) {
+    for (std::size_t i = 0; i < kLatePixels; ++i) {
+      mover[i] = mover_depth(t);
+      sporadic[i] = sporadic_depth(t);
     }
     vkc::CommandBatch batch(gpu.device, gpu.allocator);
+    CHECK(
+        detector
+            .record_detect(batch, kMover, vkc::StorageInput(mover.data()), cam)
+            .ok());
     CHECK(detector
-              .record_detect(batch, kSlot, vkc::StorageInput(depth.data()), cam)
+              .record_detect(batch, kSporadic,
+                             vkc::StorageInput(sporadic.data()), cam)
               .ok());
     CHECK(batch
-              .readback(*detector.mask(kSlot), 0,
-                        mask.size() * sizeof(std::uint32_t), mask.data())
+              .readback(*detector.mask(kMover), 0,
+                        kLatePixels * sizeof(std::uint32_t), mover_mask.data())
+              .ok());
+    CHECK(batch
+              .readback(*detector.mask(kSporadic), 0,
+                        kLatePixels * sizeof(std::uint32_t),
+                        sporadic_mask.data())
               .ok());
     CHECK(batch.submit().ok());
+    for (std::size_t i = 0; i < kLatePixels; ++i) {
+      const std::uint32_t m = mover_mask[i];
+      const std::uint32_t p = sporadic_mask[i];
+      if (t == 63) {
+        nearer_63 += tsdf::change_of(m) == tsdf::PixelChange::Nearer ? 1 : 0;
+      } else if (t == 65) {
+        if (tsdf::change_of(m) == tsdf::PixelChange::Vanished) {
+          ++vanished_mover;
+          depth_error =
+              std::max(depth_error, std::abs(tsdf::vanished_depth(m) - 1.3f));
+        }
+      } else if (m != 0u) {
+        ++other_flags;
+      }
+      if (t == 73) {
+        if (tsdf::change_of(p) == tsdf::PixelChange::Vanished) {
+          ++vanished_sporadic;
+          depth_error =
+              std::max(depth_error, std::abs(tsdf::vanished_depth(p) - 2.5f));
+        }
+      } else if (p != 0u) {
+        ++other_flags;
+      }
+    }
   }
-  std::size_t farther = 0;
-  for (const std::uint32_t m : mask) farther += m == 2 ? 1 : 0;
-  std::printf("late pixels: %zu of %zu flag the background's return\n", farther,
-              mask.size());
-  CHECK(farther == mask.size());
+  std::printf(
+      "over no return: %zu of %zu flag the mover's step, %zu its departure "
+      "and %zu the sporadic run's end (depth error %.2f mm); %zu other "
+      "flags\n",
+      nearer_63, kLatePixels, vanished_mover, vanished_sporadic,
+      double(depth_error) * 1000.0, other_flags);
+  CHECK(nearer_63 == kLatePixels);
+  CHECK(vanished_mover == kLatePixels);
+  CHECK(vanished_sporadic == kLatePixels);
+  CHECK(other_flags == 0);
+  // The history's depth is a mean of two (1.3 m) or three (2.5 m) samples,
+  // sigma 0.9 and 1.4 mm: 1024 pixels' worst within 5 sigma.
+  CHECK(depth_error < 0.007f);
+  // A word of another kind holds no depth.
+  CHECK(tsdf::vanished_depth(2u) == 0.0f);
+  CHECK(tsdf::change_of(2u) == tsdf::PixelChange::Farther);
   return 0;
 }
 
@@ -430,7 +501,7 @@ int refusals(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
         tsdf::ChangeDetectorConfig{0.5f, 8.0f, 0.0f},
         tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 0},
         tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 1024},
-        tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 30, 30, 4096}}) {
+        tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 30, 30, 512}}) {
     CHECK(refused(
         tsdf::ChangeDetector::create(gpu.device, gpu.allocator, bad).status()));
   }
@@ -457,7 +528,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   }
   if (refusals(gpu, detector) != 0) return 1;
   if (gate_case(gpu, detector) != 0) return 1;
-  if (late_case(gpu, detector) != 0) return 1;
+  if (no_return_case(gpu, detector) != 0) return 1;
 
   const tsdf::DepthNoise tof{};  // the Femto's
   const tsdf::DepthNoise stereo{0.0f, 0.0f, kStereoC};

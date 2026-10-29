@@ -896,7 +896,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   A fixed camera flags its own real change: `tsdf::ChangeDetector` keeps
   each pixel's history and own noise on the device, floored by the sensor's
   `DepthNoise`, and alarms on a two-sided CUSUM (k 0.5, h 8) or one frame
-  past 6 sigma, the operating point measured on the rig's static takes.
+  past 6 sigma, the operating point measured on the rig's static takes; a
+  surface first seen over no return that gives way to no return again
+  flags `Vanished`.
 - [**2026-10-29**](#2026-10-29--dynamic-fusion-evicts-on-change-and-averages-conflict-supersedes-the-2026-10-08-dynamic-set-entry) —
   Dynamic fusion evicts on change and averages conflict: a set tests each
   fixed camera for change (`FrameInput::slot`), resets along the changed
@@ -5225,7 +5227,7 @@ consumer's kernel through `INCLUDE_TARGETS`.
 
 **The rule.** `tsdf::ChangeDetector` tests each fixed camera's depth a pixel
 at a time against that pixel's own past, one pass a camera a frame, and
-writes a mask (`PixelChange`: none, nearer, farther). Per pixel:
+writes a mask (`PixelChange`: none, nearer, farther, vanished). Per pixel:
 - `d_hist`, the cumulative mean of the first 30 valid samples, then an
   exponential average of weight 1/30, restarted at each alarm;
 - `sigma_r = max(sqrt(pi/2) x running mean |d - d_hist|, sigma(d))`, each
@@ -5235,7 +5237,12 @@ writes a mask (`PixelChange`: none, nearer, farther). Per pixel:
 - `S+- = max(0, S+- +- r - k)` on `r = (d - d_hist) / sigma_r`; an alarm
   when either passes h, or one frame has `|r| > 6`; k 0.5, h 8;
 - a camera's pixels test after its first 30 frames; an invalid sample
-  changes nothing.
+  changes nothing,
+- but over no return: a pixel first valid once its camera tests had
+  returned nothing, so its history lasts only while it returns. Its first
+  invalid sample ends it, and flags `Vanished` if it had three valid samples
+  in a row; the mask word's high 30 bits carry the depth that left (0.1 mm),
+  so a reader needs nothing else.
 
 **Why.** Change is a camera disagreeing with its own past; comparing a
 camera with itself cancels its calibration error. Measured on the rig's
@@ -5262,6 +5269,22 @@ its warm-up before the mover did, so its later intermittent returns flagged
 nothing, and a Dynamic replay of the 1 m/s sphere kept 382 cm² of ghost
 there against main's 85 (take1, lab RTX 4090).
 
+**Over no return.** Invalid is not empty, so an invalid sample alone never
+flags. But where nothing returned before a surface came, nothing returning
+after it is that surface leaving, and no other evidence of it will come:
+with the camera's warm-up fixed, Dynamic still kept 102 / 121 cm² of the
+1 m/s / 0.1 m/s sphere where no camera returns (main: 85 / 68), and 1.27 m²
+of a walking column (main: 2.16 m²; take1 and take3, lab RTX 4090). The
+three-in-a-row condition is what keeps the rule quiet on still scenes. On
+the recorded takes' validity (four cameras, sets 60 on), ending such a
+history on its first invalid sample would flag 14-23 times a second
+without it (take3, take1), 1.8-2.6k times a second with three samples in
+total rather than in a row, and 6.6k times a second over the 1 m/s sphere's
+replay with it: the background's sporadic returns end silently. 2 in a row
+flags 210-319 times a second on the still takes, 5 none, and misses 6% of
+the sphere's 3-in-a-row flags. Such a pixel's dropouts end its history too,
+so a still object over no return re-learns there after each.
+
 **Cost.** 24 bytes a pixel per camera, 8.8 MB at 640 x 576; one dispatch a
 camera a frame.
 
@@ -5271,7 +5294,11 @@ False alarms per pixel per second 3.7e-4 (ToF-like, 2 m) and 5.1e-4
 (stereo-like, `c z^2` from 1 to 3 m, the same at 1-2 m and 2-3 m), against
 the rig's 4.3e-4; the step, ramp and sweep delays within the rig's; dropouts
 change nothing (a twin that skipped them matches bit for bit); a camera that
-leaves and returns compares with its own history.
+leaves and returns compares with its own history. Over no return, a mover's
+departure flags `Vanished` on every pixel with its depth (to the noise of
+the history's mean, under 7 mm), a step
+while it is there notwithstanding; a 2-sample sporadic return ends
+silently, a 3-sample one flags.
 
 ### 2026-10-29 — Dynamic fusion evicts on change and averages conflict (supersedes the 2026-10-08 Dynamic set entry).
 

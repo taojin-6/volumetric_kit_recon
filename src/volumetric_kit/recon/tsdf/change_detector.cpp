@@ -59,9 +59,10 @@ static_assert(offsetof(Push, noise_a) == 12, "Push layout drift");
 static_assert(offsetof(Push, memory) == 36, "Push layout drift");
 static_assert(offsetof(Push, gate_word) == 48, "Push layout drift");
 
-// The counts' fields (tsdf_change_detect.comp): 10, 10 and 12 bits.
+// The counts' fields (tsdf_change_detect.comp): 10, 10 and 9 bits, then a
+// flag and a 2-bit run.
 constexpr std::uint32_t kMaxMemory = 1023;
-constexpr std::uint32_t kMaxFreeze = 4095;
+constexpr std::uint32_t kMaxFreeze = 511;
 
 core::Status check_config(const ChangeDetectorConfig& c) {
   const auto bad = [](const char* what) {
@@ -78,7 +79,7 @@ core::Status check_config(const ChangeDetectorConfig& c) {
   if (c.memory < 1 || c.memory > kMaxMemory) {
     return bad("memory must be in [1, 1023]");
   }
-  if (c.freeze > kMaxFreeze) return bad("freeze must be at most 4095");
+  if (c.freeze > kMaxFreeze) return bad("freeze must be at most 511");
   return {};
 }
 
