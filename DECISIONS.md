@@ -5493,7 +5493,10 @@ would find nothing. Under Dynamic, two more rules:
    past its band or into a gap and whose nearest return is gone from the
    band or is a pixel that changed, whoever fused it: a rim distance, or
    the front of another camera's band, which that camera fuses again the
-   same set at one sample's weight. An arrival clears nothing.
+   same set at one sample's weight. A gap counts at once there: within the
+   reach of a departure, pixels that return nothing around a voxel are not
+   taken for a dropout, as a lone invalid sample is elsewhere (the detector
+   flags `Vanished` on the second). An arrival clears nothing.
 
 **Why.** Beside a silhouette the projective distance is the background's,
 so marching cubes steps the outline a cell at a time and leaves thin parts
@@ -5580,7 +5583,10 @@ set leaves no weight beside its moving sides in a set it moves, and takes
 its distances in the first set it is still; a sphere at 1 m/s past a wall,
 seen by three cameras, is 97% covered in every set it moves, 99.5% once it
 stops, and leaves nothing off the wall's band in the set it goes. Each rule
-was taken out in turn, and its check failed. Run on the RTX 4090 with
+was taken out in turn, and its check failed. In the change-driven test's
+box over no return, the set the box goes clears it also within 6 pixels of
+where a camera sees the wall past it (to 4 cm past where nothing returns
+behind it), and the rest the next set, as before. Run on the RTX 4090 with
 validation (the full suite) and synchronization validation (the tsdf and
 sender tests); the rim test prints the same figures on the M5 Max (at the
 first cut) and before and after the rim map.
