@@ -164,8 +164,12 @@ target_link_libraries(
                                     volumetric_kit::core_test_policy)
 include(vr_embed)
 vr_embed_shaders(
-  recon_tsdf_integrate_test EXPORTED_FROM volumetric_kit::grid_volume
-  volumetric_kit::sensor_frame SHADERS
+  recon_tsdf_integrate_test
+  INCLUDE_TARGETS
+  volumetric_kit::grid_volume
+  volumetric_kit::sensor_frame
+  WITH_SRC
+  SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/project_pinhole.comp")
 vr_target_warnings(recon_tsdf_integrate_test)
 add_test(NAME recon_tsdf_integrate COMMAND recon_tsdf_integrate_test)

@@ -4,7 +4,7 @@ name: camera-only
 # tested in a bare Ubuntu container holding a compiler, CMake, GLM and git, and
 # no Vulkan loader, headers, glslc or driver. find_package(Vulkan) is disabled
 # too, so a configure that reaches for Vulkan fails rather than finds one. The
-# tests are the camera tier's, sensor_recon_free and
+# tests are the camera tier's, sensor_package_boundary and
 # sensor_subproject_camera_only.
 # Invoked by ci.yml, which owns the push / pull_request triggers and the
 # concurrency group.

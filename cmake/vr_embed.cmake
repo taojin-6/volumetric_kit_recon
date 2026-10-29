@@ -2,30 +2,28 @@
 # Copyright (c) 2026 Tao Jin
 
 # vr_embed_shaders(<target> [SYMBOL_PREFIX <prefix>] [INCLUDE_TARGETS
-# <target>...] [EXPORTED_FROM <target>...] SHADERS <file>...)
+# <target>... [WITH_SRC]] SHADERS <file>...)
 #
 # The core's vkc_embed_shaders with spirv-val's --scalar-block-layout, the
 # buffer ABI the kernels declare (2026-07-05), and the vr_ symbol prefix unless
 # another is given: hash.comp embeds as hash_comp.spv.hpp, declaring
 # `vr_hash_comp_spv[]` and `vr_hash_comp_spv_size`. The shaders include through
 # recon's src/, so a cross-tier include reads like its C++ header path
-# ("volumetric_kit/recon/tsdf/shaders/tsdf_common.glsl"), and, with
-# EXPORTED_FROM, through those targets' exported GLSL too (a sibling package's,
-# such as sensor_frame's pinhole.glsl); with INCLUDE_TARGETS, through those
-# targets' exported GLSL alone instead, as a project that fetches recon does.
+# ("volumetric_kit/recon/tsdf/shaders/tsdf_common.glsl"); with INCLUDE_TARGETS,
+# through those targets' exported GLSL alone instead (sensor_frame's pinhole,
+# grid_volume's contract), and with WITH_SRC as well, through recon's src/ too.
 function(vr_embed_shaders target)
-  cmake_parse_arguments(ARG "" "SYMBOL_PREFIX"
-                        "INCLUDE_TARGETS;EXPORTED_FROM;SHADERS" ${ARGN})
+  cmake_parse_arguments(ARG "WITH_SRC" "SYMBOL_PREFIX"
+                        "INCLUDE_TARGETS;SHADERS" ${ARGN})
   if(NOT ARG_SYMBOL_PREFIX)
     set(ARG_SYMBOL_PREFIX vr_)
   endif()
+  set(_includes "")
+  if(NOT ARG_INCLUDE_TARGETS OR ARG_WITH_SRC)
+    list(APPEND _includes INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/src")
+  endif()
   if(ARG_INCLUDE_TARGETS)
-    set(_includes INCLUDE_TARGETS ${ARG_INCLUDE_TARGETS})
-  else()
-    set(_includes INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/src")
-    if(ARG_EXPORTED_FROM)
-      list(APPEND _includes INCLUDE_TARGETS ${ARG_EXPORTED_FROM})
-    endif()
+    list(APPEND _includes INCLUDE_TARGETS ${ARG_INCLUDE_TARGETS})
   endif()
   vkc_embed_shaders(
     ${target}
