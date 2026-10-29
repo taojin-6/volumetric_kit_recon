@@ -26,14 +26,15 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.29.0 (a4a6fff, core #65's merge), as is the Homebrew key
-# action in .github/workflows/_build.yml; the vkc_require_core checks below say
-# which core each part needs. The tests are main()s of their own on the core's
-# test support.
+# The pin is core 0.30.0 (2120e62, core #70's merge), as are the Homebrew key
+# action in .github/workflows/_build.yml and the workflow-trigger check in
+# .github/workflows/lint.yml; the vkc_require_core checks below say which core
+# each part needs. The tests are main()s of their own on the core's test
+# support.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG a4a6fff4af65b26b25df27c8ed8c9eecbfbfcd87)
+  GIT_TAG 2120e6294e3c7ead8bb168d757f940b21d21267c)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
@@ -96,11 +97,11 @@ vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
 # turn on grid's test support, and recon's examples and tests its example
 # helpers (grid_example_common), which grid builds with its examples.
 #
-# The pin is grid 0.1.0 (cbf7a6e, its repository's first main).
+# The pin is grid 0.3.0 (dc11031, grid #6's merge).
 FetchContent_Declare(
   volumetric_kit_grid
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
-  GIT_TAG cbf7a6ea2b8729645b24503063ff7a076706f698)
+  GIT_TAG dc110319a8f693873a74450b65695958de38c40e)
 set(VGRID_BUILD_TEST_SUPPORT ${VR_BUILD_TESTS})
 if(VR_BUILD_EXAMPLES OR VR_BUILD_TESTS)
   set(VGRID_BUILD_EXAMPLES ON)
