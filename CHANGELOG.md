@@ -15,37 +15,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   neither grid's tests nor its `-Werror`. Targets, headers and bytes are unchanged. A
   consumer that declared grid from this repository (`SOURCE_SUBDIR grid`)
   declares it from grid's at its re-pin, by URL and SHA.
-- **The camera and sensor tiers are the in-tree package
-  `volumetric_kit_sensor`** (BREAKING; `sensor/`, 0.1.0; sensor's
-  DECISIONS.md, the 2026-10-29 package entry): `camera`, `sensor` and its drivers, decoders,
-  prep and array, image I/O, and recon_core's `camera_params.hpp`,
-  `color_space.hpp` and `pinhole.glsl` (now the header-only `sensor_frame`,
-  with `DeviceFrame`), with their tests, tools, fixtures and docs. The
-  package has its own `device_requirements()`, GLM aliases and version.
-  recon declares it after the core (`SOURCE_DIR sensor`) and before grid,
-  and requires 0.1.0 with `vkc_require_sibling`; its libraries link
-  `sensor_frame` alone (`recon_library_sensor_links`), and recon exports no
-  GLSL of its own. `VR_CAMERA_ONLY` is gone (the package's `VS_CAMERA_ONLY`
-  builds `sensor_camera` alone), and the `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG`
-  and `VR_WITH_CUDA` options are the package's `VS_` ones. In recon's tree
-  the package's tests and `-Werror` follow recon's (`VR_BUILD_TESTS`,
-  `VR_WARNINGS_AS_ERRORS`), so CI tests it there on every leg, alone on the
-  CUDA leg, and camera-only in its container. The ThreadSanitizer step runs
-  the package's threaded tests (`sensor_tsan_tests`); recon has none left.
-  For consumers, every name
-  moved, with no alias or forwarding header;
-  [sensor's CHANGELOG.md](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/CHANGELOG.md)'s
-  0.1.0 maps each old name to its new one.
-- **sensor is fetched from its own repository**
+- **The camera and sensor tiers are the package `volumetric_kit_sensor`**
+  (BREAKING; sensor's DECISIONS.md, the 2026-10-29 package entry), a
+  repository of its own
   ([`volumetric_kit_sensor`](https://github.com/taojin-6/volumetric_kit_sensor),
-  pinned at 0.1.0, `436840c`), and `sensor/` is gone from this one, with the
-  CI that tested it there (camera-only, the package alone, its
-  ThreadSanitizer step and the iOS build check): sensor's own CI tests it,
-  so recon builds neither its tests nor its `-Werror`. recon's CI installs
-  the Orbbec SDK with sensor's action, at the same pin, and its own copy is
-  gone. Targets, headers and bytes are unchanged. A consumer that declared
-  sensor from this repository (`SOURCE_SUBDIR sensor`) declares it from
-  sensor's at its re-pin, by URL and SHA.
+  pinned at 0.1.0, `436840c`) that recon fetches after the core and before
+  grid: `camera`, `sensor` and its drivers, decoders, prep and array, image
+  I/O, and recon_core's `camera_params.hpp`, `color_space.hpp` and
+  `pinhole.glsl` (now the header-only `sensor_frame`, with `DeviceFrame`),
+  with their tests, tools, fixtures and docs. The package has its own
+  `device_requirements()`, GLM aliases and version. recon requires 0.1.0
+  with `vkc_require_sibling`; its libraries link `sensor_frame` alone
+  (`recon_library_sensor_links`), and recon exports no GLSL of its own.
+  `VR_CAMERA_ONLY` is gone (the package's `VS_CAMERA_ONLY` builds
+  `sensor_camera` alone), and the `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG` and
+  `VR_WITH_CUDA` options are the package's `VS_` ones. sensor's own CI tests
+  it, so recon builds neither its tests nor its `-Werror`, and recon's CI
+  has no camera-only job, ThreadSanitizer step or iOS build check left.
+  For consumers, every name moved, with no alias or forwarding header;
+  [sensor's CHANGELOG.md](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/CHANGELOG.md)'s
+  0.1.0 maps each old name to its new one. The `install-orbbec-sdk` action
+  is sensor's too, and recon's CI uses it at the sensor pin: a consumer
+  whose CI used recon's takes sensor's, at its own sensor pin, when it
+  re-pins. A consumer that declared sensor from this repository
+  (`SOURCE_SUBDIR sensor`) declares it from sensor's at its re-pin, by URL
+  and SHA.
 
 ## [0.1.0] - 2026-10-28
 
