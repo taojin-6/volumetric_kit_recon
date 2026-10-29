@@ -118,8 +118,8 @@ if(VR_BUILD_TESTS)
                  "${PROJECT_SOURCE_DIR}/tests/example_viewer_device_test.cpp")
   target_link_libraries(
     recon_example_viewer_device_test
-    PRIVATE volumetric_kit::core_test_base volumetric_kit::grid_mesh
-            volumetric_kit::gfx_glfw Vulkan::Vulkan)
+    PRIVATE volumetric_kit::core_test_base volumetric_kit::recon_core
+            volumetric_kit::grid_mesh volumetric_kit::gfx_glfw Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_device_test
                              PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   vr_target_warnings(recon_example_viewer_device_test)
@@ -151,7 +151,8 @@ if(VR_BUILD_TESTS)
   target_link_libraries(
     recon_example_viewer_pass_test
     PRIVATE volumetric_kit::core_test_base volumetric_kit::core_test_policy
-            volumetric_kit::grid_mesh volumetric_kit::gfx_glfw Vulkan::Vulkan)
+            volumetric_kit::recon_core volumetric_kit::grid_mesh
+            volumetric_kit::gfx_glfw Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_pass_test
                              PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   vr_target_warnings(recon_example_viewer_pass_test)
