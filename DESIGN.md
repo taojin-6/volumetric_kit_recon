@@ -1524,8 +1524,9 @@ the next poll and past the capture.
 HEVC keeps the decoded tag with left alignment when unspecified.
 The GPU samples the location consistently for planes in a buffer and NV12
 images. Existing callers that leave the field unset keep left alignment. The
-resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
-`integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
+resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth`
+(its camera through `to_depth_pinhole`) and `integrate` (and
+`ColorFrame::buffer`, with `coverage_in_alpha`, since a
 pixel the lens maps outside the picture is a 0 word), so nothing is
 uploaded and nothing registered. Y'CbCr colour comes as I420 or NV12 on the
 device only (the 2026-10-06 device-only `GpuFramePrep` decision): planes in a
