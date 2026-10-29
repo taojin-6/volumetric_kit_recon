@@ -689,7 +689,9 @@ core::Status TsdfIntegrator::record_checked(
                               max_workgroup_count_x_, stage);
   }
   if (dynamic && detected.ok()) {
-    VKC_TRY(make_reach(frames, live));
+    // The reaches are made in a submit of their own; a failure there goes
+    // through `detected` as well, so the uploads still go to the batch.
+    detected = make_reach(frames, live);
     if (rows) metrics->add_cpu("  ..detect", 0.0);
     core::GpuStageScope detect(rows ? &parts : nullptr, gpu_timer_,
                                "  ..detect");
