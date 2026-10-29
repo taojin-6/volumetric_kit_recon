@@ -187,6 +187,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `volume`, `tsdf`: **the voxel layer takes its own depth camera** (the
+  2026-10-28 camera-free volume decision): `volume::DepthPinhole`
+  (`voxel_hash_map.hpp`), the fields and 96-byte layout of
+  `DepthCameraParams`, is `DepthInput::camera` and the camera the one-frame
+  `allocate_from_depth` overloads take, and the depth kernel unprojects
+  through a copy of its own; nothing in `volume` includes `camera_params.hpp`
+  or `pinhole.glsl`. `tsdf::FrameInput` no longer derives from `DepthInput`:
+  it holds the depth, its `DepthCameraParams` and its colour, and
+  `tsdf::to_depth_pinhole` copies a camera field by field. Allocation gives
+  main's blocks, heap count and stamps, bit for bit. Migration: pass
+  `tsdf::to_depth_pinhole(camera)` to `allocate_from_depth`; build a
+  `FrameInput` as `{depth, camera, color}`, not `{{depth, camera}, color}`;
+  a list of them no longer slices into `DepthInput`s. Tests:
+  `recon_volume_allocate`, `recon_volume_depth_unproject` (new),
+  `recon_volume_camera_free` (new), `recon_tsdf_depth_pinhole` (new),
+  `recon_volume_block_stamps`, `recon_volume_recorded`, and the tsdf,
+  sensor and stage-metrics tests that allocate from depth.
 - `sensor`: **the Orbbec driver defaults to H.265 at 3840x2160 and 25 fps**
   (the 2026-10-27 colour-controls decision), depth 640x576 as before: the
   streams core 0.25.0's Orbbec scenarios default to, which recon now needs

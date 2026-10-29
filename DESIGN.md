@@ -104,7 +104,9 @@ GPU pass (`sensor_utils`).
 - **`volume`** — the sparse voxel hash map in Vulkan buffers; allocate / compact
   / rehash as compute shaders, a stateless `grow_grid` helper, a default
   hash layout (`kDefaultBucketSize`, `kDefaultMaxChain`) and a default block
-  layout (`block_grid_params`).
+  layout (`block_grid_params`). Camera-free: depth allocation takes its own
+  `DepthPinhole`, and nothing in it includes the camera vocabulary
+  (2026-10-28).
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic), the
   `Fuser` that fuses a set of frames (grow, allocate, integrate), the grid it
   starts from (`create_fusion_grid`), and a triangle mesh's distance field
@@ -811,11 +813,14 @@ bracket, so no `gpu_ms` measures the markers around the work.
 
 `core/shaders/pinhole.glsl` is recon's GLSL pinhole: the rigid inverse,
 unprojection, divide, in-image projection and nearest pixel that tsdf,
-volume, texture and the sensor prep's colour test go through, and that recon
+texture and the sensor prep's colour test go through, and that recon
 exports to its consumers' kernels (README, "Building"). Its functions take
 values, so a scalar-layout camera and a std430 one both pass theirs. The
 acceptance stays two callers' own: texture extrapolates past the image, and
-the colour test bounds the rounded pixel.
+the colour test bounds the rounded pixel. volume's depth allocation
+unprojects through its own copy of the one line it needs
+(`volume/shaders/depth_pinhole.glsl`), which `recon_volume_depth_unproject`
+holds to this one bit for bit.
 
 ### volume
 
@@ -944,7 +949,9 @@ or retry state and reports resize failures through `Status`. `bytes_at`
 reports the attributes and grid-sized table's storage footprint. It excludes
 transient rehash/staging buffers, host scratch and allocator/driver overhead,
 so it is not a peak-memory budget for resize (2026-10-10).
-`allocate_from_depth` also takes a list of frames (`DepthInput`), every
+`allocate_from_depth` takes a frame's camera as volume's `DepthPinhole`, the
+fields and 96-byte layout of `DepthCameraParams`, which tsdf fills by
+`to_depth_pinhole`. It also takes a list of frames (`DepthInput`), every
 frame dispatched in each round's one submit, on a set of its own; a round
 that retries dispatches them all again, and the rounds are the call's, not
 each frame's. `record_allocate_from_depth` records one such round into a
@@ -1024,8 +1031,9 @@ grid's block slots, none runs behind a closed gate word, the tick is taken
 at record, and every frame's cameras go up in one write each ahead of the
 compaction. `integrate` is that, one submit and its wait.
 `integrate` also takes a list of frames
-(`FrameInput`, a `DepthInput` and its colour, so one list feeds both
-calls): one compaction and one submit for them all, each frame a dispatch
+(`FrameInput`: a depth image, its `DepthCameraParams` and its colour; the
+`Fuser` allocates from the same list through `to_depth_pinhole`): one
+compaction and one submit for them all, each frame a dispatch
 of its own over the union in order. Under Classic every voxel takes them in
 turn as integrating them one at a time does, bit for bit. A Dynamic set is
 one instant: the clear kernel (`tsdf_clear.comp`, the integrate kernel's
@@ -1516,8 +1524,9 @@ the next poll and past the capture.
 HEVC keeps the decoded tag with left alignment when unspecified.
 The GPU samples the location consistently for planes in a buffer and NV12
 images. Existing callers that leave the field unset keep left alignment. The
-resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
-`integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
+resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth`
+(its camera through `to_depth_pinhole`) and `integrate` (and
+`ColorFrame::buffer`, with `coverage_in_alpha`, since a
 pixel the lens maps outside the picture is a 0 word), so nothing is
 uploaded and nothing registered. Y'CbCr colour comes as I420 or NV12 on the
 device only (the 2026-10-06 device-only `GpuFramePrep` decision): planes in a

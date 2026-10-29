@@ -220,7 +220,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // StageMetrics no call was handed stays empty proves only that a default-
   // constructed vector is empty; it holds against precisely that tier.
   for (int n = 0; n < kPastOneWindow; ++n) {
-    CHECK(grid.value().map().allocate_from_depth(depth.data(), cam));
+    CHECK(grid.value().map().allocate_from_depth(
+        depth.data(), vr::tsdf::to_depth_pinhole(cam)));
     CHECK(integrator.value().integrate(grid.value(), depth.data(), cam));
   }
   vkc::StageMetrics after_untimed;
@@ -239,7 +240,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(grid.value().clear().ok());
   vkc::StageMetrics metrics;
   vkc::Result<std::uint32_t> allocated = grid.value().map().allocate_from_depth(
-      depth.data(), cam, nullptr, &metrics);
+      depth.data(), vr::tsdf::to_depth_pinhole(cam), nullptr, &metrics);
   CHECK(allocated);
   CHECK(integrator.value().integrate(grid.value(), depth.data(), cam, 5.0f,
                                      vr::tsdf::IntegrationMode::Classic,
@@ -307,8 +308,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
     vkc::Result<vkc::Buffer> on_device = vr_test::upload_device_buffer(
         gpu.device, gpu.allocator, plane.data(), plane.size() * sizeof(float));
     CHECK(on_device);
-    const vr::tsdf::FrameInput frame{
-        {vkc::StorageInput(on_device.value()), narrow}, nullptr};
+    const vr::tsdf::FrameInput frame{vkc::StorageInput(on_device.value()),
+                                     narrow, nullptr};
     vr::tsdf::FuserConfig partial;
     partial.allow_partial = true;
     vkc::Result<vr::tsdf::Fuser> fuser =
