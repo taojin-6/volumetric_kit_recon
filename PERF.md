@@ -589,7 +589,7 @@ improvement awaits measurement; the figures below describe the original GC.
 
 ### Known gaps, not planned
 
-- **The decoders run only on NVIDIA with CUDA (`VR_WITH_CUDA`, Linux) and on
+- **The decoders run only on NVIDIA with CUDA (`VS_WITH_CUDA`, Linux) and on
   Apple.** An integrated GPU's decoder (VAAPI) would need its surfaces
   imported into Vulkan (DMA-BUF); none is planned. An NVIDIA GPU without a
   hardware JPEG engine decodes no MJPEG.

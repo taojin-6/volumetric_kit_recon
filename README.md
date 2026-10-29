@@ -29,9 +29,12 @@ clean, independently consumable tiers.
 
 ## Design at a glance
 
-- **Tiered, like gfx:** `core` → `tsdf` → `texture` → `interop`, with
-  `sensor` off `core`, on grid's tiers below them. A tier may depend only on
-  tiers to its left, and grid on nothing of recon's.
+- **Tiered, like gfx:** `core` → `tsdf` → `texture` → `interop`, on grid's
+  tiers below them. A tier may depend only on tiers to its left, and grid on
+  nothing of recon's.
+- **Cameras in a package of their own:** capture, decoding and frame
+  preparation are the in-tree sensor package ([sensor/](sensor/README.md)),
+  whose frame contract (`sensor_frame`) is all recon's libraries link.
 - **One Vulkan path everywhere:** compute runs as Vulkan compute shaders
   (GLSL → SPIR-V), with MoltenVK on Apple — Linux / Android / macOS / iOS
   from one source, mirroring `volumetric_kit_gfx`. No Metal/CUDA split. GCC or
@@ -64,12 +67,10 @@ Consume it from another CMake project with `FetchContent`, pinned by commit
 `volumetric_kit::recon_core`). Fetched, recon builds its library tiers alone:
 its tests, examples and `-Werror` (`VR_WARNINGS_AS_ERRORS`) default on only
 when it is the top-level project. The camera and sensor tiers are the
-in-tree sensor package (`sensor/`, `volumetric_kit::sensor_*`), which builds
-and tests alone too (`cmake -S "$recon_root/sensor" ...`); recon's configure
-passes it the `VS_` options, and `-DVS_BUILD_TESTS=ON` builds its tests in
-recon's tree. A consumer with no GPU work, such as calib's solver, builds the
-package's camera tier (`volumetric_kit::sensor_camera`) alone with
-`VS_CAMERA_ONLY` ON, with no Vulkan SDK; it refuses the optional drivers.
+in-tree sensor package (`sensor/`, `volumetric_kit::sensor_*`; its
+[README](sensor/README.md) covers its options, drivers and decoders), which
+recon declares after the core: recon's configure passes it the `VS_`
+options, and `-DVS_BUILD_TESTS=ON` builds its tests in recon's tree.
 
 recon exports no GLSL. A consumer's kernels include the GLSL recon's kernels
 read as they do, through the core's `INCLUDE_TARGETS`: the sensor package's
@@ -119,36 +120,25 @@ core version they and the viewers' pinned gfx (`VR_BUILD_VIEWER`) need.
 
 ### Asset I/O
 
-The sensor package's `volumetric_kit::sensor_image_io` provides encoded RGB
-image loading, 16-bit grayscale depth PNG loading with explicit units, and
-RGBA8 and 16-bit grayscale PNG writing (`volumetric_kit/sensor/io/image_io.hpp`);
-it links the core's base tier alone, with no Vulkan. These are host file
-operations; they allocate no Vulkan resources and do not download a live GPU
-volume. Mesh files -- PLY export and the optional Assimp import
-(`VGRID_WITH_ASSIMP`) -- are grid's
+recon reads and writes no asset files of its own: image files are the
+sensor package's (`volumetric_kit::sensor_image_io`,
+[its README](sensor/README.md#image-files)), and mesh files -- PLY export
+and the optional Assimp import (`VGRID_WITH_ASSIMP`) -- are grid's
 ([its README](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#mesh-files)).
 
 ### Optional: Orbbec SDK
 
-The Orbbec (Femto Mega) capture code is off by default and needs the
-[Orbbec SDK](https://github.com/orbbec/OrbbecSDK_v2/releases) ≥ 2.10.6
-installed. It is not fetched: install it once, outside the repo (the family
-convention is `<workspace>/third_party/OrbbecSDK_v<version>`), and point the
-build at its root:
+The live example, `fuse_orbbec`, needs the sensor package's Orbbec driver:
+the installed Orbbec SDK and, on Linux, the video decoders
+([the package's README](sensor/README.md#orbbec-driver)).
 
 ```sh
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
     -DVS_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
 # on Linux, add -DVS_WITH_FFMPEG=ON -DVS_WITH_CUDA=ON
-# or once, for every repo that finds it:  export OrbbecSDK_ROOT=<sdk>
 ```
 
-The driver decodes each camera's colour itself, so it needs the video
-decoders too (see below: every Apple build has them; on Linux, FFmpeg and
-CUDA). That builds
-`volumetric_kit::recon_sensor_orbbec` -- `OrbbecSensor`, one camera as an
-`IRgbdSensor` (`sensor/orbbec/orbbec_sensor.hpp`), which a `SensorArray`
-reads as a synced rig -- and the live example. Every example takes a core
+Every example takes a core
 scenario file through `--config`; `--help` prints the common entry point.
 The core owns JSON decoding, defaults, units, ranges, source selection and
 operation compatibility. See [example configurations](config/README.md).
@@ -189,28 +179,6 @@ explicitly writes those settings. The stream operation refuses fusion, codec
 and output settings before opening any resource. Relative paths are resolved
 from the scenario file's directory, including the sync, calibration and output
 paths.
-
-### Video decoders
-
-The sensor package's HEVC and JPEG decoders (`volumetric_kit::sensor_video`)
-decode on the GPU's hardware and hand their pictures out on the device only.
-Every Apple build has them, on VideoToolbox with no FFmpeg; their pictures
-reach Vulkan through `PixelBufferImporter` (`volumetric_kit::sensor_apple`).
-On Linux they are
-off by default: NVDEC through FFmpeg ≥ 6.1, found through pkg-config, and
-nvJPEG, with the CUDA 13 toolkit's headers (`sensor/cmake/vs_cuda.cmake`).
-`VS_WITH_FFMPEG` on Apple fails the configure. The H.265 syntax the Apple
-decoder reads (`volumetric_kit::sensor_video_syntax`,
-`volumetric_kit/sensor/video/hevc_syntax.hpp`) is host code, in every build.
-
-```sh
-sudo apt install pkg-config libavcodec-dev libavutil-dev
-cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
-    -DVS_WITH_FFMPEG=ON -DVS_WITH_CUDA=ON -DVS_BUILD_TESTS=ON
-# fail, rather than skip, where the decoders find no device path
-# (videotoolbox on a Mac):
-VS_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
-```
 
 ## Codec evaluation
 
