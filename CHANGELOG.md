@@ -16,8 +16,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   consumer that declared grid from this repository (`SOURCE_SUBDIR grid`)
   declares it from grid's at its re-pin, by URL and SHA.
 - **The camera and sensor tiers are the in-tree package
-  `volumetric_kit_sensor`** (BREAKING; `sensor/`, 0.1.0; sensor/DECISIONS.md,
-  the 2026-10-29 package entry): `camera`, `sensor` and its drivers, decoders,
+  `volumetric_kit_sensor`** (BREAKING; `sensor/`, 0.1.0; sensor's
+  DECISIONS.md, the 2026-10-29 package entry): `camera`, `sensor` and its drivers, decoders,
   prep and array, image I/O, and recon_core's `camera_params.hpp`,
   `color_space.hpp` and `pinhole.glsl` (now the header-only `sensor_frame`,
   with `DeviceFrame`), with their tests, tools, fixtures and docs. The
@@ -34,8 +34,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the package's threaded tests (`sensor_tsan_tests`); recon has none left.
   For consumers, every name
   moved, with no alias or forwarding header;
-  [sensor/CHANGELOG.md](sensor/CHANGELOG.md)'s 0.1.0 maps each old name to
-  its new one.
+  [sensor's CHANGELOG.md](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/CHANGELOG.md)'s
+  0.1.0 maps each old name to its new one.
+- **sensor is fetched from its own repository**
+  ([`volumetric_kit_sensor`](https://github.com/taojin-6/volumetric_kit_sensor),
+  pinned at 0.1.0, `436840c`), and `sensor/` is gone from this one, with the
+  CI that tested it there (camera-only, the package alone, its
+  ThreadSanitizer step and the iOS build check): sensor's own CI tests it,
+  so recon builds neither its tests nor its `-Werror`. recon's CI installs
+  the Orbbec SDK with sensor's action, at the same pin, and its own copy is
+  gone. Targets, headers and bytes are unchanged. A consumer that declared
+  sensor from this repository (`SOURCE_SUBDIR sensor`) declares it from
+  sensor's at its re-pin, by URL and SHA.
 
 ## [0.1.0] - 2026-10-28
 
