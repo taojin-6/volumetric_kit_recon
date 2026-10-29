@@ -5251,7 +5251,7 @@ static takes with injected changes (CPU, both takes, four cameras):
   than the sensor model alone at the same k and h, and a static edge that
   always flickers learns a large one and stays quiet with no edge term;
 - one false alarm per interior pixel in about 39 minutes, 15 rays a camera
-  frame (0.006%), 90x fewer resets than the 10-26 prototype's spatial test;
+  frame (0.006%), 90x fewer resets than an earlier prototype's spatial test;
 - steps of 40 mm alarm in the frame they happen (98%), 20 mm 81%, 10 mm in
   2 frames (median), 5 mm in 5; a silhouette 0.5 m nearer on the frame it
   reaches a pixel (95.7%), the rest the next;
@@ -5283,7 +5283,10 @@ total rather than in a row, and 6.6k times a second over the 1 m/s sphere's
 replay with it: the background's sporadic returns end silently. 2 in a row
 flags 210-319 times a second on the still takes, 5 none, and misses 6% of
 the sphere's 3-in-a-row flags. Such a pixel's dropouts end its history too,
-so a still object over no return re-learns there after each.
+so a still surface over no return re-learns there after each, and each
+dropout after three valid samples flags `Vanished`: 30 p (1 - p)^3 times a
+pixel a second at dropout rate p, 2.2 at 10% (tested). What Dynamic does
+with those flags is measured in the next entry.
 
 **Cost.** 24 bytes a pixel per camera, 8.8 MB at 640 x 576; one dispatch a
 camera a frame.
@@ -5298,7 +5301,11 @@ leaves and returns compares with its own history. Over no return, a mover's
 departure flags `Vanished` on every pixel with its depth (to the noise of
 the history's mean, under 7 mm), a step
 while it is there notwithstanding; a 2-sample sporadic return ends
-silently, a 3-sample one flags.
+silently, a 3-sample one flags; a still surface there with 10% dropouts
+flags 2.15 times a pixel a second; a depth past the word's 30 bits keeps
+the largest they hold (107 km). The noise freeze holds a 10 mm a frame
+ramp's drift before its history restarts to 30 mm at p95 (bound 60 mm;
+80-90 mm with the freeze off, which fails).
 
 ### 2026-10-29 — Dynamic fusion evicts on change and averages conflict (supersedes the 2026-10-08 Dynamic set entry).
 

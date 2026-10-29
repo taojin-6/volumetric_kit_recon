@@ -829,9 +829,9 @@ change from its noise, a pixel against its own past (2026-10-29). Each
 camera slot (up to 64) keeps a history per pixel on the device -- a running
 depth, the pixel's own temporal noise `sigma_r`, floored by the sensor's
 `DepthNoise` (`sigma(z) = a + b z + c z^2`, its only knowledge of the
-sensor), two cumulative sums and three counters, 20 bytes -- and one pass a
-camera a frame (`record_detect`) tests every valid sample and writes the
-camera's mask, a `uint32` a pixel: `PixelChange::None`, `Nearer`,
+sensor), two cumulative sums, four counters and a flag, 20 bytes -- and one
+pass a camera a frame (`record_detect`) tests every valid sample and writes
+the camera's mask, a `uint32` a pixel: `PixelChange::None`, `Nearer`,
 `Farther` or `Vanished` in its low two bits (`change_of`). Two-sided CUSUM
 on `r = (d - d_hist) / sigma_r` (k 0.5, h 8) or one frame past 6 sigma
 alarms; an alarm restarts the pixel's history and freezes its noise
