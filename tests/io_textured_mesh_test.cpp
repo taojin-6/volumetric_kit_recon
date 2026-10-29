@@ -28,6 +28,7 @@
 
 namespace vkc = volumetric_kit::core;
 namespace io = volumetric_kit::recon::io;
+namespace image_io = volumetric_kit::sensor::io;
 namespace fs = std::filesystem;
 using Code = vkc::Status::Code;
 
@@ -121,8 +122,8 @@ int main() {
     }
   }
   const fs::path map = dir / "materials" / "cube.png";
-  CHECK(io::write_png_rgba8(map.string(), rgba.data(), rgba.size(), kWidth,
-                            kHeight)
+  CHECK(image_io::write_png_rgba8(map.string(), rgba.data(), rgba.size(),
+                                  kWidth, kHeight)
             .ok());
   write(dir / "materials" / "cube.mtl", "newmtl cube\nmap_Kd cube.png\n");
 
@@ -197,7 +198,7 @@ int main() {
   // The map resolves against the material library, and decodes.
   CHECK(fs::path(textured->diffuse_texture) == map);
   const vkc::Result<std::vector<std::uint32_t>> pixels =
-      io::load_color_packed(textured->diffuse_texture, kWidth, kHeight);
+      image_io::load_color_packed(textured->diffuse_texture, kWidth, kHeight);
   CHECK(pixels.ok());
   CHECK(*pixels == packed);
 

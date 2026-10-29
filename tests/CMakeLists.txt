@@ -348,13 +348,13 @@ if(TARGET volumetric_kit::sensor_orbbec)
   target_compile_definitions(recon_example_fuse_config_test
                              PRIVATE VR_TEST_ORBBEC_CONFIG=1)
 endif()
-# fuse_sender.hpp reports through codec_report.hpp, which compares with eval's.
-# recon_sender brings the codec and the sensor tiers: naming them too would
-# repeat their archives on the link line.
+# fuse_sender.hpp reports through codec_report.hpp, which compares with eval's,
+# and fuses with the frame prep's frames. recon_sender brings the codec tiers:
+# naming them too would repeat their archives on the link line.
 target_link_libraries(
   recon_example_fuse_config_test
   PRIVATE volumetric_kit::core_config volumetric_kit::recon_eval
-          volumetric_kit::recon_sender)
+          volumetric_kit::recon_sender volumetric_kit::sensor_prep)
 target_compile_definitions(
   recon_example_fuse_config_test
   PRIVATE VR_CONFIG_FIXTURES="${PROJECT_SOURCE_DIR}/config/examples")
@@ -473,7 +473,7 @@ target_include_directories(recon_example_fuse_sender_test
 target_link_libraries(
   recon_example_fuse_sender_test
   PRIVATE volumetric_kit::core_config volumetric_kit::recon_eval
-          volumetric_kit::recon_sender)
+          volumetric_kit::recon_sender volumetric_kit::sensor_prep)
 vr_target_warnings(recon_example_fuse_sender_test)
 add_test(NAME recon_example_fuse_sender COMMAND recon_example_fuse_sender_test)
 

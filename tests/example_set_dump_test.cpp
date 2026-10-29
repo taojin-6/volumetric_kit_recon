@@ -31,7 +31,7 @@
 #include "volumetric_kit/sensor/rgbd_frame.hpp"
 
 namespace vkc = volumetric_kit::core;
-namespace io = volumetric_kit::recon::io;
+namespace io = volumetric_kit::sensor::io;
 namespace sensor = volumetric_kit::sensor;
 
 namespace {

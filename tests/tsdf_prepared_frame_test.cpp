@@ -204,9 +204,9 @@ int test_fuses_at_the_surface(vkc::Device& device, vkc::Allocator& allocator,
   CHECK(integrator->integrate(vbg.value(), *out->depth, dc).ok());
 
   auto active = vbg->map().compact_active_blocks();
-  auto tsdf_values = vs_test::read_attribute<float>(
+  auto tsdf_values = vr_test::read_attribute<float>(
       device, allocator, vbg.value(), vol::kTsdfAttribute);
-  auto weights = vs_test::read_attribute<float>(device, allocator, vbg.value(),
+  auto weights = vr_test::read_attribute<float>(device, allocator, vbg.value(),
                                                 vol::kWeightAttribute);
   CHECK(active.ok() && tsdf_values.ok() && weights.ok());
   // Every fused voxel's value, by its global coordinate.
