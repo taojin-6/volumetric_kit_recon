@@ -105,8 +105,9 @@ package includes anything of recon's ([grid's tiers](https://github.com/taojin-6
   core's one umbrella header (`core/vulkan/vulkan.hpp`) — no other code
   includes `<vulkan/...>` directly.
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic), the
-  `Fuser` that fuses a set of frames (grow, allocate, integrate), and the grid
-  it starts from (`create_fusion_grid`).
+  per-camera `ChangeDetector` that flags pixels whose depth changed for
+  real, the `Fuser` that fuses a set of frames (grow, allocate, integrate),
+  and the grid it starts from (`create_fusion_grid`).
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), or with several cameras' coordinates into an atlas of
@@ -798,6 +799,23 @@ next (2026-10-10, amended 2026-10-22). Its fuser belongs to one grid.
 failures, any failed-grow status and final occupancy; failed allocation
 requests can refer to the same block repeatedly. Host allocation exceptions
 become `OutOfMemory`, and a host failure during rehash rolls the map back.
+
+`ChangeDetector` (`tsdf/change_detector.hpp`) tells a fixed camera's real
+change from its noise, a pixel against its own past (2026-10-29). Each
+camera slot (up to 64) keeps a history per pixel on the device -- a running
+depth, the pixel's own temporal noise `sigma_r`, floored by the sensor's
+`DepthNoise` (`sigma(z) = a + b z + c z^2`, its only knowledge of the
+sensor), two cumulative sums and three counters, 20 bytes -- and one pass a
+camera a frame (`record_detect`) tests every valid sample and writes the
+camera's mask, a `uint32` a pixel: `PixelChange::None`, `Nearer` or
+`Farther`. Two-sided CUSUM on `r = (d - d_hist) / sigma_r` (k 0.5, h 8) or
+one frame past 6 sigma alarms; an alarm restarts the pixel's history and
+freezes its noise estimate for 30 samples; a pixel tests once it holds 30
+samples. An invalid sample changes nothing, a camera missing from a set is
+simply not detected, and one whose image size changes starts over. A gate
+word, as `record_integrate` takes one, has a pass test nothing. Its first
+frame zeroes a camera's state in a submit of its own; 24 bytes a pixel in
+all, 8.8 MB a 640 x 576 camera.
 Scanner-specific memory callbacks and allocation-stop thresholds are deferred
 to the iOS port, alongside the actual caller and peak-memory measurements.
 

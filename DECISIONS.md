@@ -890,6 +890,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   pixel otherwise: a slope no longer comes out in half-pixel terraces, which
   fusion shaded as bands on floors and walls, and an edge or a hole is never
   blended. No option; about 1-2 µs of device time a frame.
+- [**2026-10-29**](#2026-10-29--a-fixed-camera-flags-its-own-real-change-a-cusum-on-each-pixels-own-noise-on-the-device) —
+  A fixed camera flags its own real change: `tsdf::ChangeDetector` keeps
+  each pixel's history and own noise on the device, floored by the sensor's
+  `DepthNoise`, and alarms on a two-sided CUSUM (k 0.5, h 8) or one frame
+  past 6 sigma, the operating point measured on the rig's static takes.
 
 ## Decision record
 
@@ -5206,6 +5211,51 @@ its LeakSanitizer case included, is the core's
 recon, and `recon_subproject_old_recon` one whose floor, a minor above,
 is refused naming recon's version. `recon_subproject_glsl` builds the
 consumer's kernel through `INCLUDE_TARGETS`.
+
+### 2026-10-29 — A fixed camera flags its own real change: a CUSUM on each pixel's own noise, on the device.
+
+**The rule.** `tsdf::ChangeDetector` tests each fixed camera's depth a pixel
+at a time against that pixel's own past, one pass a camera a frame, and
+writes a mask (`PixelChange`: none, nearer, farther). Per pixel:
+- `d_hist`, the cumulative mean of the first 30 valid samples, then an
+  exponential average of weight 1/30, restarted at each alarm;
+- `sigma_r = max(sqrt(pi/2) x running mean |d - d_hist|, sigma(d))`, each
+  sample clipped at 3 `sigma_r`, the same memory, not learning for 30
+  samples after an alarm; `sigma(z) = a + b z + c z^2` is the sensor's
+  noise floor (`DepthNoise`, Femto Mega: b = 0.95 mm/m);
+- `S+- = max(0, S+- +- r - k)` on `r = (d - d_hist) / sigma_r`; an alarm
+  when either passes h, or one frame has `|r| > 6`; k 0.5, h 8;
+- a pixel tests once it holds 30 samples; an invalid sample changes
+  nothing.
+
+**Why.** Change is a camera disagreeing with its own past; comparing a
+camera with itself cancels its calibration error. Measured on the rig's
+static takes with injected changes (CPU, both takes, four cameras):
+- the pixel's own `sigma_r` is what keeps false alarms rare: 550x fewer
+  than the sensor model alone at the same k and h, and a static edge that
+  always flickers learns a large one and stays quiet with no edge term;
+- one false alarm per interior pixel in about 39 minutes, 15 rays a camera
+  frame (0.006%), 90x fewer resets than the 10-26 prototype's spatial test;
+- steps of 40 mm alarm in the frame they happen (98%), 20 mm 81%, 10 mm in
+  2 frames (median), 5 mm in 5; a silhouette 0.5 m nearer on the frame it
+  reaches a pixel (95.7%), the rest the next;
+- without the freeze, sustained motion trains `sigma_r` up and doubles the
+  lag at 10 mm a frame.
+h is the one knob: h 5 is 1-2 frames faster on 5-10 mm steps and resets
+0.145% of rays a frame. The warm-up counts a pixel's own samples, not the
+camera's frames, so a pixel first seen late learns before it tests, and the
+state is all on the device: a gated-off pass changes nothing.
+
+**Cost.** 24 bytes a pixel per camera, 8.8 MB at 640 x 576; one dispatch a
+camera a frame.
+
+**Tests.** `recon_tsdf_change_detector`: synthetic white Gaussian noise
+scattered per pixel around the floor as the rig's interior pixels are.
+False alarms per pixel per second 3.7e-4 (ToF-like, 2 m) and 5.1e-4
+(stereo-like, `c z^2` from 1 to 3 m, the same at 1-2 m and 2-3 m), against
+the rig's 4.3e-4; the step, ramp and sweep delays within the rig's; dropouts
+change nothing (a twin that skipped them matches bit for bit); a camera that
+leaves and returns compares with its own history.
 
 ## Measured lessons
 
