@@ -3,17 +3,16 @@
 
 // A Dynamic set's cameras act as one instant: two cameras that disagree give
 // the same grid in either order, and the surface one of them sees survives
-// the other's free space. F looks down world +z at a wall 1.005 m away, in
-// colour. G sits 2 mm in front of that wall's surface and looks along it, at
-// a far wall: its rays pass through F's band on the near side, which G sees
-// as free space far past the band, and never reach F's wall; it brings a
-// colour of its own. Each order is fused as a set twice, each camera keeping
-// its slot. The two grids must
-// agree bit for bit, so their meshes must too, and F's surface must be whole:
-// as many triangles on it as F fused alone gives, and F's colour in it. G's
-// free space only averages into F's band, at a tenth of the weight, so it
-// moves F's surface by under a millimetre, evicts nothing and brings F's
-// band none of its colour; the former
+// the other's free space, keeping all of its weight. F looks down world +z at a
+// wall 1.005 m away, in colour. G sits 2 mm in front of that wall's surface and
+// looks along it, at a far wall: its rays pass through F's band on the near
+// side, which G sees as free space far past the band, and never reach F's wall;
+// it brings a colour of its own. Each order is fused as a set twice, each
+// camera keeping its slot. The two grids must agree bit for bit, so their
+// meshes must too, and F's surface must be whole: as many triangles on it as F
+// fused alone gives, and F's colour in it. G's free space only averages into
+// F's band, at a tenth of the weight, so it moves F's surface by under a
+// millimetre, evicts nothing and brings F's band none of its colour; the former
 // Dynamic cleared F's band there each set, and fused one camera after the
 // other erased it, leaving a hole in one order only. And G's far wall must
 // mesh. A third set, F's wall receded 10 cm, is a change on every one of F's
@@ -291,19 +290,29 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(mesh_fg->on_far_wall > 1000);
 
   // Where G looks -- x = 0, y = 0, a metre down its axis -- F's near band
-  // holds weight and F's colour.
+  // holds F's colour and at least the weight F alone gives it: G's free
+  // space only adds. Evicting it, as the former Dynamic did each set, left
+  // one F sample's weight against F alone's two.
   {
     auto blocks = vgrid_test::blocks_of(fg.value());
-    CHECK(blocks.ok());
+    auto alone_blocks = vgrid_test::blocks_of(alone.value());
+    CHECK(blocks.ok() && alone_blocks.ok());
     auto weight = vgrid_test::read_attribute<float>(dev, alloc, fg.value(),
                                                     vol::kWeightAttribute);
+    auto alone_weight = vgrid_test::read_attribute<float>(
+        dev, alloc, alone.value(), vol::kWeightAttribute);
     auto colors = vgrid_test::read_attribute<std::uint32_t>(
         dev, alloc, fg.value(), vol::kColorAttribute);
-    CHECK(weight.ok() && colors.ok());
+    CHECK(weight.ok() && alone_weight.ok() && colors.ok());
     for (const float z : {0.97f, 0.98f, 0.99f, 1.00f}) {
       const std::int64_t i = voxel_at(blocks.value(), 0.0f, 0.0f, z);
-      CHECK(i >= 0);
-      CHECK(weight.value()[static_cast<std::size_t>(i)] > 0.0f);
+      const std::int64_t a = voxel_at(alone_blocks.value(), 0.0f, 0.0f, z);
+      CHECK(i >= 0 && a >= 0);
+      const float w = weight.value()[static_cast<std::size_t>(i)];
+      const float w_alone = alone_weight.value()[static_cast<std::size_t>(a)];
+      std::printf("z %.2f: weight %.3f with G, %.3f F alone\n", double(z),
+                  double(w), double(w_alone));
+      CHECK(w > 0.0f && w >= w_alone);
       CHECK(colors.value()[static_cast<std::size_t>(i)] == kColor);
     }
   }

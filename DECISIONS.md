@@ -5257,7 +5257,7 @@ static takes with injected changes (CPU, both takes, four cameras):
   than the sensor model alone at the same k and h, and a static edge that
   always flickers learns a large one and stays quiet with no edge term;
 - one false alarm per interior pixel in about 39 minutes, 15 rays a camera
-  frame (0.006%), 90x fewer resets than the 10-26 prototype's spatial test;
+  frame (0.006%), 90x fewer resets than an earlier prototype's spatial test;
 - steps of 40 mm alarm in the frame they happen (98%), 20 mm 81%, 10 mm in
   2 frames (median), 5 mm in 5; a silhouette 0.5 m nearer on the frame it
   reaches a pixel (95.7%), the rest the next;
@@ -5289,7 +5289,10 @@ total rather than in a row, and 6.6k times a second over the 1 m/s sphere's
 replay with it: the background's sporadic returns end silently. 2 in a row
 flags 210-319 times a second on the still takes, 5 none, and misses 6% of
 the sphere's 3-in-a-row flags. Such a pixel's dropouts end its history too,
-so a still object over no return re-learns there after each.
+so a still surface over no return re-learns there after each, and each
+dropout after three valid samples flags `Vanished`: 30 p (1 - p)^3 times a
+pixel a second at dropout rate p, 2.2 at 10% (tested). What Dynamic does
+with those flags is measured in the next entry.
 
 **Cost.** 24 bytes a pixel per camera, 8.8 MB at 640 x 576; one dispatch a
 camera a frame.
@@ -5304,7 +5307,11 @@ leaves and returns compares with its own history. Over no return, a mover's
 departure flags `Vanished` on every pixel with its depth (to the noise of
 the history's mean, under 7 mm), a step
 while it is there notwithstanding; a 2-sample sporadic return ends
-silently, a 3-sample one flags.
+silently, a 3-sample one flags; a still surface there with 10% dropouts
+flags 2.15 times a pixel a second; a depth past the word's 30 bits keeps
+the largest they hold (107 km). The noise freeze holds a 10 mm a frame
+ramp's drift before its history restarts to 30 mm at p95 (bound 60 mm;
+80-90 mm with the freeze off, which fails).
 
 ### 2026-10-29 — Dynamic fusion evicts on change and averages conflict (supersedes the 2026-10-08 Dynamic set entry).
 
@@ -5328,11 +5335,14 @@ cleared debris within 4 cm of a surface after an object left (measured:
 the moving sphere's 80 / 72 cm² ghost, fast / slow, stays). Change is a
 camera disagreeing with its own past; conflict is cameras disagreeing with
 each other. Only change evicts; conflict averages.
-- **Reset rule:** the 10-26 prototype's, tested there (an object that
+- **Reset rule:** an earlier prototype's, tested there (an object that
   approaches and recedes leaves no older layer; occluded history survives).
 - **Free space only into weighted voxels.** It wears away a surface no
-  change removed, at a tenth of a sample's weight so a camera seeing past
-  another's rim shifts that surface by under a tenth of the band. Never
+  change removed, at a tenth of a sample's weight, so a camera seeing past
+  another's rim shifts that surface by about a tenth of the band at equal
+  depth, more when the camera seeing past is nearer (weights go as 1/z^2):
+  one 1.6 times nearer or more carves the other's rim, as the former clear
+  did (the shader's arithmetic run to equilibrium). Never
   making an unobserved voxel observed keeps space a reset cleared, and a
   mover's blocks, unobserved, so the free pass frees them, as before. The
   A/B's other arm fused free space into every voxel (known-empty at a tenth
@@ -5360,8 +5370,9 @@ drawn into the depth (lab RTX 4090, against main):
 - A box that enters, stays 10 s and leaves (take3): whole in the set it
   arrives, and nothing of it left the set it goes (main: a 169 cm² ring at
   its foot, 9 sets to clear).
-- A sphere at 0.1 m/s (take1): 38 cm² of ghost stays (main 68). At 1 m/s,
-  before the `Vanished` reset, 102 (main 85); not replayed since.
+- A sphere at 0.1 m/s (take1): 38 cm² of ghost stays (main 68). At 1 m/s:
+  46.5 cm² while it moves, 50.2 the set after it leaves, 46.4 for good
+  (main 77.9 / 81.3 / 84.8); shown while moving 98.6% (main 90.5%).
 - A walking column that vanishes mid-walk (take3): 0.49 m² stays along its
   last pose and in slivers at its first (main 2.16 m²; 1.27 m² before the
   `Vanished` reset).
@@ -5386,7 +5397,9 @@ A second scene puts the box where nothing returns behind it, the wall only
 on the left: in the set it goes nothing of it meshes, by its cameras'
 `Vanished` rays alone, and no weight falls in any other set.
 `recon_tsdf_integrate_dynamic_set` gives the grazing camera a colour of its
-own, which the frontal camera's band must not take.
+own, which the frontal camera's band must not take, and requires that band
+to keep at least the weight the frontal camera alone gives it (the former
+clear left one sample's).
 `recon_tsdf_integrate_set` now compares a Dynamic set with its reverse bit
 for bit. Run on the M5 Max (MoltenVK) and the RTX 4090, with validation and
 synchronization validation.
@@ -5395,8 +5408,16 @@ synchronization validation.
 returned anything in its camera's warm-up (a surface there from the start,
 or a background's sporadic return) or where it returned for under three
 samples in a row (`TODO(tsdf)`); partial evidence lowering the weight cap
-so slow motion slides; pixels that drop in and out; the noise model's edge
-and incidence terms.
+so slow motion slides; the noise model's edge and incidence terms; and
+pixels that drop in and out over no return. A still surface there flags
+`Vanished` at each dropout after three valid samples (the entry above), and
+each resets its ray's band. A column that walks in and stands still, its
+pixels dropping out i.i.d. at 15% (take3, lab RTX 4090), was flagged 41k
+times a second while it stood, and kept 97.0% of its surface against 97.5%
+both on main with the same dropouts and here without them, at 4.4 mm rms
+(main 4.8): pinholes spread over its face, where main's are at its rim.
+The candidate, the owner's call: flag on the second invalid sample in a
+row, 33 ms later on a real departure, for one more state bit.
 
 ### 2026-10-29 — Near an outline a voxel takes the true distance, in both modes; under Dynamic not where its camera saw a change, and a departure takes what it left.
 

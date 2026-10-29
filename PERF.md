@@ -150,6 +150,7 @@ kernels.
 | P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | step 1 landed (#268); step 2, a strict set in the caller's batch, landed (2026-10-25); landed for the senders (2026-10-25): prep, fusion, the free pass and the frame's front half in one batch, its rANS half in a second, 2 submits a coded set (the 2026-10-25 decision); one camera's set on the RTX 4090 no faster with a cached frame slot, faster with a write-combined one (below) |
 | P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | landed (#132); device-list follow-up landed (#146); recorded into the set's batch (`record_free_stale`, 2026-10-25) |
 | P9 | Allocate only the band blocks a sample can weight | ~60% of a static room's active set holds no weight; compaction, integrate and meshing scale with it | M | — | open, measure first |
+| P10 | Reset a Dynamic set's cameras in one dispatch | up to ~0.45 ms/set on the RTX 4090 and ~1.1 on the M5 Max (three of four sweeps; an upper bound, unmeasured) | M | — | open, measure first |
 | D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | superseded: the decoders hand out device pictures only |
 | D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | landed (#130) |
 | D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed (#130) |
@@ -546,6 +547,19 @@ improvement awaits measurement; the figures below describe the original GC.
     `eval` tier.
 - **Expected.** Up to ~2.5x fewer blocks on a static scene, and integrate's
   work with them; an estimate until measured.
+
+### P10 — Reset a Dynamic set's cameras in one dispatch
+
+- **Problem.** A Dynamic set's reset sweeps the whole active set once a
+  camera: 0.63 of integrate's 1.62 ms on the RTX 4090 and 1.46 of 4.63 ms
+  on the M5 Max (four Femtos, take1, 2026-10-29), each sweep reading every
+  voxel's weight and projecting the weighted ones.
+- **Change.** One dispatch reads each voxel's weight once and loops over the
+  set's cameras for the weighted voxels alone. Every mask word carries its
+  sample's depth, as a `Vanished` one does, so the reset binds no depth
+  image; every camera's mask lives in one buffer, at an offset a slot.
+- **Expected.** Three of the four sweeps go: up to ~0.45 ms a set on the
+  RTX 4090 and ~1.1 ms on the M5 Max, an upper bound until measured.
 
 ### D1 — Report a decoder's fallback to host pictures
 

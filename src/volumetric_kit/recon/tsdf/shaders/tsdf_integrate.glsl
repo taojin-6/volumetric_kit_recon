@@ -54,7 +54,9 @@ layout(local_size_x = 256) in;
 // Dynamic's free space past the band, as a share of a surface sample's weight
 // at the same depth: enough to wear away, over seconds, a surface no change
 // removed, little enough that a camera seeing past another's rim shifts that
-// surface by under a tenth of the band (DECISIONS.md, 2026-10-29).
+// surface by about a tenth of the band at equal depth. A nearer camera's
+// weighs more (1/z^2): from 1.6 times nearer it carves the rim, as the former
+// clear did (DECISIONS.md, 2026-10-29).
 const float kFreeSpaceWeight = 0.1;
 
 layout(set = 0, binding = 0, scalar) buffer Tsdf { float tsdf[]; };

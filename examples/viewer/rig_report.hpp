@@ -339,7 +339,8 @@ inline TextureShares count_texture_shares(
 ///        textured from a held frame.
 /// @param held       Per camera, whether its view was held.
 /// @param occlusion  The texture pass's threshold (metres).
-/// @param dynamic    Whether fusion clears free space.
+/// @param dynamic    Whether fusion is Dynamic: it resets where a camera
+///                   sees change.
 /// @param read_ms    What reading the mesh back cost.
 inline void print_texture_shares(const TextureShares& shares,
                                  const std::vector<bool>& held, float occlusion,

@@ -72,8 +72,9 @@ inline vr::tsdf::IntegrationMode integration_mode(bool dynamic) {
 /// @param frames      The prepared frames.
 /// @param max_weight  The running-average cap (`TsdfIntegrator::integrate`).
 /// @param mode        `Classic` keeps free space ahead of a surface;
-///                    `Dynamic` clears it, so a surface that moves away
-///                    leaves no ghost.
+///                    `Dynamic`, for fixed cameras, resets where a camera
+///                    sees change, so a surface that moves away leaves no
+///                    ghost.
 /// @param metrics     Optional stage rows; null measures nothing.
 /// @return OK, or `Fuser::fuse`'s error.
 inline vkc::Status fuse_set(
