@@ -815,7 +815,9 @@ moving surface is fused from its fresh projective samples alone; and beside
 a departure the reset also clears a positive voxel its camera sees past or
 into a gap whose nearest return is gone from the band or is a pixel that
 changed, so what a rim distance left beside an object leaves with it, while
-an outline that stayed keeps its own (2026-10-29).
+an outline that stayed keeps its own (2026-10-29). It clears such a voxel
+whoever fused it: the front of another camera's band there is fused again
+by that camera the same set, at one sample's weight.
 `Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). A set
 records into a caller's batch (`record_fuse`, 2026-10-25): the fuse's checks
 (`check_frames`), a grow ahead past `kGrowThreshold`, blocking, then one

@@ -910,8 +910,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   Near an outline a voxel takes the true distance, in both modes: the
   Euclidean distance to the nearest return around it, where the projective
   sample sees past the outline or into a gap. Under Dynamic not within
-  6 pixels of a change its camera saw this set, and a departure there
-  resets what such distances left beside it.
+  6 pixels of a change its camera saw this set; and within 6 pixels of a
+  departure the reset also clears the positive voxels the camera's rays see
+  past or into a gap whose nearest return left, whoever fused them (a
+  camera that supports them fuses them again that set, at one sample's
+  weight).
 
 ## Decision record
 
@@ -5443,7 +5446,9 @@ would find nothing. Under Dynamic, two more rules:
 2. **A departure takes what it left beside it.** Within the reach of a
    departure, the reset also clears a positive voxel whose own ray sees
    past its band or into a gap and whose nearest return is gone from the
-   band or is a pixel that changed. An arrival clears nothing.
+   band or is a pixel that changed, whoever fused it: a rim distance, or
+   the front of another camera's band, which that camera fuses again the
+   same set at one sample's weight. An arrival clears nothing.
 
 **Why.** Beside a silhouette the projective distance is the background's,
 so marching cubes steps the outline a cell at a time and leaves thin parts
@@ -5466,8 +5471,10 @@ the surface was or is going averaged into its fresh samples.
   weights fell); departures only, with the nearest-return test, clear none
   there. A camera clears only beside a departure it saw itself, and the
   resets run before any fuse, so another camera's band fuses again in the
-  same set: change evicts, still.
-- **The study's rule otherwise,** with its fix for walls behind rims (the
+  same set, though at one sample's weight where it had up to the cap: on
+  rays its camera did not flag, so whether that keeps "cameras never evict
+  each other" is open (below).
+- **That rule otherwise,** with its fix for walls behind rims (the
   shadow rule) and its gap weight.
 
 **Measured** on replays of the rig's recorded takes with synthetic movers
@@ -5478,7 +5485,7 @@ drawn in (lab RTX 4090), against main and against the entry above alone
   2.2 / 1.2%; the stream 74.8 / 64.9, 15.0 / 11.3, 24.7 / 18.1 Mbps.
   Classic, take1: holes 0.96% (2.6% before), edge flicker 1.0% (0.83%),
   20.2 Mbps (17.0).
-- **Against the ground-truth bench** (`bench_real`, against main): Dynamic
+- **Against the ground-truth bench** (realistic noise, against main): Dynamic
   rims lie 1.2 mm inside the true silhouette (2.6 before), the surface
   within 2 cm of a rim is 97.4% covered (92.5%), and 0.77% of triangles
   are flipped (1.09%); the sawtooth stays 4.6 mm (4.8). Classic: a 2.3 mm

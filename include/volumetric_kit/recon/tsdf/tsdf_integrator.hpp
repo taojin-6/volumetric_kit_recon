@@ -40,7 +40,12 @@ enum class IntegrationMode : std::uint32_t {
   /// Change evicts, conflict averages: each fixed camera's
   /// @ref ChangeDetector finds the rays whose depth changed for real, and a
   /// set resets along them -- the newly exposed free space and the new
-  /// surface's band -- before any camera fuses; everything else accumulates.
+  /// surface's band -- before any camera fuses. Within a few pixels of a ray
+  /// whose surface went farther or vanished, it also resets a positive voxel
+  /// that camera's own ray sees past or into a gap, if the voxel's nearest
+  /// return is gone or changed, whichever camera fused it: a camera that
+  /// still sees it fuses it again that set, at one sample's weight
+  /// (@ref TsdfIntegrator). Everything else accumulates.
   /// Free space past the band averages in at a tenth of a sample's weight,
   /// only into a voxel that holds weight, so it never evicts and cameras that
   /// disagree average into one surface (moving scenes, fixed cameras).
@@ -157,8 +162,12 @@ VR_TSDF_API volumetric_kit::grid::volume::DepthPinhole to_depth_pinhole(
 /// edge rather than a cell's step, and thin parts close. Under
 /// @ref IntegrationMode::Dynamic, a camera fuses no such distance within a
 /// few pixels of a change it saw this set, so a moving surface is fused from
-/// its own samples alone, and a departure there resets the distances it left
-/// beside it.
+/// its own samples alone. Within a few pixels of a departure (a surface that
+/// went farther or vanished), the reset also clears a positive voxel the
+/// camera's ray sees past or into a gap whose nearest return is gone from the
+/// band or changed, whoever fused it: a rim distance the departed surface
+/// left, or the front of another camera's band, which that camera fuses
+/// again the same set at one sample's weight.
 ///
 /// @warning The `Device` and `Allocator` passed to @ref create must
 ///          outlive this object; it stores references to them.

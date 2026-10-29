@@ -40,13 +40,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   camera's first Dynamic set zeroes its history in a submit of its own.
   Classic is unchanged.
 
-- **Fusion takes the true distance near outlines**, in both modes (changes
-  results; DECISIONS.md, 2026-10-29): a voxel whose sample sees past an
-  outline or into a gap takes the Euclidean distance to the nearest return
-  around it, so outlines lie at the true edge instead of a cell's step and
-  thin parts mesh solid. Under Dynamic, a camera's change test also marks
-  its reach (6 pixels): no rim distance there, and a departure resets what
-  such distances left beside it. Each frame gets a rim map pass
+- **Fusion takes the true distance near outlines** (BREAKING for both
+  modes' results; DECISIONS.md, 2026-10-29): a voxel whose sample sees past
+  an outline or into a gap takes the Euclidean distance to the nearest
+  return around it, so outlines lie at the true edge instead of a cell's
+  step and thin parts mesh solid. Under Dynamic, a camera's change test
+  also marks its reach (6 pixels): no rim distance there, and beside a
+  departure the reset also clears the positive voxels its rays see past or
+  into a gap whose nearest return left, whoever fused them (another
+  camera's band fuses again the same set, at one sample's weight). Each frame gets a rim map pass
   (`tsdf_rim_map.comp`) and, under Dynamic, each camera a change reach
   (`tsdf_change_reach.comp`, a `uint32` a pixel).
 
