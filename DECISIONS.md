@@ -1499,8 +1499,12 @@ not inside the first extract's arena grow.
 and encode with is no longer `core`'s. The voxel colour attribute's format,
 the curve included, is `volume/shaders/voxel_color.glsl`, which `volume`
 exports, with its host half `volume/voxel_color.hpp`; the PLY writer encodes
-with a copy of its own. `core/color_space.hpp` stays the sensor boundary's,
-and both copies are held to it by tests. The rule is unchanged.
+with a copy of its own. `core/color_space.hpp` stays the sensor boundary's.
+The volume test holds the voxel format to the published curve and the PLY
+test holds the PLY copy to the voxel format, so the grid tiers' tests take
+no colour vocabulary from `core`; `recon_tsdf_voxel_color_space`, in tsdf,
+which links both, holds the voxel format to `color_space.hpp`. The rule is
+unchanged.
 
 Color arrives from a sensor encoded for a
 display and is then **averaged** four times — the TSDF running mean

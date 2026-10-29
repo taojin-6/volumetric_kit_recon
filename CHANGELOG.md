@@ -213,10 +213,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `voxel_color.glsl` through `INCLUDE_TARGETS volumetric_kit::recon_volume`;
   nothing outside the voxel grid's tiers binds the hash entries. Tests:
   `recon_volume_grid_types` (new), `recon_volume_voxel_color` (was
-  `recon_core_color_space_gpu`), `recon_io_ply`, `recon_subproject_glsl`,
-  `recon_subproject_headers`, `recon_mesh_marching_cubes_sparse`,
-  `recon_volume_hash_map`, `recon_voxelize_mesh_integrate_exact`, and the
-  tests that name the attributes.
+  `recon_core_color_space_gpu`), `recon_tsdf_voxel_color_space` (new),
+  `recon_io_ply`, `recon_subproject_glsl`, `recon_subproject_headers`,
+  `recon_mesh_marching_cubes_sparse`, `recon_volume_hash_map`,
+  `recon_voxelize_mesh_integrate_exact`, and the tests that name the
+  attributes.
 - `codec_stream`, `sender`: **the codec stream is a tier of its own,
   `codec_stream`, and its frame in halves is public** (the 2026-10-28
   codec-stream decision): `codec_stream::CodecStream`, `CodecOutputs` and

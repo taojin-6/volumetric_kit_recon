@@ -165,8 +165,9 @@ add_test(NAME recon_volume_depth_unproject
 # and struct layouts (shaders/grid_types_cases.comp), and voxel_color.glsl's
 # colour format, decode, running-mean encode, first observation and the mesher's
 # read (shaders/voxel_color_cases.comp). The colour test also holds
-# volume/voxel_color.hpp to core/color_space.hpp on the host, bit for bit. Skip
-# the device half where no device is present.
+# volume/voxel_color.hpp to the published sRGB curve, its own reference, on the
+# host, bit for bit; recon_tsdf_voxel_color_space holds it to
+# core/color_space.hpp. Skip the device half where no device is present.
 add_executable(recon_volume_grid_types_test volume_grid_types_test.cpp)
 vr_embed_shaders(
   recon_volume_grid_types_test INCLUDE_TARGETS volumetric_kit::recon_volume
@@ -238,6 +239,18 @@ target_link_libraries(recon_tsdf_depth_pinhole_test
                       PRIVATE volumetric_kit::recon_tsdf)
 vr_target_warnings(recon_tsdf_depth_pinhole_test)
 add_test(NAME recon_tsdf_depth_pinhole COMMAND recon_tsdf_depth_pinhole_test)
+
+# The sensor boundary's curve (core/color_space.hpp) and the voxel colour
+# format's (volume/voxel_color.hpp), held to each other bit for bit. Here in
+# tsdf, which links both, so the volume tier takes no colour vocabulary from
+# core. Host-only, so it always runs.
+add_executable(recon_tsdf_voxel_color_space_test
+               tsdf_voxel_color_space_test.cpp)
+target_link_libraries(recon_tsdf_voxel_color_space_test
+                      PRIVATE volumetric_kit::recon_tsdf)
+vr_target_warnings(recon_tsdf_voxel_color_space_test)
+add_test(NAME recon_tsdf_voxel_color_space
+         COMMAND recon_tsdf_voxel_color_space_test)
 
 # tsdf integrate: fuse a synthetic constant-depth plane into a VoxelBlockGrid
 # and verify the classic projective TSDF math per voxel (sdf, truncation, weight
@@ -863,7 +876,8 @@ add_test(NAME recon_texture_device_mesh COMMAND recon_texture_device_mesh_test)
 # Color-space vocabulary: the exact piecewise sRGB curve, the sensor boundary's
 # packed helpers, and the primaries matrices. Pure host math over core, so it
 # always runs -- no device, no platform. The kernels' colour format is volume's
-# (voxel_color.glsl / voxel_color.hpp), pinned by recon_volume_voxel_color.
+# (voxel_color.glsl / voxel_color.hpp), pinned by recon_volume_voxel_color, and
+# held to this curve by recon_tsdf_voxel_color_space.
 add_executable(recon_core_color_space_test core_color_space_test.cpp)
 target_link_libraries(recon_core_color_space_test
                       PRIVATE volumetric_kit::recon_core)

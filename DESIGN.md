@@ -608,8 +608,10 @@ included, is `volume`'s (2026-10-28): `volume/shaders/voxel_color.glsl`,
 which fusion writes and the mesher reads through, exported to consumers'
 kernels, and its host half `volume/voxel_color.hpp`. The PLY writer encodes
 with a copy of its own. `recon_volume_voxel_color` holds the GLSL to
-`voxel_color.hpp` and that to `color_space.hpp`; `recon_io_ply` holds the
-PLY copy to `color_space.hpp`.
+`voxel_color.hpp` and that to the published curve; `recon_io_ply` holds the
+PLY copy to `voxel_color.hpp`; and `recon_tsdf_voxel_color_space`, in tsdf,
+which links both, holds `voxel_color.hpp` to `color_space.hpp`, so the grid
+tiers take no colour vocabulary from `core`.
 
 The **type and the `is_canonical` predicate go to `core` with the curve**, not
 to `sensor` — implementing this moved them. `TsdfIntegrator::integrate` refuses
