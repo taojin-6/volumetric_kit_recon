@@ -270,7 +270,7 @@ jobs:
       - name: Homebrew key
         id: brew
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
-        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@effc4649acf4c418fe45143c6b728197f2bcbb58
+        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@a4a6fff4af65b26b25df27c8ed8c9eecbfbfcd87
         with:
           formulae: ${{ steps.formulae.outputs.formulae }}
 
@@ -411,9 +411,9 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         env:
           VR_TEST_HEVC_BACKEND: ${{ inputs.hevc_backend }}
-          # The core's test policy (tests/gpu_test.hpp). Every leg has a device
-          # and the validation layer, so a GPU test fails rather than skips
-          # without either, and fails on any error the layer reports.
+          # The core's test policy (core/testing/gpu_test.hpp). Every leg has a
+          # device and the validation layer, so a GPU test fails rather than
+          # skips without either, and fails on any error the layer reports.
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
           VKC_TEST_SYNC_VALIDATION: ${{ inputs.sync_validation && '1' || '' }}

@@ -23,15 +23,16 @@
 #include <cstring>
 #include <vector>
 
-#include "buffer_readback.hpp"
-#include "test_check.hpp"
+#include "volumetric_kit/core/testing/buffer_readback.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/compute_kernel.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 
 #include "depth_unproject_cases_comp.spv.hpp"
-#include "gpu_test.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -95,7 +96,7 @@ bool near(float got, double want) {
   return std::abs(static_cast<double>(got) - want) <= 5e-7 * std::abs(want);
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   const std::vector<UnprojectCase> all = cases();
   const auto n = static_cast<std::uint32_t>(all.size());
 
@@ -107,8 +108,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
                  vr_depth_unproject_cases_comp_spv_size, 3)
             .ok());
   auto pool = builder.build();
-  auto in = vr_test::upload_device_buffer(gpu.device, gpu.allocator, all.data(),
-                                          n * sizeof(all[0]));
+  auto in = vkc::test::upload_device_buffer(gpu.device, gpu.allocator,
+                                            all.data(), n * sizeof(all[0]));
   auto volume_out =
       vkc::device_storage_buffer(gpu.allocator, n * sizeof(vr::Vec4f));
   auto core_out =
@@ -120,10 +121,10 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(vkc::dispatch(gpu.device, kernel, nullptr, 0, vkc::group_count(n, 64),
                       gpu.device.caps().limits().maxComputeWorkGroupCount[0])
             .ok());
-  auto volume_points =
-      vr_test::read_back<vr::Vec4f>(gpu.device, gpu.allocator, *volume_out, n);
+  auto volume_points = vkc::test::read_back<vr::Vec4f>(
+      gpu.device, gpu.allocator, *volume_out, n);
   auto core_points =
-      vr_test::read_back<vr::Vec4f>(gpu.device, gpu.allocator, *core_out, n);
+      vkc::test::read_back<vr::Vec4f>(gpu.device, gpu.allocator, *core_out, n);
   CHECK(volume_points.ok() && core_points.ok());
 
   int failures = 0;
@@ -157,4 +158,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

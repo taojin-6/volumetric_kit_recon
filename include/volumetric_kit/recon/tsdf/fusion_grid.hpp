@@ -12,8 +12,8 @@
 #include <optional>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/fwd.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/recon/core/fwd.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 

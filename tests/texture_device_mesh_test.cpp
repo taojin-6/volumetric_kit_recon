@@ -31,8 +31,8 @@
 #include <vector>
 
 #include "device_blocks.hpp"
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
@@ -44,8 +44,9 @@
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
-#include "gpu_test.hpp"
 #include "grid_readback.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -116,7 +117,7 @@ enum class Field { kSphere, kDense };
 // The device the grids live on, for fill_grid.
 // Allocate every block of the cube and write @p field (weight 1) into each
 // voxel, addressed by the compacted BlockIndex::ptr + local index.
-bool fill_grid(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& grid,
+bool fill_grid(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& grid,
                Field field = Field::kSphere) {
   std::vector<vol::BlockIndex> blocks;
   for (int cz = 0; cz < kBlocks; ++cz) {
@@ -173,7 +174,7 @@ bool fill_grid(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& grid,
              .ok();
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::Result<mesh::MarchingCubes> extractor_result =
       mesh::MarchingCubes::create(gpu.device, gpu.allocator);
   CHECK(extractor_result.ok());
@@ -302,8 +303,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
     vkc::Result<vkc::Buffer> depth_result =
         vkc::device_storage_buffer(gpu.allocator, depth.size() * sizeof(float));
     CHECK(depth_result.ok());
-    CHECK(vr_test::write_back(gpu.device, gpu.allocator, depth_result.value(),
-                              depth)
+    CHECK(vkc::test::write_back(gpu.device, gpu.allocator, depth_result.value(),
+                                depth)
               .ok());
     const auto device_depth =
         std::make_shared<const vkc::Buffer>(std::move(depth_result).value());
@@ -380,9 +381,9 @@ int gpu_main(vr_test::GpuContext& gpu) {
       vkc::Result<vkc::Buffer> coverage = vkc::device_storage_buffer(
           gpu.allocator, half.size() * sizeof(std::uint32_t));
       CHECK(coverage.ok());
-      CHECK(
-          vr_test::write_back(gpu.device, gpu.allocator, coverage.value(), half)
-              .ok());
+      CHECK(vkc::test::write_back(gpu.device, gpu.allocator, coverage.value(),
+                                  half)
+                .ok());
       rtex::TextureView covered = view_from(aside);
       covered.coverage =
           std::make_shared<const vkc::Buffer>(std::move(coverage).value());
@@ -780,4 +781,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

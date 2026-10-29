@@ -9,8 +9,8 @@
 #include <cstdio>
 #include <memory>
 
-#include "test_check.hpp"
 #include "viewer_common.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 
 namespace vkc = volumetric_kit::core;
 namespace vg = volumetric_kit::gfx;

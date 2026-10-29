@@ -187,6 +187,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `core`, tests, build: **recon adopts core 0.29.0 and drops its own copies**
+  (the 2026-10-28 core-adoption decision): the core pin, the Homebrew key
+  action and `VR_CORE_MIN_VERSION` move to 0.29.0 (core #65's merge).
+  recon's headers include the core's `volumetric_kit/core/vulkan/fwd.hpp`;
+  `volumetric_kit/recon/core/fwd.hpp` is gone. `recon_core` exports
+  `pinhole.glsl` with the core's `vkc_export_glsl`, at the same include
+  path; its `VR_SHADER_INCLUDE_DIR` property is gone. The umbrella
+  `volumetric_kit::recon` carries recon's version as `VKC_PACKAGE_VERSION`,
+  for a consumer's `vkc_require_sibling`. The tests run on the core's test
+  support (`volumetric_kit/core/testing/`, namespace
+  `volumetric_kit::core::test`, `VKC_TEST_SANITIZED`); recon's
+  `test_check.hpp`, `scratch_dir.hpp`, `buffer_readback.hpp`,
+  `test_allocation_failure.{hpp,cpp}` and `gpu_test.hpp`'s harness are
+  gone, and the decoder skips and `bare_device` stay in
+  `tests/decoder_test.hpp`. A camera-only build with tests sets
+  `VKC_BUILD_TEST_SUPPORT` too. Migration: pin core 0.29.0 or newer first;
+  include `volumetric_kit/core/vulkan/fwd.hpp`; a consumer's kernels reach
+  `pinhole.glsl` with `INCLUDE_TARGETS volumetric_kit::recon_core` in place
+  of reading `VR_SHADER_INCLUDE_DIR`, at its next re-pin. Tests:
+  `recon_subproject_defaults` (its consumer's `vkc_require_sibling` accepts
+  recon), `recon_subproject_old_recon` (new: refused under a floor above
+  recon's version), `recon_subproject_glsl` (through `INCLUDE_TARGETS`),
+  `recon_subproject_old_core` (the 0.29.0 floor), and
+  `recon_decoder_test_harness` (was `recon_gpu_test_harness`, whose generic
+  cases the core's `vkc_testing_gpu_test_harness_test` holds).
 - `voxelize`, `tsdf`, `volume`: **`MeshIntegrator` moves to a tier of its
   own, `voxelize`** (the 2026-10-28 voxelize decision):
   `voxelize::MeshIntegrator`, `MeshSdfMode`, `MeshSdfParams` and

@@ -13,7 +13,8 @@
 # With -DVR_CORE_FIRST=ON it makes the core available first, as an application
 # that also fetches calib or gfx does, with VKC_WITH_VULKAN as given, so recon's
 # pin yields to it; -DVR_CONSUMER_CORE_VERSION=<version> stamps that version on
-# the core, standing in for an older one.
+# the core, standing in for an older one. -DVR_REQUIRE_RECON=<version> is the
+# consumer's floor on recon.
 cmake_minimum_required(VERSION 3.21)
 project(vr_subproject_consumer LANGUAGES CXX)
 
@@ -34,6 +35,12 @@ foreach(_option VR_BUILD_TESTS VR_BUILD_EXAMPLES VR_WARNINGS_AS_ERRORS)
     message(FATAL_ERROR "${_option} must default OFF for a non-top-level recon")
   endif()
 endforeach()
+
+# With -DVR_REQUIRE_RECON=<version>, the consumer needs a recon that new, and
+# checks it as a sibling does, with the core's vkc_require_sibling.
+if(VR_REQUIRE_RECON)
+  vkc_require_sibling(volumetric_kit::recon ${VR_REQUIRE_RECON})
+endif()
 
 # A camera-only recon (VR_CAMERA_ONLY) makes no core vulkan tier and no other
 # recon tier, and fetches no dependency of the other tiers. That it finds no

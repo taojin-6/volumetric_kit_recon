@@ -18,8 +18,8 @@
 #include <utility>
 #include <vector>
 
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
@@ -31,9 +31,9 @@
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 #include "depth_inputs.hpp"
-#include "gpu_test.hpp"
 #include "grid_readback.hpp"
 #include "sphere_scene.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -99,7 +99,7 @@ bool same_stamps(vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
 }
 
 // Whether each block `grid` holds carries the bits `expected` holds there.
-bool held_blocks_match(const vr_test::Gpu& gpu, vol::VoxelBlockGrid& expected,
+bool held_blocks_match(const vkc::test::Gpu& gpu, vol::VoxelBlockGrid& expected,
                        vol::VoxelBlockGrid& grid) {
   auto all = vr_test::blocks_of(expected);
   auto held = grid.map().compact_active_blocks();
@@ -126,7 +126,7 @@ bool held_blocks_match(const vr_test::Gpu& gpu, vol::VoxelBlockGrid& expected,
 }
 
 // Whether any voxel of `grid` holds weight: the set was integrated.
-vkc::Result<bool> fused_any(const vr_test::Gpu& gpu,
+vkc::Result<bool> fused_any(const vkc::test::Gpu& gpu,
                             const vol::VoxelBlockGrid& grid) {
   VKC_ASSIGN(const std::vector<float> weight,
              vr_test::read_attribute<float>(gpu.device, gpu.allocator, grid,
@@ -139,10 +139,10 @@ vkc::Result<bool> fused_any(const vr_test::Gpu& gpu,
 
 }  // namespace
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::Device& dev = gpu.device;
   vkc::Allocator& alloc = gpu.allocator;
-  const vr_test::Gpu ctx{dev, alloc};
+  const vkc::test::Gpu ctx{dev, alloc};
 
   // The set: three cameras, depth and colour on the host.
   std::vector<View> views;
@@ -369,10 +369,10 @@ int gpu_main(vr_test::GpuContext& gpu) {
     std::vector<vkc::Buffer> color_buffers;
     std::vector<tsdf::ColorFrame> device_colors = colors;
     for (int c = 0; c < kCameras; ++c) {
-      auto depth =
-          vr_test::upload_device_buffer(dev, alloc, views[c].depth.data(),
-                                        views[c].depth.size() * sizeof(float));
-      auto color = vr_test::upload_device_buffer(
+      auto depth = vkc::test::upload_device_buffer(
+          dev, alloc, views[c].depth.data(),
+          views[c].depth.size() * sizeof(float));
+      auto color = vkc::test::upload_device_buffer(
           dev, alloc, views[c].color.data(),
           views[c].color.size() * sizeof(std::uint32_t));
       CHECK(depth.ok() && color.ok());
@@ -496,4 +496,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
   return 0;
 }
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

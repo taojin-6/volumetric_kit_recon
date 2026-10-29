@@ -41,14 +41,15 @@
 #include <vector>
 
 #include "codec_fixture.hpp"
-#include "gpu_test.hpp"
 #include "networking_loopback.hpp"
-#include "scratch_dir.hpp"
 #include "stage_rows.hpp"
 #include "volumetric_kit/core/base/file_io.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/core/testing/scratch_dir.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/networking/stream_client.hpp"
 #include "volumetric_kit/recon/networking/stream_server.hpp"
 #include "volumetric_kit/recon/sender/codec_stream.hpp"
@@ -56,6 +57,8 @@
 #include "volumetric_kit/recon/stream/stream_reader.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 
+namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace codec = volumetric_kit::recon::codec;
 namespace networking = volumetric_kit::recon::networking;
 namespace sender = volumetric_kit::recon::sender;
@@ -102,7 +105,7 @@ bool rows_of(const sender::SentFrame& frame, bool decoded) {
 // naming the path, before the encoder; outputs that can be made get the
 // encoder's refusal, and their file is taken back. A session that is not one
 // Geometry track is refused before any output is made.
-int refused(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
+int refused(vkc::test::GpuContext& gpu, const vkc::test::Scratch& scratch) {
   const auto refuses = [&gpu](const sender::CodecOutputs& outputs,
                               const stream::Session& s, vkc::Status::Code code,
                               const std::string& named) {
@@ -146,8 +149,8 @@ int refused(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
 // the working directory; a frame out of order, and any call once finished, is
 // refused all the same, with no writer to refuse it. A stream moved from
 // refuses every call and reports nothing, the one it moved into going on.
-int writes_nothing(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
-                   const vr_test::Scratch& scratch) {
+int writes_nothing(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+                   const vkc::test::Scratch& scratch) {
   const fs::path quiet = scratch.path / "quiet";
   CHECK(fs::create_directory(quiet));
   vkc::Result<sender::CodecStream> made =
@@ -189,7 +192,7 @@ int writes_nothing(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // Frames 3 and 7 of `source`, frames out of order, `other`'s frame 9, which
 // the decoder refuses, `source`'s frame 10, then finish, into `outputs`.
 // `sent` receives the frames that went out whole.
-int code_frames(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+int code_frames(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                 vol::VoxelBlockGrid& other, const sender::CodecOutputs& outputs,
                 std::vector<sender::SentFrame>* sent) {
   vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
@@ -242,7 +245,7 @@ int code_frames(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // code_frames' .vrst: the session's one Geometry track, and a key record for
 // each frame the encoder returned, in order, its payload what a separate
 // encoder returns for the same grid.
-int check_records(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+int check_records(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                   const std::string& path,
                   const std::vector<sender::SentFrame>& sent,
                   float other_voxel) {
@@ -302,8 +305,8 @@ int check_records(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // A stream destroyed without finish leaves a file that reads as a killed
 // writer's: not finished, every record whole. Destroyed before its first
 // frame, it leaves none, so a rerun onto its path is not refused.
-int unfinished(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
-               const vr_test::Scratch& scratch) {
+int unfinished(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+               const vkc::test::Scratch& scratch) {
   sender::CodecOutputs outputs;
   outputs.stream = (scratch.path / "unfinished.vrst").string();
   {  // Dropped before its first frame: the file is taken back.
@@ -342,8 +345,8 @@ int unfinished(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // lacks; 5 an I-frame, the player's geometry again, and the period from it.
 // Each frame that went out whole has its type, and each record is a key
 // exactly when it holds an I-frame.
-int periodic(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
-             vol::VoxelBlockGrid& other, const vr_test::Scratch& scratch) {
+int periodic(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+             vol::VoxelBlockGrid& other, const vkc::test::Scratch& scratch) {
   constexpr codec::FrameType I = codec::FrameType::kIntra;
   constexpr codec::FrameType P = codec::FrameType::kInter;
   sender::CodecOutputs outputs;
@@ -414,8 +417,8 @@ std::unique_ptr<networking::StreamClient> joined(
 // frame's included, with the file's seq, key, pts, set, payload and offset,
 // under the file's session, then the end once the stream is finished, which
 // leaves the stream without a server.
-int serves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
-           vol::VoxelBlockGrid& other, const vr_test::Scratch& scratch) {
+int serves(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+           vol::VoxelBlockGrid& other, const vkc::test::Scratch& scratch) {
   const sender::CodecOutputs outputs =
       served_on_loopback(scratch.path / "served.vrst");
   codec::EncoderConfig config;
@@ -471,8 +474,8 @@ int serves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // before its decode, its rows its frame's encode with "crc", "write",
 // "publish" and the waits, and each frame as code() returns it. A frame out
 // of order is refused, its front dropped, and the stream goes on.
-int halves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
-           vol::VoxelBlockGrid& other, const vr_test::Scratch& scratch) {
+int halves(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+           vol::VoxelBlockGrid& other, const vkc::test::Scratch& scratch) {
   codec::EncoderConfig config;
   config.intra_period = 3;
   sender::CodecOutputs by_code;
@@ -527,15 +530,15 @@ int halves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(send(source, 5, &rows, &published).ok() && published == 1);
   CHECK(a->finish().ok() && b->finish().ok());
   CHECK(a->coded() == 6 && b->coded() == 6);
-  CHECK(vr_test::read_bytes(by_code.stream) ==
-        vr_test::read_bytes(by_halves.stream));
+  CHECK(vkc::test::read_bytes(by_code.stream) ==
+        vkc::test::read_bytes(by_halves.stream));
   return 0;
 }
 
 // Serving alone, the stream codes its frames and serves each, a key at the
 // default period of 1, writing no file.
-int serves_alone(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
-                 const vr_test::Scratch& scratch) {
+int serves_alone(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+                 const vkc::test::Scratch& scratch) {
   const fs::path quiet = scratch.path / "serving";
   CHECK(fs::create_directory(quiet));
   vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
@@ -571,7 +574,7 @@ int serves_alone(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 
 // A port in use fails create with the server's IoError, naming it, before
 // the stream or the encoder is made.
-int port_in_use(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
+int port_in_use(vkc::test::GpuContext& gpu, const vkc::test::Scratch& scratch) {
   const net::Listener taken = net::bind_loopback();
   CHECK(taken.port != 0);
   sender::CodecOutputs outputs =
@@ -588,8 +591,8 @@ int port_in_use(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
 
 // A client that leaves mid-run, after two frames, never fails a frame: the
 // rest are coded and recorded as before.
-int viewer_leaves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
-                  const vr_test::Scratch& scratch) {
+int viewer_leaves(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+                  const vkc::test::Scratch& scratch) {
   const sender::CodecOutputs outputs =
       served_on_loopback(scratch.path / "left.vrst");
   codec::EncoderConfig config;
@@ -620,8 +623,8 @@ int viewer_leaves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // size limit (SIGXFSZ ignored), frame 1's record cannot be appended, and the
 // client, which got frame 0, sees the end once the stream is finished, with
 // nothing between.
-int unrecorded_unserved(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
-                        const vr_test::Scratch& scratch) {
+int unrecorded_unserved(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+                        const vkc::test::Scratch& scratch) {
   const sender::CodecOutputs outputs =
       served_on_loopback(scratch.path / "full.vrst");
   vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
@@ -658,8 +661,8 @@ int unrecorded_unserved(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // A record the server refuses fails no frame: with a key at seq 1000 already
 // published to the stream's server, each record after is out of order there,
 // yet every frame is coded and recorded, each refusal a Warning naming it.
-int refused_publish(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
-                    const vr_test::Scratch& scratch) {
+int refused_publish(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+                    const vkc::test::Scratch& scratch) {
   const sender::CodecOutputs outputs =
       served_on_loopback(scratch.path / "refused.vrst");
   vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
@@ -700,8 +703,8 @@ int refused_publish(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // the decode and without. Without, the frames are coded, served and recorded
 // as with it, the .vrst byte for byte the same; each frame has its type and
 // encode rows and no decode rows, and no player grid is made.
-int decode_off(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
-               const vr_test::Scratch& scratch) {
+int decode_off(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+               const vkc::test::Scratch& scratch) {
   constexpr codec::FrameType I = codec::FrameType::kIntra;
   constexpr codec::FrameType P = codec::FrameType::kInter;
   const codec::FrameType types[] = {I, P, P, I, P};
@@ -729,13 +732,13 @@ int decode_off(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
     }
     CHECK(coder.finish().ok());
     CHECK((coder.player() != nullptr) == decode);
-    recorded[decode ? 1 : 0] = vr_test::read_bytes(outputs.stream);
+    recorded[decode ? 1 : 0] = vkc::test::read_bytes(outputs.stream);
   }
   CHECK(!recorded[0].empty() && recorded[0] == recorded[1]);
   return 0;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   const Sphere sphere{vr::Vec3f(0.01f, -0.02f, 0.03f), 0.09f};
   vkc::Result<vol::VoxelBlockGrid> source = sphere_grid(gpu, sphere);
   CHECK(source.ok());
@@ -744,7 +747,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   vkc::Result<vol::VoxelBlockGrid> other = sphere_grid(gpu, sphere, coarser);
   CHECK(other.ok());
 
-  vr_test::Scratch scratch("recon_sender_codec_stream_");
+  vkc::test::Scratch scratch("recon_sender_codec_stream_");
   CHECK(refused(gpu, scratch) == 0);
   CHECK(writes_nothing(gpu, *source, scratch) == 0);
 
@@ -764,8 +767,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
   const sender::CodecOutputs second = outputs_in("second");
   std::vector<sender::SentFrame> rerun;
   CHECK(code_frames(gpu, *source, *other, second, &rerun) == 0);
-  const std::vector<std::uint8_t> bytes = vr_test::read_bytes(first.stream);
-  CHECK(!bytes.empty() && bytes == vr_test::read_bytes(second.stream));
+  const std::vector<std::uint8_t> bytes = vkc::test::read_bytes(first.stream);
+  CHECK(!bytes.empty() && bytes == vkc::test::read_bytes(second.stream));
 
   CHECK(periodic(gpu, *source, *other, scratch) == 0);
   CHECK(unfinished(gpu, *source, scratch) == 0);
@@ -783,4 +786,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

@@ -37,8 +37,8 @@
 #include <utility>
 #include <vector>
 
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
@@ -48,8 +48,9 @@
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 
-#include "buffer_readback.hpp"
-#include "gpu_test.hpp"
+#include "volumetric_kit/core/testing/buffer_readback.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -236,7 +237,7 @@ std::shared_ptr<const vkc::Buffer> to_device(
   desc.memory = vkc::MemoryUsage::DeviceOnly;
   vkc::Result<vkc::Buffer> buffer = allocator.create_buffer(desc);
   if (!buffer ||
-      !vr_test::write_back(device, allocator, buffer.value(), data).ok()) {
+      !vkc::test::write_back(device, allocator, buffer.value(), data).ok()) {
     return nullptr;
   }
   return std::make_shared<const vkc::Buffer>(std::move(buffer).value());
@@ -309,7 +310,7 @@ int texture_alone(tex::ProjectiveTexturer& texturer,
   return check_triangle(m, 0, want, one, layout.value());
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::Result<tex::ProjectiveTexturer> created =
       tex::ProjectiveTexturer::create(gpu.device, gpu.allocator);
   CHECK(created.ok());
@@ -912,4 +913,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}
