@@ -5449,16 +5449,17 @@ would find nothing. Under Dynamic, two more rules:
 so marching cubes steps the outline a cell at a time and leaves thin parts
 open: on take1 3.9% of the pixels at depth edges show no surface, and on
 the ground-truth bench today's Dynamic rims lie 2.6 mm inside the true
-silhouette with a 4.8 mm sawtooth. The 10-28 edge study's true rim
-distance (`VR_EXP_RIMDIST`) was its best still-scene fix (holes 3.9% to
-0.65%), but on its own it shredded the 1 m/s sphere and left more debris
-(131 against 80 cm²): next to a moving outline, distances to where the
-surface was or is going averaged into its fresh samples.
+silhouette with a 4.8 mm sawtooth. An earlier study's true rim distance
+was its best still-scene fix (holes 3.9% to 0.65%), but on its own, under
+the former Dynamic, it shredded a sphere moving at 1 m/s and left more
+debris (131 against 80 cm²): next to a moving outline, distances to where
+the surface was or is going averaged into its fresh samples.
 - **Rule 1** keeps a moving surface's own samples whole. Without it, the
   test's plate moving 3 cm a set kept 42 voxels beside its moving sides
   holding distances in the set it moved.
 - **Rule 2.** A beside voxel lies on a ray that does not hit the object, so
-  B's reset along changed rays never reaches it when the object leaves
+  the reset along changed rays (the entry above) never reaches it when
+  the object leaves
   (the test's sphere: 779 weighted voxels off the wall in the set it
   left). Clearing on any change instead let an arriving box clear one
   camera's barely-past-band view of the other camera's wall band (653
@@ -5466,14 +5467,14 @@ surface was or is going averaged into its fresh samples.
   there. A camera clears only beside a departure it saw itself, and the
   resets run before any fuse, so another camera's band fuses again in the
   same set: change evicts, still.
-- **Exactly the 10-28 rule otherwise,** with its fix for walls behind rims
-  (the shadow rule) and its gap weight.
+- **The study's rule otherwise,** with its fix for walls behind rims (the
+  shadow rule) and its gap weight.
 
-**Measured** on the change detector's replays (lab RTX 4090, the rig's
-recorded takes with synthetic movers drawn in), against main and the
-Dynamic entry above (B):
+**Measured** on replays of the rig's recorded takes with synthetic movers
+drawn in (lab RTX 4090), against main and against the entry above alone
+("change-driven"):
 - **Still scenes** (take1 / take3): silhouette holes 3.9 / 4.5% on main,
-  2.7 / 2.9% with B, 0.80 / 0.26% now; edge flicker 11.5 / 9.2, 1.1 / 0.85,
+  2.7 / 2.9% change-driven, 0.80 / 0.26% now; edge flicker 11.5 / 9.2, 1.1 / 0.85,
   2.2 / 1.2%; the stream 74.8 / 64.9, 15.0 / 11.3, 24.7 / 18.1 Mbps.
   Classic, take1: holes 0.96% (2.6% before), edge flicker 1.0% (0.83%),
   20.2 Mbps (17.0).
@@ -5484,20 +5485,20 @@ Dynamic entry above (B):
   sawtooth (3.0) and 2.3 cm² of fattening (13.7), but rims 1.5 mm inside
   (0.7) and 19.6 cm² of sheets more than 1 cm inside the objects (0.5).
 - **Movers.** What a mover leaves where nothing is, the set after it goes
-  (main / B / now): the 1 m/s sphere 81 / 50 / 4.4 cm², gone in one set
+  (main / change-driven / now): the 1 m/s sphere 81 / 50 / 4.4 cm², gone in one set
   now and never before; the 0.1 m/s sphere 81 / 44 / 0.6 cm²; the walking
   column 2.23 / 0.47 / 0.05 m²; the box 169 / 0 / 0 cm². The moving surface
-  shows 99% of its visible area while it moves, as with B.
+  shows 99% of its visible area while it moves, as before.
 - **What it costs movers:** more of the background beside a mover's path
   goes while it moves (mean 25, 104 and 362 cm² for the fast sphere, the
-  slow one and the column, against B's 5, 14 and 80; at most 0.17 m², the
-  column's), filling back over one to three seconds; 13-29 cm² stays
-  (main and B: under 5). Edge flicker at the still sets after a mover is
+  slow one and the column, against 5, 14 and 80 change-driven; at most
+  0.17 m², the column's), filling back over one to three seconds; 13-29 cm²
+  stays (main and change-driven: under 5). Edge flicker at the still sets after a mover is
   2.7-4.3%, against 1.2-2.2% on the still run.
 
 **Cost.** Release, take1 replay (four Femto cameras, 1 cm), sets 40-119,
-interleaved: integrate a set takes 2.79 ms on the RTX 4090 against B's 1.63
-(Classic 1.93 against 0.98): about 0.3 ms the rim map and change reach
+interleaved: integrate a set takes 2.79 ms on the RTX 4090 against 1.63
+change-driven (Classic 1.93 against 0.98): about 0.3 ms the rim map and change reach
 passes, the rest the nearest-return search beside outlines. The first
 cut, which scanned each voxel's window and searched wherever a window held
 an outline, took 3.81 ms; reading the rim map and skipping searches that

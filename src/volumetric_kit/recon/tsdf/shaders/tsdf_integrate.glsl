@@ -271,7 +271,7 @@ const int kRimGap = 3;
 
 // A rim voxel over its own pixel's gap at a quarter of a sample's weight: the
 // gap says only that this ray returned nothing, which a dark or grazing
-// surface also does (the 2026-10-29 study's weight).
+// surface also does (DECISIONS.md, 2026-10-29).
 const float kRimGapWeight = 0.25;
 
 // The true distance near an outline. A voxel is a rim voxel when the window
