@@ -5496,12 +5496,23 @@ drawn in (lab RTX 4090), against main and against the entry above alone
   now and never before; the 0.1 m/s sphere 81 / 44 / 0.6 cm²; the walking
   column 2.23 / 0.47 / 0.05 m²; the box 169 / 0 / 0 cm². The moving surface
   shows 99% of its visible area while it moves, as before.
-- **What it costs movers:** more of the background beside a mover's path
-  goes while it moves (mean 25, 104 and 362 cm² for the fast sphere, the
-  slow one and the column, against 5, 14 and 80 change-driven; at most
-  0.17 m², the column's), filling back over one to three seconds; 13-29 cm²
-  stays (main and change-driven: under 5). Edge flicker at the still sets after a mover is
-  2.7-4.3%, against 1.2-2.2% on the still run.
+- **What it costs movers:** background beside a mover's path goes missing
+  while it moves. Each run above is scored against its own still run, and
+  against this mode's that counts the outline surface rule 1 withholds near
+  a change (means 25, 104 and 362 cm² for the fast sphere, the slow one and
+  the column). The same meshes scored against the change-driven still run
+  give means of 10, 44 and 182 cm², of which the two still runs' own
+  difference there is 6, 6 and 108; change-driven, 5, 14 and 80. That is
+  about change-driven's loss for the fast sphere and the column and about
+  two and a half times it for the slow one, with higher peaks (75, 86 and
+  951 cm² against 25, 34 and 644); the cause is not isolated, as no rule
+  was taken out on the replays. By the end of each run no more is missing
+  than the still runs' difference, within 1 cm². Against its own still run
+  19-29 cm² reads as missing at the end; for the box that is surface this
+  mode's still run holds in the footprint (25-29 cm², more than 2 cm from
+  the change-driven still surface), which the box run does not grow back
+  once the box leaves, its cause not isolated either. Edge flicker at the
+  still sets after a mover is 2.7-4.3%, against 1.2-2.2% on the still run.
 
 **Cost.** Release, take1 replay (four Femto cameras, 1 cm), sets 40-119,
 interleaved: integrate a set takes 2.79 ms on the RTX 4090 against 1.63
@@ -5529,10 +5540,17 @@ validation (the full suite) and synchronization validation (the tsdf and
 sender tests); the rim test prints the same figures on the M5 Max (at the
 first cut) and before and after the rim map.
 
-**Open.** The background a departure's reach resets beside a mover's path
-(above): narrowing rule 2 to voxels a rim distance wrote would keep another
-camera's band, at a bit a voxel. Classic's sheets inside objects. The M5
-Max's cost. The rim test's footprint and search are in pixels of one voxel
+**Open.** Rule 2 clears the front of another camera's band beside a
+departure, on rays that camera did not flag, and that camera fuses it again
+at one sample's weight: whether that keeps cameras from evicting each other
+is open. Narrowing rule 2 to voxels a rim distance wrote, at a bit a voxel,
+would keep that band, but must keep the movers' figures above:
+change-driven alone, with no rim distance, leaves 46-50 cm² behind the fast
+sphere, and part of what clears it here may be rule 2, which a narrowed rule
+would lose. The extra background
+missing beside a slow mover (above). Classic's sheets inside objects. The
+M5 Max's cost, and a nearest-return search that stops early (PERF.md, P11).
+The rim test's footprint and search are in pixels of one voxel
 size; a finer grid changes them with it, unmeasured. A static outline
 within 6 pixels of a change takes no rim distance that set, so it shows
 its projective steps while something moves beside it.
