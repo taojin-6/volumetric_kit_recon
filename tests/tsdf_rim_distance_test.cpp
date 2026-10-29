@@ -540,7 +540,13 @@ int moving_sphere(vkc::test::GpuContext& gpu) {
   config.change.warm_up = 5;
   auto fuser = tsdf::Fuser::create(gpu.device, gpu.allocator, config);
   CHECK(fuser.ok());
-  auto mc = mesh::MarchingCubes::create(gpu.device, gpu.allocator);
+  // Shared vertices: the 34 square metres of wall the three cameras see mesh
+  // into 0.71 M triangles, whose 2.1 M private vertices, at 64 B each, pass
+  // the 128 MiB storage binding every Vulkan device guarantees (lavapipe's),
+  // so extract_host refuses that arena. Shared, they are 0.61 M.
+  mesh::MarchingCubesConfig mc_config;
+  mc_config.share_vertices = true;
+  auto mc = mesh::MarchingCubes::create(gpu.device, gpu.allocator, mc_config);
   CHECK(mc.ok());
   auto made =
       tsdf::create_fusion_grid(gpu.device, gpu.allocator, kVoxel, kTrunc, 4096);
