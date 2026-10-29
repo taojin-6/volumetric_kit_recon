@@ -376,6 +376,19 @@ target_link_libraries(
 vr_target_warnings(recon_tsdf_integrate_set_test)
 add_test(NAME recon_tsdf_integrate_set COMMAND recon_tsdf_integrate_set_test)
 
+# tsdf change detector: synthetic depth sequences, a camera slot each -- static
+# ToF-like and stereo-like noise, steps, ramps, a foreground sweeping in,
+# dropouts, a camera that leaves and returns, a resized one -- against the rates
+# and delays measured on the rig, and the refusals. Skips (exit 0) where no
+# device is present.
+add_executable(recon_tsdf_change_detector_test tsdf_change_detector_test.cpp)
+target_link_libraries(
+  recon_tsdf_change_detector_test PRIVATE volumetric_kit::core_test_policy
+                                          volumetric_kit::recon_tsdf)
+vr_target_warnings(recon_tsdf_change_detector_test)
+add_test(NAME recon_tsdf_change_detector
+         COMMAND recon_tsdf_change_detector_test)
+
 # tsdf integrate dynamic set: a frontal camera and a grazing one that sees past
 # its band, fused as a Dynamic set in either order, must give the same grid and
 # mesh, the grid fusing the grazing one and then the frontal one a call each

@@ -1,0 +1,134 @@
+#version 450
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+// One camera's change test of one depth frame (tsdf::ChangeDetector): a
+// thread a pixel tests the sample against the pixel's own history, updates the
+// history and writes the pixel's mask word. A grid-stride loop, so an image
+// of any size takes at most maxComputeWorkGroupCount[0] groups.
+//
+// r = (d - d_hist) / sigma_r, sigma_r = max(sqrt(pi/2) * mean_abs, floor(d)),
+// floor(d) = a + b d + c d^2 (the sensor's noise). Two cumulative sums,
+// S+ = max(0, S+ + r - k) (farther) and S- = max(0, S- - r - k) (nearer),
+// alarm past h, and one frame with |r| past one_frame alarms alone. A pixel
+// tests once it holds warm_up earlier samples (its noise estimate's count
+// plus the sample that started the history). An alarm restarts the history at
+// the sample, clears the sums and freezes the noise estimate for `freeze`
+// samples; any other sample updates the history -- a cumulative mean of the
+// first `memory` samples, then an exponential average of weight 1/memory --
+// and, unless frozen, the noise estimate on the same schedule, its sample
+// |d - d_hist| clipped at 3 sigma_r. An invalid sample changes nothing.
+
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 256) in;
+
+// One pixel's history (mirrors PixelHistory in change_detector.cpp, 20 bytes
+// under scalar layout).
+struct PixelHistory {
+  float depth;     // d_hist (m)
+  float mean_abs;  // running mean of the clipped |d - d_hist| (m)
+  float far_sum;   // S+, in sigma
+  float near_sum;  // S-, in sigma
+  // bits 0-9: the history's samples, capped at memory (0 = no history);
+  // bits 10-19: the noise estimate's, capped at memory;
+  // bits 20-31: samples the noise estimate still skips after an alarm.
+  uint counts;
+};
+
+layout(set = 0, binding = 0, scalar) readonly buffer Depth { float depth[]; };
+layout(set = 0, binding = 1, scalar) buffer History {
+  PixelHistory history[];
+};
+layout(set = 0, binding = 2, scalar) writeonly buffer Mask { uint mask[]; };
+// The gate: a word that, 0, has the pass test nothing (ChangeDetector's
+// record_detect); a dummy word when the record has none.
+layout(set = 0, binding = 3, scalar) readonly buffer Gate { uint gate[]; };
+
+// Mirrors Push in change_detector.cpp.
+layout(push_constant, scalar) uniform Push {
+  uint pixels;
+  float min_depth;
+  float max_depth;
+  float noise_a;
+  float noise_b;
+  float noise_c;
+  float k;
+  float h;
+  float one_frame;
+  uint memory;
+  uint warm_up;
+  uint freeze;
+  uint gate_word;  // the gate's word index; 0xFFFFFFFF for no gate
+} pc;
+
+const uint kNone = 0u;
+const uint kNearer = 1u;
+const uint kFarther = 2u;
+const float kAbsToSigma = 1.2533141;  // sqrt(pi / 2): E|x| = sigma sqrt(2/pi)
+const float kClip = 3.0;
+// A floor under sigma_r, so a noise model of zero at a tiny depth never
+// divides by zero (1 um, far below any sensor's noise).
+const float kMinSigma = 1e-6;
+
+void main() {
+  if (pc.gate_word != 0xFFFFFFFFu && gate[pc.gate_word] == 0u) {
+    return;  // the set's allocation was incomplete: it is fused again later
+  }
+  uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+  for (uint i = gl_GlobalInvocationID.x; i < pc.pixels; i += stride) {
+    float d = depth[i];
+    // The negated compare drops NaN; +inf fails d <= max_depth, finite.
+    if (!(d > 0.0 && d >= pc.min_depth && d <= pc.max_depth)) {
+      mask[i] = kNone;  // an invalid sample changes nothing
+      continue;
+    }
+    PixelHistory s = history[i];
+    uint n = s.counts & 0x3FFu;
+    uint learned = (s.counts >> 10) & 0x3FFu;
+    uint frozen = s.counts >> 20;
+    uint change = kNone;
+    if (n == 0u) {
+      s.depth = d;  // the first sample starts the history
+      n = 1u;
+    } else {
+      float floor_sigma = pc.noise_a + d * (pc.noise_b + d * pc.noise_c);
+      float sigma = max(max(kAbsToSigma * s.mean_abs, floor_sigma), kMinSigma);
+      float e = d - s.depth;
+      float r = e / sigma;
+      bool alarm = false;
+      if (learned + 1u >= pc.warm_up) {
+        s.far_sum = max(0.0, s.far_sum + r - pc.k);
+        s.near_sum = max(0.0, s.near_sum - r - pc.k);
+        if (s.far_sum > pc.h) {
+          change = kFarther;
+        } else if (s.near_sum > pc.h) {
+          change = kNearer;
+        } else if (abs(r) > pc.one_frame) {
+          change = r > 0.0 ? kFarther : kNearer;
+        }
+        alarm = change != kNone;
+      }
+      if (alarm) {
+        s.depth = d;
+        s.far_sum = 0.0;
+        s.near_sum = 0.0;
+        n = 1u;
+        frozen = pc.freeze;
+      } else {
+        if (frozen > 0u) {
+          frozen -= 1u;
+        } else {
+          learned = min(learned + 1u, pc.memory);
+          s.mean_abs += (min(abs(e), kClip * sigma) - s.mean_abs) /
+                        float(learned);
+        }
+        n = min(n + 1u, pc.memory);
+        s.depth += (d - s.depth) / float(n);
+      }
+    }
+    s.counts = n | (learned << 10) | (frozen << 20);
+    history[i] = s;
+    mask[i] = change;
+  }
+}
