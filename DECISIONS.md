@@ -5549,14 +5549,19 @@ drawn in (lab RTX 4090), against main and against the entry above alone
   (main / change-driven / now): the 1 m/s sphere 81 / 50 / 4.4 cm², gone in one set
   now and never before; the 0.1 m/s sphere 81 / 44 / 0.6 cm²; the walking
   column 2.23 / 0.47 / 0.05 m²; the box 169 / 0 / 0 cm². The moving surface
-  shows 99% of its visible area while it moves, as before.
+  shows 99% of its visible area while it moves, as before. Replayed again
+  with the detector's second-invalid rule (the entries above), the 1 m/s
+  sphere gives the same: 4.5 cm² left the set after it goes, gone in one
+  set, 99% shown while it moves; the still take1 0.80% holes, 2.3% edge
+  flicker, 25.1 Mbps.
 - **What it costs movers:** background beside a mover's path goes missing
   while it moves. Each run above is scored against its own still run, and
   against this mode's that counts the outline surface rule 1 withholds near
   a change (means 25, 104 and 362 cm² for the fast sphere, the slow one and
   the column). The same meshes scored against the change-driven still run
-  give means of 10, 44 and 182 cm², of which the two still runs' own
-  difference there is 6, 6 and 108; change-driven, 5, 14 and 80. That is
+  give means of 10, 44 and 182 cm² (the fast sphere 11 with the
+  second-invalid rule), of which the two still runs' own difference there
+  is 6, 6 and 108; change-driven, 5, 14 and 80. That is
   about change-driven's loss for the fast sphere and the column and about
   two and a half times it for the slow one, with higher peaks (75, 86 and
   951 cm² against 25, 34 and 644); the cause is not isolated, as no rule
@@ -5592,10 +5597,11 @@ stops, and leaves nothing off the wall's band in the set it goes. Each rule
 was taken out in turn, and its check failed. In the change-driven test's
 box over no return, the set the box goes clears it also within 6 pixels of
 where a camera sees the wall past it (to 4 cm past where nothing returns
-behind it), and the rest the next set, as before. Run on the RTX 4090 with
-validation (the full suite) and synchronization validation (the tsdf and
-sender tests); the rim test prints the same figures on the M5 Max (at the
-first cut) and before and after the rim map.
+behind it), and the rest the next set, as before. Run on the RTX 4090 and
+the M4 Mac mini with validation (the full suite) and synchronization
+validation (the tsdf and sender tests); the rim test prints the same
+figures on both, on the M5 Max (at the first cut), and before and after
+the rim map.
 
 **Open.** Rule 2 clears the front of another camera's band beside a
 departure, on rays that camera did not flag, and that camera fuses it again
