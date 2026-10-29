@@ -25,7 +25,9 @@
 // Then a second scene, a fuser of its own, over no return: the wall only
 // left of x = -0.3 m, nothing returning elsewhere, the same two cameras. The
 // box is there over sets 40-49, where nothing returns behind it, and goes at
-// 50: in that set nothing of it meshes and no voxel of its band reads as
+// 50. Its cameras flag Vanished on the second set with no return, so set 50
+// changes nothing -- the box still meshes, as after a single-frame dropout --
+// and in set 51 nothing of it meshes and no voxel of its band reads as
 // inside a surface (no camera ever sees past it, so only its cameras'
 // Vanished rays can clear it); no weight falls in any other set.
 //
@@ -214,7 +216,7 @@ int refusals(vkc::test::GpuContext& gpu, tsdf::Fuser& fuser,
   return 0;
 }
 
-// The second scene: a box over no return, gone at set 50.
+// The second scene: a box over no return, gone at set 50, cleared at 51.
 int no_return_case(vkc::test::GpuContext& gpu) {
   vkc::Device& dev = gpu.device;
   vkc::Allocator& alloc = gpu.allocator;
@@ -228,7 +230,7 @@ int no_return_case(vkc::test::GpuContext& gpu) {
   const sensor::DepthCameraParams a = camera_a();
   const sensor::DepthCameraParams b = camera_b();
   std::vector<float> weights_before;
-  for (int set = 0; set <= 50; ++set) {
+  for (int set = 0; set <= 51; ++set) {
     const Thing thing = set >= 40 && set < 50 ? Thing::Box : Thing::None;
     const std::vector<float> da = render(a, thing, 0.0f, true);
     const std::vector<float> db = render(b, thing, kOffsetB, true);
@@ -241,7 +243,7 @@ int no_return_case(vkc::test::GpuContext& gpu) {
                                                vol::kWeightAttribute);
     CHECK(w.ok());
     const std::vector<float>& weights = w.value();
-    if (!weights_before.empty() && set != 50) {
+    if (!weights_before.empty() && set != 51) {
       std::size_t fell = 0;
       for (std::size_t i = 0; i < weights_before.size(); ++i) {
         fell += weights[i] < weights_before[i] ? 1 : 0;
@@ -252,15 +254,15 @@ int no_return_case(vkc::test::GpuContext& gpu) {
         return 1;
       }
     }
-    if (set == 49 || set == 50) {
+    if (set >= 49) {
       auto box = triangles_at(mc.value(), grid, kBox);
       CHECK(box.ok());
       std::printf("over no return, set %d: %zu triangles on the box\n", set,
                   box.value());
-      if (set == 49) CHECK(box.value() > 500);
-      if (set == 50) CHECK(box.value() == 0);
+      if (set < 51) CHECK(box.value() > 500);
+      if (set == 51) CHECK(box.value() == 0);
     }
-    if (set == 50) {
+    if (set == 51) {
       auto vox = voxels_of(grid);
       auto t = vgrid_test::read_attribute<float>(dev, alloc, grid,
                                                  vol::kTsdfAttribute);

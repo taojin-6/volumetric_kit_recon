@@ -898,7 +898,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   `DepthNoise`, and alarms on a two-sided CUSUM (k 0.5, h 8) or one frame
   past 6 sigma, the operating point measured on the rig's static takes; a
   surface first seen over no return that gives way to no return again
-  flags `Vanished`.
+  flags `Vanished`, on the second invalid sample in a row: a lone dropout
+  changes nothing.
 - [**2026-10-29**](#2026-10-29--dynamic-fusion-evicts-on-change-and-averages-conflict-supersedes-the-2026-10-08-dynamic-set-entry) —
   Dynamic fusion evicts on change and averages conflict: a set tests each
   fixed camera for change (`FrameInput::slot`), resets along the changed
@@ -5239,10 +5240,13 @@ writes a mask (`PixelChange`: none, nearer, farther, vanished). Per pixel:
 - a camera's pixels test after its first 30 frames; an invalid sample
   changes nothing,
 - but over no return: a pixel first valid once its camera tests had
-  returned nothing, so its history lasts only while it returns. Its first
-  invalid sample ends it, and flags `Vanished` if it had three valid samples
-  in a row; the mask word's high 30 bits carry the depth that left (0.1 mm),
-  so a reader needs nothing else.
+  returned nothing, so its history lasts only while it returns. A lone
+  invalid sample there is a dropout and changes nothing: the history, its
+  sums and its count of valid samples go on as if it never happened. The
+  second invalid sample in a row ends the history, and flags `Vanished` if
+  it had three valid samples, a lone dropout skipped; the mask word's high
+  30 bits carry the depth that left (0.1 mm), so a reader needs nothing
+  else.
 
 **Why.** Change is a camera disagreeing with its own past; comparing a
 camera with itself cancels its calibration error. Measured on the rig's
@@ -5275,18 +5279,40 @@ after it is that surface leaving, and no other evidence of it will come:
 with the camera's warm-up fixed, Dynamic still kept 102 / 121 cm² of the
 1 m/s / 0.1 m/s sphere where no camera returns (main: 85 / 68), and 1.27 m²
 of a walking column (main: 2.16 m²; take1 and take3, lab RTX 4090). The
-three-in-a-row condition is what keeps the rule quiet on still scenes. On
-the recorded takes' validity (four cameras, sets 60 on), ending such a
-history on its first invalid sample would flag 14-23 times a second
-without it (take3, take1), 1.8-2.6k times a second with three samples in
-total rather than in a row, and 6.6k times a second over the 1 m/s sphere's
-replay with it: the background's sporadic returns end silently. 2 in a row
-flags 210-319 times a second on the still takes, 5 none, and misses 6% of
-the sphere's 3-in-a-row flags. Such a pixel's dropouts end its history too,
-so a still surface over no return re-learns there after each, and each
-dropout after three valid samples flags `Vanished`: 30 p (1 - p)^3 times a
-pixel a second at dropout rate p, 2.2 at 10% (tested). What Dynamic does
-with those flags is measured in the next entry.
+three-sample condition is what keeps the rule quiet on still scenes: a
+background's sporadic returns end silently. On the recorded takes'
+validity (four cameras, sets 60 on), with a history ended on its first
+invalid sample, three valid samples in a row flagged 14-23 times a second
+(take3, take1), three in total 1.8-2.6k, two in a row 210-319 and five
+none; over the 1 m/s sphere's replay three in a row flagged 6.6k times a
+second, of which two in a row would miss 6%.
+
+**A dropout is not a departure** (the owner's call, measured on Dynamic in
+the next entry). Ended on its first invalid sample, a still surface over no
+return re-learned after each dropout, and each one after three valid
+samples flagged `Vanished`, 30 p (1 - p)^3 times a pixel a second at
+dropout rate p (2.2 at 10%), each resetting its ray's band under Dynamic: a
+column standing over no return with 15% i.i.d. dropouts was flagged 41k
+times a second, pinholes spread over its face. So the second invalid sample
+in a row ends the history, and a lone one is as if it never happened. A
+history then lasts (1 + p) / p^2 frames on average and flags if two more
+valid samples came first, each with probability (1 - p)(1 + p): p^2
+(1 - p)^3 (1 + p)^2 flags a pixel a frame, 0.26 a second at 10% (tested)
+and 0.55 at 15%, 8 and 5 times fewer. A real departure is flagged one
+frame (33 ms) later. The mark takes a bit, so the history's three counts
+are 9 bits each and `memory`, like `freeze`, is at most 511 samples (17 s;
+the default is 30). On the takes' validity, the rule flags 42-69 times a
+second on the still takes (14-23 before: sporadic returns a frame apart now
+add up), against 1.8-3.0k ordinary false alarms; the walking column
+110-113k times a second while it walks, without and with 15% dropouts on
+it (112k before, without them); the standing column with them 8.1k (41k
+before). Restarting
+the count at a lone dropout instead (three valid samples literally in a
+row) flags 13-21 times a second still and 6.2k on the standing column, but
+misses a departure wherever one of its last three samples dropped out,
+1 - (1 - p)^3 of the pixels: the walking column with 15% dropouts then
+flagged 86k times a second against 110k without them. Eviction comes
+first, so the count skips the dropout.
 
 **Cost.** 24 bytes a pixel per camera, 8.8 MB at 640 x 576; one dispatch a
 camera a frame.
@@ -5301,9 +5327,11 @@ leaves and returns compares with its own history. Over no return, a mover's
 departure flags `Vanished` on every pixel with its depth (to the noise of
 the history's mean, under 7 mm), a step
 while it is there notwithstanding; a 2-sample sporadic return ends
-silently, a 3-sample one flags; a still surface there with 10% dropouts
-flags 2.15 times a pixel a second; a depth past the word's 30 bits keeps
-the largest they hold (107 km). The noise freeze holds a 10 mm a frame
+silently, a 3-sample one flags; single-frame dropouts there change
+nothing (a twin that skipped them matches bit for bit, through a step and
+the departure, flagged on its second frame); a still surface there with
+10% dropouts flags within 15% of the rule's 0.265 times a pixel a second;
+a depth past the word's 30 bits keeps the largest they hold (107 km). The noise freeze holds a 10 mm a frame
 ramp's drift before its history restarts to 30 mm at p95 (bound 60 mm;
 80-90 mm with the freeze off, which fails).
 
@@ -5388,8 +5416,9 @@ wall, inside its band, and a box 0.5 m in front, leave no triangle in the
 set they leave, and the wall meshes there at once; the box meshes in the set
 it arrives and the wall it hides keeps every voxel's weight.
 A second scene puts the box where nothing returns behind it, the wall only
-on the left: in the set it goes nothing of it meshes, by its cameras'
-`Vanished` rays alone, and no weight falls in any other set.
+on the left: the set it goes changes nothing, as a single-frame dropout
+there does not, and in the next nothing of it meshes, by its cameras'
+`Vanished` rays alone; no weight falls in any other set.
 `recon_tsdf_integrate_dynamic_set` gives the grazing camera a colour of its
 own, which the frontal camera's band must not take, and requires that band
 to keep at least the weight the frontal camera alone gives it (the former

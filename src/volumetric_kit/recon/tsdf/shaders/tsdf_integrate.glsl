@@ -26,7 +26,8 @@
 // its new sample and in that sample's band -- the newly exposed free space and
 // the new surface -- to the unobserved state, and keeps the history behind the
 // band, which the new surface occludes; a Vanished ray, with no new sample,
-// resets up to the band of the surface that left (DECISIONS.md, 2026-10-29).
+// resets up to the band of the surface that left, the set after it left
+// (DECISIONS.md, 2026-10-29).
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_basic : require
@@ -236,7 +237,7 @@ void main() {
   }
   // TODO(tsdf): a surface that leaves to no return flags nothing where its
   // pixel returned anything in its camera's warm-up, or where it returned
-  // for under three samples in a row, so nothing resets it; a decay gated by
+  // for under three samples, so nothing resets it; a decay gated by
   // visibility is the rule to try (DECISIONS.md, 2026-10-29).
   // The weight > 0.0 test above is the "did anything change" test: a voxel
   // at weight 0 is in the state the reset writes.

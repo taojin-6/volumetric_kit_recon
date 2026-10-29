@@ -13,7 +13,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on the device, a two-sided CUSUM with a one-frame test, and a `uint32`
   mask a camera a frame (`PixelChange`; `Vanished`, with the depth that
   left, where a surface first seen over no return gives way to no return
-  again). The sensor is described only by
+  again for two samples in a row: a lone dropout changes nothing).
+  `ChangeDetectorConfig::memory` is at most 511. The sensor is described
+  only by
   its noise floor, `DepthNoise` (`sigma(z) = a + b z + c z^2`, default the
   Femto Mega's 0.95 mm per metre); the defaults are the operating point
   measured on the rig (DECISIONS.md, 2026-10-29).

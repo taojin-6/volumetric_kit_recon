@@ -829,7 +829,7 @@ change from its noise, a pixel against its own past (2026-10-29). Each
 camera slot (up to 64) keeps a history per pixel on the device -- a running
 depth, the pixel's own temporal noise `sigma_r`, floored by the sensor's
 `DepthNoise` (`sigma(z) = a + b z + c z^2`, its only knowledge of the
-sensor), two cumulative sums, four counters and a flag, 20 bytes -- and one
+sensor), two cumulative sums, four counters and two flags, 20 bytes -- and one
 pass a camera a frame (`record_detect`) tests every valid sample and writes
 the camera's mask, a `uint32` a pixel: `PixelChange::None`, `Nearer`,
 `Farther` or `Vanished` in its low two bits (`change_of`). Two-sided CUSUM
@@ -838,10 +838,13 @@ alarms; an alarm restarts the pixel's history and freezes its noise
 estimate for 30 samples; a camera's pixels test after its first 30
 recorded frames. An invalid sample changes nothing, but over no return: a
 pixel first valid once its camera tests had returned nothing until then, so
-its history lasts only while it returns. Its first invalid sample ends the
-history, and flags `Vanished` after three valid samples in a row, the word's
-high 30 bits the depth that left in 0.1 mm (`vanished_depth`): what a mover
-leaves where nothing behind it returns. A camera missing from a set is
+its history lasts only while it returns. A lone invalid sample there is a
+dropout and changes nothing (it only marks the history, and the next valid
+sample clears the mark); the second invalid sample in a row ends the
+history, and flags `Vanished` after three valid samples, a lone dropout
+skipped, the word's high 30 bits the depth that left in 0.1 mm
+(`vanished_depth`): what a mover leaves where nothing behind it returns,
+flagged a frame after it left. A camera missing from a set is
 simply not detected, and one whose image size changes starts over. A gate
 word, as `record_integrate` takes one, has a pass test nothing, though a
 camera's first frame at a new size starts its history all the same: that
@@ -1132,7 +1135,7 @@ than the rig gets the newest set, so sets drop; that cost is unmeasured.
 **On `tsdf`**, Dynamic resets on change (2026-10-29). Next, each judged on
 the lab rig: a surface that leaves to no return flags nothing where its
 pixel returned anything in its camera's warm-up, or where it returned for
-under three samples in a row (a decay gated by visibility; what stays of a
+under three samples (a decay gated by visibility; what stays of a
 walking column that vanishes, 0.49 m², and of a slow sphere, 38 cm²);
 partial evidence lowering the weight cap along a ray, so slow motion slides
 instead of stepping; a rule for pixels that drop in and out, the source of
