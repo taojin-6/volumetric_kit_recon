@@ -4,7 +4,8 @@
 # --- recon_tsdf: Tier 3 -----------------------------------------------------
 # TSDF integration: fuses posed depth frames into a VoxelBlockGrid's per-voxel
 # tsdf/weight attributes via a GLSL compute kernel (classic projective
-# integration first; dynamic follows), the Fuser that takes a set of frames
+# integration first; dynamic follows), the per-camera ChangeDetector that flags
+# pixels whose depth changed for real, the Fuser that takes a set of frames
 # through the grid's growth, allocation and integration, and the grid it starts
 # from. Depends on grid_volume (VoxelBlockGrid, grow_grid, DepthPinhole, the
 # BlockIndex/VoxelGridParams ABI), per the strict left-to-right tier rule.
@@ -15,7 +16,8 @@ set(_vr_tsdf_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_tsdf)
 add_library(volumetric_kit::recon_tsdf ALIAS recon_tsdf)
 
-target_sources(recon_tsdf PRIVATE fuser.cpp fusion_grid.cpp tsdf_integrator.cpp)
+target_sources(recon_tsdf PRIVATE change_detector.cpp fuser.cpp fusion_grid.cpp
+                                  tsdf_integrator.cpp)
 
 # Per-tier export header (VR_TSDF_API / VR_TSDF_STATIC_DEFINE), isolated so the
 # macros never collide with another tier's on one include path.
@@ -66,6 +68,7 @@ vr_embed_shaders(
   volumetric_kit::grid_volume
   SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_clear.comp")
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_clear.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_change_detect.comp")
 
 vr_target_warnings(recon_tsdf)

@@ -890,6 +890,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   pixel otherwise: a slope no longer comes out in half-pixel terraces, which
   fusion shaded as bands on floors and walls, and an edge or a hole is never
   blended. No option; about 1-2 µs of device time a frame.
+- [**2026-10-29**](#2026-10-29--a-fixed-camera-flags-its-own-real-change-a-cusum-on-each-pixels-own-noise-on-the-device) —
+  A fixed camera flags its own real change: `tsdf::ChangeDetector` keeps
+  each pixel's history and own noise on the device, floored by the sensor's
+  `DepthNoise`, and alarms on a two-sided CUSUM (k 0.5, h 8) or one frame
+  past 6 sigma, the operating point measured on the rig's static takes; a
+  surface first seen over no return that gives way to no return again
+  flags `Vanished`.
 
 ## Decision record
 
@@ -5206,6 +5213,90 @@ its LeakSanitizer case included, is the core's
 recon, and `recon_subproject_old_recon` one whose floor, a minor above,
 is refused naming recon's version. `recon_subproject_glsl` builds the
 consumer's kernel through `INCLUDE_TARGETS`.
+
+### 2026-10-29 — A fixed camera flags its own real change: a CUSUM on each pixel's own noise, on the device.
+
+**The rule.** `tsdf::ChangeDetector` tests each fixed camera's depth a pixel
+at a time against that pixel's own past, one pass a camera a frame, and
+writes a mask (`PixelChange`: none, nearer, farther, vanished). Per pixel:
+- `d_hist`, the cumulative mean of the first 30 valid samples, then an
+  exponential average of weight 1/30, restarted at each alarm;
+- `sigma_r = max(sqrt(pi/2) x running mean |d - d_hist|, sigma(d))`, each
+  sample clipped at 3 `sigma_r`, the same memory, not learning for 30
+  samples after an alarm; `sigma(z) = a + b z + c z^2` is the sensor's
+  noise floor (`DepthNoise`, Femto Mega: b = 0.95 mm/m);
+- `S+- = max(0, S+- +- r - k)` on `r = (d - d_hist) / sigma_r`; an alarm
+  when either passes h, or one frame has `|r| > 6`; k 0.5, h 8;
+- a camera's pixels test after its first 30 frames; an invalid sample
+  changes nothing,
+- but over no return: a pixel first valid once its camera tests had
+  returned nothing, so its history lasts only while it returns. Its first
+  invalid sample ends it, and flags `Vanished` if it had three valid samples
+  in a row; the mask word's high 30 bits carry the depth that left (0.1 mm),
+  so a reader needs nothing else.
+
+**Why.** Change is a camera disagreeing with its own past; comparing a
+camera with itself cancels its calibration error. Measured on the rig's
+static takes with injected changes (CPU, both takes, four cameras):
+- the pixel's own `sigma_r` is what keeps false alarms rare: 550x fewer
+  than the sensor model alone at the same k and h, and a static edge that
+  always flickers learns a large one and stays quiet with no edge term;
+- one false alarm per interior pixel in about 39 minutes, 15 rays a camera
+  frame (0.006%), 90x fewer resets than an earlier prototype's spatial test;
+- steps of 40 mm alarm in the frame they happen (98%), 20 mm 81%, 10 mm in
+  2 frames (median), 5 mm in 5; a silhouette 0.5 m nearer on the frame it
+  reaches a pixel (95.7%), the rest the next;
+- without the freeze, sustained motion trains `sigma_r` up and doubles the
+  lag at 10 mm a frame.
+h is the one knob: h 5 is 1-2 frames faster on 5-10 mm steps and resets
+0.145% of rays a frame. As measured, the floor is taken at the sample's
+depth, and a restarted history is tested from its next sample at the
+pixel's `sigma_r`, not inflated by the one-sample history's own error: 5.9%
+of alarms follow another on the same pixel within 3 frames, part of the
+rates above; inflating by sqrt(1 + 1/n) is untried. The warm-up counts the
+camera's frames, as measured, not each pixel's samples: counted per pixel, a
+pixel a mover first made valid over a background with no return never left
+its warm-up before the mover did, so its later intermittent returns flagged
+nothing, and a Dynamic replay of the 1 m/s sphere kept 382 cm² of ghost
+there against main's 85 (take1, lab RTX 4090).
+
+**Over no return.** Invalid is not empty, so an invalid sample alone never
+flags. But where nothing returned before a surface came, nothing returning
+after it is that surface leaving, and no other evidence of it will come:
+with the camera's warm-up fixed, Dynamic still kept 102 / 121 cm² of the
+1 m/s / 0.1 m/s sphere where no camera returns (main: 85 / 68), and 1.27 m²
+of a walking column (main: 2.16 m²; take1 and take3, lab RTX 4090). The
+three-in-a-row condition is what keeps the rule quiet on still scenes. On
+the recorded takes' validity (four cameras, sets 60 on), ending such a
+history on its first invalid sample would flag 14-23 times a second
+without it (take3, take1), 1.8-2.6k times a second with three samples in
+total rather than in a row, and 6.6k times a second over the 1 m/s sphere's
+replay with it: the background's sporadic returns end silently. 2 in a row
+flags 210-319 times a second on the still takes, 5 none, and misses 6% of
+the sphere's 3-in-a-row flags. Such a pixel's dropouts end its history too,
+so a still surface over no return re-learns there after each, and each
+dropout after three valid samples flags `Vanished`: 30 p (1 - p)^3 times a
+pixel a second at dropout rate p, 2.2 at 10% (tested). What Dynamic does
+with those flags is measured in the next entry.
+
+**Cost.** 24 bytes a pixel per camera, 8.8 MB at 640 x 576; one dispatch a
+camera a frame.
+
+**Tests.** `recon_tsdf_change_detector`: synthetic white Gaussian noise
+scattered per pixel around the floor as the rig's interior pixels are.
+False alarms per pixel per second 3.7e-4 (ToF-like, 2 m) and 5.1e-4
+(stereo-like, `c z^2` from 1 to 3 m, the same at 1-2 m and 2-3 m), against
+the rig's 4.3e-4; the step, ramp and sweep delays within the rig's; dropouts
+change nothing (a twin that skipped them matches bit for bit); a camera that
+leaves and returns compares with its own history. Over no return, a mover's
+departure flags `Vanished` on every pixel with its depth (to the noise of
+the history's mean, under 7 mm), a step
+while it is there notwithstanding; a 2-sample sporadic return ends
+silently, a 3-sample one flags; a still surface there with 10% dropouts
+flags 2.15 times a pixel a second; a depth past the word's 30 bits keeps
+the largest they hold (107 km). The noise freeze holds a 10 mm a frame
+ramp's drift before its history restarts to 30 mm at p95 (bound 60 mm;
+80-90 mm with the freeze off, which fails).
 
 ## Measured lessons
 

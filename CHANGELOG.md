@@ -8,6 +8,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`tsdf::ChangeDetector`** flags, per fixed camera and per pixel, a depth
+  change that is real rather than noise: each pixel's history and own noise
+  on the device, a two-sided CUSUM with a one-frame test, and a `uint32`
+  mask a camera a frame (`PixelChange`; `Vanished`, with the depth that
+  left, where a surface first seen over no return gives way to no return
+  again). The sensor is described only by
+  its noise floor, `DepthNoise` (`sigma(z) = a + b z + c z^2`, default the
+  Femto Mega's 0.95 mm per metre); the defaults are the operating point
+  measured on the rig (DECISIONS.md, 2026-10-29).
+
 - **`fuse_orbbec` serves `output.max_viewers` viewers at once** (default 4),
   so a scenario serves more than 4 without a code change
   ([config/README.md](config/README.md)). recon pins core 0.30.0, which

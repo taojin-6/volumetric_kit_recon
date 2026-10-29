@@ -105,8 +105,9 @@ package includes anything of recon's ([grid's tiers](https://github.com/taojin-6
   core's one umbrella header (`core/vulkan/vulkan.hpp`) — no other code
   includes `<vulkan/...>` directly.
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic), the
-  `Fuser` that fuses a set of frames (grow, allocate, integrate), and the grid
-  it starts from (`create_fusion_grid`).
+  per-camera `ChangeDetector` that flags pixels whose depth changed for
+  real, the `Fuser` that fuses a set of frames (grow, allocate, integrate),
+  and the grid it starts from (`create_fusion_grid`).
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), or with several cameras' coordinates into an atlas of
@@ -800,6 +801,30 @@ requests can refer to the same block repeatedly. Host allocation exceptions
 become `OutOfMemory`, and a host failure during rehash rolls the map back.
 Scanner-specific memory callbacks and allocation-stop thresholds are deferred
 to the iOS port, alongside the actual caller and peak-memory measurements.
+
+`ChangeDetector` (`tsdf/change_detector.hpp`) tells a fixed camera's real
+change from its noise, a pixel against its own past (2026-10-29). Each
+camera slot (up to 64) keeps a history per pixel on the device -- a running
+depth, the pixel's own temporal noise `sigma_r`, floored by the sensor's
+`DepthNoise` (`sigma(z) = a + b z + c z^2`, its only knowledge of the
+sensor), two cumulative sums, four counters and a flag, 20 bytes -- and one
+pass a camera a frame (`record_detect`) tests every valid sample and writes
+the camera's mask, a `uint32` a pixel: `PixelChange::None`, `Nearer`,
+`Farther` or `Vanished` in its low two bits (`change_of`). Two-sided CUSUM
+on `r = (d - d_hist) / sigma_r` (k 0.5, h 8) or one frame past 6 sigma
+alarms; an alarm restarts the pixel's history and freezes its noise
+estimate for 30 samples; a camera's pixels test after its first 30
+recorded frames. An invalid sample changes nothing, but over no return: a
+pixel first valid once its camera tests had returned nothing until then, so
+its history lasts only while it returns. Its first invalid sample ends the
+history, and flags `Vanished` after three valid samples in a row, the word's
+high 30 bits the depth that left in 0.1 mm (`vanished_depth`): what a mover
+leaves where nothing behind it returns. A camera missing from a set is
+simply not detected, and one whose image size changes starts over. A gate
+word, as `record_integrate` takes one, has a pass test nothing, though a
+camera's first frame at a new size starts its history all the same: that
+frame zeroes the camera's state in a submit of its own. 24 bytes a pixel in
+all, 8.8 MB a 640 x 576 camera.
 
 ### texture
 
