@@ -129,7 +129,8 @@ View grazing() {
 int allocate(vol::VoxelBlockGrid& grid, const std::vector<View>& views) {
   std::vector<vol::DepthInput> depths;
   for (const View& v : views) {
-    depths.push_back({vkc::StorageInput(v.depth.data()), v.cam});
+    depths.push_back(
+        {vkc::StorageInput(v.depth.data()), tsdf::to_depth_pinhole(v.cam)});
   }
   for (int round = 0; round < 5; ++round) {
     vol::AllocFailures why;
@@ -157,7 +158,7 @@ int fuse(tsdf::TsdfIntegrator& integrator, vol::VoxelBlockGrid& grid,
       CHECK(integrator.integrate(grid, v.depth.data(), v.cam, 5.0f, kDynamic, c)
                 .ok());
     } else {
-      frames.push_back({{vkc::StorageInput(v.depth.data()), v.cam}, c});
+      frames.push_back({vkc::StorageInput(v.depth.data()), v.cam, c});
     }
   }
   if (!each) CHECK(integrator.integrate(grid, frames, 5.0f, kDynamic).ok());

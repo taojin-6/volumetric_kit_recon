@@ -62,7 +62,8 @@ conventions and Vulkan setup.
   `volumetric_kit::recon_camera`, `…_core`, `…_volume`, `…_voxelize`,
   `…_tsdf`, `…_mesh`,
   `…_texture`,
-  `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_stream`, `…_networking`,
+  `…_sensor`, `…_codec`, `…_eval`, `…_image_io`, `…_mesh_io`, `…_stream`,
+  `…_networking`,
   `…_sender`, `…_interop` (+ later `…_track`),
   plus `…_sensor_utils` (GPU pre-processing), `…_sensor_array` (several
   sensors read as one), `…_sensor_apple` (Apple's pixel buffers as images),
@@ -70,7 +71,7 @@ conventions and Vulkan setup.
   driver (`VR_WITH_ORBBEC`), `…_sensor_video` decoders (every Apple build,
   elsewhere `VR_WITH_FFMPEG`), `…_sensor_video_syntax` (H.265 syntax read
   on the host, every build), and
-  `…_io_assimp` mesh importer (`VR_WITH_ASSIMP`);
+  `…_mesh_io_assimp` mesh importer (`VR_WITH_ASSIMP`);
   umbrella alias
   `volumetric_kit::recon`.
 
@@ -81,12 +82,12 @@ left. No upward includes.
 
 `core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
 branching off **`core`**, `voxelize` and `codec` off **`volume`** and
-`eval`/`io` off **`mesh`**
-(later: `track`). `camera` sits under `sensor` and beside `core`: it
-links the family core's base tier and GLM, and no other recon tier. `stream`
-links that base tier alone, and `networking` links `stream`. `sender` comes
-after `networking`: it links `networking`, `codec`, `tsdf` and `sensor`'s
-GPU pass (`sensor_utils`).
+`eval`/`io` off **`mesh`** (later: `track`); `io`'s image target links the
+family core's base tier alone. `camera` sits under `sensor` and beside
+`core`: it links the family core's base tier and GLM, and no other recon
+tier. `stream` links that base tier alone, and `networking` links `stream`.
+`sender` comes after `networking`: it links `networking`, `codec`, `tsdf`
+and `sensor`'s GPU pass (`sensor_utils`).
 
 - **`camera`** — the camera vocabulary the drivers and the sensor tier
   share: the double-precision `CameraModel` (image size, intrinsics, OpenCV's
@@ -106,7 +107,9 @@ GPU pass (`sensor_utils`).
 - **`volume`** — the sparse voxel hash map in Vulkan buffers; allocate / compact
   / rehash as compute shaders, a stateless `grow_grid` helper, a default
   hash layout (`kDefaultBucketSize`, `kDefaultMaxChain`) and a default block
-  layout (`block_grid_params`).
+  layout (`block_grid_params`). Camera-free: depth allocation takes its own
+  `DepthPinhole`, and nothing in it includes the camera vocabulary
+  (2026-10-28).
 - **`voxelize`** — a triangle mesh's distance field written into a grid
   (signed, or as a shell), `MeshIntegrator`. Links **`volume` alone**: it
   fuses no depth (2026-10-28).
@@ -114,11 +117,13 @@ GPU pass (`sensor_utils`).
   `Fuser` that fuses a set of frames (grow, allocate, integrate), and the grid
   it starts from (`create_fusion_grid`).
 - **`mesh`** — marching-cubes compute shaders and host mesh containers.
-- **`io`** — host asset loading and export, branching off `mesh`; encoded
-  images, depth PNGs, PLY/PNG export and opt-in mesh normalization helpers
-  are in `recon_io`, static mesh import in the optional Assimp-backed
-  `recon_io_assimp`. GPU tiers never link back to file I/O. Dataset playback
-  and camera conventions remain with their capture adapters.
+- **`io`** — host asset loading and export, in two targets: encoded images,
+  depth PNGs and PNG export in `recon_image_io`, on the family core's base
+  tier alone; PLY export, the host triangle containers and opt-in mesh
+  normalization helpers in `recon_mesh_io`, off `mesh`; static mesh import
+  in the optional Assimp-backed `recon_mesh_io_assimp`. GPU tiers never link
+  back to file I/O. Dataset playback and camera conventions remain with
+  their capture adapters.
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), or with several cameras' coordinates into an atlas of
@@ -815,11 +820,14 @@ bracket, so no `gpu_ms` measures the markers around the work.
 
 `core/shaders/pinhole.glsl` is recon's GLSL pinhole: the rigid inverse,
 unprojection, divide, in-image projection and nearest pixel that tsdf,
-volume, texture and the sensor prep's colour test go through, and that recon
+texture and the sensor prep's colour test go through, and that recon
 exports to its consumers' kernels (README, "Building"). Its functions take
 values, so a scalar-layout camera and a std430 one both pass theirs. The
 acceptance stays two callers' own: texture extrapolates past the image, and
-the colour test bounds the rounded pixel.
+the colour test bounds the rounded pixel. volume's depth allocation
+unprojects through its own copy of the one line it needs
+(`volume/shaders/depth_pinhole.glsl`), which `recon_volume_depth_unproject`
+holds to this one bit for bit.
 
 ### volume
 
@@ -948,7 +956,9 @@ or retry state and reports resize failures through `Status`. `bytes_at`
 reports the attributes and grid-sized table's storage footprint. It excludes
 transient rehash/staging buffers, host scratch and allocator/driver overhead,
 so it is not a peak-memory budget for resize (2026-10-10).
-`allocate_from_depth` also takes a list of frames (`DepthInput`), every
+`allocate_from_depth` takes a frame's camera as volume's `DepthPinhole`, the
+fields and 96-byte layout of `DepthCameraParams`, which tsdf fills by
+`to_depth_pinhole`. It also takes a list of frames (`DepthInput`), every
 frame dispatched in each round's one submit, on a set of its own; a round
 that retries dispatches them all again, and the rounds are the call's, not
 each frame's. `record_allocate_from_depth` records one such round into a
@@ -1066,8 +1076,9 @@ grid's block slots, none runs behind a closed gate word, the tick is taken
 at record, and every frame's cameras go up in one write each ahead of the
 compaction. `integrate` is that, one submit and its wait.
 `integrate` also takes a list of frames
-(`FrameInput`, a `DepthInput` and its colour, so one list feeds both
-calls): one compaction and one submit for them all, each frame a dispatch
+(`FrameInput`: a depth image, its `DepthCameraParams` and its colour; the
+`Fuser` allocates from the same list through `to_depth_pinhole`): one
+compaction and one submit for them all, each frame a dispatch
 of its own over the union in order. Under Classic every voxel takes them in
 turn as integrating them one at a time does, bit for bit. A Dynamic set is
 one instant: the clear kernel (`tsdf_clear.comp`, the integrate kernel's
@@ -1523,8 +1534,9 @@ the next poll and past the capture.
 HEVC keeps the decoded tag with left alignment when unspecified.
 The GPU samples the location consistently for planes in a buffer and NV12
 images. Existing callers that leave the field unset keep left alignment. The
-resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
-`integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
+resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth`
+(its camera through `to_depth_pinhole`) and `integrate` (and
+`ColorFrame::buffer`, with `coverage_in_alpha`, since a
 pixel the lens maps outside the picture is a 0 word), so nothing is
 uploaded and nothing registered. Y'CbCr colour comes as I420 or NV12 on the
 device only (the 2026-10-06 device-only `GpuFramePrep` decision): planes in a
@@ -1941,7 +1953,7 @@ and translate backend exceptions that reach them into `Status`/`Result`
 (tinyply's writer is `noexcept`); private third-party types never appear in
 public headers.
 
-`recon_io_assimp` adds `io::load_mesh`, which returns the owned
+`recon_mesh_io_assimp` adds `io::load_mesh`, which returns the owned
 `io::TriangleMesh` position / index container of `io/triangle_mesh.hpp`.
 Assimp handles format decoding and triangulation. Recon walks every node
 instance with composed transforms and corrects triangle winding when the
@@ -1972,11 +1984,12 @@ installed Assimp allows: before 5.3 it still applies Collada's `<unit>`, and
 GPU-resident reconstruction. The default build has no Assimp dependency;
 `VR_WITH_ASSIMP=ON` finds an installed Assimp and builds a separate target.
 The image and PLY backends use the existing pinned stb and tinyply sources,
-now private implementation dependencies of the I/O library.
+now private implementation dependencies of `recon_image_io` and
+`recon_mesh_io`.
 
-`io/mesh_normalization.hpp`, in `recon_io`, holds opt-in helpers for a caller
-that knows its mesh's unit or up direction; nothing in recon calls them. They
-serve one mesh or a temporal sequence alike:
+`io/mesh_normalization.hpp`, in `recon_mesh_io`, holds opt-in helpers for a
+caller that knows its mesh's unit or up direction; nothing in recon calls
+them. They serve one mesh or a temporal sequence alike:
 
 - `up_axes` turns a head-up direction into the proper rotation that takes it
   to +Y. `mesh_bounds` measures positions along those axes, and

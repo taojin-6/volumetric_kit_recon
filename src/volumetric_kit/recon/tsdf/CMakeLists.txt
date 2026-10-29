@@ -6,8 +6,8 @@
 # tsdf/weight attributes via a GLSL compute kernel (classic projective
 # integration first; dynamic follows), the Fuser that takes a set of frames
 # through the grid's growth, allocation and integration, and the grid it starts
-# from. Depends on recon_volume (VoxelBlockGrid, grow_grid, DepthCameraParams,
-# the BlockIndex/VoxelGridParams ABI), per the strict left-to-right tier rule.
+# from. Depends on recon_volume (VoxelBlockGrid, grow_grid, DepthPinhole, the
+# BlockIndex/VoxelGridParams ABI), per the strict left-to-right tier rule.
 include(GenerateExportHeader)
 
 set(_vr_tsdf_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
@@ -42,8 +42,8 @@ endif()
 target_compile_features(recon_tsdf PUBLIC cxx_std_17)
 
 # PUBLIC: the tsdf public header exposes volume types (VoxelBlockGrid,
-# DepthCameraParams) + core types (Result), so consumers compile against
-# recon_volume (and, transitively, recon_core) too.
+# DepthPinhole) + core types (Result, DepthCameraParams), so consumers compile
+# against recon_volume (and, transitively, recon_core) too.
 target_link_libraries(recon_tsdf PUBLIC recon_volume)
 
 # PRIVATE src/: recon_core's internal dispatch.hpp, as recon_volume reaches it.

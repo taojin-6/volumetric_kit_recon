@@ -191,7 +191,8 @@ int run(const vr_test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
     std::vector<tsdf::ColorFrame> colors;
     colors.reserve(frames.size());
     for (const Frame& f : frames) {
-      depths.push_back({vkc::StorageInput(f.depth.data()), f.cam});
+      depths.push_back(
+          {vkc::StorageInput(f.depth.data()), tsdf::to_depth_pinhole(f.cam)});
       colors.push_back(tsdf::ColorFrame{
           f.color.data(),
           vr::ColorCameraParams{f.cam.fx, f.cam.fy, f.cam.cx, f.cam.cy,
@@ -204,10 +205,10 @@ int run(const vr_test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
     // frustum alone is the witness's.
     std::vector<tsdf::FrameInput> fa;
     std::vector<tsdf::FrameInput> fb{
-        {{vkc::StorageInput(all.depth.data()), all.cam}, nullptr}};
+        {vkc::StorageInput(all.depth.data()), all.cam, nullptr}};
     for (std::size_t i = 0; i < frames.size(); ++i) {
-      fa.push_back({depths[i], &colors[i]});
-      fb.push_back({depths[i], &colors[i]});
+      fa.push_back({depths[i].depth, frames[i].cam, &colors[i]});
+      fb.push_back({depths[i].depth, frames[i].cam, &colors[i]});
     }
     fb.push_back(fb.front());
     auto active = b->map().compact_active_blocks();
@@ -306,7 +307,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(g.ok());
     std::vector<vol::DepthInput> depths;
     for (const Frame& f : pair) {
-      depths.push_back({vkc::StorageInput(f.depth.data()), f.cam});
+      depths.push_back(
+          {vkc::StorageInput(f.depth.data()), tsdf::to_depth_pinhole(f.cam)});
     }
     CHECK(settle(g.value(), depths) == 0);
     auto active = g->map().compact_active_blocks();
@@ -325,7 +327,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     // every call fused the whole set; an empty grid does not tick.
     const Frame away = wall(1.0f, vr::Vec3f(0.0f, 0.0f, 10.0f));
     const std::vector<tsdf::FrameInput> lone{
-        {{vkc::StorageInput(away.depth.data()), away.cam}, nullptr}};
+        {vkc::StorageInput(away.depth.data()), away.cam, nullptr}};
     auto missed =
         g->map().compact_active_blocks_in_frusta_on_device({reach(away.cam)});
     CHECK(missed.ok() && missed.value().count == 0);

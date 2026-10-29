@@ -43,7 +43,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   camera.cam_to_world = vr::Mat4f(1.0f);
   const std::vector<float> depth(32 * 32, 0.54f);
   const std::vector<tsdf::FrameInput> frames = {
-      {{vkc::StorageInput(depth.data()), camera}, nullptr}};
+      {vkc::StorageInput(depth.data()), camera, nullptr}};
   const std::uint32_t words[] = {0, 1, 0};
   auto storage = vr_test::upload_device_buffer(gpu.device, gpu.allocator, words,
                                                sizeof(words));

@@ -85,7 +85,8 @@ int allocate(vol::VoxelBlockGrid& grid, const Depth& depth,
              const vr::DepthCameraParams& camera) {
   for (int round = 0; round < 5; ++round) {
     vol::AllocFailures why;
-    auto failed = grid.map().allocate_from_depth(depth, camera, &why);
+    auto failed = grid.map().allocate_from_depth(
+        depth, tsdf::to_depth_pinhole(camera), &why);
     CHECK(failed.ok() && !why.capacity_limited());
     if (failed.value() == 0) return 0;
   }
@@ -244,14 +245,16 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // Refusals: an empty buffer, one smaller than the image, one that is not a
   // storage buffer, and a colour frame naming both images.
   const auto invalid = vkc::Status::Code::InvalidArgument;
+  const vol::DepthPinhole pinhole = tsdf::to_depth_pinhole(cam);
   // Borrowing an existing VkBuffer without its memory provenance is refused
   // before allocating blocks or updating any voxel, even on unified memory.
   const vkc::Buffer unknown(depth_buf->handle(), depth_buf->size(),
                             depth_buf->usage(), depth_buf->sharing_mode(),
                             nullptr, {}, std::nullopt);
-  CHECK(
-      device_grid->map().allocate_from_depth(unknown, cam).status().domain() ==
-      invalid);
+  CHECK(device_grid->map()
+            .allocate_from_depth(unknown, pinhole)
+            .status()
+            .domain() == invalid);
   CHECK(integrator->integrate(device_grid.value(), unknown, cam).domain() ==
         invalid);
   tsdf::ColorFrame unknown_color = device_color;
@@ -261,15 +264,17 @@ int gpu_main(vr_test::GpuContext& gpu) {
                         tsdf::IntegrationMode::Classic, &unknown_color)
             .domain() == invalid);
   const vkc::Buffer empty;
-  CHECK(device_grid->map().allocate_from_depth(empty, cam).status().domain() ==
-        invalid);
+  CHECK(device_grid->map()
+            .allocate_from_depth(empty, pinhole)
+            .status()
+            .domain() == invalid);
   CHECK(integrator->integrate(device_grid.value(), empty, cam).domain() ==
         invalid);
   auto small = vr_test::upload_device_buffer(dev, alloc, depth.data(),
                                              sizeof(float) * kWidth);
   CHECK(small.ok());
   CHECK(device_grid->map()
-            .allocate_from_depth(small.value(), cam)
+            .allocate_from_depth(small.value(), pinhole)
             .status()
             .domain() == invalid);
   CHECK(
@@ -282,7 +287,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   auto not_storage = alloc.create_buffer(transfer_only);
   CHECK(not_storage.ok());
   CHECK(device_grid->map()
-            .allocate_from_depth(not_storage.value(), cam)
+            .allocate_from_depth(not_storage.value(), pinhole)
             .status()
             .domain() == invalid);
   tsdf::ColorFrame both = device_color;
