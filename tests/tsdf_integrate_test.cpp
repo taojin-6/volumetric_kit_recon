@@ -16,11 +16,11 @@
 #include <limits>
 #include <vector>
 
-#include "buffer_readback.hpp"
 #include "device_blocks.hpp"
 #include "grid_readback.hpp"
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/buffer_readback.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/compute_kernel.hpp"
@@ -36,8 +36,9 @@
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
-#include "gpu_test.hpp"
 #include "project_pinhole_comp.spv.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -84,7 +85,7 @@ vr::ColorCameraParams color_cam_of(const vr::DepthCameraParams& d) {
 // first fuse legitimately changes the bz=12 blocks as well and the fixture
 // loses the separation it is built on.
 int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
-  const vr_test::Gpu ctx{device, allocator};
+  const vkc::test::Gpu ctx{device, allocator};
   vol::VoxelGridParams gp{};
   gp.voxel_size = 0.005f;
   gp.block_size = 8;
@@ -248,7 +249,7 @@ int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
 }
 
 // A non-finite neighbor is a hole, like zero, not a poisoned sample.
-int nonfinite_depth_taps_case(const vr_test::Gpu& ctx) {
+int nonfinite_depth_taps_case(const vkc::test::Gpu& ctx) {
   const float hole[] = {1.0f, 0.0f, std::numeric_limits<float>::quiet_NaN(),
                         std::numeric_limits<float>::infinity(),
                         -std::numeric_limits<float>::infinity()};
@@ -302,7 +303,7 @@ int nonfinite_depth_taps_case(const vr_test::Gpu& ctx) {
 // colour, is refused before any work: every projection through it would be
 // NaN, and no frustum bounds the call. A list with one such frame fuses none
 // of the others, and the grid's tick stays where it was.
-int nonfinite_camera_case(const vr_test::Gpu& ctx) {
+int nonfinite_camera_case(const vkc::test::Gpu& ctx) {
   const float nan = std::numeric_limits<float>::quiet_NaN();
   const float inf = std::numeric_limits<float>::infinity();
   vol::VoxelGridParams gp{};
@@ -395,7 +396,7 @@ struct ProjectionCase {
 static_assert(sizeof(ProjectionCase) == 108,
               "mirrors Case in shaders/project_pinhole.comp");
 
-int projection_nan_case(const vr_test::Gpu& ctx) {
+int projection_nan_case(const vkc::test::Gpu& ctx) {
   const float nan = std::numeric_limits<float>::quiet_NaN();
   vr::DepthCameraParams cam{};
   cam.fx = cam.fy = 100.0f;
@@ -426,7 +427,7 @@ int projection_nan_case(const vr_test::Gpu& ctx) {
                  vr_project_pinhole_comp_spv_size, 3)
             .ok());
   auto pool = builder.build();
-  auto in = vr_test::upload_device_buffer(
+  auto in = vkc::test::upload_device_buffer(
       ctx.device, ctx.allocator, cases.data(), n * sizeof(ProjectionCase));
   auto accepted =
       vkc::device_storage_buffer(ctx.allocator, n * sizeof(std::uint32_t));
@@ -439,10 +440,10 @@ int projection_nan_case(const vr_test::Gpu& ctx) {
   CHECK(vkc::dispatch(ctx.device, kernel, nullptr, 0, vkc::group_count(n, 64),
                       ctx.device.caps().limits().maxComputeWorkGroupCount[0])
             .ok());
-  auto got = vr_test::read_back<std::uint32_t>(ctx.device, ctx.allocator,
-                                               *accepted, n);
+  auto got = vkc::test::read_back<std::uint32_t>(ctx.device, ctx.allocator,
+                                                 *accepted, n);
   auto px =
-      vr_test::read_back<vr::Vec2f>(ctx.device, ctx.allocator, *pixels, 1);
+      vkc::test::read_back<vr::Vec2f>(ctx.device, ctx.allocator, *pixels, 1);
   CHECK(got.ok() && px.ok());
   CHECK(got.value()[0] == 1u);
   CHECK(approx(px.value()[0].x, 60.0f, 1e-4f) &&
@@ -463,7 +464,7 @@ int projection_nan_case(const vr_test::Gpu& ctx) {
 // the image, whose last half pixel rounds past it. Each pixel's colour names
 // it (R its column, G its row), and the first observation assigns it, so the
 // fused colour says which pixel was read.
-int color_pixel_case(const vr_test::Gpu& ctx) {
+int color_pixel_case(const vkc::test::Gpu& ctx) {
   vol::VoxelGridParams gp{};
   gp.block_size = 8;
   gp.voxels_per_block = 512;
@@ -533,7 +534,7 @@ int color_pixel_case(const vr_test::Gpu& ctx) {
 
 // Zero is a missing measurement even when the near bound admits it: a hole
 // neither allocates the block at the camera nor fuses a surface there.
-int zero_depth_case(const vr_test::Gpu& ctx) {
+int zero_depth_case(const vkc::test::Gpu& ctx) {
   vol::VoxelGridParams gp{};
   gp.block_size = 8;
   gp.voxels_per_block = 512;
@@ -575,7 +576,7 @@ int zero_depth_case(const vr_test::Gpu& ctx) {
   return 0;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(nonfinite_depth_taps_case({gpu.device, gpu.allocator}) == 0);
   CHECK(zero_depth_case({gpu.device, gpu.allocator}) == 0);
   CHECK(nonfinite_camera_case({gpu.device, gpu.allocator}) == 0);
@@ -1168,4 +1169,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

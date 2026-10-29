@@ -9,8 +9,8 @@
 #include "codec_report.hpp"
 #include "fuse_sender.hpp"
 #include "set_log.hpp"
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/recon/codec/codec_params.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
 

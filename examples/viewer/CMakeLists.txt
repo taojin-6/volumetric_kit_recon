@@ -101,12 +101,11 @@ if(VR_BUILD_TESTS)
                  "${PROJECT_SOURCE_DIR}/tests/example_viewer_atlas_test.cpp")
   target_link_libraries(
     recon_example_viewer_atlas_test
-    PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_texture
-            volumetric_kit::gfx_app volumetric_kit::gfx_pipelines
-            Vulkan::Vulkan)
-  target_include_directories(
-    recon_example_viewer_atlas_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
-                                            "${PROJECT_SOURCE_DIR}/tests")
+    PRIVATE volumetric_kit::core_test_base volumetric_kit::core_test_policy
+            volumetric_kit::recon_texture volumetric_kit::gfx_app
+            volumetric_kit::gfx_pipelines Vulkan::Vulkan)
+  target_include_directories(recon_example_viewer_atlas_test
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   vr_target_warnings(recon_example_viewer_atlas_test)
   add_test(NAME recon_example_viewer_atlas
            COMMAND recon_example_viewer_atlas_test)
@@ -119,10 +118,10 @@ if(VR_BUILD_TESTS)
                  "${PROJECT_SOURCE_DIR}/tests/example_viewer_device_test.cpp")
   target_link_libraries(
     recon_example_viewer_device_test
-    PRIVATE volumetric_kit::recon_mesh volumetric_kit::gfx_glfw Vulkan::Vulkan)
-  target_include_directories(
-    recon_example_viewer_device_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
-                                             "${PROJECT_SOURCE_DIR}/tests")
+    PRIVATE volumetric_kit::core_test_base volumetric_kit::recon_mesh
+            volumetric_kit::gfx_glfw Vulkan::Vulkan)
+  target_include_directories(recon_example_viewer_device_test
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   vr_target_warnings(recon_example_viewer_device_test)
   add_test(NAME recon_example_viewer_device
            COMMAND recon_example_viewer_device_test)
@@ -135,11 +134,11 @@ if(VR_BUILD_TESTS)
     "${PROJECT_SOURCE_DIR}/tests/example_viewer_rig_report_test.cpp")
   target_link_libraries(
     recon_example_viewer_rig_report_test
-    PRIVATE volumetric_kit::recon_sensor_array volumetric_kit::recon_texture
-            volumetric_kit::gfx_glfw Vulkan::Vulkan)
-  target_include_directories(
-    recon_example_viewer_rig_report_test PRIVATE ${_viewer_common_inc}
-                                                 "${PROJECT_SOURCE_DIR}/tests")
+    PRIVATE volumetric_kit::core_test_base volumetric_kit::recon_sensor_array
+            volumetric_kit::recon_texture volumetric_kit::gfx_glfw
+            Vulkan::Vulkan)
+  target_include_directories(recon_example_viewer_rig_report_test
+                             PRIVATE ${_viewer_common_inc})
   vr_target_warnings(recon_example_viewer_rig_report_test)
   add_test(NAME recon_example_viewer_rig_report
            COMMAND recon_example_viewer_rig_report_test)
@@ -150,11 +149,10 @@ if(VR_BUILD_TESTS)
                  "${PROJECT_SOURCE_DIR}/tests/example_viewer_pass_test.cpp")
   target_link_libraries(
     recon_example_viewer_pass_test
-    PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_mesh
-            volumetric_kit::gfx_glfw Vulkan::Vulkan)
-  target_include_directories(
-    recon_example_viewer_pass_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
-                                           "${PROJECT_SOURCE_DIR}/tests")
+    PRIVATE volumetric_kit::core_test_base volumetric_kit::core_test_policy
+            volumetric_kit::recon_mesh volumetric_kit::gfx_glfw Vulkan::Vulkan)
+  target_include_directories(recon_example_viewer_pass_test
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   vr_target_warnings(recon_example_viewer_pass_test)
   add_test(NAME recon_example_viewer_pass
            COMMAND recon_example_viewer_pass_test)

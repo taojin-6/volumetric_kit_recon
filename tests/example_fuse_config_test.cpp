@@ -12,7 +12,7 @@
 
 #include "fuse_sender.hpp"
 #include "replica_config.hpp"
-#include "test_check.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #ifdef VR_TEST_ORBBEC_CONFIG
 #include "orbbec_config.hpp"
 #endif

@@ -12,8 +12,8 @@
 #include <utility>
 
 #include "fuse_orbbec_sets.hpp"
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/recon/camera/array_calibration.hpp"
 #include "volumetric_kit/recon/camera/camera_model.hpp"
 #include "volumetric_kit/recon/camera/color_controls.hpp"

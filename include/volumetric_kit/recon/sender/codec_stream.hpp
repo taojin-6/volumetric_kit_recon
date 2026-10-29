@@ -15,9 +15,9 @@
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/vulkan/fwd.hpp"
 #include "volumetric_kit/recon/codec/codec_params.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
-#include "volumetric_kit/recon/core/fwd.hpp"
 #include "volumetric_kit/recon/networking/stream_server.hpp"
 #include "volumetric_kit/recon/sender/export.hpp"
 #include "volumetric_kit/recon/stream/session.hpp"

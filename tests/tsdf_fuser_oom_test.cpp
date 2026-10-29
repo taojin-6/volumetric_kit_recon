@@ -12,10 +12,10 @@
 #include <string>
 #include <vector>
 
-#include "gpu_test.hpp"
 #include "sphere_scene.hpp"
-#include "test_allocation_failure.hpp"
-#include "test_check.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/core/testing/test_allocation_failure.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
@@ -38,13 +38,13 @@ vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
 }
 
 void fail_allocation(std::size_t bytes, const void* site = nullptr) {
-  vr_test::allocation_failure = {};
-  vr_test::allocation_failure.bytes = bytes;
-  vr_test::allocation_failure.armed = true;
-  vr_test::allocation_failure.site = site;
+  vkc::test::allocation_failure = {};
+  vkc::test::allocation_failure.bytes = bytes;
+  vkc::test::allocation_failure.armed = true;
+  vkc::test::allocation_failure.site = site;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   std::vector<vr_test::SphereView<vr::DepthCameraParams>> views;
   views.reserve(3);
   for (int c = 0; c < 3; ++c) {
@@ -64,7 +64,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
                                                      *grid, "weight");
   CHECK(before_blocks.ok() && before.ok());
   const std::uint32_t tick = grid->map().tick();
-  auto& failure = vr_test::allocation_failure;
+  auto& failure = vkc::test::allocation_failure;
 
   // The input-vector allocation used to throw across the public Fuser API.
   fail_allocation(frames.size() * sizeof(vol::DepthInput));
@@ -192,9 +192,9 @@ int gpu_main(vr_test::GpuContext& gpu) {
 }  // namespace
 
 int main() try {
-  return vr_test::run_on_gpu(gpu_main);
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
 } catch (const std::bad_alloc&) {
-  vr_test::allocation_failure.armed = false;
+  vkc::test::allocation_failure.armed = false;
   std::fputs("FAIL: bad_alloc escaped fusion or growth\n", stderr);
   return 1;
 }

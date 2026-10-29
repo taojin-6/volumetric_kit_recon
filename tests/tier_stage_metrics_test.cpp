@@ -52,8 +52,9 @@
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
-#include "buffer_readback.hpp"
-#include "gpu_test.hpp"
+#include "volumetric_kit/core/testing/buffer_readback.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -173,7 +174,7 @@ vr::DepthCameraParams plane_camera() {
   return cam;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   const vr::volume::VoxelGridParams params{
       /*voxel_size=*/0.02f,     /*block_size=*/8,
       /*voxels_per_block=*/512,
@@ -305,7 +306,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     narrow.fx = narrow.fy = 16384.0f;
     narrow.cx = narrow.cy = 512.0f;
     const std::vector<float> plane(std::size_t{1024} * 1024, 1.0f);
-    vkc::Result<vkc::Buffer> on_device = vr_test::upload_device_buffer(
+    vkc::Result<vkc::Buffer> on_device = vkc::test::upload_device_buffer(
         gpu.device, gpu.allocator, plane.data(), plane.size() * sizeof(float));
     CHECK(on_device);
     const vr::tsdf::FrameInput frame{vkc::StorageInput(on_device.value()),
@@ -486,4 +487,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}
