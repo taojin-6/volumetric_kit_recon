@@ -5413,7 +5413,13 @@ drawn into the depth (lab RTX 4090, against main):
   dropout ended a history; 14 without dropouts), and 97.4% of its surface
   shown at 4.3 mm rms (97.0% and 4.4 mm before; main with the same dropouts
   97.5% and 4.8 mm; without them 97.5% and 4.1 mm). The lit crops show a
-  few scattered pinholes where there were many; main's sit at the rim.
+  few scattered pinholes where there were many; main's sit at the rim. It
+  leaves a little more of its walk-in behind than before: 0.66 m² of ghost
+  while it stands (0.60; main 2.93), level throughout, and background missing
+  near its path 64 cm² on average (47.5; main 28), nearly all during the
+  walk-in, where it comes back a few sets later. On the walking column
+  without dropouts the missing background is unchanged (80 cm²); the cause
+  is not traced.
 - A moving surface shows 99% of its visible area while it moves (main 90%).
 
 **Cost.** Release, take1 replay (four Femto cameras, 1 cm), sets 40-119,
