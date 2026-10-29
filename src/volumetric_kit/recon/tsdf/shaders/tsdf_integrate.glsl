@@ -27,11 +27,12 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_memory_scope_semantics : require
 #include "tsdf_common.glsl"
-// Cross-tier: the one transfer curve, from core. Colour is fused as a running
-// MEAN, and a mean is a linear operation, so both operands are decoded out of
-// the canonical 8-bit encoding before blending and the result is re-encoded.
-#include "volumetric_kit/recon/core/shaders/color_common.glsl"
-#include "volumetric_kit/recon/volume/shaders/block_stamp.glsl"
+// The voxel grid's contract and its colour attribute's format, from the GLSL
+// recon_volume exports. Colour is fused as a running MEAN, and a mean is a
+// linear operation, so both operands are decoded out of the canonical 8-bit
+// encoding before blending and the result is re-encoded.
+#include "volumetric_kit/recon/volume/shaders/grid_types.glsl"
+#include "volumetric_kit/recon/volume/shaders/voxel_color.glsl"
 
 layout(local_size_x = 256) in;
 
@@ -182,9 +183,7 @@ void main() {
   // Voxel world position: node convention (voxel * voxel_size), matching
   // volume/voxel_coords.hpp::voxel_to_world and the prior engine.
   int bs = pc.grid.block_size;
-  ivec3 lc = ivec3(int(local % uint(bs)), int((local / uint(bs)) % uint(bs)),
-                   int(local / uint(bs * bs)));
-  ivec3 voxel = block.coord * bs + lc;
+  ivec3 voxel = block.coord * bs + vrLocalBase(local, bs);
   vec3 world = vec3(voxel) * pc.grid.voxel_size;
 
   // Project into the depth camera (rigid world -> camera; see project_to_image).
@@ -232,7 +231,8 @@ void main() {
       tsdf[idx] = 0.0;
       weight[idx] = 0.0;
       if (pc.has_color_attr != 0u) {
-        color_attr[idx] = 0u;  // drop stale color along with the geometry
+        // drop stale color along with the geometry
+        color_attr[idx] = kVoxelColorUnobserved;
       }
       // A clear changes the field exactly as a fuse does -- a receded surface
       // that leaves a stale mesh behind is the whole reason dynamic mode exists.
@@ -281,12 +281,12 @@ void main() {
   // attribute.
   //
   // The "first observation assigns" test keys on whether COLOR was seen
-  // (color_attr == 0, the zero-initialised / cleared state), NOT on the SDF
-  // weight w_old: with a separate color camera the color and depth coverage
-  // differ per voxel (a voxel can accrue depth weight while outside the color
-  // frame, or across depth-only frames), so gating on w_old would blend the
-  // first real color into the black initial attribute and darken it. A fused
-  // color always packs a 0xFF alpha, so it is never 0 -- the sentinel is exact.
+  // (kVoxelColorUnobserved, the zero-initialised / cleared state), NOT on the
+  // SDF weight w_old: with a separate color camera the color and depth
+  // coverage differ per voxel (a voxel can accrue depth weight while outside
+  // the color frame, or across depth-only frames), so gating on w_old would
+  // blend the first real color into the black initial attribute and darken
+  // it. A fused color always packs a 0xFF alpha, so the sentinel is exact.
   //
   // Color still shares the SDF's w_obs and max_weight cap (a bounded moving
   // average), so once depth saturates the weight a later color change converges
@@ -314,15 +314,11 @@ void main() {
     }
     if (seen) {
       uint c_old = color_attr[idx];
-      if (c_old == 0u) {
-        // First color observation ASSIGNS, and assigns the sensor's own bytes
-        // rather than a decode/encode round trip of them: an assignment is not
-        // an average, so it needs no linear space, and copying the codes keeps
-        // the stored color bit-exact with what the camera reported instead of
-        // resting on the curve round-tripping all 256 codes. Alpha is forced to
-        // 0xFF (the source's high byte is undefined) so the "color unobserved"
-        // sentinel stays exact -- a written color is never 0, not even black.
-        color_attr[idx] = (obs_packed & 0x00FFFFFFu) | 0xFF000000u;
+      if (c_old == kVoxelColorUnobserved) {
+        // First color observation ASSIGNS the sensor's own bytes: copying the
+        // codes keeps the stored color bit-exact with what the camera reported
+        // instead of resting on the curve round-tripping all 256 codes.
+        color_attr[idx] = vrVoxelColorFromObserved(obs_packed);
       } else {
         // A running mean, so decode both operands to linear working values,
         // average there, and re-encode. Blending the encoded codes directly is

@@ -33,7 +33,9 @@ vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
                                            int buckets) {
   const vol::VoxelGridParams params{0.01f, 8,       512,         0.04f,
                                     8,     buckets, 8 * buckets, 128};
-  const vol::AttributeSpec attrs[] = {{"tsdf", 4}, {"weight", 4}, {"color", 4}};
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, 4},
+                                      {vol::kWeightAttribute, 4},
+                                      {vol::kColorAttribute, 4}};
   return vol::VoxelBlockGrid::create(device, allocator, params, attrs, 3);
 }
 
@@ -60,8 +62,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(grid.ok() && fuser.ok());
   CHECK(fuser->fuse(*grid, frames).ok());
   const auto before_blocks = vr_test::blocks_of(*grid);
-  const auto before = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
-                                                     *grid, "weight");
+  const auto before = vr_test::read_attribute<float>(
+      gpu.device, gpu.allocator, *grid, vol::kWeightAttribute);
   CHECK(before_blocks.ok() && before.ok());
   const std::uint32_t tick = grid->map().tick();
   auto& failure = vkc::test::allocation_failure;
@@ -74,7 +76,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(refused.status().domain() == vkc::Status::Code::OutOfMemory);
   CHECK(grid->map().tick() == tick);
   auto after = vr_test::read_attribute<float>(gpu.device, gpu.allocator, *grid,
-                                              "weight");
+                                              vol::kWeightAttribute);
   CHECK(after.ok() && *before == *after);
 
   // Resize allocates its attribute-buffer owners before any Vulkan work.
@@ -101,12 +103,12 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   const auto kept = vr_test::blocks_of(*grid);
   CHECK(kept.ok() && *kept == *before_blocks);
   after = vr_test::read_attribute<float>(gpu.device, gpu.allocator, *grid,
-                                         "weight");
+                                         vol::kWeightAttribute);
   CHECK(after.ok() && *before == *after);
   CHECK(vol::grow_grid(*grid).ok());
   CHECK(grid->grid().num_buckets == 254);
   after = vr_test::read_attribute<float>(gpu.device, gpu.allocator, *grid,
-                                         "weight");
+                                         vol::kWeightAttribute);
   CHECK(after.ok() && after->size() == 2 * before->size());
   CHECK(std::equal(before->begin(), before->end(), after->begin()));
   CHECK(fuser->fuse(*grid, frames).ok());
@@ -146,8 +148,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     CHECK(failed.status().domain() == vkc::Status::Code::OutOfMemory);
     CHECK(failed.status().message().find("grow_grid") != std::string::npos);
     CHECK(small->map().tick() == before_tick);
-    auto weights = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
-                                                  *small, "weight");
+    auto weights = vr_test::read_attribute<float>(
+        gpu.device, gpu.allocator, *small, vol::kWeightAttribute);
     CHECK(weights.ok() &&
           std::all_of(weights->begin(), weights->end(),
                       [](float weight) { return weight == 0.0f; }));
@@ -170,7 +172,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(report->growth_error.domain() == vkc::Status::Code::OutOfMemory);
   CHECK(report->dropped > 0 && small->map().tick() == refused_tick + 1);
   auto weights = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
-                                                *small, "weight");
+                                                *small, vol::kWeightAttribute);
   CHECK(weights.ok() &&
         std::any_of(weights->begin(), weights->end(),
                     [](float weight) { return weight > 0.0f; }));

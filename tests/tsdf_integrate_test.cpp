@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <string_view>
 #include <vector>
 
 #include "device_blocks.hpp"
@@ -95,8 +96,8 @@ int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   gp.num_buckets = 256;
   gp.num_blocks = 256 * 8;
   gp.max_chain = 128;
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)}};
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, sizeof(float)},
+                                      {vol::kWeightAttribute, sizeof(float)}};
 
   vkc::Result<vol::VoxelBlockGrid> grid_a =
       vol::VoxelBlockGrid::create(device, allocator, gp, attrs, 2);
@@ -262,8 +263,8 @@ int nonfinite_depth_taps_case(const vkc::test::Gpu& ctx) {
   gp.max_chain = 128;
   gp.voxel_size = 0.125f;
   gp.trunc_dist = 0.1f;
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)}};
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, sizeof(float)},
+                                      {vol::kWeightAttribute, sizeof(float)}};
   auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
   CHECK(integrator.ok());
   for (float invalid : hole) {
@@ -291,7 +292,7 @@ int nonfinite_depth_taps_case(const vkc::test::Gpu& ctx) {
       depth[tap] = invalid;
       CHECK(integrator->integrate(grid, depth.data(), cam, 100.0f).ok());
       auto weight = vr_test::read_attribute<float>(ctx.device, ctx.allocator,
-                                                   grid, "weight");
+                                                   grid, vol::kWeightAttribute);
       CHECK(weight.ok());
       CHECK(weight.value()[active->front().ptr] == 1.0f);
     }
@@ -315,9 +316,10 @@ int nonfinite_camera_case(const vkc::test::Gpu& ctx) {
   gp.max_chain = 128;
   gp.voxel_size = 0.125f;
   gp.trunc_dist = 0.1f;
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec attrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
   auto made =
       vol::VoxelBlockGrid::create(ctx.device, ctx.allocator, gp, attrs, 3);
@@ -369,8 +371,8 @@ int nonfinite_camera_case(const vkc::test::Gpu& ctx) {
         refused(integrator->integrate(grid, depth.data(), cam, 5.0f,
                                       tsdf::IntegrationMode::Classic, &frame)));
   }
-  auto weight =
-      vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid, "weight");
+  auto weight = vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid,
+                                               vol::kWeightAttribute);
   CHECK(weight.ok());
   for (const float w : weight.value()) CHECK(w == 0.0f);
 
@@ -474,9 +476,10 @@ int color_pixel_case(const vkc::test::Gpu& ctx) {
   gp.max_chain = 128;
   gp.voxel_size = 0.125f;
   gp.trunc_dist = 0.1f;
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec attrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
   CHECK(integrator.ok());
   constexpr std::uint32_t kSide = 8;
@@ -523,7 +526,7 @@ int color_pixel_case(const vkc::test::Gpu& ctx) {
                           tsdf::IntegrationMode::Classic, &frame)
               .ok());
     auto color = vr_test::read_attribute<std::uint32_t>(
-        ctx.device, ctx.allocator, grid, "color");
+        ctx.device, ctx.allocator, grid, vol::kColorAttribute);
     CHECK(color.ok());
     const std::uint32_t got = color.value()[active->front().ptr];
     CHECK((got & 0xFFu) == c.x);
@@ -544,8 +547,8 @@ int zero_depth_case(const vkc::test::Gpu& ctx) {
   gp.max_chain = 128;
   gp.voxel_size = 0.125f;
   gp.trunc_dist = 0.5f;  // spans the voxels just in front of the camera
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)}};
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, sizeof(float)},
+                                      {vol::kWeightAttribute, sizeof(float)}};
   auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
   CHECK(integrator.ok());
   auto made =
@@ -569,8 +572,8 @@ int zero_depth_case(const vkc::test::Gpu& ctx) {
   const vol::BlockIndex block{};  // the block at the camera
   CHECK(vr_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
   CHECK(integrator->integrate(grid, depth.data(), cam, 100.0f).ok());
-  auto weight =
-      vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid, "weight");
+  auto weight = vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid,
+                                               vol::kWeightAttribute);
   CHECK(weight.ok());
   for (float w : weight.value()) CHECK(w == 0.0f);
   return 0;
@@ -584,11 +587,11 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(color_pixel_case({gpu.device, gpu.allocator}) == 0);
 
   // Copies of a grid attribute; the arrays are device-local.
-  const auto floats = [&](const vol::VoxelBlockGrid& g, const char* name) {
+  const auto floats = [&](const vol::VoxelBlockGrid& g, std::string_view name) {
     return vr_test::read_attribute<float>(gpu.device, gpu.allocator, g, name)
         .value();
   };
-  const auto words = [&](const vol::VoxelBlockGrid& g, const char* name) {
+  const auto words = [&](const vol::VoxelBlockGrid& g, std::string_view name) {
     return vr_test::read_attribute<std::uint32_t>(gpu.device, gpu.allocator, g,
                                                   name)
         .value();
@@ -605,8 +608,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   grid.max_chain = 128;
   const int bs = grid.block_size;
 
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)}};
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, sizeof(float)},
+                                      {vol::kWeightAttribute, sizeof(float)}};
   vkc::Result<vol::VoxelBlockGrid> grid_result =
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   if (!grid_result) {
@@ -662,8 +665,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
   CHECK(integ.integrate(vbg, depth.data(), cam, /*max_weight=*/5.0f).ok());
 
-  std::vector<float> tsdf_data = floats(vbg, "tsdf");
-  std::vector<float> weight_data = floats(vbg, "weight");
+  std::vector<float> tsdf_data = floats(vbg, vol::kTsdfAttribute);
+  std::vector<float> weight_data = floats(vbg, vol::kWeightAttribute);
 
   const std::int32_t p12 = find_ptr(active.value(), vr::Vec3i(0, 0, 12));
   const std::int32_t p13 = find_ptr(active.value(), vr::Vec3i(0, 0, 13));
@@ -721,8 +724,9 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     const bool fused = integ.integrate(split, depth.data(), cam, 5.0f).ok();
     vr::detail::set_test_groups_per_dispatch(0);
     CHECK(fused);
-    const std::vector<float> split_tsdf = floats(split, "tsdf");
-    const std::vector<float> split_weight = floats(split, "weight");
+    const std::vector<float> split_tsdf = floats(split, vol::kTsdfAttribute);
+    const std::vector<float> split_weight =
+        floats(split, vol::kWeightAttribute);
     for (const vol::BlockIndex& b : active.value()) {
       const std::int32_t p = find_ptr(list.value(), b.coord);
       CHECK(p >= 0);
@@ -739,8 +743,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // the weight accumulates and saturates at the cap (4.25 + 4.25 -> min(8.5,
   // 5)).
   CHECK(integ.integrate(vbg, depth.data(), cam, /*max_weight=*/5.0f).ok());
-  tsdf_data = floats(vbg, "tsdf");
-  weight_data = floats(vbg, "weight");
+  tsdf_data = floats(vbg, vol::kTsdfAttribute);
+  weight_data = floats(vbg, vol::kWeightAttribute);
   CHECK(approx(tsdf_data[front], 0.015f, 1e-3f));
   CHECK(approx(weight_data[front], 5.0f, 1e-3f));
 
@@ -769,8 +773,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::Result<std::vector<vol::BlockIndex>> active2 =
       vbg2.map().compact_active_blocks();
   CHECK(active2.ok());
-  const std::vector<float> tsdf2 = floats(vbg2, "tsdf");
-  const std::vector<float> weight2 = floats(vbg2, "weight");
+  const std::vector<float> tsdf2 = floats(vbg2, vol::kTsdfAttribute);
+  const std::vector<float> weight2 = floats(vbg2, vol::kWeightAttribute);
   std::size_t cross_checked = 0;
   for (const vol::BlockIndex& b : active2.value()) {
     for (int lz = 0; lz < bs; ++lz) {
@@ -816,14 +820,14 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(pd >= 0);
   const std::size_t vd = static_cast<std::size_t>(pd) + corner_local;
   CHECK(integ.integrate(vbg_dyn, depth.data(), cam, 5.0f).ok());
-  std::vector<float> dyn_weight = floats(vbg_dyn, "weight");
+  std::vector<float> dyn_weight = floats(vbg_dyn, vol::kWeightAttribute);
   CHECK(dyn_weight[vd] > 0.0f);  // fused at sdf = +0.02
   CHECK(integ
             .integrate(vbg_dyn, depth_far.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());
-  dyn_weight = floats(vbg_dyn, "weight");
-  const std::vector<float> dyn_tsdf = floats(vbg_dyn, "tsdf");
+  dyn_weight = floats(vbg_dyn, vol::kWeightAttribute);
+  const std::vector<float> dyn_tsdf = floats(vbg_dyn, vol::kTsdfAttribute);
   CHECK(dyn_weight[vd] == 0.0f && dyn_tsdf[vd] == 0.0f);  // stale voxel cleared
 
   // Dynamic clears only free space *past* the band, never near-surface
@@ -851,7 +855,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   const std::size_t vc = static_cast<std::size_t>(pcl) + corner_local;
   CHECK(integ.integrate(vbg_cls, depth.data(), cam, 5.0f).ok());
   CHECK(integ.integrate(vbg_cls, depth_far.data(), cam, 5.0f).ok());  // classic
-  const std::vector<float> cls_weight = floats(vbg_cls, "weight");
+  const std::vector<float> cls_weight = floats(vbg_cls, vol::kWeightAttribute);
   CHECK(cls_weight[vc] > 0.0f);  // kept (clamped to +trunc, fused)
 
   // Bilinear depth sampling. Pixel centres sit at integer coordinates, so
@@ -883,8 +887,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(pbi >= 0);
   const std::size_t vbi = static_cast<std::size_t>(pbi) + on_axis;
   CHECK(integ.integrate(vbg_bi, depth_interp.data(), bcam, 5.0f).ok());
-  const std::vector<float> bi_tsdf = floats(vbg_bi, "tsdf");
-  const std::vector<float> bi_weight = floats(vbg_bi, "weight");
+  const std::vector<float> bi_tsdf = floats(vbg_bi, vol::kTsdfAttribute);
+  const std::vector<float> bi_weight = floats(vbg_bi, vol::kWeightAttribute);
   CHECK(bi_weight[vbi] > 0.0f);
   CHECK(approx(bi_tsdf[vbi], 0.01f, 1e-3f));   // bilinear: 0.49 - 0.48
   CHECK(!approx(bi_tsdf[vbi], 0.02f, 5e-3f));  // NOT nearest: 0.50 - 0.48
@@ -913,8 +917,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(ped >= 0);
   const std::size_t ved = static_cast<std::size_t>(ped) + on_axis;
   CHECK(integ.integrate(vbg_ed, depth_edge.data(), bcam, 5.0f).ok());
-  const std::vector<float> ed_tsdf = floats(vbg_ed, "tsdf");
-  const std::vector<float> ed_weight = floats(vbg_ed, "weight");
+  const std::vector<float> ed_tsdf = floats(vbg_ed, vol::kTsdfAttribute);
+  const std::vector<float> ed_weight = floats(vbg_ed, vol::kWeightAttribute);
   CHECK(ed_weight[ved] > 0.0f);  // fused (fallback kept it in-band)
   CHECK(approx(ed_tsdf[ved], 0.0f,
                1e-3f));  // 0.48 - 0.48; not a cross-edge blend
@@ -923,9 +927,10 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // bytes, the mesh tier's layout). A grid with a `color` attribute + a
   // constant color frame: a first-observation voxel takes the sampled RGB; an
   // occluded voxel (never depth-fused) keeps zero.
-  const vol::AttributeSpec cattrs[] = {{"tsdf", sizeof(float)},
-                                       {"weight", sizeof(float)},
-                                       {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec cattrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   vkc::Result<vol::VoxelBlockGrid> cg =
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(cg.ok());
@@ -951,8 +956,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
             .integrate(vbg_c, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &frame)
             .ok());
-  std::vector<std::uint32_t> c_color = words(vbg_c, "color");
-  std::vector<float> c_weight = floats(vbg_c, "weight");
+  std::vector<std::uint32_t> c_color = words(vbg_c, vol::kColorAttribute);
+  std::vector<float> c_weight = floats(vbg_c, vol::kWeightAttribute);
   CHECK(c_weight[c_front] > 0.0f);
   CHECK((c_color[c_front] & 0xFFu) == 200u);         // R
   CHECK(((c_color[c_front] >> 8) & 0xFFu) == 100u);  // G
@@ -968,8 +973,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
             .integrate(vbg_c, depth_far.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic, &frame)
             .ok());
-  c_color = words(vbg_c, "color");
-  c_weight = floats(vbg_c, "weight");
+  c_color = words(vbg_c, vol::kColorAttribute);
+  c_weight = floats(vbg_c, vol::kWeightAttribute);
   CHECK(c_weight[c_front] == 0.0f && c_color[c_front] == 0u);  // color cleared
 
   // Separate color camera: shift it 10 m off in +X so the same voxel projects
@@ -995,8 +1000,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
             .integrate(vbg_o, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &off_frame)
             .ok());
-  const std::vector<std::uint32_t> o_color = words(vbg_o, "color");
-  const std::vector<float> o_weight = floats(vbg_o, "weight");
+  const std::vector<std::uint32_t> o_color = words(vbg_o, vol::kColorAttribute);
+  const std::vector<float> o_weight = floats(vbg_o, vol::kWeightAttribute);
   CHECK(o_weight[o_front] > 0.0f);  // depth still fuses the voxel
   CHECK(o_color[o_front] == 0u);    // but color is out of frame -> skipped
 
@@ -1019,8 +1024,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       static_cast<std::size_t>(wup12) + local_index(0, 0, 1, bs);
   CHECK(integ.integrate(vbg_wu, depth.data(), cam, 5.0f).ok());  // depth only
   CHECK(integ.integrate(vbg_wu, depth.data(), cam, 5.0f).ok());  // depth only
-  std::vector<std::uint32_t> wu_color = words(vbg_wu, "color");
-  std::vector<float> wu_weight = floats(vbg_wu, "weight");
+  std::vector<std::uint32_t> wu_color = words(vbg_wu, vol::kColorAttribute);
+  std::vector<float> wu_weight = floats(vbg_wu, vol::kWeightAttribute);
   CHECK(wu_weight[wu_front] >
         1.0f);                      // depth weight accumulated across 2 frames
   CHECK(wu_color[wu_front] == 0u);  // ...but no color observed yet
@@ -1028,8 +1033,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
             .integrate(vbg_wu, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &frame)
             .ok());
-  wu_color = words(vbg_wu, "color");
-  wu_weight = floats(vbg_wu, "weight");
+  wu_color = words(vbg_wu, vol::kColorAttribute);
+  wu_weight = floats(vbg_wu, vol::kWeightAttribute);
   CHECK((wu_color[wu_front] & 0xFFu) == 200u);  // first color assigns the
   CHECK(((wu_color[wu_front] >> 8) & 0xFFu) == 100u);  // full RGB, not a blend
   CHECK(((wu_color[wu_front] >> 16) & 0xFFu) == 50u);  // toward black
@@ -1065,7 +1070,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
               .integrate(vbg_wu, depth.data(), cam, 5.0f,
                          tsdf::IntegrationMode::Classic, &dark_frame)
               .ok());
-    const std::uint32_t got = words(vbg_wu, "color")[wu_front];
+    const std::uint32_t got = words(vbg_wu, vol::kColorAttribute)[wu_front];
 
     // Both weights are known here rather than recovered from the answer (which
     // would make the comparison circular and unfailable): `w_before` is the
@@ -1144,15 +1149,15 @@ int gpu_main(vkc::test::GpuContext& gpu) {
             .integrate(vbg_dz, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &frame)
             .ok());  // fuse depth + color
-  std::vector<std::uint32_t> dz_color = words(vbg_dz, "color");
-  std::vector<float> dz_weight = floats(vbg_dz, "weight");
+  std::vector<std::uint32_t> dz_color = words(vbg_dz, vol::kColorAttribute);
+  std::vector<float> dz_weight = floats(vbg_dz, vol::kWeightAttribute);
   CHECK(dz_weight[dz_front] > 0.0f && dz_color[dz_front] != 0u);  // fused
   CHECK(integ
             .integrate(vbg_dz, depth_far.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());  // depth-only recede
-  dz_color = words(vbg_dz, "color");
-  dz_weight = floats(vbg_dz, "weight");
+  dz_color = words(vbg_dz, vol::kColorAttribute);
+  dz_weight = floats(vbg_dz, vol::kWeightAttribute);
   CHECK(dz_weight[dz_front] == 0.0f &&
         dz_color[dz_front] == 0u);  // geometry + color ghost both cleared
 

@@ -52,10 +52,10 @@ target_include_directories(
 # Compile the GLSL view-selection kernel to SPIR-V and embed it as a constexpr
 # byte array (projective_texturer.cpp #includes the generated *.spv.hpp on a
 # PRIVATE path), so recon_texture ships the technique with no runtime shader
-# files.
+# files. They include the GLSL recon_core exports (pinhole.glsl), not src/.
 include(vr_embed)
 vr_embed_shaders(
-  recon_texture SHADERS
+  recon_texture INCLUDE_TARGETS volumetric_kit::recon_core SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/texture_score.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/texture_multiview.comp")
 

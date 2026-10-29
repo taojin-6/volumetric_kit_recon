@@ -439,8 +439,8 @@ core::Result<TsdfIntegrator::Checked> TsdfIntegrator::check(
   if (out.live.empty()) return out;
 
   // The float tsdf + weight attributes to fuse into.
-  VKC_ASSIGN(out.tsdf, grid.attribute("tsdf"));
-  VKC_ASSIGN(out.weight, grid.attribute("weight"));
+  VKC_ASSIGN(out.tsdf, grid.attribute(volume::kTsdfAttribute));
+  VKC_ASSIGN(out.weight, grid.attribute(volume::kWeightAttribute));
   if (out.tsdf.element_size != sizeof(float) ||
       out.weight.element_size != sizeof(float)) {
     return core::Status::invalid_argument(
@@ -453,15 +453,17 @@ core::Result<TsdfIntegrator::Checked> TsdfIntegrator::check(
   // engine, which clears color whenever the grid holds a color block, not only
   // when a color image arrives.
   if (any_color) {
-    VKC_ASSIGN(const AttributeView color_view, grid.attribute("color"));
+    VKC_ASSIGN(const AttributeView color_view,
+               grid.attribute(volume::kColorAttribute));
     if (color_view.element_size != sizeof(std::uint32_t)) {
       return core::Status::invalid_argument(
           "TsdfIntegrator::integrate: color attribute must be uint32 (packed "
           "RGB)");
     }
     out.color_attr = color_view.buffer;
-  } else if (grid.has_attribute("color")) {
-    VKC_ASSIGN(const AttributeView color_view, grid.attribute("color"));
+  } else if (grid.has_attribute(volume::kColorAttribute)) {
+    VKC_ASSIGN(const AttributeView color_view,
+               grid.attribute(volume::kColorAttribute));
     if (color_view.element_size == sizeof(std::uint32_t)) {
       out.color_attr = color_view.buffer;
     }

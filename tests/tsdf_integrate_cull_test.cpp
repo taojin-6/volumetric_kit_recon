@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <string_view>
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
@@ -65,9 +66,10 @@ vol::VoxelGridParams grid_params() {
 
 vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
                                            vkc::Allocator& allocator) {
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec attrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   return vol::VoxelBlockGrid::create(device, allocator, grid_params(), attrs,
                                      3);
 }
@@ -134,12 +136,14 @@ vkc::Result<std::map<Coord, Block>> blocks_of(const vkc::test::Gpu& ctx,
                                               vol::VoxelBlockGrid& g) {
   VKC_ASSIGN(const std::vector<vol::BlockIndex> active,
              g.map().compact_active_blocks());
-  const auto read = [&](const char* name) {
+  const auto read = [&](std::string_view name) {
     return vr_test::read_blocks<std::uint32_t>(ctx, g, name, active);
   };
-  VKC_ASSIGN(const std::vector<std::uint32_t> tsdf, read("tsdf"));
-  VKC_ASSIGN(const std::vector<std::uint32_t> weight, read("weight"));
-  VKC_ASSIGN(const std::vector<std::uint32_t> color, read("color"));
+  VKC_ASSIGN(const std::vector<std::uint32_t> tsdf, read(vol::kTsdfAttribute));
+  VKC_ASSIGN(const std::vector<std::uint32_t> weight,
+             read(vol::kWeightAttribute));
+  VKC_ASSIGN(const std::vector<std::uint32_t> color,
+             read(vol::kColorAttribute));
   VKC_ASSIGN(const std::vector<vol::BlockStamp> stamps,
              g.map().read_block_stamps());
   const std::size_t vpb = grid_params().voxels_per_block;

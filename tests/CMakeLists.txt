@@ -159,6 +159,37 @@ vr_target_warnings(recon_volume_depth_unproject_test)
 add_test(NAME recon_volume_depth_unproject
          COMMAND recon_volume_depth_unproject_test)
 
+# The grid's exported GLSL, built through INCLUDE_TARGETS
+# volumetric_kit::recon_volume as a consumer's kernels are, against volume's
+# host types on the device: grid_types.glsl's tick comparison, in-block index
+# and struct layouts (shaders/grid_types_cases.comp), and voxel_color.glsl's
+# colour format, decode, running-mean encode, first observation and the mesher's
+# read (shaders/voxel_color_cases.comp). The colour test also holds
+# volume/voxel_color.hpp to the published sRGB curve, its own reference, on the
+# host, bit for bit; recon_tsdf_voxel_color_space holds it to
+# core/color_space.hpp. Skip the device half where no device is present.
+add_executable(recon_volume_grid_types_test volume_grid_types_test.cpp)
+vr_embed_shaders(
+  recon_volume_grid_types_test INCLUDE_TARGETS volumetric_kit::recon_volume
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/grid_types_cases.comp")
+target_link_libraries(
+  recon_volume_grid_types_test
+  PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_volume_grid_types_test)
+add_test(NAME recon_volume_grid_types COMMAND recon_volume_grid_types_test)
+
+add_executable(recon_volume_voxel_color_test volume_voxel_color_test.cpp)
+vr_embed_shaders(
+  recon_volume_voxel_color_test INCLUDE_TARGETS volumetric_kit::recon_volume
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/voxel_color_cases.comp")
+target_link_libraries(
+  recon_volume_voxel_color_test
+  PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_volume_voxel_color_test)
+add_test(NAME recon_volume_voxel_color COMMAND recon_volume_voxel_color_test)
+
 # volume GPU hash map: build a VoxelHashMap, allocate a cube of block coords,
 # compact, and verify the active set round-trips on the real driver (MoltenVK /
 # NVIDIA). The table's entry layout is internal (hash.hpp), reached by include
@@ -209,6 +240,18 @@ target_link_libraries(recon_tsdf_depth_pinhole_test
 vr_target_warnings(recon_tsdf_depth_pinhole_test)
 add_test(NAME recon_tsdf_depth_pinhole COMMAND recon_tsdf_depth_pinhole_test)
 
+# The sensor boundary's curve (core/color_space.hpp) and the voxel colour
+# format's (volume/voxel_color.hpp), held to each other bit for bit. Here in
+# tsdf, which links both, so the volume tier takes no colour vocabulary from
+# core. Host-only, so it always runs.
+add_executable(recon_tsdf_voxel_color_space_test
+               tsdf_voxel_color_space_test.cpp)
+target_link_libraries(recon_tsdf_voxel_color_space_test
+                      PRIVATE volumetric_kit::recon_tsdf)
+vr_target_warnings(recon_tsdf_voxel_color_space_test)
+add_test(NAME recon_tsdf_voxel_color_space
+         COMMAND recon_tsdf_voxel_color_space_test)
+
 # tsdf integrate: fuse a synthetic constant-depth plane into a VoxelBlockGrid
 # and verify the classic projective TSDF math per voxel (sdf, truncation, weight
 # + cap), and a split dispatch (core/dispatch.hpp's test seam, by src/). It also
@@ -248,14 +291,17 @@ add_test(NAME recon_voxelize_mesh_integrate
 # what a brute force (shaders/mesh_integrate_reference.comp) writes measuring
 # every triangle of each voxel's bin -- on shared vertices with opposite
 # windings, duplicates, near-coincident sheets, slivers, metre-long triangles, a
-# far sphere, bins past the kernel's sort, three block sizes, both modes. Skips
-# with no device.
+# far sphere, bins past the kernel's sort, three block sizes, both modes. The
+# brute force binds the hash entries (volume/hash_map_internal.hpp, by src/).
+# Skips with no device.
 add_executable(recon_voxelize_mesh_integrate_exact_test
                voxelize_mesh_integrate_exact_test.cpp)
 target_link_libraries(
   recon_voxelize_mesh_integrate_exact_test
   PRIVATE volumetric_kit::recon_voxelize Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(recon_voxelize_mesh_integrate_exact_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_embed_shaders(
   recon_voxelize_mesh_integrate_exact_test SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_integrate_reference.comp")
@@ -827,38 +873,16 @@ target_link_libraries(
 vr_target_warnings(recon_texture_device_mesh_test)
 add_test(NAME recon_texture_device_mesh COMMAND recon_texture_device_mesh_test)
 
-include(vr_shaders)
-
-# Color-space vocabulary: the exact piecewise sRGB curve, the packed helpers the
-# fusion kernels mirror, and the primaries matrices. Pure host math over core,
-# so it always runs -- no device, no platform. That portability is the reason
-# the curve lives in `core` rather than in whichever tier decodes with it.
+# Color-space vocabulary: the exact piecewise sRGB curve, the sensor boundary's
+# packed helpers, and the primaries matrices. Pure host math over core, so it
+# always runs -- no device, no platform. The kernels' colour format is volume's
+# (voxel_color.glsl / voxel_color.hpp), pinned by recon_volume_voxel_color, and
+# held to this curve by recon_tsdf_voxel_color_space.
 add_executable(recon_core_color_space_test core_color_space_test.cpp)
 target_link_libraries(recon_core_color_space_test
                       PRIVATE volumetric_kit::recon_core)
 vr_target_warnings(recon_core_color_space_test)
 add_test(NAME recon_core_color_space COMMAND recon_core_color_space_test)
-
-# ...and the device half of the same claim: run core/shaders/color_common.glsl
-# over all 256 codes on the real driver and compare against the host curve. Two
-# implementations of one transfer function is the silent drift the 2026-08-02
-# decision exists to prevent, so it is pinned rather than trusted. Skips where
-# no device is present.
-add_executable(recon_core_color_space_gpu_test core_color_space_gpu_test.cpp)
-vr_compile_shaders(recon_core_color_space_gpu_test SHADERS
-                   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/color_parity.comp")
-target_compile_definitions(
-  recon_core_color_space_gpu_test
-  PRIVATE
-    VR_COLOR_PARITY_SPV="${CMAKE_CURRENT_BINARY_DIR}/shaders/color_parity.comp.spv"
-)
-target_link_libraries(
-  recon_core_color_space_gpu_test
-  PRIVATE volumetric_kit::recon_core Vulkan::Vulkan
-          volumetric_kit::core_test_policy)
-vr_target_warnings(recon_core_color_space_gpu_test)
-add_test(NAME recon_core_color_space_gpu
-         COMMAND recon_core_color_space_gpu_test)
 
 # core/shaders/pinhole.glsl, the GLSL pinhole recon exports, against the host's
 # arithmetic in double (shaders/pinhole_cases.comp, std430 as a consumer's
@@ -1777,8 +1801,9 @@ _vr_expect_message(
   recon_subproject_old_recon
   "vr_subproject_consumer needs volumetric_kit_recon ${_vr_newer} or newer, but the recon at .+ is ${PROJECT_VERSION}: pin v${_vr_newer} or newer"
 )
-# The sibling compiles a kernel that includes recon's exported GLSL through the
-# root recon_core names (glsl_consumer.cmake).
+# The sibling compiles kernels that include recon's exported GLSL through the
+# roots recon_core and recon_volume name, each holding exactly what its target
+# exports (glsl_consumer.cmake).
 add_test(NAME recon_subproject_glsl
          COMMAND "${CMAKE_COMMAND}" --build "${_vr_subproject}/defaults"
                  --target vr_glsl_consumer)

@@ -72,7 +72,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-02**](#2026-08-02--one-color-space-rule-and-a-named-working-space-8-bit-color-is-encoded-float-color-is-linear-converted-once-at-the-sensor-boundary-and-encoded-once-at-presentation) —
   One color-space rule, and a *named* working space: 8-bit color is encoded,
   float color is linear, converted once at the sensor boundary and encoded once
-  at presentation.
+  at presentation. *Amended 2026-10-28:* the voxel colour attribute's GLSL
+  and its host half are `volume`'s, and the PLY writer has a copy of its own.
 - [**2026-08-03**](#2026-08-03--a-buffer-names-the-families-that-will-read-it-and-the-dispatch-barrier-widens-only-as-far-as-its-queue-family-may) —
   A buffer names the *families* that will read it, and the dispatch barrier
   widens only as far as its queue family may.
@@ -590,7 +591,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   point that only tests called goes: the host `BlockList`, the host-array
   `allocate` and `remove`, and the table readbacks. *Amended 2026-10-17:*
   `HashEntry` and the fail slots are internal, the host sentinels go, and
-  `hash_bucket` moves into the tests.
+  `hash_bucket` moves into the tests. *Amended 2026-10-28:* the entries
+  accessor is internal too.
 - [**2026-10-14**](#2026-10-14--the-encoder-writes-zero-motion-p-frames-against-the-frame-it-returned-last-kept-in-the-referencestore-as-its-forward-made-it-five-rules-make-an-i-frame-and-the-split-the-diff-and-a-static-price-for-zero-run-on-the-device-amends-the-2026-10-13-decoder-and-coordinate-and-2026-10-12-p-frame-entries) —
   The `Encoder` writes zero-motion P-frames at `intra_period` above 1,
   against the frame it returned last, kept in the `ReferenceStore` as its
@@ -864,6 +866,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   `SetSender` and `fuse_inputs`. The frame in halves is the stream's public
   calls (`record_front`, `front_ran`, `redo`, `finish_frame`), `SetSender`
   codes through them, and `coder()` is gone.
+- [**2026-10-28**](#2026-10-28--the-voxel-grids-gpu-contract-has-one-home-volume-exports-grid_typesglsl-and-voxel_colorglsl-names-its-shared-attributes-and-keeps-the-hash-entries-internal-amends-the-2026-08-02-color-space-and-2026-10-13-block-list-entries) —
+  The voxel grid's GPU contract has one home: `recon_volume` exports
+  `grid_types.glsl` (the grid's structs, the in-block index, `vrTickAfter`)
+  and `voxel_color.glsl` (the colour attribute's format), tsdf includes
+  only those, `kTsdfAttribute` / `kWeightAttribute` / `kColorAttribute`
+  name the shared attributes, and the hash entries' accessor is internal.
+  Bit-identical to main.
 
 ## Decision record
 
@@ -1485,6 +1494,17 @@ drops the allocate flag in NDEBUG) — validated where the caller supplies it,
 not inside the first extract's arena grow.
 
 ### 2026-08-02 — One color-space rule, and a *named* working space: 8-bit color is encoded, float color is linear, converted once at the sensor boundary and encoded once at presentation.
+
+*Amended 2026-10-28 (the grid-contract entry):* the GLSL the kernels decode
+and encode with is no longer `core`'s. The voxel colour attribute's format,
+the curve included, is `volume/shaders/voxel_color.glsl`, which `volume`
+exports, with its host half `volume/voxel_color.hpp`; the PLY writer encodes
+with a copy of its own. `core/color_space.hpp` stays the sensor boundary's.
+The volume test holds the voxel format to the published curve and the PLY
+test holds the PLY copy to the voxel format, so the grid tiers' tests take
+no colour vocabulary from `core`; `recon_tsdf_voxel_color_space`, in tsdf,
+which links both, holds the voxel format to `color_space.hpp`. The rule is
+unchanged.
 
 Color arrives from a sensor encoded for a
 display and is then **averaged** four times — the TSDF running mean
@@ -13205,6 +13225,10 @@ installed again, or if an installed volume header, or an installed header
 that includes one, declares any of these names in the volume namespace.
 *Amended 2026-10-22 (the install entry):* `recon_subproject_headers` makes
 that check on the public headers, as a fetching sibling sees them.
+*Amended 2026-10-28 (the grid-contract entry):* `entries_buffer()` and
+`entries_buffer_size()` leave the public header for
+`VoxelHashMap::Internal`; only codec, mesh and voxelize bind the entries,
+and the check fails if either is public again.
 
 **The rule** is the user's (2026-10-13): only I/O takes a host path --
 reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads
@@ -16529,6 +16553,81 @@ fail a test: `front_ran` giving the frame no device rows, or every row;
 not reading the viewers' key requests (`recon_sender_set_sender` too);
 `finish_frame` taking a finished stream, or refusing it as out of order;
 all in `recon_codec_stream`.
+
+### 2026-10-28 — The voxel grid's GPU contract has one home: `volume` exports `grid_types.glsl` and `voxel_color.glsl`, names its shared attributes, and keeps the hash entries internal (amends the 2026-08-02 color-space and 2026-10-13 block-list entries).
+
+**The rule.** What a kernel outside the voxel grid's tiers may include is
+what `recon_volume` exports (`vkc_export_glsl`, prefix
+`volumetric_kit/recon/volume/shaders`), two files:
+- `grid_types.glsl`: `VoxelGridParams`, `BlockIndex` and `BlockStamp`, the
+  host PODs' scalar-layout mirrors; the in-block voxel index
+  `x + bs (y + bs z)` (`vrLocalIndex`) and its inverse (`vrLocalBase`); and
+  `vrTickAfter`, `volume::tick_after`. It absorbs `block_stamp.glsl`;
+  `hash_common.glsl` includes it, and `tsdf_common.glsl`'s copies of the
+  structs are gone.
+- `voxel_color.glsl`: the `color` attribute's format. The exact sRGB curve
+  and its packed decode and running-mean encode (from
+  `core/shaders/color_common.glsl`, which is gone), `kVoxelColorUnobserved`
+  (0), `vrVoxelColorFromObserved` (a first observation's R, G, B with alpha
+  0xFF) and `vrVoxelColorToLinear` (unobserved reads opaque white). Its
+  host half is `volume/voxel_color.hpp`.
+
+tsdf's kernels include these, and texture's `pinhole.glsl`, through
+`INCLUDE_TARGETS` (`vr_embed_shaders`), never `src/`, so they reach the
+grid as a separate repository's kernels will. The hash table's GLSL stays
+internal to codec, mesh and voxelize, and so does the entries buffer they
+bind: `VoxelHashMap::entries_buffer()` and `entries_buffer_size()` move to
+`VoxelHashMap::Internal`, a nested class the public header declares and
+`src/volumetric_kit/recon/volume/hash_map_internal.hpp` defines (a member,
+so it reads the map's private state without a `friend`).
+`kTsdfAttribute`, `kWeightAttribute` and `kColorAttribute`
+(`voxel_block_grid.hpp`, beside `kObservedWeight`) name the attributes the
+tiers share, `float`, `float` and `uint32_t`. The PLY writer encodes sRGB
+with a copy of its own, so `recon_mesh_io` includes no colour vocabulary.
+
+**Why.** The voxel grid leaves recon for a repository of its own, and what
+it publishes must be small and versioned: the grid's shape and block
+records, and the colour format fusion writes and the mesher reads. The slot
+layout, probe order and sentinels stay private, as the 2026-10-13 entry
+meant them to. Before this, tsdf re-declared two of the structs, the colour
+format lived in `core` beside the camera vocabulary that goes with the
+sensors, three attribute names were string literals in five tiers, and
+any tier could bind the hash table. The GLSL `tick_after`, dropped with
+incremental meshing for want of a caller, returns as part of what a
+consumer's kernel reads stamps with.
+
+**Bit-identical.** The kernels compute what they computed: the structs
+are the same declarations, the colour functions are the expressions they
+replace, and the in-block index tsdf and voxelize wrote inline is
+`vrLocalIndex`'s and `vrLocalBase`'s integer arithmetic.
+
+**Tests.** `recon_volume_grid_types` runs `grid_types.glsl` on the device,
+built through `INCLUDE_TARGETS`: `vrTickAfter` against `tick_after` across
+the wrap, the in-block index for every voxel of five block sizes, and every
+field of the three structs read from the host PODs. `recon_volume_voxel_color`
+(was `recon_core_color_space_gpu`) runs `voxel_color.glsl` over every grey
+code, the unobserved word and 255 others against `voxel_color.hpp`, and holds
+`voxel_color.hpp` to `color_space.hpp` bit for bit on the host, the
+unobserved word to opaque white.
+`recon_io_ply` writes 5,892 linear channels, every code's rounding edge
+among them, and reads back `color_space.hpp`'s codes. The subproject
+consumer checks that each export root holds exactly its exported files,
+compiles both kernels through `INCLUDE_TARGETS`, and fails if
+`VoxelHashMap` names either entries accessor or `Internal` is complete in a
+public header. Mutation-checked: of 20 mutants 19 fail a test; the one
+left is equivalent (the decode toe moved from 0.04045 to 0.04, between
+which no 8-bit code lies).
+
+**Validation.** Apple M5 Max, MoltenVK, Release with warnings as errors
+and Assimp, under the validation layer: the 128 tests pass, the codec's
+golden frames unchanged. Main (7e93e85e) and this change, twice each:
+`codec_replica` on Replica `room0` (400 frames, 1 cm, every frame coded)
+and `codec_mesh` on Rafa2 frames 1–12 write the same stream bytes;
+`fuse_replica` on `room0` (400 frames, 2 cm, colour) ends at 8,692 blocks
+and 330,324 triangles, and its mesh and `codec_mesh`'s uncompressed and
+decoded meshes hold the same vertices, colour bytes included, and the same
+triangles. Their PLY bytes differ only in vertex order, as between any two
+runs of main. The kernels' cost is unchanged, so no timing was run.
 
 ## Measured lessons
 

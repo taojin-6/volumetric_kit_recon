@@ -187,6 +187,37 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `volume`, `tsdf`, `mesh`, `codec`, `voxelize`, `io`: **the voxel grid's
+  GPU contract has one home, in `volume`** (the 2026-10-28 grid-contract
+  decision). `recon_volume` exports two GLSL files with `vkc_export_glsl`:
+  `volume/shaders/grid_types.glsl` (`VoxelGridParams`, `BlockIndex`,
+  `BlockStamp`, the in-block index `vrLocalIndex` / `vrLocalBase`, and
+  `vrTickAfter`), which absorbs `block_stamp.glsl` and replaces
+  `tsdf_common.glsl`'s copies of the structs, and
+  `volume/shaders/voxel_color.glsl`, the colour attribute's format (the
+  sRGB curve from `core/shaders/color_common.glsl`, which is gone,
+  `kVoxelColorUnobserved`, `vrVoxelColorFromObserved` for a first
+  observation, `vrVoxelColorToLinear` for the mesher), with its host half
+  `volume/voxel_color.hpp`. tsdf's and texture's kernels include only
+  exported GLSL (`vr_embed_shaders(... INCLUDE_TARGETS ...)`), not `src/`.
+  `kTsdfAttribute`, `kWeightAttribute` and `kColorAttribute`
+  (`voxel_block_grid.hpp`) name the shared attributes. The PLY writer
+  encodes sRGB with a copy of its own, so `recon_mesh_io` includes no colour
+  vocabulary. `VoxelHashMap::entries_buffer()` and `entries_buffer_size()`
+  leave the public header for `VoxelHashMap::Internal`
+  (`src/volumetric_kit/recon/volume/hash_map_internal.hpp`), which codec,
+  mesh and voxelize include on their private `src/` path.
+  `vr_compile_shaders` (`cmake/vr_shaders.cmake`), left with no caller, is
+  gone. Fused voxels, meshes and codec streams are main's, bit for bit.
+  Migration: a consumer's kernel includes `grid_types.glsl` and
+  `voxel_color.glsl` through `INCLUDE_TARGETS volumetric_kit::recon_volume`;
+  nothing outside the voxel grid's tiers binds the hash entries. Tests:
+  `recon_volume_grid_types` (new), `recon_volume_voxel_color` (was
+  `recon_core_color_space_gpu`), `recon_tsdf_voxel_color_space` (new),
+  `recon_io_ply`, `recon_subproject_glsl`, `recon_subproject_headers`,
+  `recon_mesh_marching_cubes_sparse`, `recon_volume_hash_map`,
+  `recon_voxelize_mesh_integrate_exact`, and the tests that name the
+  attributes.
 - `codec_stream`, `sender`: **the codec stream is a tier of its own,
   `codec_stream`, and its frame in halves is public** (the 2026-10-28
   codec-stream decision): `codec_stream::CodecStream`, `CodecOutputs` and

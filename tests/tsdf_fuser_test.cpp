@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -62,9 +63,10 @@ vol::VoxelGridParams params(std::int32_t num_buckets) {
 vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
                                            vkc::Allocator& allocator,
                                            const vol::VoxelGridParams& grid) {
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec attrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   return vol::VoxelBlockGrid::create(device, allocator, grid, attrs, 3);
 }
 
@@ -112,7 +114,8 @@ bool held_blocks_match(const vkc::test::Gpu& gpu, vol::VoxelBlockGrid& expected,
     blocks.a.push_back({b.coord, there->second});
     blocks.b.push_back(b);
   }
-  for (const char* name : {"weight", "tsdf", "color"}) {
+  for (const std::string_view name :
+       {vol::kWeightAttribute, vol::kTsdfAttribute, vol::kColorAttribute}) {
     auto a = vr_test::read_blocks<std::uint32_t>(gpu, expected, name, blocks.a);
     auto b = vr_test::read_blocks<std::uint32_t>(gpu, grid, name, blocks.b);
     if (!a.ok() || !b.ok() ||
@@ -130,7 +133,7 @@ vkc::Result<bool> fused_any(const vkc::test::Gpu& gpu,
                             const vol::VoxelBlockGrid& grid) {
   VKC_ASSIGN(const std::vector<float> weight,
              vr_test::read_attribute<float>(gpu.device, gpu.allocator, grid,
-                                            "weight"));
+                                            vol::kWeightAttribute));
   for (const float w : weight) {
     if (w > 0.0f) return true;
   }
