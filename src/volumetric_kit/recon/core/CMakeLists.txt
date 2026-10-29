@@ -97,7 +97,7 @@ vr_target_warnings(recon_core)
 
 # The GLSL recon exports, for a consumer's kernels to #include as recon's own do
 # ("volumetric_kit/recon/core/shaders/pinhole.glsl"), through the core's
-# INCLUDE_TARGETS volumetric_kit::recon_core. recon's own shaders read src/
-# (vr_compile_shaders).
+# INCLUDE_TARGETS volumetric_kit::recon_core, as recon's tsdf and texture do.
+# The other tiers' shaders read src/ (vr_embed_shaders).
 vkc_export_glsl(recon_core PREFIX volumetric_kit/recon/core/shaders FILES
                 shaders/pinhole.glsl)

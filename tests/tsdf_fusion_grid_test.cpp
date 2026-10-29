@@ -108,12 +108,13 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(got.bucket_size == want.bucket_size &&
         got.num_blocks == want.num_blocks && got.max_chain == want.max_chain);
   CHECK(grid->attribute_count() == 3);
-  CHECK(grid->attribute("tsdf").ok() &&
-        grid->attribute("tsdf")->element_size == sizeof(float));
-  CHECK(grid->attribute("weight").ok() &&
-        grid->attribute("weight")->element_size == sizeof(float));
-  CHECK(grid->attribute("color").ok() &&
-        grid->attribute("color")->element_size == sizeof(std::uint32_t));
+  CHECK(grid->attribute(vol::kTsdfAttribute).ok() &&
+        grid->attribute(vol::kTsdfAttribute)->element_size == sizeof(float));
+  CHECK(grid->attribute(vol::kWeightAttribute).ok() &&
+        grid->attribute(vol::kWeightAttribute)->element_size == sizeof(float));
+  CHECK(grid->attribute(vol::kColorAttribute).ok() &&
+        grid->attribute(vol::kColorAttribute)->element_size ==
+            sizeof(std::uint32_t));
   const std::int32_t cap =
       fusion_buckets(0.02f, vkc::max_storage_buffer_range(gpu.device), kAny);
   CHECK(warned(gpu.log, 1, cap, kAny));

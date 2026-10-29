@@ -18,9 +18,9 @@ namespace {
 
 // What every fusion grid carries: the attributes Fuser writes.
 constexpr volume::AttributeSpec kFusionAttributes[] = {
-    {"tsdf", sizeof(float)},
-    {"weight", sizeof(float)},
-    {"color", sizeof(std::uint32_t)}};
+    {volume::kTsdfAttribute, sizeof(float)},
+    {volume::kWeightAttribute, sizeof(float)},
+    {volume::kColorAttribute, sizeof(std::uint32_t)}};
 
 // The warning for a caller's start capped to the device; a host allocation
 // failure loses the warning alone.

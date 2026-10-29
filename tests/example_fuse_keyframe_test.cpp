@@ -107,8 +107,8 @@ int check_mode(vkc::test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
   // 5 cm, so its z coordinate is at most 3.
   const auto near_weight = [&]() -> double {
     auto blocks = vr_test::blocks_of(*volume);
-    auto weight = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
-                                                 *volume, "weight");
+    auto weight = vr_test::read_attribute<float>(
+        gpu.device, gpu.allocator, *volume, vr::volume::kWeightAttribute);
     if (!blocks.ok() || !weight.ok()) return -1.0;
     double sum = 0.0;
     for (const auto& [coord, ptr] : *blocks) {
@@ -175,8 +175,9 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // Preparation and allocation succeed, but fusion refuses a volume without
   // a colour attribute. Different pixels and pose expose an early replacement
   // or reuse of the retained buffers even if the optional stays engaged.
-  const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                             {"weight", sizeof(float)}};
+  const vr::volume::AttributeSpec attrs[] = {
+      {vr::volume::kTsdfAttribute, sizeof(float)},
+      {vr::volume::kWeightAttribute, sizeof(float)}};
   auto depth_only = vr::volume::VoxelBlockGrid::create(
       gpu.device, gpu.allocator,
       vr::volume::block_grid_params(0.05f, 0.15f, 256), attrs, 2);

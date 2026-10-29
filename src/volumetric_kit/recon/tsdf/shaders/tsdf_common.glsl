@@ -6,30 +6,14 @@
 // push-constant block. #included by tsdf_integrate.glsl, the body of the
 // integrate and clear kernels.
 //
-// VoxelGridParams / BlockIndex mirror volume/{voxel_grid,hash_types}.hpp (the
-// same scalar-layout structs the volume kernels use in hash_common.glsl);
-// IntegrateParams mirrors the host struct in tsdf_integrator.cpp. Under scalar
+// VoxelGridParams / BlockIndex are the voxel grid's, from the GLSL recon_volume
+// exports (grid_types.glsl); the cameras mirror the host structs. Under scalar
 // block layout every field lands at its host offset -- no std430 vec padding.
 
 #extension GL_EXT_scalar_block_layout : require
 
 #include "volumetric_kit/recon/core/shaders/pinhole.glsl"
-
-struct VoxelGridParams {
-  float voxel_size;
-  int block_size;
-  int voxels_per_block;
-  float trunc_dist;
-  int bucket_size;
-  int num_buckets;
-  int num_blocks;
-  int max_chain;
-};
-
-struct BlockIndex {
-  ivec3 coord;
-  int ptr;
-};
+#include "volumetric_kit/recon/volume/shaders/grid_types.glsl"
 
 // Camera intrinsics + pose + depth range (mirrors DepthCameraParams
 // byte-for-byte: scalars at their 4-byte offsets, the cam_to_world mat4 at 32).

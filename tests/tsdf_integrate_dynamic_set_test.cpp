@@ -76,9 +76,10 @@ vol::VoxelGridParams grid_params() {
 
 vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
                                            vkc::Allocator& allocator) {
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec attrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   return vol::VoxelBlockGrid::create(device, allocator, grid_params(), attrs,
                                      3);
 }
@@ -279,10 +280,10 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   {
     auto blocks = vr_test::blocks_of(fg.value());
     CHECK(blocks.ok());
-    auto weight =
-        vr_test::read_attribute<float>(dev, alloc, fg.value(), "weight");
-    auto colors =
-        vr_test::read_attribute<std::uint32_t>(dev, alloc, fg.value(), "color");
+    auto weight = vr_test::read_attribute<float>(dev, alloc, fg.value(),
+                                                 vol::kWeightAttribute);
+    auto colors = vr_test::read_attribute<std::uint32_t>(dev, alloc, fg.value(),
+                                                         vol::kColorAttribute);
     CHECK(weight.ok() && colors.ok());
     for (const float z : {0.97f, 0.98f, 0.99f, 1.00f}) {
       const std::int64_t i = voxel_at(blocks.value(), 0.0f, 0.0f, z);

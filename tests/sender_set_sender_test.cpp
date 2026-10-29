@@ -492,8 +492,8 @@ int code_sets(vkc::test::GpuContext& gpu, const Fusion& fusion,
            vr_test::find_row(logged.rows, "wait: redo") != nullptr});
     }
     if (s == 1) {  // read once: the whole attribute is slow in Debug
-      auto weights = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
-                                                    *grid, "weight");
+      auto weights = vr_test::read_attribute<float>(
+          gpu.device, gpu.allocator, *grid, vr::volume::kWeightAttribute);
       CHECK(weights.ok() && !weights->empty());
       CHECK(*std::max_element(weights->begin(), weights->end()) ==
             fusion.max_weight);

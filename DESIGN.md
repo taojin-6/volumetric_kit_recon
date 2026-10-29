@@ -354,7 +354,7 @@ the geometry buffers directly.
   packing; keep the `layout(scalar)` GLSL definitions in lockstep.
   `device_requirements()` asks for the `scalarBlockLayout` feature, and every
   `create` that builds kernels refuses a device that did not enable it
-  (`check_device_requirements`); `vr_compile_shaders` validates the emitted
+  (`check_device_requirements`); `vr_embed_shaders` validates the emitted
   SPIR-V with `--scalar-block-layout`.
 - **GLSL compute is the baseline; CUDA is the optional accelerator.** In the
   Vulkan path, warp/wave tricks become Vulkan subgroup ops and device atomics use
@@ -599,14 +599,14 @@ The color-space contract is implemented across these boundaries:
   like any other. The seam holds because `mesh::Vertex` is already gfx's layout
   and glTF already calls `COLOR_0` linear — the two conventions agreed all along.
 
-The curve has one host implementation in `core/color_space.hpp` and one GLSL
-mirror in `core/shaders/color_common.glsl`, in the shared-`.glsl` discipline the
-`volume` and `tsdf` tiers already use — reached through a cross-tier include
-spelled like the C++ header path, the first one in the repo, so its provenance
-is visible at the include site. It lives in `core` rather than `sensor` for the
-reason the camera parameter blocks did: `sensor` branches off `core` beside the
-fusion tiers, so `tsdf` and `mesh` cannot include from it, and a curve those
-kernels need is vocabulary.
+The curve's host implementation for the sensor boundary is
+`core/color_space.hpp`. The voxel colour attribute's format, the curve
+included, is `volume`'s (2026-10-28): `volume/shaders/voxel_color.glsl`,
+which fusion writes and the mesher reads through, exported to consumers'
+kernels, and its host half `volume/voxel_color.hpp`. The PLY writer encodes
+with a copy of its own. `recon_volume_voxel_color` holds the GLSL to
+`voxel_color.hpp` and that to `color_space.hpp`; `recon_io_ply` holds the
+PLY copy to `color_space.hpp`.
 
 The **type and the `is_canonical` predicate go to `core` with the curve**, not
 to `sensor` — implementing this moved them. `TsdfIntegrator::integrate` refuses
@@ -891,7 +891,8 @@ preserves block indices, so per-voxel data survives a grow.
 `VoxelBlockGrid` composes the map with independently-allocated SoA
 attribute arrays (`tsdf`, `weight`, `color`, …), each
 `num_blocks·voxels_per_block`, so a consumer materialises only what it
-needs. Every buffer of both is device-local, reached through a
+needs; the three the tiers share are named by `kTsdfAttribute`,
+`kWeightAttribute` and `kColorAttribute`. Every buffer of both is device-local, reached through a
 `CommandBatch`: `create`, `clear` and `remove` zero on the device (`clear`
 and `remove` before any index is freed, `remove` by a kernel that finds
 each coord's block itself, so its cost is the count's, not the grid's),
@@ -944,11 +945,18 @@ counter, which every call that moves it refreshes, `settle` for a recorded
 one), and `kGrowThreshold` is
 the occupancy it says to grow at — named here so a UI or an embedder cannot
 draw a ceiling that disagrees with it. No host call reads the table back;
-a kernel binds `entries_buffer()` and reads it through `hash_common.glsl`
-or `hash_lookup.glsl` (2026-10-13), whose layout is internal: the host
-`HashEntry` and fail slots are in `src/volumetric_kit/recon/volume/hash.hpp`,
-and the slot sentinels and hash are the GLSL's alone in the library
-(2026-10-17).
+a kernel of the grid's own tiers (codec, mesh, voxelize) binds the entries,
+`VoxelHashMap::Internal::entries_buffer` in
+`src/volumetric_kit/recon/volume/hash_map_internal.hpp` (2026-10-28), and
+reads them through `hash_common.glsl` or `hash_lookup.glsl` (2026-10-13),
+whose layout is internal: the host `HashEntry` and fail slots are in
+`src/volumetric_kit/recon/volume/hash.hpp`, and the slot sentinels and hash
+are the GLSL's alone in the library (2026-10-17). What any kernel may
+include is what `recon_volume` exports (`vkc_export_glsl`, 2026-10-28):
+`grid_types.glsl` (`VoxelGridParams`, `BlockIndex`, `BlockStamp`, the
+in-block index `vrLocalIndex` / `vrLocalBase` and `vrTickAfter`) and
+`voxel_color.glsl`; tsdf's kernels include them through `INCLUDE_TARGETS`,
+not `src/`.
 `grow_grid` centralizes the growth arithmetic: double, or reach a larger
 requested minimum, within `VoxelBlockGrid::max_num_buckets` (block pointers
 within int32, each attribute array within one binding). It retains no policy

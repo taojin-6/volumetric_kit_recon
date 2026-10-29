@@ -182,8 +182,9 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       /*num_buckets=*/64,
       /*num_blocks=*/512,       /*max_chain=*/128};
 
-  const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                             {"weight", sizeof(float)}};
+  const vr::volume::AttributeSpec attrs[] = {
+      {vr::volume::kTsdfAttribute, sizeof(float)},
+      {vr::volume::kWeightAttribute, sizeof(float)}};
   vkc::Result<vr::volume::VoxelBlockGrid> grid =
       vr::volume::VoxelBlockGrid::create(gpu.device, gpu.allocator, params,
                                          attrs, 2);

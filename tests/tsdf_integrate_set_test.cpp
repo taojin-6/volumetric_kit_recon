@@ -69,9 +69,10 @@ vol::VoxelGridParams grid_params() {
 
 vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
                                            vkc::Allocator& allocator) {
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec attrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   return vol::VoxelBlockGrid::create(device, allocator, grid_params(), attrs,
                                      3);
 }
@@ -287,8 +288,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     bad[2] = {vkc::StorageInput(small.value()), views[2].cam, nullptr};
     CHECK(integrator->integrate(grid.value(), bad).domain() ==
           vkc::Status::Code::InvalidArgument);
-    auto weight =
-        vr_test::read_attribute<float>(dev, alloc, grid.value(), "weight");
+    auto weight = vr_test::read_attribute<float>(dev, alloc, grid.value(),
+                                                 vol::kWeightAttribute);
     CHECK(weight.ok());
     for (const float w : weight.value()) CHECK(w == 0.0f);
 

@@ -63,14 +63,19 @@ solver, sets `VR_CAMERA_ONLY` ON to build the camera tier
 (`volumetric_kit::recon_camera`) alone, with no Vulkan SDK; it refuses the
 examples and the optional drivers.
 
-A consumer's kernels include recon's GLSL pinhole as recon's own do,
-`#include "volumetric_kit/recon/core/shaders/pinhole.glsl"`, through the
-core's `INCLUDE_TARGETS`: `volumetric_kit::recon_core` exports it with
-`vkc_export_glsl`, under a root that holds the exported GLSL alone.
+A consumer's kernels include recon's exported GLSL as recon's own do,
+through the core's `INCLUDE_TARGETS`, each target exporting with
+`vkc_export_glsl` under a root that holds its exported GLSL alone:
+`volumetric_kit::recon_core` the pinhole
+(`volumetric_kit/recon/core/shaders/pinhole.glsl`), and
+`volumetric_kit::recon_volume` the voxel grid's contract
+(`volumetric_kit/recon/volume/shaders/grid_types.glsl`) and its colour
+attribute's format (`.../voxel_color.glsl`). The hash table's GLSL is not
+exported.
 
 ```cmake
 vkc_compile_shaders(my_kernels INCLUDE_TARGETS volumetric_kit::recon_core
-                    SHADERS my.comp)
+                    volumetric_kit::recon_volume SHADERS my.comp)
 ```
 
 A consumer that needs a recon at least as new as a given version calls the

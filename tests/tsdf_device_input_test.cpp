@@ -57,9 +57,10 @@ vol::VoxelGridParams grid_params() {
 
 vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
                                            vkc::Allocator& allocator) {
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
+  const vol::AttributeSpec attrs[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)},
+      {vol::kColorAttribute, sizeof(std::uint32_t)}};
   return vol::VoxelBlockGrid::create(device, allocator, grid_params(), attrs,
                                      3);
 }
@@ -105,12 +106,12 @@ vkc::Result<ColorCounts> color_counts(const vkc::test::Gpu& ctx,
                                       vol::VoxelBlockGrid& g) {
   VKC_ASSIGN(const std::vector<vol::BlockIndex> active,
              g.map().compact_active_blocks());
-  VKC_ASSIGN(
-      const std::vector<float> weight,
-      vr_test::read_attribute<float>(ctx.device, ctx.allocator, g, "weight"));
+  VKC_ASSIGN(const std::vector<float> weight,
+             vr_test::read_attribute<float>(ctx.device, ctx.allocator, g,
+                                            vol::kWeightAttribute));
   VKC_ASSIGN(const std::vector<std::uint32_t> color,
              vr_test::read_attribute<std::uint32_t>(ctx.device, ctx.allocator,
-                                                    g, "color"));
+                                                    g, vol::kColorAttribute));
   ColorCounts out;
   for (const vol::BlockIndex& b : active) {
     for (std::int32_t k = 0; k < grid_params().voxels_per_block; ++k) {

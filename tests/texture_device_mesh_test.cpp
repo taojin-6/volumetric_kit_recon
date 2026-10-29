@@ -136,10 +136,10 @@ bool fill_grid(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& grid,
       grid.map().compact_active_blocks();
   if (!active) return false;
 
-  auto tsdf =
-      vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid, "tsdf");
-  auto weight =
-      vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid, "weight");
+  auto tsdf = vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid,
+                                             vol::kTsdfAttribute);
+  auto weight = vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid,
+                                               vol::kWeightAttribute);
   if (!tsdf || !weight) return false;
   float* tsdf_data = tsdf.value().data();
   float* weight_data = weight.value().data();
@@ -166,11 +166,11 @@ bool fill_grid(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& grid,
       }
     }
   }
-  return vr_test::write_attribute(ctx.device, ctx.allocator, grid, "tsdf",
-                                  tsdf.value())
+  return vr_test::write_attribute(ctx.device, ctx.allocator, grid,
+                                  vol::kTsdfAttribute, tsdf.value())
              .ok() &&
-         vr_test::write_attribute(ctx.device, ctx.allocator, grid, "weight",
-                                  weight.value())
+         vr_test::write_attribute(ctx.device, ctx.allocator, grid,
+                                  vol::kWeightAttribute, weight.value())
              .ok();
 }
 
@@ -184,8 +184,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(texturer_result.ok());
   rtex::ProjectiveTexturer texturer = std::move(texturer_result).value();
 
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)}};
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, sizeof(float)},
+                                      {vol::kWeightAttribute, sizeof(float)}};
   vkc::Result<vol::VoxelBlockGrid> grid_result = vol::VoxelBlockGrid::create(
       gpu.device, gpu.allocator, sphere_grid_params(), attrs, 2);
   CHECK(grid_result.ok());

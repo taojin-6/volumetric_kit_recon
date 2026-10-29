@@ -54,8 +54,8 @@ vkc::Status touch(vkc::Device& device, vkc::Allocator& allocator,
 }  // namespace
 
 int gpu_main(vkc::test::GpuContext& gpu) {
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)}};
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, sizeof(float)},
+                                      {vol::kWeightAttribute, sizeof(float)}};
   auto made = vol::VoxelBlockGrid::create(
       gpu.device, gpu.allocator, vol::block_grid_params(0.01f, 0.04f, 256),
       attrs, 2);

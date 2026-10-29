@@ -55,10 +55,17 @@ target_include_directories(
 
 # Compile the GLSL kernels to SPIR-V and embed them as constexpr byte arrays
 # (each .cpp #includes its generated *.spv.hpp on a PRIVATE path), so recon_tsdf
-# ships the technique with no runtime shader files.
+# ships the technique with no runtime shader files. They include the GLSL
+# recon_core and recon_volume export, not src/: the grid's contract, never its
+# hash table.
 include(vr_embed)
 vr_embed_shaders(
-  recon_tsdf SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
+  recon_tsdf
+  INCLUDE_TARGETS
+  volumetric_kit::recon_core
+  volumetric_kit::recon_volume
+  SHADERS
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_clear.comp")
 
 vr_target_warnings(recon_tsdf)

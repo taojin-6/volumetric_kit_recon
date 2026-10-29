@@ -26,8 +26,9 @@ namespace tsdf = vr::tsdf;
 namespace {
 int gpu_main(vkc::test::GpuContext& gpu) {
   const vol::VoxelGridParams shape{0.01f, 8, 512, 0.03f, 8, 16, 128, 16};
-  const vol::AttributeSpec attributes[] = {{"tsdf", sizeof(float)},
-                                           {"weight", sizeof(float)}};
+  const vol::AttributeSpec attributes[] = {
+      {vol::kTsdfAttribute, sizeof(float)},
+      {vol::kWeightAttribute, sizeof(float)}};
   auto grid = vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, shape,
                                           attributes, 2);
   auto integrator = tsdf::TsdfIntegrator::create(gpu.device, gpu.allocator);
@@ -82,8 +83,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       {&unknown, 0, 1},
       {&nonlocal, 0, 1},
       {&oversized, 0, 1}};
-  const auto before = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
-                                                     *grid, "weight");
+  const auto before = vr_test::read_attribute<float>(
+      gpu.device, gpu.allocator, *grid, vol::kWeightAttribute);
   CHECK(before.ok());
   for (const auto& gate : invalid) {
     const auto tick = grid->map().tick();
@@ -96,7 +97,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     CHECK(batch.submit().ok());
     CHECK(gpu.device.counters().dispatches == counters.dispatches);
     auto after = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
-                                                *grid, "weight");
+                                                *grid, vol::kWeightAttribute);
     CHECK(after.ok() && *after == *before);
   }
   for (const auto offset : {8u, 4u}) {
@@ -108,7 +109,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
               .ok());
     CHECK(batch.submit().ok());
     auto after = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
-                                                *grid, "weight");
+                                                *grid, vol::kWeightAttribute);
     CHECK(after.ok());
     if (offset == 8) {
       CHECK(*after == *before);
