@@ -6,7 +6,7 @@
 # project, so its tests, examples and -Werror must default off, and the consumer
 # builds the library tiers alone, under its own compiler's warnings. recon
 # exports no GLSL: grid's own consumer (its tests/subproject) checks grid's, and
-# the sensor package's (sensor/tests/subproject) the package's.
+# sensor's (its tests/subproject) sensor's.
 #
 # With -DVR_CORE_FIRST=ON it makes the core available first, as an application
 # that also fetches calib or gfx does, with VKC_WITH_VULKAN as given, so recon's

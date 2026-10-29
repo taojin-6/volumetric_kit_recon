@@ -81,7 +81,9 @@ P-frames' update segments, so core refuses it, even as 0, at a
 `codec` keys other than `encode_every` and `inspect_only`; it still writes
 the PLY at `output.path`. `output.serve` serves the frames on that port as
 they are recorded ([Live streaming](../README.md#live-streaming)); 0, the
-default, serves nothing.
+default, serves nothing. `output.max_viewers`, given only with a port, is how
+many viewers it serves at once, first come (default 4); a connection past
+them is closed.
 Like `rig_viewer`, it fuses Dynamic by default, clearing a surface the
 cameras see past, so the frames and the PLY follow a changing scene, and it
 frees stale blocks every `fusion.free_after` sets (default 30).

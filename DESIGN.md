@@ -8,7 +8,7 @@ to the task, and update them with the code when a contract changes.
 
 - [Tiered architecture](#tiered-architecture) and [package names](#naming-conventions-use-these-consistently)
 - [Interop and device ownership](#the-interop-seam), [Vulkan gotchas](#key-gotchas-verified), and [color](#color-space)
-- Implementation: [core](#core), [tsdf](#tsdf), [texture](#texture), [sender](#sender); the voxel grid, meshing, the codec and streaming are grid's ([its DESIGN.md](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md)), and the camera side the in-tree sensor package's ([its DESIGN.md](sensor/DESIGN.md))
+- Implementation: [core](#core), [tsdf](#tsdf), [texture](#texture), [sender](#sender); the voxel grid, meshing, the codec and streaming are grid's ([its DESIGN.md](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md)), and the camera side sensor's ([its DESIGN.md](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DESIGN.md))
 - [Examples](#examples) and [next work](#next-work)
 
 The tier descriptions and next-work notes below retain the implementation
@@ -44,9 +44,9 @@ renderer. They meet only at the interop seam.
 - **[`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid)** — the voxel grid,
   meshing, mesh files, quality measurement, the codec and the `.vrst`
   stream and its live serving, on volumetric_kit_core alone.
-- **`volumetric_kit_sensor`** (this repo's `sensor/`, until it has a
-  repository of its own) — cameras, capture and the device-frame contract,
-  on volumetric_kit_core alone.
+- **[`volumetric_kit_sensor`](https://github.com/taojin-6/volumetric_kit_sensor)** —
+  cameras, capture and the device-frame contract, on volumetric_kit_core
+  alone.
 - **`volumetric_kit_gfx`** — the Vulkan/MoltenVK renderer. Consumes meshes /
   point clouds / glTF.
 
@@ -74,7 +74,7 @@ conventions and Vulkan setup.
   `volumetric_kit::recon_core`, `…_tsdf`, `…_texture`, `…_sender`,
   `…_interop` (+ later `…_track`); umbrella alias `volumetric_kit::recon`.
   The camera and sensor targets are the sensor package's
-  (`volumetric_kit::sensor_*`, [its names](sensor/DESIGN.md#names)).
+  (`volumetric_kit::sensor_*`, [its names](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DESIGN.md#names)).
 - grid's names are its own: `volumetric_kit::grid`, `vgrid::` in docs,
   `include/volumetric_kit/grid/<tier>/…`, `VGRID_` macros and
   `volumetric_kit::grid_<tier>` targets ([grid's
@@ -92,7 +92,7 @@ comes last: it links grid's `codec_stream`, `tsdf` and the sensor
 package's frame contract (`sensor_frame`). Neither grid nor the sensor
 package includes anything of recon's ([grid's tiers](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#tiered-architecture)).
 
-- **The sensor package** (`sensor/`, its own [DESIGN.md](sensor/DESIGN.md))
+- **The sensor package** (`volumetric_kit_sensor`, its own [DESIGN.md](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DESIGN.md))
   — the camera vocabulary, the sensor interface and its drivers, the video
   decoders, GPU frame preparation, the sensor array and image files.
   recon's libraries link its `frame` tier alone: `DeviceFrame`, the pinhole
@@ -418,7 +418,7 @@ representation changes and therefore where the conversion belongs.
 
 A driver declares the encoding it produces and never converts: the sensor
 package's `ColorEncoding`, which rides beside the camera
-([its design](sensor/DESIGN.md#declaring-an-encoding-not-converting-it)).
+([its design](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DESIGN.md#declaring-an-encoding-not-converting-it)).
 
 ### Encoding at presentation
 
@@ -564,9 +564,8 @@ a bitstream is reproducible on the device that wrote it and decodable on any.
 
 A consumer fetches recon by commit (`FetchContent`) and links its per-tier
 targets; recon has no install rules or package config (the 2026-10-22
-decision). recon declares the in-tree sensor package (`sensor/`) after the
-core, and its libraries link the package's `sensor_frame` alone
-([README](README.md#building)). Quality gates
+decision). recon fetches sensor and grid by commit after the core, and its
+libraries link sensor's `sensor_frame` alone ([README](README.md#building)). Quality gates
 (warnings-as-errors, formatting hooks, sanitizer and test CI) are wired from the
 start, not retrofitted.
 

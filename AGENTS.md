@@ -25,13 +25,14 @@ geometry and compressed bitstreams → renderer handoff.
   only. Never build or write in either prior repository.
 - Production only: no triplane/neural code, tiny-cuda-nn, KLT, iQuantizer, or
   Python research/evaluation harnesses. The production C++ `eval` tier is allowed.
-- The camera side is the in-tree package `volumetric_kit_sensor`
-  (`sensor/`), on the core alone, until it moves to a repository of its own;
-  its [AGENTS.md](sensor/AGENTS.md), docs and CHANGELOG govern work there.
-  Nothing under `sensor/` includes recon or grid
-  (`sensor_package_boundary`), recon's libraries link its `sensor_frame`
-  alone (`recon_library_sensor_links`), and recon's examples assemble any of
-  its tiers.
+- The camera side is
+  [`volumetric_kit_sensor`](https://github.com/taojin-6/volumetric_kit_sensor),
+  a repository of its own on the core alone, which recon fetches pinned by
+  commit (`third_party/CMakeLists.txt`). A change to sensor is a task in that
+  repository, under its own AGENTS.md and DECISIONS.md; recon then moves its
+  pin. recon's libraries link its `sensor_frame` alone
+  (`recon_library_sensor_links`), and recon's examples assemble any of its
+  tiers.
 - The tiers work on any data. A tier never applies dataset preprocessing on
   its own: the caller opts in, as an example does for its
   demo asset, and a tier's tests use synthetic data.
@@ -47,7 +48,7 @@ linked documents.
 | Build, dependencies, optional drivers | [README.md](README.md#building), [CONTRIBUTING.md](CONTRIBUTING.md), relevant CMake files |
 | Architecture, tier APIs, current implementation | [DESIGN.md](DESIGN.md#tiered-architecture), then the affected tier under [Implementation reference](DESIGN.md#implementation-reference) |
 | Vulkan, shader ABI, device ownership, memory | [Key gotchas](DESIGN.md#key-gotchas-verified) and [The interop seam](DESIGN.md#the-interop-seam) |
-| Color or camera conventions | [Color space](DESIGN.md#color-space), the texture section or [the sensor package's design](sensor/DESIGN.md), and the public headers |
+| Color or camera conventions | [Color space](DESIGN.md#color-space), the texture section or [sensor's design](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DESIGN.md), and the public headers |
 | Changing a contract or understanding a constraint | [Decision index](DECISIONS.md#decision-index), then the relevant dated entries; newest context wins |
 | Live rig performance | [PERF.md](PERF.md), including its measurement rules and the item's row |
 | Remaining work or an unmeasured claim | [Next work](DESIGN.md#next-work) and [Measured lessons](DECISIONS.md#measured-lessons) |
@@ -172,13 +173,12 @@ git -C "$recon_root" diff --check
   contracts or broad changes warrant it. CI also covers Debug and sanitizers.
 - For documentation-only changes, check formatting, links, and consistency;
   a build is unnecessary. The hooks can be scoped with `pre-commit run --files`.
-- `VR_BUILD_VIEWER`, grid's `VGRID_WITH_ASSIMP` and the in-tree sensor
-  package's (`sensor/`) `VS_WITH_ORBBEC`, `VS_WITH_FFMPEG` and `VS_WITH_CUDA`
-  enable optional paths (the package's options: [its
-  README](sensor/README.md#building)); in recon's tree the package's tests
-  and `-Werror` follow recon's, and `cmake -S sensor` builds and tests it
-  alone. Orbbec, FFmpeg and Assimp are installed prerequisites, never fetched
-  by this repository.
+- `VR_BUILD_VIEWER`, grid's `VGRID_WITH_ASSIMP` and sensor's
+  `VS_WITH_ORBBEC`, `VS_WITH_FFMPEG` and `VS_WITH_CUDA` enable optional paths
+  (sensor's options: [its
+  README](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/README.md#building)).
+  Orbbec, FFmpeg and Assimp are installed prerequisites, never fetched by
+  this repository.
 - Tests use no real hardware: a camera is checked by hand through its example
   (`fuse_orbbec`). Report such a check as run or not run, never as a test.
 - Tests are `main()`s of their own on the core's test support

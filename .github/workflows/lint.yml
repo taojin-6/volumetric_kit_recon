@@ -1,11 +1,15 @@
 name: lint
 
-# Styling + docs gate. Runs the same hooks as the local `pre-commit` install.
+# Styling + docs gate: the workflows' triggers, then the same hooks as the
+# local `pre-commit` install. No job pushes, so no checkout keeps a token.
 # Linux-only: clang-format and cmake-format output is deterministic across
 # operating systems, so one runner is enough. Invoked by ci.yml, which owns the
 # push / pull_request triggers and the concurrency group.
 on:
   workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   lint:
@@ -13,9 +17,18 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No workflow is triggered by an event an outsider can cause, or by a
+      # schedule (the core's tools/runners/README.md, "Who can trigger CI").
+      # The action is at the core pin in third_party/CMakeLists.txt.
+      # TODO: re-pin to the merge commit once core#64 merges.
+      - uses: taojin-6/volumetric_kit_core/.github/actions/check-workflow-triggers@5ea2ea4dfca817b48614fa7e58f6f00beaec64d6
+      # 3.14, the version the cmake-format hook names: cmakelang 0.6.13 cannot
+      # start on 3.15 (.pre-commit-config.yaml).
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       # Cache pre-commit's installed hook environments (incl. the pinned
       # clang-format) keyed on the config so they're only rebuilt when it changes.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

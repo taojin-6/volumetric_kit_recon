@@ -63,7 +63,7 @@ FetchContent_Declare(
   # It refuses a core older than 0.20.0 (gfx's VG_VKC_MIN_VERSION).
   #
   # TODO: re-pin to the merge commit once gfx#161 merges.
-  GIT_TAG 192e572a955784c0aa3ede75247ae2ac77af5390 # gfx #161's head
+  GIT_TAG 734bcb2d7258b3418bd50c4183d7aa123c3e32bd # gfx #161's head
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 

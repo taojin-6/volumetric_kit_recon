@@ -10,9 +10,9 @@ the same commit, plus the affected contract in DESIGN.md and any essential
 shared rule in AGENTS.md. An entry that governs grid's code is grid's
 ([its DECISIONS.md](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#decision-index));
 this index keeps a line for each, linking there.
-An entry that governs the in-tree sensor package's code is the package's
-([sensor/DECISIONS.md](sensor/DECISIONS.md#decision-index)), with a line
-here for each too.
+An entry that governs sensor's code is sensor's
+([its DECISIONS.md](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#decision-index)),
+with a line here for each too.
 
 ## Decision index
 
@@ -68,13 +68,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   The neutral shared-`VkDevice` bootstrap lands in the viewer example, and
   prefers two families over a shared queue. *Amended 2026-10-12:* gfx's
   `gfx_glfw` builds it; recon keeps no copy.
-- [**2026-08-02**](sensor/DECISIONS.md#2026-08-02--the-sensor-tier-is-a-contract-not-a-driver-collection-a-capture-driver-lives-here-only-if-this-repo-can-build) —
+- [**2026-08-02**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-08-02--the-sensor-tier-is-a-contract-not-a-driver-collection-a-capture-driver-lives-here-only-if-this-repo-can-build) —
   The `sensor` tier is a *contract*, not a driver collection: a capture driver
   lives here only if this repo can build (`ICameraCapture` went 2026-10-07)
 - [**2026-08-02**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-02--the-mesh-arenas-extra-buffer-usage-is-declared-by-the-consumer-not-named-by-this-tier--and-usage-alone-does-not-reach-seam-b) —
   The mesh arena's extra buffer usage is declared by the *consumer*, not named
   by this tier — and usage alone does not reach seam B.
-- [**2026-08-02**](sensor/DECISIONS.md#2026-08-02--one-color-space-rule-and-a-named-working-space-8-bit-color-is-encoded-float-color-is-linear-converted-once-at-the-sensor-boundary-and-encoded-once-at-presentation) —
+- [**2026-08-02**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-08-02--one-color-space-rule-and-a-named-working-space-8-bit-color-is-encoded-float-color-is-linear-converted-once-at-the-sensor-boundary-and-encoded-once-at-presentation) —
   One color-space rule, and a *named* working space: 8-bit color is encoded,
   float color is linear, converted once at the sensor boundary and encoded once
   at presentation. *Amended 2026-10-28:* the voxel colour attribute's GLSL
@@ -164,16 +164,16 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-31**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-31--a-triangles-work-unit-is-the-candidate-block-not-the-triangle-and-the-band-it-allocates-is-measured-from-the-surface-not-dilated-from-a-point) —
   A triangle's work unit is the candidate *block*, not the triangle; and the
   band it allocates is measured from the surface, not dilated from a point.
-- [**2026-09-14**](sensor/DECISIONS.md#2026-09-14--the-examples-poll-their-frames-through-the-sensor-contract-the-replica-reader-is-an-icameracapture-a-source-says-when-it-is-exhausted-and-a-frame-kept-past-the-next-poll-is-copied--the-last-one-included) —
+- [**2026-09-14**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-09-14--the-examples-poll-their-frames-through-the-sensor-contract-the-replica-reader-is-an-icameracapture-a-source-says-when-it-is-exhausted-and-a-frame-kept-past-the-next-poll-is-copied--the-last-one-included) —
   The examples poll their frames through the sensor contract: the Replica
   reader is an `ICameraCapture`, a source says when it is exhausted, and a
   frame kept past the next poll is copied — the last one included. (The
   reader became an `IRgbdSensor`, and the copy went, on 2026-10-07.)
-- [**2026-09-24**](sensor/DECISIONS.md#2026-09-24--the-orbbec-sdk-is-a-prerequisite-behind-vr_with_orbbec-installed-once-for-the-family-found-and-never-fetched) —
+- [**2026-09-24**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-09-24--the-orbbec-sdk-is-a-prerequisite-behind-vr_with_orbbec-installed-once-for-the-family-found-and-never-fetched) —
   The Orbbec SDK is a prerequisite behind `VR_WITH_ORBBEC`: installed once for
   the family, found, and never fetched. The floor rose to 2.10.6 on
   2026-10-07.
-- [**2026-09-26**](sensor/DECISIONS.md#2026-09-26--the-orbbec-driver-lands-as-sensororbbec-a-target-of-its-own-it-undistorts-colour-and-then-registers-depth-to-it-on-the-host-and-it-reads-the-rigs-sync-roles-without-writing-them) —
+- [**2026-09-26**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-09-26--the-orbbec-driver-lands-as-sensororbbec-a-target-of-its-own-it-undistorts-colour-and-then-registers-depth-to-it-on-the-host-and-it-reads-the-rigs-sync-roles-without-writing-them) —
   The Orbbec driver lands as `sensor/orbbec`, a target of its own: it
   undistorts colour and then registers depth to it on the host, and it reads
   the rig's sync roles without writing them. The host path went on
@@ -189,7 +189,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   decoder's end check is for consistency, not integrity (amends the 2026-09-26
   entry's interleaved lanes). *Amended 2026-10-13:* a segment holds at most
   1,024 entries, a rule every writer and reader holds.
-- [**2026-09-27**](sensor/DECISIONS.md#2026-09-27--the-rig-is-orbbecrig-it-checks-the-cameras-against-the-rigs-sync-configuration-and-writes-it-only-when-asked-starts-the-secondaries-before-the-primary-keeps-the-cameras-on-the-hosts-clock-and-builds-each-set-around-a-primary-frame-poses-come-from-the-calibration-file) —
+- [**2026-09-27**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-09-27--the-rig-is-orbbecrig-it-checks-the-cameras-against-the-rigs-sync-configuration-and-writes-it-only-when-asked-starts-the-secondaries-before-the-primary-keeps-the-cameras-on-the-hosts-clock-and-builds-each-set-around-a-primary-frame-poses-come-from-the-calibration-file) —
   The rig is `OrbbecRig`: it checks the cameras against the rig's sync
   configuration and writes it only when asked, starts the secondaries before
   the primary, keeps the cameras on the host's clock, and builds each set
@@ -210,7 +210,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   `make_decode_grid` and `decode_growing` take the caller's block ceiling,
   and refuse a frame or a grow past it as `InvalidArgument`.
   *Amended 2026-10-26:* the encoder takes a const grid.
-- [**2026-09-27**](sensor/DECISIONS.md#2026-09-27--the-video-decoder-is-recon_sensor_video-a-target-of-its-own-over-an-installed-ffmpeg-hevc-in-host-pictures-out-on-the-first-hardware-back-end-that-decodes-a-built-in-clip-nvidia-ahead-of-an-integrated-gpu-each-ci-leg-requires-the-hardware-it-has) —
+- [**2026-09-27**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-09-27--the-video-decoder-is-recon_sensor_video-a-target-of-its-own-over-an-installed-ffmpeg-hevc-in-host-pictures-out-on-the-first-hardware-back-end-that-decodes-a-built-in-clip-nvidia-ahead-of-an-integrated-gpu-each-ci-leg-requires-the-hardware-it-has) —
   The video decoder is `recon_sensor_video`, a target of its own over an
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
   that decodes a built-in clip, NVIDIA ahead of an integrated GPU; each CI leg
@@ -230,7 +230,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh
   — binned per block over the allocation's own candidates, with no topology.
   *Amended 2026-10-28:* in a tier of its own, `voxelize`.
-- [**2026-09-28**](sensor/DECISIONS.md#2026-09-28--the-orbbec-driver-streams-colour-as-h265-on-request-every-colour-frame-is-decoded-in-order-on-a-thread-per-camera-ahead-of-the-mailbox-a-lost-frame-is-read-off-the-frame-index-not-the-clock-and-the-femto-megas-stream-is-decoded-as-bt601-full-range-which-it-codes-and-does-not-say) —
+- [**2026-09-28**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-09-28--the-orbbec-driver-streams-colour-as-h265-on-request-every-colour-frame-is-decoded-in-order-on-a-thread-per-camera-ahead-of-the-mailbox-a-lost-frame-is-read-off-the-frame-index-not-the-clock-and-the-femto-megas-stream-is-decoded-as-bt601-full-range-which-it-codes-and-does-not-say) —
   The Orbbec driver streams colour as H.265 on request: every colour frame is
   decoded, in order, on a thread per camera ahead of the mailbox; a lost frame
   is read off the frame index, not the clock; and the Femto Mega's stream is
@@ -242,11 +242,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   Projective texturing from several views chooses a view per triangle, on an
   unshared mesh, into an atlas of the views' images side by side, in
   floor(sqrt(n)) rows; the single-camera pass stays per vertex.
-- [**2026-09-28**](sensor/DECISIONS.md#2026-09-28--gpu-pre-processing-is-recon_sensor_utils-a-driver-hands-out-the-frame-as-captured-the-device-undistorts-depth-and-undistorts-and-converts-colour-and-fusion-reads-the-buffers-in-place-depth-and-colour-each-with-its-own-camera-rather-than-registered) —
+- [**2026-09-28**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-09-28--gpu-pre-processing-is-recon_sensor_utils-a-driver-hands-out-the-frame-as-captured-the-device-undistorts-depth-and-undistorts-and-converts-colour-and-fusion-reads-the-buffers-in-place-depth-and-colour-each-with-its-own-camera-rather-than-registered) —
   GPU pre-processing is `recon_sensor_utils`: a driver hands out the frame as
   captured, the device undistorts depth and undistorts and converts colour,
   and fusion reads the buffers in place, depth and colour each with its own
-  camera rather than registered.
+  camera rather than registered. *Amended 2026-10-29:* depth mixes the four
+  raw pixels around the source where they are one surface, nearest only at
+  an edge or a hole.
 - [**2026-09-28**](#2026-09-28--memory-the-kernels-use-lives-on-the-device-on-every-platform-and-the-host-only-records-commands-against-it-one-commandbatch-per-call-parameters-inline-bulk-bytes-staged-at-the-edges-small-results-read-back) —
   Memory the kernels use lives on the device on every platform, and the host
   only records commands against it: one `CommandBatch` per call, parameters
@@ -256,7 +258,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   2026-10-24:* a frame's results and input go through core's `HostRing`
   slots, in place where device-mapped memory is cached and copied
   elsewhere, chosen by the device, with no switch.
-- [**2026-09-28**](sensor/DECISIONS.md#2026-09-28--a-decoded-colour-frame-never-leaves-the-gpu-the-platforms-hardware-decoder-for-h265-and-mjpeg-alike-hands-its-picture-to-vulkan-in-place-and-gpuframeprep-takes-i420-or-nv12-from-the-host-or-the-device) —
+- [**2026-09-28**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-09-28--a-decoded-colour-frame-never-leaves-the-gpu-the-platforms-hardware-decoder-for-h265-and-mjpeg-alike-hands-its-picture-to-vulkan-in-place-and-gpuframeprep-takes-i420-or-nv12-from-the-host-or-the-device) —
   A decoded colour frame never leaves the GPU: the platform's hardware
   decoder, for H.265 and MJPEG alike, hands its picture to Vulkan in place,
   and `GpuFramePrep` takes I420 or NV12 from the host or the device. The
@@ -378,52 +380,52 @@ entries relevant to your task; later amendments supersede earlier rules.
   The viewers pin gfx #106, after gfx moved onto the core: recon and gfx share
   one `Status`, `Device` and `StageRow`, so the device and timing seams
   convert nothing, and a program linking both carries one VMA.
-- [**2026-10-06**](sensor/DECISIONS.md#2026-10-06--the-familys-camera-vocabulary-is-recons-camera-tier-a-double-precision-camera-model-and-the-sensor-arrays-calibration-file-version-2) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--the-familys-camera-vocabulary-is-recons-camera-tier-a-double-precision-camera-model-and-the-sensor-arrays-calibration-file-version-2) —
   The family's camera vocabulary is recon's `camera` tier: a double-precision
   camera model with one templated projection, rigid transforms, and the
   sensor array's calibration file, version 2. It links the core's base tier
   and GLM, not Vulkan. *Amended 2026-10-11:* `VR_CAMERA_ONLY` configures it
   alone. Cut back the same day, below.
-- [**2026-10-06**](sensor/DECISIONS.md#2026-10-06--the-camera-tier-keeps-only-what-a-capture-uses-amends-the-entry-above) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--the-camera-tier-keeps-only-what-a-capture-uses-amends-the-entry-above) —
   The camera tier keeps only what a capture uses: the camera model and its
   check, the lens's forward template, rigid checks, and each sensor's pose
   from the calibration file's version-1 layout. Unprojection, rescaling,
   version 2 and the writer go until a caller needs them. *Amended
   2026-10-12:* version 2 and the writer are back, for calib.
-- [**2026-10-06**](sensor/DECISIONS.md#2026-10-06--tests-use-no-real-hardware-amends-the-2026-09-26-orbbec-driver-entry) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--tests-use-no-real-hardware-amends-the-2026-09-26-orbbec-driver-entry) —
   Tests use no real hardware: the three camera tests are removed, and a
   camera is checked by hand through `fuse_orbbec`. *Amended 2026-10-07:* no
   test looks for a camera either.
-- [**2026-10-06**](sensor/DECISIONS.md#2026-10-06--a-sensors-frame-is-rgbdframe-each-cameras-cameramodel-the-poses-in-double-a-sequence-number-and-the-pixels-it-holds-and-the-femto-megas-factory-extrinsic-is-made-a-rotation) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--a-sensors-frame-is-rgbdframe-each-cameras-cameramodel-the-poses-in-double-a-sequence-number-and-the-pixels-it-holds-and-the-femto-megas-factory-extrinsic-is-made-a-rotation) —
   A sensor's frame is `RgbdFrame`: each camera's `CameraModel`, the poses in
   double, a sequence number, and the pixels it holds. The Femto Mega's factory
   depth-to-colour rotation is not one, and is made one.
-- [**2026-10-06**](sensor/DECISIONS.md#2026-10-06--a-sensor-is-an-irgbdsensor-what-it-is-before-a-frame-sensorinfo-frames-polled-newest-or-drained-oldest-first-and-the-femto-mega-is-orbbecsensor) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--a-sensor-is-an-irgbdsensor-what-it-is-before-a-frame-sensorinfo-frames-polled-newest-or-drained-oldest-first-and-the-femto-mega-is-orbbecsensor) —
   A sensor is an `IRgbdSensor`: what it is before a frame (`SensorInfo`),
   frames polled newest or drained oldest first. The Femto Mega is
   `OrbbecSensor`. (The Replica source followed on 2026-10-07, and
   `sync_clock_to_host` became the SDK's global timestamps.)
-- [**2026-10-06**](sensor/DECISIONS.md#2026-10-06--several-sensors-are-a-sensorarray-vendor-neutral-started-in-their-rigs-order-grouped-by-trigger-or-by-sequence-number-and-posed-by-the-calibration) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--several-sensors-are-a-sensorarray-vendor-neutral-started-in-their-rigs-order-grouped-by-trigger-or-by-sequence-number-and-posed-by-the-calibration) —
   Several sensors are a `SensorArray`, vendor-neutral: started in their rig's
   order, grouped by trigger or by sequence number, and posed by the
   calibration. (Sequence grouping went later that day; on 2026-10-07
   `TriggerGrouper` became its internals and the tolerance 0.4 of a frame
   period.)
-- [**2026-10-06**](sensor/DECISIONS.md#2026-10-06--an-arrays-set-is-prepared-in-one-batch-every-stream-of-every-sensor-one-submit-and-one-wait-host-colour-staged-on-a-thread-per-camera-first) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--an-arrays-set-is-prepared-in-one-batch-every-stream-of-every-sensor-one-submit-and-one-wait-host-colour-staged-on-a-thread-per-camera-first) —
   An array's set is prepared in one batch, every stream of every sensor, one
   submit and one wait; host colour is staged on a thread per camera first,
   and `prepare_set` goes. (Host colour and the threads went later that day.)
-- [**2026-10-06**](sensor/DECISIONS.md#2026-10-06--every-orbbec-frame-is-handed-out-as-captured-the-sdks-host-path-orbbeccapture-and-fuse_orbbec---gpu-go-amends-the-2026-09-26-2026-09-27-and-2026-09-28-orbbec-entries) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--every-orbbec-frame-is-handed-out-as-captured-the-sdks-host-path-orbbeccapture-and-fuse_orbbec---gpu-go-amends-the-2026-09-26-2026-09-27-and-2026-09-28-orbbec-entries) —
   Every Orbbec frame is handed out as captured: the SDK's host path,
   `OrbbecCapture` and `fuse_orbbec --gpu` go, and the Orbbec driver needs
   the video decoders.
-- [**2026-10-06**](sensor/DECISIONS.md#2026-10-06--the-video-decoders-hand-out-pictures-on-the-device-only-the-hardware-path-is-fixed-per-build-a-stream-the-hardware-refuses-is-an-error-and-off-apple-vr_with_ffmpeg-needs-vr_with_cuda-amends-the-2026-09-27-decoder-2026-09-28-decoded-frame-and-2026-10-06-raw-frames-entries) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--the-video-decoders-hand-out-pictures-on-the-device-only-the-hardware-path-is-fixed-per-build-a-stream-the-hardware-refuses-is-an-error-and-off-apple-vr_with_ffmpeg-needs-vr_with_cuda-amends-the-2026-09-27-decoder-2026-09-28-decoded-frame-and-2026-10-06-raw-frames-entries) —
   The video decoders hand out pictures on the device only: the hardware path
   is fixed per build, a stream the hardware refuses is an error, and off
   Apple `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`. *Amended 2026-10-25:* on
   Apple the H.265 decoder uses VideoToolbox directly, with no FFmpeg, and
   `VR_WITH_FFMPEG` there is a configure error.
-- [**2026-10-06**](sensor/DECISIONS.md#2026-10-06--gpuframeprep-takes-colour-on-the-device-only-and-a-sets-depth-is-staged-on-one-thread-amends-the-2026-09-28-decoded-frame-and-2026-10-06-one-batch-entries) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--gpuframeprep-takes-colour-on-the-device-only-and-a-sets-depth-is-staged-on-one-thread-amends-the-2026-09-28-decoded-frame-and-2026-10-06-one-batch-entries) —
   `GpuFramePrep` takes colour on the device only, and a set's depth is
   staged on one thread. (Packed host colour came back the next day.)
 - [**2026-10-06**](#2026-10-06--platforms-linux-android-macos-and-ios-with-gcc-or-clang-windows-and-msvc-are-not-supported-amends-the-2026-06-21-vulkan-path-entry) —
@@ -444,20 +446,20 @@ entries relevant to your task; later amendments supersede earlier rules.
   device frusta list, the viewers re-meshing on a fuse or a view change, and
   a culled pass records its density. *Amended 2026-10-13:* the host
   `BlockList` it kept for the codec is gone.
-- [**2026-10-06**](sensor/DECISIONS.md#2026-10-06--a-sensor-array-groups-its-frames-by-trigger-only-syncmode-and-sequence-grouping-go-amends-the-2026-10-06-sensorarray-entry) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--a-sensor-array-groups-its-frames-by-trigger-only-syncmode-and-sequence-grouping-go-amends-the-2026-10-06-sensorarray-entry) —
   A sensor array groups its frames by trigger only: `SyncMode` and sequence
   grouping go.
-- [**2026-10-07**](sensor/DECISIONS.md#2026-10-07--gpuframeprep-stages-a-host-frames-packed-colour-beside-its-depth-amends-the-2026-10-06-device-only-gpuframeprep-entry) —
+- [**2026-10-07**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-07--gpuframeprep-stages-a-host-frames-packed-colour-beside-its-depth-amends-the-2026-10-06-device-only-gpuframeprep-entry) —
   `GpuFramePrep` stages a host frame's packed colour beside its depth
   (`RgbdFrame::color_packed`): one copy in the pass's own batch, no host
   conversion, no threads.
-- [**2026-10-07**](sensor/DECISIONS.md#2026-10-07--the-replica-source-is-an-irgbdsensor-and-the-examples-fuse-what-gpuframeprep-prepares-icameracapture-capturedframe-and-ownedframe-go-and-io-loads-depth-as-stored-amends-the-2026-08-02-sensor-tier-2026-09-14-examples-and-2026-10-06-irgbdsensor-entries) —
+- [**2026-10-07**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-07--the-replica-source-is-an-irgbdsensor-and-the-examples-fuse-what-gpuframeprep-prepares-icameracapture-capturedframe-and-ownedframe-go-and-io-loads-depth-as-stored-amends-the-2026-08-02-sensor-tier-2026-09-14-examples-and-2026-10-06-irgbdsensor-entries) —
   The Replica source is an `IRgbdSensor` and the examples fuse what
   `GpuFramePrep` prepares: `ICameraCapture`, `CapturedFrame` and
   `OwnedFrame` go, and `io` loads depth as stored. What the iOS scanner
   calls stays until it migrates; the frame gains no float depth. The viewer
   retains its last successful keyframe through a failed preparation or fuse.
-- [**2026-10-07**](sensor/DECISIONS.md#2026-10-07--a-rig-is-an-orbbecsensor-per-camera-in-a-sensorarray-on-the-sdks-global-timestamps-sdk-2106-or-later-each-camera-is-checked-against-its-sync-settings-at-open-and-written-only-when-asked-the-tolerance-is-04-of-a-frame-period-and-orbbecrig-its-start-order-and-the-public-triggergrouper-go-amends-the-2026-09-24-sdk-2026-09-27-rig-and-2026-10-06-irgbdsensor-and-sensorarray-entries) —
+- [**2026-10-07**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-07--a-rig-is-an-orbbecsensor-per-camera-in-a-sensorarray-on-the-sdks-global-timestamps-sdk-2106-or-later-each-camera-is-checked-against-its-sync-settings-at-open-and-written-only-when-asked-the-tolerance-is-04-of-a-frame-period-and-orbbecrig-its-start-order-and-the-public-triggergrouper-go-amends-the-2026-09-24-sdk-2026-09-27-rig-and-2026-10-06-irgbdsensor-and-sensorarray-entries) —
   A rig is an `OrbbecSensor` per camera in a `SensorArray`, on the SDK's
   global timestamps (SDK 2.10.6 or later): each camera is checked against
   its sync settings at `open`, written only when asked and checked for SDK
@@ -507,12 +509,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   recon's GPU tests run on the core's test policy: the validation layer on
   every CI leg fails a test on any error it reports, a leaked object's
   included, and a skip is a skip.
-- [**2026-10-08**](sensor/DECISIONS.md#2026-10-08--a-decoded-picture-is-its-yuvimage-with-its-pts-and-encoding-the-one-description-of-a-device-picture-which-a-frame-takes-as-it-is-amends-the-2026-09-28-decoded-frame-and-2026-10-02-gpu-regression-entries) —
+- [**2026-10-08**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-08--a-decoded-picture-is-its-yuvimage-with-its-pts-and-encoding-the-one-description-of-a-device-picture-which-a-frame-takes-as-it-is-amends-the-2026-09-28-decoded-frame-and-2026-10-02-gpu-regression-entries) —
   A decoded picture is its `YuvImage`, with its pts and encoding: one
   description of a device picture, which a frame takes as it is.
   *Amended 2026-10-26:* NVDEC's picture is two plane images, which CUDA
   wrote; nvJPEG's alone is a buffer.
-- [**2026-10-08**](sensor/DECISIONS.md#2026-10-08--apples-pixel-buffer-importer-is-public-pixelbufferimporter-in-recon_sensor_apple-on-every-apple-build-ios-included-with-no-ffmpeg) —
+- [**2026-10-08**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-08--apples-pixel-buffer-importer-is-public-pixelbufferimporter-in-recon_sensor_apple-on-every-apple-build-ios-included-with-no-ffmpeg) —
   Apple's pixel-buffer importer is public: `PixelBufferImporter` in
   `recon_sensor_apple`, on every Apple build, iOS included, with no FFmpeg.
   *Amended 2026-10-25:* CI compiles the importer for iOS 26.0.
@@ -523,7 +525,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-10**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-10--grid-validation-bounds-the-truncation-band-by-the-depth-kernels-integer-representation) —
   Grid validation rejects non-finite metrics and bounds the truncation band by
   the depth kernel's integer representation.
-- [**2026-10-11**](sensor/DECISIONS.md#2026-10-11--decoded-pictures-name-the-queue-families-that-read-them-videotoolboxs-images-are-concurrent-across-two-or-more) —
+- [**2026-10-11**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-11--decoded-pictures-name-the-queue-families-that-read-them-videotoolboxs-images-are-concurrent-across-two-or-more) —
   Decoded pictures name the queue families that read them: VideoToolbox's
   images are CONCURRENT across two or more.
 - [**2026-10-11**](#2026-10-11--examples-load-the-cores-scenario-format-and-keep-only-runtime-adapters) —
@@ -531,11 +533,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   have one owner. *Amended 2026-10-12:* the codec's step rules are recon's.
   *Amended 2026-10-14:* so are the mesh conversion's shell bound and a mesh
   path's frame number.
-- [**2026-10-11**](sensor/DECISIONS.md#2026-10-11--picture-readback-publishes-buffer-ownership-for-subsequent-stages) —
+- [**2026-10-11**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-11--picture-readback-publishes-buffer-ownership-for-subsequent-stages) —
   Picture readback updates ownership before subsequent reads or preparation.
 - [**2026-10-12**](#2026-10-12--the-viewers-window-glue-comes-from-gfxs-gfx_glfw-recon-keeps-no-copy-amends-the-2026-08-02-bootstrap-and-2026-10-04-vulkan-foundation-entries) —
   The viewers' window glue comes from gfx's `gfx_glfw`; recon keeps no copy.
-- [**2026-10-12**](sensor/DECISIONS.md#2026-10-12--the-calibration-file-records-lenses-and-is-written-version-2-and-its-writer-return-with-calib-its-first-caller-amends-the-2026-10-06-camera-tier-entries) —
+- [**2026-10-12**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-12--the-calibration-file-records-lenses-and-is-written-version-2-and-its-writer-return-with-calib-its-first-caller-amends-the-2026-10-06-camera-tier-entries) —
   The calibration file records lenses and is written: version 2 under
   version 1's `device_calibration` key, its writer and
   `rodrigues_from_rotation` return with calib; `SensorArray::open` refuses an
@@ -625,7 +627,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   and the freeze waits on the encode's count and a re-measure. *Amended
   2026-10-17:* type 1 is frozen, though P encode at R = 16 stays slower than
   intra on the host, and the templates code at period 30.
-- [**2026-10-16**](sensor/DECISIONS.md#2026-10-16--a-shared-glsl-pinhole-for-recon-and-its-consumers-coreshaderspinholeglsl-exported-under-the-include-root-recon_core-names-amends-the-2026-08-11-texturing-entrys-per-tier-copies) —
+- [**2026-10-16**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-16--a-shared-glsl-pinhole-for-recon-and-its-consumers-coreshaderspinholeglsl-exported-under-the-include-root-recon_core-names-amends-the-2026-08-11-texturing-entrys-per-tier-copies) —
   A shared GLSL pinhole for recon and its consumers,
   `core/shaders/pinhole.glsl` (amends the 2026-08-11 texturing entry's
   per-tier copies): values, not structs, so scalar-layout and std430 kernels
@@ -637,13 +639,14 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-16**](#2026-10-16--a-brew-upgrade-needs-no-cache-clearing-the-mac-jobs-install-nothing-and-the-dependency-cache-keys-on-the-cores-homebrew-key) —
   A brew upgrade needs no cache clearing: the Mac jobs install nothing, and
   the dependency cache keys on the core's Homebrew key.
-- [**2026-10-16**](sensor/DECISIONS.md#2026-10-16--a-prepared-frames-depth-is-shared-like-its-colour-gpuframeprepconfigdepth_queue_families-recon-builds-no-point-clouds-and-makes-no-calibration-measurements-the-same-k-depth-crop-and-nearest-resampling-are-accepted-on-a-stand-in-lens-pending-a-fold-check-of-the-rigs-own-amends-the-2026-09-29-rig_viewer-entry) —
+- [**2026-10-16**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-16--a-prepared-frames-depth-is-shared-like-its-colour-gpuframeprepconfigdepth_queue_families-recon-builds-no-point-clouds-and-makes-no-calibration-measurements-the-same-k-depth-crop-and-nearest-resampling-are-accepted-on-a-stand-in-lens-pending-a-fold-check-of-the-rigs-own-amends-the-2026-09-29-rig_viewer-entry) —
   A prepared frame's depth may be shared with another queue family, as its
   colour is: `GpuFramePrepConfig::depth_queue_families`, with no vertex
   usage. recon builds no point clouds and makes no calibration
   measurements. The same-K depth crop and nearest resampling are accepted on
   a stand-in lens, pending a fold check of each rig camera's own (by hand,
-  not yet run).
+  not yet run). *Amended 2026-10-29:* the resampling mixes where the raw
+  pixels are one surface; the crop stands.
 - [**2026-10-17**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-17--a-p-frames-update-segments-default-to-its-segment-size-encoderconfigupdate_size-0-the-default-takes-segment_size-resolved-once-in-encodercreate-the-format-and-the-goldens-are-unchanged-amends-the-2026-10-16-codec-examples-2026-10-14-encoder-and-2026-10-12-p-frame-entries) —
   A P-frame's update segments default to its segment size:
   `EncoderConfig::update_size` 0, the default, takes `segment_size`
@@ -662,7 +665,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   The re-measure missed one comparison, Rafa2's encode at R = 16, where
   P-frames take up to 4% longer than intra on the host alone; the user
   froze type 1 anyway, and trimming that overhead is next.
-- [**2026-10-18**](sensor/DECISIONS.md#2026-10-18--the-calibration-files-world-may-be-a-printed-apriltag-in-opencvs-marker-axes-and-the-file-stays-version-2-amends-the-2026-10-12-calibration-file-entry) —
+- [**2026-10-18**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-18--the-calibration-files-world-may-be-a-printed-apriltag-in-opencvs-marker-axes-and-the-file-stays-version-2-amends-the-2026-10-12-calibration-file-entry) —
   The calibration file's world may be a printed AprilTag, in OpenCV's
   marker axes rather than libapriltag's, so a floor tag's z is up. A world
   is a sensor or a tag, never both, and a tag puts no sensor at the origin.
@@ -739,7 +742,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   device, and the decoder judges rows 11 to 13 there; each gathers its
   results into a ring slot read after the batch. The blocking calls are
   record, one submit and finish.
-- [**2026-10-25**](sensor/DECISIONS.md#2026-10-25--hevcdecoder-decodes-through-videotoolbox-directly-on-apple-no-ffmpeg-the-hardware-decoder-or-none-pictures-in-display-order-by-their-order-count-and-vr_with_ffmpeg-on-apple-a-configure-error-amends-the-2026-10-06-device-only-decoder-and-2026-10-08-pixel-buffer-importer-entries) —
+- [**2026-10-25**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-25--hevcdecoder-decodes-through-videotoolbox-directly-on-apple-no-ffmpeg-the-hardware-decoder-or-none-pictures-in-display-order-by-their-order-count-and-vr_with_ffmpeg-on-apple-a-configure-error-amends-the-2026-10-06-device-only-decoder-and-2026-10-08-pixel-buffer-importer-entries) —
   `HevcDecoder` decodes through VideoToolbox directly on Apple: no FFmpeg,
   the hardware decoder or none, pictures put in display order by their
   order count and written at the range the stream declares;
@@ -756,12 +759,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   set and the latency to publish, P-frame, I-frame and uncoded sets apart;
   the encoder's and the free pass's compactions are `"  ..encode set"` and
   `"  ..stale set"`, apart from a fuse's `"  ..active set"`.
-- [**2026-10-25**](sensor/DECISIONS.md#2026-10-25--the-h265-syntax-reader-is-public-in-a-target-of-its-own-on-every-platform-amends-the-2026-10-25-videotoolbox-decoder-entry) —
+- [**2026-10-25**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-25--the-h265-syntax-reader-is-public-in-a-target-of-its-own-on-every-platform-amends-the-2026-10-25-videotoolbox-decoder-entry) —
   The H.265 syntax reader is public (`sensor/video/hevc_syntax.hpp`,
   `recon_sensor_video_syntax`): host code on the core's base tier alone,
   built on every platform, its parsers returning `Result` and its
   `BitReader` public with them.
-- [**2026-10-25**](sensor/DECISIONS.md#2026-10-25--frame-prep-samples-nv12-plane-images-where-they-are-in-a-second-entry-of-the-colour-pass-and-the-plane-copies-go-amends-the-2026-09-28-decoded-frame-and-2026-10-08-pixel-buffer-importer-entries) —
+- [**2026-10-25**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-25--frame-prep-samples-nv12-plane-images-where-they-are-in-a-second-entry-of-the-colour-pass-and-the-plane-copies-go-amends-the-2026-09-28-decoded-frame-and-2026-10-08-pixel-buffer-importer-entries) —
   Frame prep samples NV12 plane images where they are, through combined
   image samplers in a second entry over the colour pass's body, to the
   buffer form's words bit for bit; the two plane copies and their scratch
@@ -769,7 +772,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   `TRANSFER_SRC` for readback, and the importer's carry both.
   *Amended 2026-10-26:* NVDEC's pictures are plane images too, which both
   readers take over from outside Vulkan (the NVDEC plane-image entry).
-- [**2026-10-25**](sensor/DECISIONS.md#2026-10-25--a-runs-sets-the-fusion-grid-and-the-block-layout-are-library-calls-rigsets-in-the-arrays-tier-create_fusion_grid-in-tsdf-and-block_grid_params-in-volume-opening-a-rig-stays-the-callers) —
+- [**2026-10-25**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-25--a-runs-sets-the-fusion-grid-and-the-block-layout-are-library-calls-rigsets-in-the-arrays-tier-create_fusion_grid-in-tsdf-and-block_grid_params-in-volume-opening-a-rig-stays-the-callers) —
   A run's sets, the fusion grid and the block layout move from the examples
   into the library: `sensor::RigSets` in `recon_sensor_array`,
   `tsdf::create_fusion_grid` and `fusion_buckets` in `recon_tsdf`, and
@@ -800,7 +803,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   more for each mesh dropped before a commit. A third outcome, with no
   deadline or policy in the exchange. The ring's size counts one frame in
   flight as two.
-- [**2026-10-26**](sensor/DECISIONS.md#2026-10-26--nvdecs-pictures-land-in-two-plane-images-videotoolboxs-form-cudas-one-copy-writes-them-a-reader-takes-each-over-from-outside-vulkan-and-nothing-hands-it-back-amends-the-2026-10-08-decoded-picture-and-2026-10-25-plane-image-entries) —
+- [**2026-10-26**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-26--nvdecs-pictures-land-in-two-plane-images-videotoolboxs-form-cudas-one-copy-writes-them-a-reader-takes-each-over-from-outside-vulkan-and-nothing-hands-it-back-amends-the-2026-10-08-decoded-picture-and-2026-10-25-plane-image-entries) —
   NVDEC's pictures land in two plane images, an R8 luma and an R8G8 chroma,
   VideoToolbox's form: CUDA's one copy writes them, handed to it once in
   `GENERAL`; a reader takes each picture over from outside Vulkan in the
@@ -816,7 +819,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   at a time, const or not, and no resize or frusta grow until the batch has
   resolved; broken, a resize refuses the batch and a frusta grow is
   undefined behaviour.
-- [**2026-10-27**](sensor/DECISIONS.md#2026-10-27--a-sensors-depth-offset-lives-in-the-calibration-file-version-3-and-frame-prep-subtracts-it-the-calibration-its-one-source-amends-the-2026-10-12-calibration-file-entry) —
+- [**2026-10-27**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-27--a-sensors-depth-offset-lives-in-the-calibration-file-version-3-and-frame-prep-subtracts-it-the-calibration-its-one-source-amends-the-2026-10-12-calibration-file-entry) —
   A sensor's depth offset (`SensorCalibration::depth_offset_m`, + where it
   reads too far) lives in the calibration file, version 3, which the writer
   writes only for a corrected calibration; frame prep's depth pass
@@ -824,7 +827,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   within-colour mask. `SensorArray` sets each pass's offset from the
   calibration, its one source, and refuses one in `Options::prep`.
   *Amended the same day:* the colour cameras' exposure joins version 3.
-- [**2026-10-27**](sensor/DECISIONS.md#2026-10-27--the-orbbec-driver-defaults-to-h265-at-3840x2160-and-25-fps-and-opens-each-colour-camera-at-the-calibrations-exposure-written-where-the-camera-differs-auto-white-balance-on-and-read-back-an-array-refuses-a-sensor-opened-at-another-amends-the-2026-09-28-h265-entry-and-the-depth-offset-entry-above) —
+- [**2026-10-27**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-27--the-orbbec-driver-defaults-to-h265-at-3840x2160-and-25-fps-and-opens-each-colour-camera-at-the-calibrations-exposure-written-where-the-camera-differs-auto-white-balance-on-and-read-back-an-array-refuses-a-sensor-opened-at-another-amends-the-2026-09-28-h265-entry-and-the-depth-offset-entry-above) —
   The Orbbec driver defaults to H.265 at 3840x2160 and 25 fps, as core
   0.25.0's scenarios do; MJPEG stays for calibration captures and
   diagnostics. Every colour camera opens at the calibration's exposure
@@ -845,7 +848,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   kernel unprojects through a copy of the pinhole's one line; tsdf's
   `FrameInput` keeps `DepthCameraParams` and `to_depth_pinhole` copies it
   field by field. Allocation is main's, bit for bit.
-- [**2026-10-28**](sensor/DECISIONS.md#2026-10-28--io-is-two-targets-images-on-the-family-cores-base-tier-alone-mesh-files-on-mesh-amends-the-2026-10-03-asset-io-entry) —
+- [**2026-10-28**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-28--io-is-two-targets-images-on-the-family-cores-base-tier-alone-mesh-files-on-mesh-amends-the-2026-10-03-asset-io-entry) —
   `io` is two targets: `recon_image_io` (images, stb) links the family
   core's base tier alone; `recon_mesh_io` (PLY, the triangle containers,
   normalization, tinyply) links `mesh`, and `recon_mesh_io_assimp` replaces
@@ -880,13 +883,20 @@ entries relevant to your task; later amendments supersede earlier rules.
   grid is a package of its own (`volumetric_kit_grid`, now its own
   repository, which recon fetches by commit): the voxel grid and what reads
   it moved there under grid's names, and recon builds on it (recon 0.1.0).
-- [**2026-10-29**](sensor/DECISIONS.md#2026-10-29--the-camera-and-sensor-tiers-are-the-package-volumetric_kit_sensor-in-recons-sensor-until-it-has-a-repository-of-its-own-and-recons-libraries-link-its-frame-tier-alone-amends-the-2026-08-02-sensor-tier-2026-10-06-camera-tier-2026-10-16-glsl-pinhole-and-2026-10-28-io-entries) —
-  The camera and sensor tiers are the package `volumetric_kit_sensor`, in
-  recon's `sensor/` until it has a repository of its own: tiers `sensor_*`,
+- [**2026-10-29**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-29--the-camera-and-sensor-tiers-are-the-package-volumetric_kit_sensor-in-recons-sensor-until-it-has-a-repository-of-its-own-and-recons-libraries-link-its-frame-tier-alone-amends-the-2026-08-02-sensor-tier-2026-10-06-camera-tier-2026-10-16-glsl-pinhole-and-2026-10-28-io-entries) —
+  The camera and sensor tiers are the package `volumetric_kit_sensor` (now
+  its own repository, which recon fetches by commit): tiers `sensor_*`,
   namespace `volumetric_kit::sensor`, macros and options `VS_`, on the core
   alone. recon's libraries link `sensor_frame` alone, and nothing in the
   package includes recon or grid. The owner's decisions of 2026-10-28:
   repositories now, these names, Blackmagic stereo NVIDIA-only at first.
+- [**2026-10-29**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-29--prepared-depth-mixes-the-four-raw-pixels-around-each-source-position-where-they-are-one-surface-and-keeps-the-nearest-pixel-at-an-edge-or-a-hole-amends-the-2026-09-28-gpu-pre-processing-and-2026-10-16-depth-crop-entries) —
+  Prepared depth is the bilinear mix of the four raw pixels around each
+  pixel's source position where all four return within 4 cm
+  (`kBlendSpanM`, the truncation the rig fuses with), and the nearest raw
+  pixel otherwise: a slope no longer comes out in half-pixel terraces, which
+  fusion shaded as bands on floors and walls, and an edge or a hole is never
+  blended. No option; about 1-2 µs of device time a frame.
 
 ## Decision record
 
@@ -5200,7 +5210,7 @@ there, so neither could its end-of-run figures for the live rig.
   its pass, and a `core::write_file`, with no host pixel work. PNG would
   deflate on the host, and PPM drop the fourth byte of every pixel there;
   the family has no image encoder on the GPU.
-- **Which frames.** `output.screenshot` (core 0.30.0) names them,
+- **Which frames.** `output.screenshot` (core 0.31.0) names them,
   `<stem>_<frame number>.bmp`: the first frame with a mesh, one every 30 s
   and the last, a few in a run of minutes. Each is written once its slot's
   next frame has begun, which waited for its fence, or once the device has

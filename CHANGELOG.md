@@ -6,39 +6,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed
-
-- **grid is fetched from its own repository**
-  ([`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid),
-  pinned at 0.1.0, `cbf7a6e`), and `grid/` is gone from this one, with the
-  CI job that tested it alone: grid's own CI tests it, so recon builds
-  neither grid's tests nor its `-Werror`. Targets, headers and bytes are unchanged. A
-  consumer that declared grid from this repository (`SOURCE_SUBDIR grid`)
-  declares it from grid's at its re-pin, by URL and SHA.
-- **The camera and sensor tiers are the in-tree package
-  `volumetric_kit_sensor`** (BREAKING; `sensor/`, 0.1.0; sensor/DECISIONS.md,
-  the 2026-10-29 package entry): `camera`, `sensor` and its drivers, decoders,
-  prep and array, image I/O, and recon_core's `camera_params.hpp`,
-  `color_space.hpp` and `pinhole.glsl` (now the header-only `sensor_frame`,
-  with `DeviceFrame`), with their tests, tools, fixtures and docs. The
-  package has its own `device_requirements()`, GLM aliases and version.
-  recon declares it after the core (`SOURCE_DIR sensor`) and before grid,
-  and requires 0.1.0 with `vkc_require_sibling`; its libraries link
-  `sensor_frame` alone (`recon_library_sensor_links`), and recon exports no
-  GLSL of its own. `VR_CAMERA_ONLY` is gone (the package's `VS_CAMERA_ONLY`
-  builds `sensor_camera` alone), and the `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG`
-  and `VR_WITH_CUDA` options are the package's `VS_` ones. In recon's tree
-  the package's tests and `-Werror` follow recon's (`VR_BUILD_TESTS`,
-  `VR_WARNINGS_AS_ERRORS`), so CI tests it there on every leg, alone on the
-  CUDA leg, and camera-only in its container. The ThreadSanitizer step runs
-  the package's threaded tests (`sensor_tsan_tests`); recon has none left.
-  For consumers, every name
-  moved, with no alias or forwarding header;
-  [sensor/CHANGELOG.md](sensor/CHANGELOG.md)'s 0.1.0 maps each old name to
-  its new one.
-
 ### Added
 
+- **`fuse_orbbec` serves `output.max_viewers` viewers at once** (default 4),
+  so a scenario serves more than 4 without a code change
+  ([config/README.md](config/README.md)). recon pins core 0.30.0, which
+  reads the key, and grid 0.3.0, whose `codec_outputs` passes it to the
+  server; both floors rise with them.
 - `examples`: **`rig_viewer` draws offscreen where there is no display**
   (the 2026-10-27 offscreen decision): where `glfwInit` finds no window
   system it draws the same frames into gfx's offscreen frame loop, paced
@@ -49,11 +23,58 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `make_offscreen_viewer_device`, `offscreen_frames`, `OffscreenRenderer`,
   `bmp_bytes`, `write_bmp` and `FrameSaver`; `ProfilerDetach` holds a frame
   loop. The gfx pin moves from #152's main to #161's head, crossing
-  #153-#160, #162 and #163 with no change to recon's draws, and the core
-  pin to 0.30.0 (#64's head), `VR_CORE_MIN_VERSION` with it; `to_gfx_mesh`
+  #153-#160 and #162-#164 with no change to recon's draws, and the core
+  pin to 0.31.0 (#64's head), `VR_CORE_MIN_VERSION` with it; `to_gfx_mesh`
   builds under GCC's `-Wclass-memaccess`. Tests:
   `recon_example_viewer_offscreen` (new), built and run by the viewer CI
   leg.
+
+### Changed
+
+- **grid is fetched from its own repository**
+  ([`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid),
+  pinned at 0.1.0, `cbf7a6e`), and `grid/` is gone from this one, with the
+  CI job that tested it alone: grid's own CI tests it, so recon builds
+  neither grid's tests nor its `-Werror`. Targets, headers and bytes are unchanged. A
+  consumer that declared grid from this repository (`SOURCE_SUBDIR grid`)
+  declares it from grid's at its re-pin, by URL and SHA.
+- **The camera and sensor tiers are the package `volumetric_kit_sensor`**
+  (BREAKING; sensor's DECISIONS.md, the 2026-10-29 package entry), a
+  repository of its own
+  ([`volumetric_kit_sensor`](https://github.com/taojin-6/volumetric_kit_sensor),
+  pinned at 0.1.0, `436840c`) that recon fetches after the core and before
+  grid: `camera`, `sensor` and its drivers, decoders, prep and array, image
+  I/O, and recon_core's `camera_params.hpp`, `color_space.hpp` and
+  `pinhole.glsl` (now the header-only `sensor_frame`, with `DeviceFrame`),
+  with their tests, tools, fixtures and docs. The package has its own
+  `device_requirements()`, GLM aliases and version. recon requires 0.1.0
+  with `vkc_require_sibling`; its libraries link `sensor_frame` alone
+  (`recon_library_sensor_links`), and recon exports no GLSL of its own.
+  `VR_CAMERA_ONLY` is gone (the package's `VS_CAMERA_ONLY` builds
+  `sensor_camera` alone), and the `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG` and
+  `VR_WITH_CUDA` options are the package's `VS_` ones. sensor's own CI tests
+  it, so recon builds neither its tests nor its `-Werror`, and recon's CI
+  has no camera-only job, ThreadSanitizer step or iOS build check left.
+  For consumers, every name moved, with no alias or forwarding header;
+  [sensor's CHANGELOG.md](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/CHANGELOG.md)'s
+  0.1.0 maps each old name to its new one. The `install-orbbec-sdk` action
+  is sensor's too, and recon's CI uses it at the sensor pin: a consumer
+  whose CI used recon's takes sensor's, at its own sensor pin, when it
+  re-pins. A consumer that declared sensor from this repository
+  (`SOURCE_SUBDIR sensor`) declares it from sensor's at its re-pin, by URL
+  and SHA.
+- build: **recon pins sensor 0.1.1** (sensor #2's merge, `1fc39c0`), and
+  its CI takes sensor's `install-orbbec-sdk` action at the new pin.
+  Prepared depth (sensor's `GpuFramePrep`) is the bilinear mix of the 2×2
+  raw pixels around each sample where all four return within 4 cm of each
+  other, and the nearest raw pixel otherwise, so a fused slope no longer
+  comes out in terraces. No recon API, option or test changes, and
+  `VR_SENSOR_MIN_VERSION` stays 0.1.0: recon builds and its tests pass on
+  either side of the change.
+- **Marching cubes gives each vertex the field's gradient at its own
+  position**, where it gave its cell's, so shading no longer jumps at cell
+  faces; positions and triangles are unchanged. It came with the grid 0.3.0
+  pin above (grid 0.2.1, grid #5).
 
 ## [0.1.0] - 2026-10-28
 

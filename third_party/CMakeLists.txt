@@ -3,9 +3,9 @@
 
 # Pinned dependencies (FetchContent). recon takes Vulkan and glm from the system
 # (find_package in the root + core CMakeLists). In order: the family's
-# volumetric_kit_core, the in-tree sensor package (sensor/) and
-# volumetric_kit_grid. The fetches run on the first configure (a network is
-# required then; afterwards the FetchContent cache serves it).
+# volumetric_kit_core, volumetric_kit_sensor and volumetric_kit_grid. The
+# fetches run on the first configure (a network is required then; afterwards the
+# FetchContent cache serves it).
 
 include(FetchContent)
 
@@ -26,16 +26,17 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.30.0 (07359d6, core #64's head), as is the Homebrew key
-# action in .github/workflows/_build.yml; the vkc_require_core checks below say
-# which core each part needs. The tests are main()s of their own on the core's
-# test support, as are the sensor package's, which follow recon's.
+# The pin is core 0.31.0 (5ea2ea4, core #64's head), as are the Homebrew key
+# action in .github/workflows/_build.yml and the workflow-trigger check in
+# .github/workflows/lint.yml; the vkc_require_core checks below say which core
+# each part needs. The tests are main()s of their own on the core's test
+# support.
 #
 # TODO: re-pin to the merge commit once core#64 merges.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 07359d60fa93b3be44124957d3e51c02bf3cb8d8)
+  GIT_TAG 5ea2ea4dfca817b48614fa7e58f6f00beaec64d6)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
@@ -65,22 +66,24 @@ if(VR_BUILD_TESTS AND NOT (TARGET volumetric_kit::core_test_base
 endif()
 
 # --- volumetric_kit_sensor: cameras, capture and the frame contract ---------
-# The in-tree package (sensor/): its own project, on the core alone, which recon
-# adds as a sibling. recon's libraries link its frame contract (sensor_frame)
-# alone; the examples assemble its drivers, array and prep with recon's tiers.
-# Declared after the core, so the package's own core pin yields to the one
-# above, and before anything of recon's. An application that also fetches the
-# sensor package declares it first (by URL + SHA + SOURCE_SUBDIR sensor), and
-# FetchContent keeps that declaration. Its drivers (VS_WITH_ORBBEC,
-# VS_WITH_FFMPEG, VS_WITH_CUDA) are given on recon's configure; in this build
-# its tests and -Werror follow recon's, as grid's did in-tree. It builds in
-# sensor/ under the build tree, not in _deps/, which CI caches for the fetched
-# dependencies alone.
+# A repository of its own, on the core alone. recon's libraries link its frame
+# contract (sensor_frame) alone; the examples assemble its drivers, array and
+# prep with recon's tiers. Declared after the core, so the package's own core
+# pin yields to the one above, and before anything of recon's. Pinned by commit,
+# never main; an application that also fetches sensor declares it first, and
+# FetchContent keeps that declaration, as with the core. Work on both checkouts
+# at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_SENSOR=<sensor
+# checkout>. Its drivers (VS_WITH_ORBBEC, VS_WITH_FFMPEG, VS_WITH_CUDA) are
+# given on recon's configure. sensor's own CI tests sensor, so its tests and
+# -Werror stay off in this build; recon's examples take its test fixtures
+# (VS_TEST_DATA_DIR, which it sets).
+#
+# The pin is sensor 0.1.1 (1fc39c0, sensor #2's merge), as is its Orbbec SDK
+# action in .github/workflows (the sibling-actions-at-pins hook).
 FetchContent_Declare(
-  volumetric_kit_sensor SOURCE_DIR "${PROJECT_SOURCE_DIR}/sensor" BINARY_DIR
-                        "${CMAKE_BINARY_DIR}/sensor")
-set(VS_BUILD_TESTS ${VR_BUILD_TESTS})
-set(VS_WARNINGS_AS_ERRORS ${VR_WARNINGS_AS_ERRORS})
+  volumetric_kit_sensor
+  GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
+  GIT_TAG 1fc39c0cab3f77fb3613a5277287d2e25052ca8c)
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)
@@ -96,11 +99,11 @@ vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
 # turn on grid's test support, and recon's examples and tests its example
 # helpers (grid_example_common), which grid builds with its examples.
 #
-# The pin is grid 0.1.0 (cbf7a6e, its repository's first main).
+# The pin is grid 0.3.0 (dc11031, grid #6's merge).
 FetchContent_Declare(
   volumetric_kit_grid
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
-  GIT_TAG cbf7a6ea2b8729645b24503063ff7a076706f698)
+  GIT_TAG dc110319a8f693873a74450b65695958de38c40e)
 set(VGRID_BUILD_TEST_SUPPORT ${VR_BUILD_TESTS})
 if(VR_BUILD_EXAMPLES OR VR_BUILD_TESTS)
   set(VGRID_BUILD_EXAMPLES ON)
