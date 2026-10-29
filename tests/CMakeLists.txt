@@ -262,8 +262,9 @@ target_link_libraries(recon_example_live_sets_test
                       PRIVATE volumetric_kit::sensor_array)
 if(TARGET volumetric_kit::sensor_realsense)
   target_link_libraries(
-    recon_example_live_sets_test PRIVATE grid_example_common
-                                         volumetric_kit::sensor_realsense)
+    recon_example_live_sets_test
+    PRIVATE grid_example_common volumetric_kit::core_config
+            volumetric_kit::sensor_realsense)
   target_compile_definitions(recon_example_live_sets_test
                              PRIVATE VR_TEST_REALSENSE_CAMERA=1)
 endif()
