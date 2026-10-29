@@ -131,7 +131,8 @@ kernels.
 - **No GPU wait between recon and gfx.** The mesh ring is released by the
   host's report (the 2026-08-03 decision).
 - **A batched path computes what the per-camera path computes** (a Dynamic
-  set what its clears and then its fuses compute). Show it with a test,
+  set what its change tests, resets and then fuses compute). Show it with a
+  test,
   voxel by voxel or block by block.
 - **Changing a tier's contract or a locked decision** means updating
   its description in DESIGN.md and its index entry and rationale in
@@ -228,8 +229,9 @@ is measured.
     feature. A fixed set of `kMaxCameras` bindings with a switch is the
     alternative that needs no feature.
 - **Semantics.** The per-voxel arithmetic is the same, in the same camera
-  order, as today's dispatches (under Dynamic every camera's clear, then
-  every camera's fuse: DECISIONS.md, 2026-10-08), since each voxel belongs
+  order, as today's dispatches (under Dynamic every camera's reset, then
+  every camera's fuse in slot order: DECISIONS.md, 2026-10-29), since each
+  voxel belongs
   to one thread. The one difference is that a block first allocated by a
   later camera in the set is also fused by the earlier ones: more
   observations, not fewer.
@@ -500,9 +502,9 @@ improvement awaits measurement; the figures below describe the original GC.
 >   reaches new space. These are what P7 frees.
 
 - **Problem.**
-  - Dynamic integration clears a receded surface's voxels to weight 0 (the
-    free-space branch in `tsdf_integrate.glsl`) but never frees their
-    blocks, and nothing on the live path calls `remove`.
+  - Dynamic integration resets a receded surface's voxels to weight 0 (the
+    reset kernel, `tsdf_reset.comp`) but never frees their blocks, and
+    nothing on the live path calls `remove`.
   - The active set therefore grows with the history of motion, and so does
     every per-set pass over it: compaction, integrate, marching cubes.
   - Eventually a resize doubles the map.
@@ -528,7 +530,7 @@ improvement awaits measurement; the figures below describe the original GC.
   - Depth allocation dilates every surface block into the (2tb+1)³ cube,
     27 blocks at the defaults. With 8 cm blocks and 4 cm of truncation, a
     sample reaches only the neighbours within 4 cm of it. Dynamic
-    integration clears free space ahead of the surface to weight 0, so the
+    integration fuses free space only into voxels that hold weight, so the
     cube's far blocks never take weight.
   - Every pass over the active set pays for them: compaction, integrate (a
     workgroup a block a camera) and marching cubes.

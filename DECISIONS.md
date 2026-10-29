@@ -493,6 +493,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-08**](#2026-10-08--a-dynamic-set-clears-with-every-camera-before-it-fuses-with-any-amends-the-2026-09-30-one-batch-entry) —
   A Dynamic set clears with every camera before it fuses with any, through a
   clear kernel of its own; a single frame and Classic are unchanged.
+  *Superseded 2026-10-29:* Dynamic no longer clears on one sample; a set
+  tests every camera for change, resets along changed rays, then fuses.
 - [**2026-10-10**](#2026-10-10--recon-keeps-exception-handlers-shares-frame-preparation-and-leaves-warning-policy-to-consumers) —
   recon keeps exception handlers and the normal CI configuration;
   `GpuFramePrep` shares one preparation path, and `-Werror` defaults on
@@ -895,6 +897,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   each pixel's history and own noise on the device, floored by the sensor's
   `DepthNoise`, and alarms on a two-sided CUSUM (k 0.5, h 8) or one frame
   past 6 sigma, the operating point measured on the rig's static takes.
+- [**2026-10-29**](#2026-10-29--dynamic-fusion-evicts-on-change-and-averages-conflict-supersedes-the-2026-10-08-dynamic-set-entry) —
+  Dynamic fusion evicts on change and averages conflict: a set tests each
+  fixed camera for change (`FrameInput::slot`), resets along the changed
+  rays (the new surface's band and the free space in front, keeping the
+  history behind), then fuses in slot order; free space averages in at a
+  tenth of the weight, only into voxels that hold weight. Nothing is
+  cleared on one sample any more. Classic is unchanged.
 
 ## Decision record
 
@@ -5256,6 +5265,68 @@ False alarms per pixel per second 3.7e-4 (ToF-like, 2 m) and 5.1e-4
 the rig's 4.3e-4; the step, ramp and sweep delays within the rig's; dropouts
 change nothing (a twin that skipped them matches bit for bit); a camera that
 leaves and returns compares with its own history.
+
+### 2026-10-29 — Dynamic fusion evicts on change and averages conflict (supersedes the 2026-10-08 Dynamic set entry).
+
+**The rule.** A Dynamic set, one instant, three passes a frame:
+1. **Detect.** Each frame's camera, by its slot (`FrameInput::slot`), runs
+   the integrator's `ChangeDetector` on its depth (the entry above).
+2. **Reset.** On a ray its camera flagged -- read at a voxel's nearest
+   pixel -- every voxel in front of the new sample and in its band goes
+   back to unobserved (tsdf, weight and colour 0); history behind the band,
+   which the new surface occludes, stays. Every frame's reset runs before
+   any frame's fuse.
+3. **Fuse,** in slot order. Free space past the band averages in as +trunc
+   at a tenth of a sample's weight, geometry only (no colour), and only into
+   a voxel that already holds weight.
+
+**Why.** The former Dynamic cleared a voxel whenever any camera's one
+sample put it past the band. That let noise near the band's front edge
+flicker the surface, let cameras erase each other at rims, and never
+cleared debris within 4 cm of a surface after an object left (measured:
+the moving sphere's 80 / 72 cm² ghost, fast / slow, stays). Change is a
+camera disagreeing with its own past; conflict is cameras disagreeing with
+each other. Only change evicts; conflict averages.
+- **Reset rule:** the 10-26 prototype's, tested there (an object that
+  approaches and recedes leaves no older layer; occluded history survives).
+- **Free space only into weighted voxels.** It wears away a surface no
+  change removed, at a tenth of a sample's weight so a camera seeing past
+  another's rim shifts that surface by under a tenth of the band. Never
+  making an unobserved voxel observed keeps space a reset cleared, and a
+  mover's blocks, unobserved, so the free pass frees them, as before.
+  Fusing free space into every voxel instead (known-empty at a small
+  weight) was the A/B's other arm (below).
+- **Slot order.** Whether one camera's free space meets a voxel another
+  camera's band first weights in the same set depends on the order; in slot
+  order the grid is the same bit for bit whatever order the frames come in.
+  The dependence on the slots themselves stays, in a voxel's first weighted
+  set only; removing it would take a weight snapshot or a free-space pass of
+  its own.
+- **Noise.** `sender::fuse_inputs` gives every camera the default
+  `DepthNoise` (the Femto's): the sensor package's frame does not carry its
+  noise yet, which is a sensor change.
+
+**Cost.** On the M5 Max (take1 replay, four Femto cameras, 1 cm, Release,
+sets 40-119), integrate 4.61 ms a set against main's 4.58-4.59: the change
+tests 0.09 ms, the resets 1.46 ms (testing a voxel's weight before
+projecting it, as the former clear did, took them from 2.02). Memory: the
+detector's 35.4 MB for the rig. Classic is unchanged, bit for bit (40
+take1 sets: the codec stream byte-identical, the set-39 mesh identical).
+
+**Tests.** `recon_tsdf_dynamic_change` fuses two cameras that disagree by
+8 mm on a wall through the `Fuser`: no voxel's weight falls while the
+scene is still or one camera misses a set; a card 2.5 cm in front of the
+wall, inside its band, and a box 0.5 m in front, leave no triangle in the
+set they leave, and the wall meshes there at once; the box meshes in the set
+it arrives and the wall it hides keeps every voxel's weight.
+`recon_tsdf_integrate_dynamic_set` gives the grazing camera a colour of its
+own, which the frontal camera's band must not take. `recon_tsdf_integrate_set` now compares a
+Dynamic set with its reverse bit for bit. Run on the M5 Max (MoltenVK,
+validation and synchronization validation) and the RTX 4090.
+
+**Open.** A surface that leaves with no return behind it (`TODO(tsdf)`);
+partial evidence lowering the weight cap so slow motion slides; pixels that
+drop in and out; the noise model's edge and incidence terms.
 
 ## Measured lessons
 

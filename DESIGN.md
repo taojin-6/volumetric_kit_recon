@@ -722,21 +722,22 @@ non-finite, and colour at the nearest pixel (2026-10-08). A NaN hole
 therefore leaves a valid nearest sample usable, and a camera with a
 non-finite intrinsic, depth bound or pose entry is refused. Zero is a
 missing sample even when `min_depth` is zero, in allocation and integration
-alike. `IntegrationMode` selects **classic** (keep free space ahead
-of the surface) or **dynamic** (clear it, so a receded surface leaves no
-ghost). An optional `ColorFrame` fuses colour through its own separate
+alike. `IntegrationMode` selects **classic** (accumulate: free space ahead
+of the surface fuses as +`trunc_dist` at a sample's weight) or **dynamic**
+(change evicts, conflict averages; below). An optional `ColorFrame` fuses
+colour through its own separate
 `ColorCameraParams`; a voxel's first colour observation assigns rather than
 blends, and `coverage_in_alpha` has a pixel with a zero high byte fuse no
 colour, as one outside the image fuses none. Each call is one tick of the
 map's clock, and stamps `changed` on every block whose `tsdf`, `weight` or
 `color` it changed -- a store that leaves a different value, Dynamic's
-clear included, so converged surface stamps nothing -- always, one lane a
+reset included, so converged surface stamps nothing -- always, one lane a
 subgroup reading the stamp before its atomic, which measured as nothing
 (2026-10-01). Opt-in `StageMetrics*` reports an
 `"integrate"` row with both halves, over a `"  ..active set"` sub-row for the
 compaction dispatch it also makes. That compaction keeps only the blocks
 the frames can change: one frustum a frame from its depth camera, no near
-cut (Dynamic clears free space up to the camera), far at
+cut (Dynamic resets free space up to the camera), far at
 `max_depth + trunc_dist`, the union compacted in one scan
 (`compact_active_blocks_in_frusta_on_device`). The kernel changes a voxel
 only inside that reach, so the result is bit-identical to fusing every active
@@ -758,13 +759,32 @@ compaction. `integrate` is that, one submit and its wait.
 `Fuser` allocates from the same list through `to_depth_pinhole`): one
 compaction and one submit for them all, each frame a dispatch
 of its own over the union in order. Under Classic every voxel takes them in
-turn as integrating them one at a time does, bit for bit. A Dynamic set is
-one instant: the clear kernel (`tsdf_clear.comp`, the integrate kernel's
-body `tsdf_integrate.glsl` built without its fuse) runs for every frame
-before the integrate kernel fuses any, so one camera's free space never
-erases what another fuses in the same set, and the grid does not depend on
-the frames' order but for the running average's arithmetic (2026-10-08). A
-frame with no pixels fuses nothing, as it allocates nothing (2026-09-30).
+turn as integrating them one at a time does, bit for bit. A frame with no
+pixels fuses nothing, as it allocates nothing (2026-09-30).
+
+**Dynamic: change evicts, conflict averages** (2026-10-29). Each frame
+names its fixed camera's slot (`FrameInput::slot`, distinct in a set; the
+sender's is the camera's index) and noise (`FrameInput::noise`), and the
+integrator owns a `ChangeDetector` (its config from `TsdfIntegrator::create`
+and `FuserConfig::change`). A Dynamic set is one instant, three passes a
+frame: every frame's change test; every frame's reset (`tsdf_reset.comp`,
+the integrate kernel's body built as `VR_TSDF_RESET`), which, on a ray its
+camera flagged -- the voxel's nearest pixel -- sets every voxel in front of
+the new sample and in its band back to unobserved (tsdf, weight and colour
+0) and keeps the history behind the band; then every frame's fuse, in slot
+order. Free space past the band averages in as +`trunc_dist` at a tenth of
+a sample's weight, geometry only (it is a sample of what lies behind, so it
+brings no colour), and only into a voxel that holds weight: it wears away
+a surface no change removed but never evicts one, cameras that disagree
+average into one surface, and free space never makes an unobserved voxel
+observed, so a reset region and the blocks a mover left stay unobserved
+and the free pass frees them. The grid is the same bit for bit whatever
+the frames' order. Whatever a change test would refuse (the detector's
+`check`) is refused before any work. A closed gate stops the change tests
+too, so a set fused again is tested once. A camera's first `warm_up` samples of a pixel
+reset nothing, and its first Dynamic set zeroes its history in a submit of
+its own. Integrate a grid with one mode and one integrator: the change
+histories are the integrator's, by slot, whatever grid it fuses.
 `Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). A set
 records into a caller's batch (`record_fuse`, 2026-10-25): the fuse's checks
 (`check_frames`), a grow ahead past `kGrowThreshold`, blocking, then one
@@ -1100,10 +1120,12 @@ sets) a P-frame's decode took 2.70 ms host and 2.14 ms device, 37% and 38%
 of the set's fusion and coding, and 6.49 / 4.38 ms at 5 mm. A loop slower
 than the rig gets the newest set, so sets drop; that cost is unmeasured.
 
-**On `tsdf`**, Dynamic's clear is still a hard reset from one ray: clearing on evidence (a
-weight decrement, an incidence term) and behind a pixel with no return are
-the next steps, each judged on the lab rig (`TODO(tsdf)` in
-`tsdf_integrate.glsl`, 2026-10-08).
+**On `tsdf`**, Dynamic resets on change (2026-10-29). Next, each judged on
+the lab rig: a surface that leaves with no return behind it (no camera sees
+past it, so nothing flags it); partial evidence lowering the weight cap
+along a ray, so slow motion slides instead of stepping; a rule for pixels
+that drop in and out, the source of most remaining false resets; and the
+sigma edge and incidence terms of the noise model.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
 decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident,

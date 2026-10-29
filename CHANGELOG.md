@@ -24,6 +24,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Dynamic fusion evicts on change and averages conflict** (BREAKING for
+  Dynamic's results; DECISIONS.md, 2026-10-29). A Dynamic set runs each
+  camera's `ChangeDetector`, resets along the rays that changed (the new
+  surface's band and the free space in front, keeping the history behind),
+  then fuses in slot order; free space averages in at a tenth of the
+  weight, only into voxels that hold weight, and nothing is cleared on one
+  sample. `FrameInput` gains `slot` and `noise`, distinct slots in a Dynamic
+  set (`sender::fuse_inputs` gives each camera its index);
+  `TsdfIntegrator::create` and `FuserConfig` take a `ChangeDetectorConfig`,
+  and `check_frames` the mode. The clear kernel is the reset kernel. A
+  camera's first Dynamic set zeroes its history in a submit of its own.
+  Classic is unchanged.
+
 - **grid is fetched from its own repository**
   ([`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid),
   pinned at 0.1.0, `cbf7a6e`), and `grid/` is gone from this one, with the
