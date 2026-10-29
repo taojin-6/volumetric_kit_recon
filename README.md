@@ -25,8 +25,8 @@ clean, independently consumable tiers.
 ## Design at a glance
 
 - **Tiered, like gfx:** `core` → `volume` → `tsdf` → `mesh` → `texture` →
-  `interop`, with `sensor` off `core`, `codec` off `volume`, and `eval`/`io` off
-  `mesh`. A tier may depend only on tiers to its left.
+  `interop`, with `sensor` off `core`, `voxelize` and `codec` off `volume`, and
+  `eval`/`io` off `mesh`. A tier may depend only on tiers to its left.
 - **One Vulkan path everywhere:** compute runs as Vulkan compute shaders
   (GLSL → SPIR-V), with MoltenVK on Apple — Linux / Android / macOS / iOS
   from one source, mirroring `volumetric_kit_gfx`. No Metal/CUDA split. GCC or
@@ -219,7 +219,7 @@ VR_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
 
 `codec_replica` runs the grid codec on a fused room sequence. `codec_mesh`
 codes one triangle mesh or a numbered sequence of them: it loads each through
-`io::load_mesh`, uses `tsdf::MeshIntegrator` to convert it to a TSDF,
+`io::load_mesh`, uses `voxelize::MeshIntegrator` to convert it to a TSDF,
 compresses and decodes that grid, then extracts the decoded surface with
 marching cubes. Build the mesh example with `VR_WITH_ASSIMP=ON` after
 installing the [asset I/O prerequisites](#asset-io).

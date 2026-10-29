@@ -15,6 +15,9 @@ set(_vr_tiers recon_camera)
 if(NOT VR_CAMERA_ONLY)
   add_subdirectory(volumetric_kit/recon/core)
   add_subdirectory(volumetric_kit/recon/volume)
+  # A triangle mesh's distance field, on volume alone: no depth fusion (the
+  # 2026-10-28 decision).
+  add_subdirectory(volumetric_kit/recon/voxelize)
   add_subdirectory(volumetric_kit/recon/tsdf)
   # mesh reads the volume voxel payload directly (proven against a dense
   # analytic SDF), so it depends on volume, not tsdf.
@@ -54,6 +57,7 @@ if(NOT VR_CAMERA_ONLY)
     _vr_tiers
     recon_core
     recon_volume
+    recon_voxelize
     recon_tsdf
     recon_mesh
     recon_texture

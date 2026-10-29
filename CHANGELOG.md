@@ -187,6 +187,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `voxelize`, `tsdf`, `volume`: **`MeshIntegrator` moves to a tier of its
+  own, `voxelize`** (the 2026-10-28 voxelize decision):
+  `voxelize::MeshIntegrator`, `MeshSdfMode`, `MeshSdfParams` and
+  `MeshIntegrateStats` (`voxelize/mesh_integrator.hpp`) in the new target
+  `volumetric_kit::recon_voxelize`, which links `recon_volume` alone;
+  `recon_tsdf` no longer builds the 7 mesh kernels. The closest-point GLSL
+  moves from `core/shaders/` to `volume/shaders/triangle_common.glsl`. The
+  code, the kernels and what they write are unchanged. Migration: include
+  `volumetric_kit/recon/voxelize/mesh_integrator.hpp`, name
+  `voxelize::` for `tsdf::`, and link `recon_voxelize`; nothing forwards
+  from the old names. Tests: `recon_tsdf_mesh_integrate` and
+  `recon_tsdf_mesh_integrate_exact` are `recon_voxelize_mesh_integrate` and
+  `recon_voxelize_mesh_integrate_exact`.
 - `io`, examples: **`recon_io` splits into `recon_image_io` and
   `recon_mesh_io`** (the 2026-10-28 decision). `recon_image_io` holds
   `io/image_io.hpp` and links the family core's base tier alone, with no

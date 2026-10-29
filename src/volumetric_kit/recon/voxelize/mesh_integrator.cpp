@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-#include "volumetric_kit/recon/tsdf/mesh_integrator.hpp"
+#include "volumetric_kit/recon/voxelize/mesh_integrator.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -27,7 +27,7 @@
 #include "mesh_scan_counts_comp.spv.hpp"
 #include "mesh_scan_sums_comp.spv.hpp"
 
-namespace volumetric_kit::recon::tsdf {
+namespace volumetric_kit::recon::voxelize {
 namespace {
 
 using volume::AttributeView;
@@ -167,32 +167,33 @@ core::Result<MeshIntegrator> MeshIntegrator::create(
   integrate_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   integrate_range.size = sizeof(IntegratePush);
   core::KernelSetBuilder kb(device);
-  VKC_TRY(kb.add(integ.bin_, "tsdf_mesh_bin", vr_mesh_bin_comp_spv,
+  VKC_TRY(kb.add(integ.bin_, "voxelize_mesh_bin", vr_mesh_bin_comp_spv,
                  vr_mesh_bin_comp_spv_size, 9, &bin_range));
-  VKC_TRY(kb.add(integ.integrate_, "tsdf_mesh_integrate",
+  VKC_TRY(kb.add(integ.integrate_, "voxelize_mesh_integrate",
                  vr_mesh_integrate_comp_spv, vr_mesh_integrate_comp_spv_size, 8,
                  &integrate_range));
   VkPushConstantRange scan_range{VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                  sizeof(ScanPush)};
-  VKC_TRY(kb.add(integ.scan_counts_, "tsdf_mesh_scan_counts",
+  VKC_TRY(kb.add(integ.scan_counts_, "voxelize_mesh_scan_counts",
                  vr_mesh_scan_counts_comp_spv,
                  vr_mesh_scan_counts_comp_spv_size, 2, &scan_range));
   for (core::ComputeKernel& kernel : integ.scan_sums_) {
-    VKC_TRY(kb.add(kernel, "tsdf_mesh_scan_sums", vr_mesh_scan_sums_comp_spv,
-                   vr_mesh_scan_sums_comp_spv_size, 2, &scan_range));
+    VKC_TRY(kb.add(kernel, "voxelize_mesh_scan_sums",
+                   vr_mesh_scan_sums_comp_spv, vr_mesh_scan_sums_comp_spv_size,
+                   2, &scan_range));
   }
   for (core::ComputeKernel& kernel : integ.scan_add_) {
-    VKC_TRY(kb.add(kernel, "tsdf_mesh_scan_add", vr_mesh_scan_add_comp_spv,
+    VKC_TRY(kb.add(kernel, "voxelize_mesh_scan_add", vr_mesh_scan_add_comp_spv,
                    vr_mesh_scan_add_comp_spv_size, 2, &scan_range));
   }
   VkPushConstantRange compact_range{VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                     sizeof(CompactPush)};
-  VKC_TRY(kb.add(integ.compact_bins_, "tsdf_mesh_compact_bins",
+  VKC_TRY(kb.add(integ.compact_bins_, "voxelize_mesh_compact_bins",
                  vr_mesh_compact_bins_comp_spv,
                  vr_mesh_compact_bins_comp_spv_size, 4, &compact_range));
   VkPushConstantRange ranges_range{VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                    sizeof(RangesPush)};
-  VKC_TRY(kb.add(integ.bin_ranges_, "tsdf_mesh_bin_ranges",
+  VKC_TRY(kb.add(integ.bin_ranges_, "voxelize_mesh_bin_ranges",
                  vr_mesh_bin_ranges_comp_spv, vr_mesh_bin_ranges_comp_spv_size,
                  3, &ranges_range));
   VKC_ASSIGN(integ.pool_, kb.build());
@@ -212,10 +213,10 @@ core::Result<MeshIntegrator> MeshIntegrator::create(
 
   device.set_object_name(VK_OBJECT_TYPE_BUFFER,
                          core::debug_object_handle(integ.missing_.handle()),
-                         "tsdf.mesh_missing");
+                         "voxelize.mesh_missing");
   device.set_object_name(VK_OBJECT_TYPE_BUFFER,
                          core::debug_object_handle(integ.dummy_.handle()),
-                         "tsdf.mesh_dummy");
+                         "voxelize.mesh_dummy");
   return integ;
 }
 
@@ -312,12 +313,13 @@ core::Result<MeshIntegrateStats> MeshIntegrator::integrate(
 
   // All bulk storage is retained. Only inputs and the count/reset state are
   // refreshed, including when a different mesh or grid fits the same capacity.
-  VKC_TRY(ensure_scratch(vertices_, vertex_bytes, "tsdf.mesh_vertices"));
-  VKC_TRY(ensure_scratch(indices_, index_bytes, "tsdf.mesh_indices"));
-  VKC_TRY(ensure_scratch(offsets_, offset_bytes, "tsdf.mesh_offsets"));
-  VKC_TRY(ensure_scratch(counts_, count_bytes, "tsdf.mesh_bin_counts"));
-  VKC_TRY(ensure_scratch(coordinates_, coord_bytes, "tsdf.mesh_coordinates"));
-  VKC_TRY(ensure_scratch(item_slots_, item_bytes, "tsdf.mesh_item_slots"));
+  VKC_TRY(ensure_scratch(vertices_, vertex_bytes, "voxelize.mesh_vertices"));
+  VKC_TRY(ensure_scratch(indices_, index_bytes, "voxelize.mesh_indices"));
+  VKC_TRY(ensure_scratch(offsets_, offset_bytes, "voxelize.mesh_offsets"));
+  VKC_TRY(ensure_scratch(counts_, count_bytes, "voxelize.mesh_bin_counts"));
+  VKC_TRY(
+      ensure_scratch(coordinates_, coord_bytes, "voxelize.mesh_coordinates"));
+  VKC_TRY(ensure_scratch(item_slots_, item_bytes, "voxelize.mesh_item_slots"));
 
   // 256-way hierarchy: even one leaf group is scanned once, leaving its
   // exclusive prefix zero and its aggregate in a separate root. At most
@@ -332,7 +334,7 @@ core::Result<MeshIntegrateStats> MeshIntegrator::integrate(
   for (std::size_t i = 0; i <= root; ++i) {
     VKC_TRY(ensure_scratch(scan_levels_[i],
                            VkDeviceSize(level_sizes[i]) * sizeof(ScanSummary),
-                           "tsdf.mesh_scan_level"));
+                           "voxelize.mesh_scan_level"));
   }
   const auto vpb = static_cast<std::uint32_t>(g.voxels_per_block);
   // Candidate work is an upper bound on bin entries. These 8-byte ranges
@@ -340,12 +342,13 @@ core::Result<MeshIntegrateStats> MeshIntegrator::integrate(
   // the upper bound lets validation and chunk planning share one submission.
   const std::uint32_t range_count = 1u + (work_items - 1u) / kBinWindow;
   const VkDeviceSize range_bytes = VkDeviceSize(range_count) * sizeof(BinRange);
-  VKC_TRY(ensure_scratch(ranges_, range_bytes, "tsdf.mesh_dispatch_ranges"));
+  VKC_TRY(
+      ensure_scratch(ranges_, range_bytes, "voxelize.mesh_dispatch_ranges"));
   // A compact list needs no full-capacity reservation. If this guess is short,
   // the GPU leaves local prefixes intact and only compaction/ranges retry.
   VKC_TRY(ensure_scratch(
       blocks_, VkDeviceSize(std::min(num_blocks, 4096u)) * sizeof(MeshBin),
-      "tsdf.mesh_blocks"));
+      "voxelize.mesh_blocks"));
 
   const auto bind = [](core::ComputeKernel& kernel, std::uint32_t binding,
                        const core::Buffer& buffer) {
@@ -474,14 +477,14 @@ core::Result<MeshIntegrateStats> MeshIntegrator::integrate(
       (std::string(kWho) + ": the block list").c_str(), block_bytes,
       max_storage_buffer_range_));
   if (blocks_.size() < block_bytes) {
-    VKC_TRY(ensure_scratch(blocks_, block_bytes, "tsdf.mesh_blocks"));
+    VKC_TRY(ensure_scratch(blocks_, block_bytes, "voxelize.mesh_blocks"));
     bind(compact_bins_, 3, blocks_);
     bind(bin_ranges_, 0, blocks_);
     core::CommandBatch batch(*device_, *allocator_);
     VKC_TRY(compact(batch));
     VKC_TRY(batch.submit());
   }
-  VKC_TRY(ensure_scratch(bins_, bins_bytes, "tsdf.mesh_bins"));
+  VKC_TRY(ensure_scratch(bins_, bins_bytes, "voxelize.mesh_bins"));
 
   bind(bin_, 8, bins_);
   bind(integrate_, 0, *tsdf_view.buffer);
@@ -528,4 +531,4 @@ core::Result<MeshIntegrateStats> MeshIntegrator::integrate(
   return stats;
 }
 
-}  // namespace volumetric_kit::recon::tsdf
+}  // namespace volumetric_kit::recon::voxelize

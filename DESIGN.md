@@ -59,7 +59,8 @@ conventions and Vulkan setup.
   Deliberately *not* the `VK_` prefix — that belongs to Vulkan. (The prior
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: fetched by commit (`FetchContent`); component targets
-  `volumetric_kit::recon_camera`, `…_core`, `…_volume`, `…_tsdf`, `…_mesh`,
+  `volumetric_kit::recon_camera`, `…_core`, `…_volume`, `…_voxelize`,
+  `…_tsdf`, `…_mesh`,
   `…_texture`,
   `…_sensor`, `…_codec`, `…_eval`, `…_image_io`, `…_mesh_io`, `…_stream`,
   `…_networking`,
@@ -80,13 +81,13 @@ Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
 `core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
-branching off **`core`**, `codec` off **`volume`** and `eval`/`io` off **`mesh`**
-(later: `track`); `io`'s image target links the family core's base tier
-alone. `camera` sits under `sensor` and beside `core`: it links the family
-core's base tier and GLM, and no other recon tier. `stream` links that base
-tier alone, and `networking` links `stream`. `sender` comes after
-`networking`: it links `networking`, `codec`, `tsdf` and `sensor`'s GPU pass
-(`sensor_utils`).
+branching off **`core`**, `voxelize` and `codec` off **`volume`** and
+`eval`/`io` off **`mesh`** (later: `track`); `io`'s image target links the
+family core's base tier alone. `camera` sits under `sensor` and beside
+`core`: it links the family core's base tier and GLM, and no other recon
+tier. `stream` links that base tier alone, and `networking` links `stream`.
+`sender` comes after `networking`: it links `networking`, `codec`, `tsdf`
+and `sensor`'s GPU pass (`sensor_utils`).
 
 - **`camera`** — the camera vocabulary the drivers and the sensor tier
   share: the double-precision `CameraModel` (image size, intrinsics, OpenCV's
@@ -109,10 +110,12 @@ tier alone, and `networking` links `stream`. `sender` comes after
   layout (`block_grid_params`). Camera-free: depth allocation takes its own
   `DepthPinhole`, and nothing in it includes the camera vocabulary
   (2026-10-28).
+- **`voxelize`** — a triangle mesh's distance field written into a grid
+  (signed, or as a shell), `MeshIntegrator`. Links **`volume` alone**: it
+  fuses no depth (2026-10-28).
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic), the
-  `Fuser` that fuses a set of frames (grow, allocate, integrate), the grid it
-  starts from (`create_fusion_grid`), and a triangle mesh's distance field
-  written in (signed, or as a shell).
+  `Fuser` that fuses a set of frames (grow, allocate, integrate), and the grid
+  it starts from (`create_fusion_grid`).
 - **`mesh`** — marching-cubes compute shaders and host mesh containers.
 - **`io`** — host asset loading and export, in two targets: encoded images,
   depth PNGs and PNG export in `recon_image_io`, on the family core's base
@@ -856,11 +859,11 @@ lane cannot own a 250 000-block quad; as a depth tile does, a workgroup asks
 for each distinct block its lanes name once. The host pass that counts those
 blocks is also where an index is bounds-checked and a zero-area or non-finite
 triangle is dropped — the former being the one input that divides by zero in
-the closest-point solve, which lives in `core/shaders/triangle_common.glsl`
+the closest-point solve, which lives in `volume/shaders/triangle_common.glsl`
 so mesh-to-SDF evaluates the field with the same function. That pass is the
 public `triangle_candidate_offsets`, and the decode and band test are
-`volume/shaders/triangle_candidates.glsl`: `tsdf`'s mesh integrator bins over
-both, so the blocks allocated and the blocks binned cannot drift apart.
+`volume/shaders/triangle_candidates.glsl`: `voxelize`'s mesh integrator bins
+over both, so the blocks allocated and the blocks binned cannot drift apart.
 Frustum-culled compaction gives the per-frame working set, from frusta built
 by `make_frustum_planes` off a depth camera's pinhole
 intrinsics or — since 2026-08-12 — off a *render* camera's `view_proj`, whose
@@ -992,6 +995,44 @@ gain (2026-10-25). The live examples run it every
 `fusion.free_after` sets (`free_stale_blocks_every`, `fuse_frame.hpp`); the
 iOS scanner reads `changed` through `read_block_stamps`.
 
+### voxelize
+
+`MeshIntegrator` writes a triangle mesh's distance field into a grid
+(2026-09-27), **overwriting** every voxel of every block the band reaches:
+weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
+elsewhere, so a mesh-derived grid reads like a decoded frame. `Signed` signs
+by the closest triangle's face normal, the research codec's rule, and builds
+no topology and checks nothing: the field is the codec's input, not a
+reconstruction of the mesh, so it gives up the sign past edges sharper than
+90° and grows a skirt past an open mesh's rim. `Shell` is `d − σ` and takes
+any mesh. The blocks must be
+allocated by `allocate_from_triangles` — a missing one is refused before
+anything is written — and triangles are binned per block over that
+allocation's own candidates, so no voxel measures the whole mesh. The fill
+replays the slots the count pass recorded, so no bin comes up short; a bin
+past `kMaxBinTriangles` is refused, and the write splits into dispatches of
+at most `kMaxDispatchBinEntries` bin entries, each submitted on its own.
+Counts, fill cursors and occupied bins stay on the device: a hierarchical
+256-way prefix scan carries entry totals, occupied counts, largest bin and
+overflow, then compacts bins in slot order. The host reads 20 bytes of
+validation/size control plus 8 bytes per bounded dispatch range, at most
+34,960 bytes of ranges even for the uint32 candidate limit. Prefix windows
+of `kMaxDispatchBinEntries - kMaxBinTriangles + 1` bound every range; the host
+only splits them further for the device thread limit. Bulk scratch grows
+with demand and stays allocated. If the compact list outgrows its retained
+capacity, only compaction/range planning retries after growth; normal calls
+need one planning submission plus one per write. No grid write precedes
+missing-block, overflow, bin-size and binding-range validation
+(2026-10-02). Ties break on the triangle index, so the same mesh writes the same
+bytes. One workgroup writes each block, and a voxel measures only the
+triangles no lower bound rules out; a bound, less a rounding margin of the
+triangle's own, rules a triangle out only when it is strictly farther than
+the voxel's best so far, or than `trunc_dist` where that is nearer, so every
+voxel writes what measuring its whole bin writes (2026-10-21;
+`mesh_integrate.comp` has the bounds and the rounding count). Blocks past
+`kMaxVoxelsPerBlock` (16^3 voxels) are refused. Each call is a tick, and
+every block it writes is stamped `changed`.
+
 ### tsdf
 
 `TsdfIntegrator` fuses a posed depth frame into a grid's
@@ -1082,41 +1123,6 @@ requests can refer to the same block repeatedly. Host allocation exceptions
 become `OutOfMemory`, and a host failure during rehash rolls the map back.
 Scanner-specific memory callbacks and allocation-stop thresholds are deferred
 to the iOS port, alongside the actual caller and peak-memory measurements.
-`MeshIntegrator` writes a triangle mesh's distance field instead
-(2026-09-27), **overwriting** every voxel of every block the band reaches:
-weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
-elsewhere, so a mesh-derived grid reads like a decoded frame. `Signed` signs
-by the closest triangle's face normal, the research codec's rule, and builds
-no topology and checks nothing: the field is the codec's input, not a
-reconstruction of the mesh, so it gives up the sign past edges sharper than
-90° and grows a skirt past an open mesh's rim. `Shell` is `d − σ` and takes
-any mesh. The blocks must be
-allocated by `allocate_from_triangles` — a missing one is refused before
-anything is written — and triangles are binned per block over that
-allocation's own candidates, so no voxel measures the whole mesh. The fill
-replays the slots the count pass recorded, so no bin comes up short; a bin
-past `kMaxBinTriangles` is refused, and the write splits into dispatches of
-at most `kMaxDispatchBinEntries` bin entries, each submitted on its own.
-Counts, fill cursors and occupied bins stay on the device: a hierarchical
-256-way prefix scan carries entry totals, occupied counts, largest bin and
-overflow, then compacts bins in slot order. The host reads 20 bytes of
-validation/size control plus 8 bytes per bounded dispatch range, at most
-34,960 bytes of ranges even for the uint32 candidate limit. Prefix windows
-of `kMaxDispatchBinEntries - kMaxBinTriangles + 1` bound every range; the host
-only splits them further for the device thread limit. Bulk scratch grows
-with demand and stays allocated. If the compact list outgrows its retained
-capacity, only compaction/range planning retries after growth; normal calls
-need one planning submission plus one per write. No grid write precedes
-missing-block, overflow, bin-size and binding-range validation
-(2026-10-02). Ties break on the triangle index, so the same mesh writes the same
-bytes. One workgroup writes each block, and a voxel measures only the
-triangles no lower bound rules out; a bound, less a rounding margin of the
-triangle's own, rules a triangle out only when it is strictly farther than
-the voxel's best so far, or than `trunc_dist` where that is nearer, so every
-voxel writes what measuring its whole bin writes (2026-10-21;
-`mesh_integrate.comp` has the bounds and the rounding count). Blocks past
-`kMaxVoxelsPerBlock` (16^3 voxels) are refused. Each call is a tick, and
-every block it writes is stamped `changed`.
 
 ### mesh
 
@@ -2528,7 +2534,7 @@ sets) a P-frame's decode took 2.70 ms host and 2.14 ms device, 37% and 38%
 of the set's fusion and coding, and 6.49 / 4.38 ms at 5 mm. A loop slower
 than the rig gets the newest set, so sets drop; that cost is unmeasured.
 
-**On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
+**On `voxelize`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. A
 winding-number sign would fix at the root the sign errors a true-SDF stream
 cuts (the 2026-10-21 true-SDF entry), and the folds within √3 voxels that it

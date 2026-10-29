@@ -223,6 +223,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest
   triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh
   — binned per block over the allocation's own candidates, with no topology.
+  *Amended 2026-10-28:* in a tier of its own, `voxelize`.
 - [**2026-09-28**](#2026-09-28--the-orbbec-driver-streams-colour-as-h265-on-request-every-colour-frame-is-decoded-in-order-on-a-thread-per-camera-ahead-of-the-mailbox-a-lost-frame-is-read-off-the-frame-index-not-the-clock-and-the-femto-megas-stream-is-decoded-as-bt601-full-range-which-it-codes-and-does-not-say) —
   The Orbbec driver streams colour as H.265 on request: every colour frame is
   decoded, in order, on a thread per camera ahead of the mailbox; a lost frame
@@ -844,6 +845,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   normalization, tinyply) links `mesh`, and `recon_mesh_io_assimp` replaces
   `recon_io_assimp`. Headers and namespace are unchanged; `recon_io` is
   gone.
+- [**2026-10-28**](#2026-10-28--a-triangle-meshs-distance-field-is-a-tier-of-its-own-voxelize-on-volume-alone-amends-the-2026-09-27-mesh-to-tsdf-entry) —
+  A triangle mesh's distance field is a tier of its own, `voxelize`
+  (`recon_voxelize`), on `volume` alone: `MeshIntegrator` and its kernels
+  leave `tsdf`, and the closest-point GLSL moves to `volume`.
 
 ## Decision record
 
@@ -6141,6 +6146,9 @@ both ways, on the shared M5 Max in Release: 1.6 to 1.9 s on one core, 0.25
 to 0.32 s threaded, every figure identical.
 
 ### 2026-09-27 — A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh — binned per block over the allocation's own candidates, with no topology.
+
+*Amended 2026-10-28 (below):* `MeshIntegrator` is
+`voxelize::MeshIntegrator`, in a tier of its own on `volume`.
 
 The second stage of mesh → TSDF (S1), on top of the 2026-08-31 block
 allocation (S0). It lands `tsdf::MeshIntegrator`, which writes a mesh's
@@ -16375,6 +16383,31 @@ pass under the validation layer with a device required.
 `recon_io_image_test` links `librecon_image_io.a` and the core's base tier,
 nothing else. Adding `recon_mesh` to `recon_image_io`'s links fails
 `recon_subproject_defaults`.
+
+### 2026-10-28 — A triangle mesh's distance field is a tier of its own, `voxelize`, on `volume` alone (amends the 2026-09-27 mesh-to-TSDF entry).
+
+**The rule.** `MeshIntegrator`, `MeshSdfMode`, `MeshSdfParams` and
+`MeshIntegrateStats` are `voxelize::`, in `voxelize/mesh_integrator.hpp`
+and the target `recon_voxelize`, which links `recon_volume` alone and sits
+right after it in the tier order. Its seven kernels and `mesh_scan.glsl`
+move with it, so `recon_tsdf` builds only the fusion kernels. The
+closest-point GLSL both mesh-driven passes share moves from `core` to
+`volume/shaders/triangle_common.glsl`, the lowest tier either is in. No
+header forwards and no namespace aliases the old names.
+
+**Why.** The conversion fuses no depth. Its header and source include no
+`tsdf` header and its kernels only `volume`'s GLSL and the closest point;
+it needs the grid, the triangle allocation's candidates and `recon_core`'s
+dispatch helper. In `tsdf` it made every fusing caller build seven mesh
+kernels it never runs, and every mesh caller -- `codec_mesh` and the
+consumers' stream writers -- link the fuser. It is the prep step that lets
+the voxel layer leave recon without depth fusion.
+
+**What stays.** The code, the kernels' bytes and every field it writes; the
+2026-09-27, 2026-10-02 and 2026-10-21 rules hold as written. Only the
+debug names change, `tsdf_mesh_*` and `tsdf.mesh_*` to `voxelize_mesh_*`
+and `voxelize.mesh_*`. The tests move with it: `recon_voxelize_mesh_integrate`
+and `recon_voxelize_mesh_integrate_exact`, unchanged but for their names.
 
 ## Measured lessons
 

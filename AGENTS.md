@@ -58,17 +58,17 @@ Dependencies flow left to right:
 
 ```text
 core → volume → tsdf → mesh → texture → interop
-  │        └→ codec     ├→ eval
-  │                    └→ io (mesh files)
+  │        ├→ codec     ├→ eval
+  │        └→ voxelize  └→ io (mesh files)
   └→ sensor ← camera          (later: track)
 stream → networking → sender  (stream on the family core's base tier alone)
 ```
 
 - No upward includes. `camera` depends on the family core's base tier and GLM
   only, `stream` on that base tier alone, `networking` on `stream`, `sensor`
-  on `camera` and `core`, `codec` on `volume`, `eval` and `io`'s mesh files
-  on `mesh`, `io`'s images on the base tier alone, and `sender` on
-  `networking`, `codec`, `tsdf` and `sensor`'s GPU pass;
+  on `camera` and `core`, `codec` and `voxelize` on `volume`, `eval` and
+  `io`'s mesh files on `mesh`, `io`'s images on the base tier alone, and
+  `sender` on `networking`, `codec`, `tsdf` and `sensor`'s GPU pass;
   driver/decoder/pre-processing targets stay separate.
   Asset I/O is host-side at file boundaries; Assimp is an optional private
   backend of `recon_mesh_io_assimp`, never a dependency of GPU kernels.
