@@ -20,6 +20,9 @@ name: sanitizers
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
   asan-ubsan-lsan:
     runs-on: vk-linux-gpu
@@ -41,6 +44,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: sanitizers
+          persist-credentials: false
 
       # Skip cleanly until a build system exists (the infra PR lands before the
       # CMake build), mirroring _build.yml's detect guard. Without this the job

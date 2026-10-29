@@ -20,6 +20,9 @@ name: viewer (reusable)
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
   viewer:
     name: viewer build
@@ -36,6 +39,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # A job on the self-hosted Mac installs nothing (DECISIONS.md,
       # 2026-10-16): a missing formula fails it. This job caches nothing, so
