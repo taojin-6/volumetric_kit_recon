@@ -318,7 +318,10 @@ void main() {
   // after the depth early-returns above). Both are unregistered-color limits a
   // color-camera depth map would fix; registered capture (color cam == depth
   // cam) avoids them.
-  if (pc.has_color != 0u) {
+  // Dynamic's free space is a sample of what lies behind the voxel, never of
+  // the voxel's own surface, so it brings no colour; classic's does, as it
+  // always has.
+  if (pc.has_color != 0u && !(free_space && pc.mode == kModeDynamic)) {
     vec2 cpx;
     float czc;
     uint obs_packed = 0u;

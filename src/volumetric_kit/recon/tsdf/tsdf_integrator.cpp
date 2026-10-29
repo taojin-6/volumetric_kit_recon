@@ -417,7 +417,8 @@ core::Result<TsdfIntegrator::Checked> TsdfIntegrator::check(
             " is past the change detector's slots or another frame's");
       }
       slot_taken[slot] = true;
-      VKC_TRY(ChangeDetector::check_noise(frames[i].noise));
+      // What the change test would refuse, refused now, before any work.
+      VKC_TRY(detector_->check(slot, cam, frames[i].noise));
     }
     VKC_TRY(core::check_storage_buffer_range(
         "TsdfIntegrator::integrate: the depth buffer", out.depth_bytes[i],
@@ -606,22 +607,26 @@ core::Status TsdfIntegrator::record_checked(
   core::StageMetrics parts;
   const bool rows =
       metrics != nullptr && stage != nullptr && stage->timer() != nullptr;
+  // The uploads go to the batch whatever the tests do: the batch has
+  // recorded their copies.
+  core::Status detected;
   if (dynamic) {
     if (rows) metrics->add_cpu("  ..detect", 0.0);
     core::GpuStageScope detect(rows ? &parts : nullptr, gpu_timer_,
                                "  ..detect");
-    for (std::size_t k = 0; k < live.size(); ++k) {
+    for (std::size_t k = 0; k < live.size() && detected.ok(); ++k) {
       const FrameInput& frame = frames[live[k]];
-      VKC_TRY(detector_->record_detect(
+      detected = detector_->record_detect(
           batch, frame.slot,
           depth_uploads[k].valid() ? core::StorageInput(depth_uploads[k])
                                    : frame.depth,
-          frame.camera, frame.noise, gate, rows ? &detect : stage));
+          frame.camera, frame.noise, gate, rows ? &detect : stage);
     }
   }
   for (core::Buffer& upload : depth_uploads) {
     if (upload.valid()) batch.retain(std::move(upload));
   }
+  VKC_TRY(detected);
 
   // The compaction, its own breakdown: its device half alone, as the stage's
   // row holds its host time and its tiles too. Its row is placed now, after

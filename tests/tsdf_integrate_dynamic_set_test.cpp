@@ -6,12 +6,14 @@
 // the other's free space. F looks down world +z at a wall 1.005 m away, in
 // colour. G sits 2 mm in front of that wall's surface and looks along it, at
 // a far wall: its rays pass through F's band on the near side, which G sees
-// as free space far past the band, and never reach F's wall. Each order is
-// fused as a set twice, each camera keeping its slot. The two grids must
+// as free space far past the band, and never reach F's wall; it brings a
+// colour of its own. Each order is fused as a set twice, each camera keeping
+// its slot. The two grids must
 // agree bit for bit, so their meshes must too, and F's surface must be whole:
 // as many triangles on it as F fused alone gives, and F's colour in it. G's
 // free space only averages into F's band, at a tenth of the weight, so it
-// moves F's surface by under a millimetre and evicts nothing; the former
+// moves F's surface by under a millimetre, evicts nothing and brings F's
+// band none of its colour; the former
 // Dynamic cleared F's band there each set, and fused one camera after the
 // other erased it, leaving a hole in one order only. And G's far wall must
 // mesh. A third set, F's wall receded 10 cm, is a change on every one of F's
@@ -60,6 +62,7 @@ constexpr float kWall = 1.005f;   // F's wall, between two voxel planes
 constexpr float kRecede = 0.1f;   // how far it moves back in the third set
 constexpr float kFarWall = 2.0f;  // G's wall, x = 2
 constexpr std::uint32_t kColor = 0xFF3366CCu;
+constexpr std::uint32_t kGColor = 0xFF22AA44u;  // G's
 
 using Coord = std::tuple<int, int, int>;
 
@@ -146,17 +149,18 @@ int allocate(vol::VoxelBlockGrid& grid, const std::vector<View>& views) {
 }
 
 // Allocate for `views`, then fuse them under Dynamic as one set; F (always
-// the one with the frontal camera's pose) brings its colour and has slot 0,
-// G slot 1.
+// the one with the frontal camera's pose) brings `color` and has slot 0, G
+// brings `g_color` and has slot 1.
 int fuse(tsdf::TsdfIntegrator& integrator, vol::VoxelBlockGrid& grid,
-         const std::vector<View>& views, const tsdf::ColorFrame& color) {
+         const std::vector<View>& views, const tsdf::ColorFrame& color,
+         const tsdf::ColorFrame& g_color) {
   constexpr tsdf::IntegrationMode kDynamic = tsdf::IntegrationMode::Dynamic;
   if (allocate(grid, views) != 0) return 1;
   std::vector<tsdf::FrameInput> frames;
   for (const View& v : views) {
     const bool is_f = v.cam.cam_to_world == vr::Mat4f(1.0f);
     frames.push_back({vkc::StorageInput(v.depth.data()), v.cam,
-                      is_f ? &color : nullptr, is_f ? 0u : 1u});
+                      is_f ? &color : &g_color, is_f ? 0u : 1u});
   }
   CHECK(integrator.integrate(grid, frames, 5.0f, kDynamic).ok());
   return 0;
@@ -245,13 +249,21 @@ int gpu_main(vkc::test::GpuContext& gpu) {
                                {f.cam.fx, f.cam.fy, f.cam.cx, f.cam.cy, kWidth,
                                 kHeight, f.cam.cam_to_world},
                                {}};
+  // G's own colour: its free space passes F's band and must leave F's colour
+  // there as it is.
+  const std::vector<std::uint32_t> g_pixels(kWidth * kHeight, kGColor);
+  const tsdf::ColorFrame g_color{g_pixels.data(),
+                                 {g.cam.fx, g.cam.fy, g.cam.cx, g.cam.cy,
+                                  kWidth, kHeight, g.cam.cam_to_world},
+                                 {}};
 
   // F alone, the surface G must leave whole.
   auto alone = make_grid(dev, alloc);
   auto alone_integrator = make_integrator(dev, alloc);
   CHECK(alone.ok() && alone_integrator.ok());
   for (int set = 0; set < 2; ++set) {
-    CHECK(fuse(alone_integrator.value(), alone.value(), {f}, color) == 0);
+    CHECK(fuse(alone_integrator.value(), alone.value(), {f}, color, g_color) ==
+          0);
   }
   auto reference = summarize(mc.value(), alone.value(), kWall);
   CHECK(reference.ok());
@@ -265,8 +277,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   auto gf_integrator = make_integrator(dev, alloc);
   CHECK(fg.ok() && gf.ok() && fg_integrator.ok() && gf_integrator.ok());
   for (int set = 0; set < 2; ++set) {
-    CHECK(fuse(fg_integrator.value(), fg.value(), {f, g}, color) == 0);
-    CHECK(fuse(gf_integrator.value(), gf.value(), {g, f}, color) == 0);
+    CHECK(fuse(fg_integrator.value(), fg.value(), {f, g}, color, g_color) == 0);
+    CHECK(fuse(gf_integrator.value(), gf.value(), {g, f}, color, g_color) == 0);
   }
   if (check_same(dev, alloc, fg.value(), gf.value()) != 0) return 1;
   auto mesh_fg = summarize(mc.value(), fg.value(), kWall);
@@ -298,8 +310,10 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
   // F's wall recedes: the set resets the old surface, in both orders.
   const View back = frontal(kWall + kRecede);
-  CHECK(fuse(fg_integrator.value(), fg.value(), {back, g}, color) == 0);
-  CHECK(fuse(gf_integrator.value(), gf.value(), {g, back}, color) == 0);
+  CHECK(fuse(fg_integrator.value(), fg.value(), {back, g}, color, g_color) ==
+        0);
+  CHECK(fuse(gf_integrator.value(), gf.value(), {g, back}, color, g_color) ==
+        0);
   if (check_same(dev, alloc, fg.value(), gf.value()) != 0) return 1;
   auto old_wall = summarize(mc.value(), fg.value(), kWall);
   auto new_wall = summarize(mc.value(), fg.value(), kWall + kRecede);

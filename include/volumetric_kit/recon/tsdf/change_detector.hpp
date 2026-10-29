@@ -192,11 +192,20 @@ class VR_TSDF_API ChangeDetector {
   ///         records after the pass in the same batch, or in a later one.
   const core::Buffer* mask(std::uint32_t camera) const noexcept;
 
-  /// @brief Whether @ref record_detect takes @p noise: every term finite and
-  ///        at least 0, not all 0.
-  /// @param noise  The noise model.
-  /// @return OK; or `Status::Code::InvalidArgument`.
-  static core::Status check_noise(const DepthNoise& noise);
+  /// @brief The checks @ref record_detect makes of a camera before any work,
+  ///        but for its depth and gate: for a caller that records other work
+  ///        ahead of the pass and refuses before any of it.
+  /// @param camera  As @ref record_detect.
+  /// @param params  As @ref record_detect.
+  /// @param noise   As @ref record_detect.
+  /// @return OK; or @ref record_detect's `Status::Code::InvalidArgument` for a
+  ///         moved-from detector, a camera past the slots, an empty or
+  ///         oversized image (its history past one binding's range
+  ///         included), a non-finite depth bound, or a noise model with a
+  ///         negative, non-finite or all-zero term.
+  core::Status check(std::uint32_t camera,
+                     const sensor::DepthCameraParams& params,
+                     const DepthNoise& noise) const;
 
   /// @return The configuration this was created with.
   const ChangeDetectorConfig& config() const noexcept { return config_; }
