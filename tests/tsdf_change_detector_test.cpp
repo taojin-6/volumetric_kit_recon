@@ -12,7 +12,9 @@
 //   false alarms near the rate measured on the rig, the same at 1 m and 3 m.
 // - Steps of 5, 10, 20 and 40 mm, either way: frames to the first alarm as
 //   measured on the rig's interior pixels, and the alarm's direction.
-// - Ramps of 1, 3 and 10 mm a frame: the first alarm as measured.
+// - Ramps of 1, 3 and 10 mm a frame: the first alarm as measured; and at
+//   10 mm a frame, the drift a pixel's history lags by before it restarts,
+//   which the noise freeze keeps short.
 // - A foreground 0.5 m nearer sweeping in at a pixel a frame, its boundary
 //   column a mixed sample: a clean pixel alarms on the frame the sweep
 //   reaches it or the next.
@@ -25,7 +27,10 @@
 //   departure flags Vanished, with its depth, whatever alarms it raised
 //   while there; a sporadic return of two samples ends silently, one of
 //   three flags; and such a pixel tests from its second sample, as the
-//   warm-up is the camera's, not the pixel's.
+//   warm-up is the camera's, not the pixel's. A still surface there with
+//   i.i.d. dropouts flags Vanished at each dropout after three valid
+//   samples, 30 p (1 - p)^3 times a second; a surface too far for the
+//   word's 30 bits keeps the farthest depth they hold.
 // - A closed gate word tests nothing: a 5 cm step behind it is flagged on
 //   the next frame the gate opens, as the history never saw it; the word is
 //   found at its offset, and a bad one is refused.
@@ -467,6 +472,101 @@ int no_return_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
   return 0;
 }
 
+// Over no return, a still surface with dropouts: slot 23, 32 x 32, no return
+// for frames 0-59, then a plane at 2 m whose every sample drops out (0) with
+// probability 0.1, independently. Each dropout after three valid samples ends
+// the history and flags Vanished, and the next sample starts another over no
+// return: 30 x 0.1 x 0.9^3 = 2.19 flags per pixel per second. Slot 24: a
+// surface 200 km away (max_depth the largest float), over no return for three
+// frames, then gone: its word holds the largest depth its 30 bits hold.
+int no_return_dropout_case(vkc::test::GpuContext& gpu,
+                           tsdf::ChangeDetector& detector) {
+  constexpr std::uint32_t kStill = 23;
+  constexpr std::uint32_t kFar = 24;
+  constexpr std::uint32_t kStillSide = 32;
+  constexpr std::uint32_t kFarSide = 4;
+  constexpr std::size_t kStillPixels = kStillSide * kStillSide;
+  constexpr std::size_t kFarPixels = kFarSide * kFarSide;
+  constexpr int kFirst = 60;
+  constexpr int kLast = 299;
+  constexpr float kDrop = 0.1f;
+  const sensor::DepthCameraParams cam = camera(kStillSide);
+  sensor::DepthCameraParams far_cam = camera(kFarSide);
+  far_cam.max_depth = std::numeric_limits<float>::max();
+  Noise noise(13u);
+  std::vector<float> still(kStillPixels);
+  std::vector<float> far(kFarPixels);
+  std::vector<std::uint32_t> still_mask(kStillPixels);
+  std::vector<std::uint32_t> far_mask(kFarPixels);
+  std::size_t vanished = 0;
+  std::size_t other_flags = 0;
+  std::size_t samples = 0;
+  std::size_t far_vanished = 0;
+  float far_depth = 0.0f;
+  for (int t = 0; t <= kLast; ++t) {
+    for (float& d : still) {
+      d = t >= kFirst && noise.uniform() >= kDrop
+              ? 2.0f + tof_sigma(2.0f) * noise.gauss()
+              : 0.0f;
+    }
+    for (float& d : far) {
+      d = t >= kFirst && t < kFirst + 3
+              ? 2.0e5f + tof_sigma(2.0e5f) * noise.gauss()
+              : 0.0f;
+    }
+    vkc::CommandBatch batch(gpu.device, gpu.allocator);
+    CHECK(
+        detector
+            .record_detect(batch, kStill, vkc::StorageInput(still.data()), cam)
+            .ok());
+    CHECK(
+        detector
+            .record_detect(batch, kFar, vkc::StorageInput(far.data()), far_cam)
+            .ok());
+    CHECK(batch
+              .readback(*detector.mask(kStill), 0,
+                        kStillPixels * sizeof(std::uint32_t), still_mask.data())
+              .ok());
+    CHECK(batch
+              .readback(*detector.mask(kFar), 0,
+                        kFarPixels * sizeof(std::uint32_t), far_mask.data())
+              .ok());
+    CHECK(batch.submit().ok());
+    if (t > kFirst) {
+      samples += kStillPixels;
+      for (const std::uint32_t m : still_mask) {
+        if (tsdf::change_of(m) == tsdf::PixelChange::Vanished) {
+          ++vanished;
+        } else if (m != 0u) {
+          ++other_flags;
+        }
+      }
+    }
+    if (t == kFirst + 3) {
+      for (const std::uint32_t m : far_mask) {
+        if (tsdf::change_of(m) == tsdf::PixelChange::Vanished) {
+          ++far_vanished;
+          far_depth = tsdf::vanished_depth(m);
+        }
+      }
+    }
+  }
+  const double rate = double(vanished) / double(samples) * kFps;
+  const double expected = kFps * kDrop * std::pow(1.0 - kDrop, 3.0);
+  std::printf(
+      "over no return, still with %.0f%% dropouts: Vanished %.2f per pixel per "
+      "second (30 p (1-p)^3 = %.2f), %zu other flags; 200 km: %zu of %zu "
+      "flag, at %.0f m\n",
+      100.0 * double(kDrop), rate, expected, other_flags, far_vanished,
+      kFarPixels, double(far_depth));
+  CHECK(rate > 0.85 * expected && rate < 1.15 * expected);
+  // The cap: 1073741760 units, not 2^30, which shifted out of the word and
+  // left a Vanished of depth 0.
+  CHECK(far_vanished == kFarPixels);
+  CHECK(far_depth > 1.07e5f && far_depth < 1.08e5f);
+  return 0;
+}
+
 int refusals(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
   const sensor::DepthCameraParams cam = camera(kSide);
   const std::vector<float> depth(kPixels, 2.0f);
@@ -529,6 +629,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   if (refusals(gpu, detector) != 0) return 1;
   if (gate_case(gpu, detector) != 0) return 1;
   if (no_return_case(gpu, detector) != 0) return 1;
+  if (no_return_dropout_case(gpu, detector) != 0) return 1;
 
   const tsdf::DepthNoise tof{};  // the Femto's
   const tsdf::DepthNoise stereo{0.0f, 0.0f, kStereoC};
@@ -691,6 +792,32 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     const int want_p95[] = {14, 7, 3};
     CHECK(med <= want_med[s] && p95 <= want_p95[s]);
   }
+  // The noise freeze: at 10 mm a frame, each pixel's largest drift since its
+  // history last restarted, over the window. Frozen for 30 samples after an
+  // alarm, sigma_r does not learn the motion, so the next alarm comes soon;
+  // learning it, the drift doubles (the rig's p95 50 against 100 mm).
+  {
+    std::vector<float> lags;
+    for (std::uint32_t i = 0; i < kPixels; ++i) {
+      if (group_of(i, kRampsMm.size()) / 2 != 2) continue;
+      float since = 0.0f;
+      float worst = 0.0f;
+      for (int t = kOnset; t < kOnset + kWindow; ++t) {
+        const float off = kRampsMm[2] * float(t - kOnset + 1);
+        worst = std::max(worst, off - since);
+        if (at(masks, kRamps, t, i) != kNone) since = off;
+      }
+      lags.push_back(worst);
+    }
+    std::sort(lags.begin(), lags.end());
+    const float lag_med = lags[lags.size() / 2];
+    const float lag_p95 = lags[std::size_t(0.95 * double(lags.size()))];
+    std::printf(
+        "ramp 10 mm a frame: drift before a restart, median %.0f mm, p95 "
+        "%.0f mm\n",
+        double(lag_med), double(lag_p95));
+    CHECK(lag_p95 <= 60.0f);
+  }
 
   // The sweep: every pixel the sweep reaches in the window, on the frame it
   // becomes the boundary or covered (the rig's 95.7%), the rest the next.
@@ -747,7 +874,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // The resized camera started over: no alarm in its first 30 frames at the
   // new size, though its plane moved 30 cm.
   CHECK(resized_alarms == 0);
-  CHECK(detector.mask(kResized)->size() >= 64 * 64 * sizeof(std::uint32_t));
+  CHECK(detector.mask(kResized)->size() == 64 * 64 * sizeof(std::uint32_t));
 
   std::puts("tsdf_change_detector: OK");
   return 0;
