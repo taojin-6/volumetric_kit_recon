@@ -24,13 +24,16 @@
 // - A camera that leaves and returns compares with its own history; one whose
 //   image changes size starts a new history.
 // - Over no return (pixels first valid once their camera tests): a mover's
-//   departure flags Vanished, with its depth, whatever alarms it raised
-//   while there; a sporadic return of two samples ends silently, one of
-//   three flags; and such a pixel tests from its second sample, as the
-//   warm-up is the camera's, not the pixel's. A still surface there with
-//   i.i.d. dropouts flags Vanished at each dropout after three valid
-//   samples, 30 p (1 - p)^3 times a second; a surface too far for the
-//   word's 30 bits keeps the farthest depth they hold.
+//   departure flags Vanished on the second invalid sample in a row, with
+//   its depth, whatever alarms it raised while there; a sporadic return of
+//   two samples ends silently, one of three flags; and such a pixel tests
+//   from its second sample, as the warm-up is the camera's, not the
+//   pixel's. A lone invalid sample there changes nothing: a camera given
+//   single-frame dropouts matches, mask for mask, a twin that skipped those
+//   frames, through a step and its departure. A still surface there with
+//   i.i.d. dropouts flags Vanished only where two come in a row after three
+//   valid samples, 30 p^2 (1 - p)^3 (1 + p)^2 times a second; a surface too
+//   far for the word's 30 bits keeps the farthest depth they hold.
 // - A closed gate word tests nothing: a 5 cm step behind it is flagged on
 //   the next frame the gate opens, as the history never saw it; the word is
 //   found at its offset, and a bad one is refused.
@@ -370,11 +373,12 @@ int gate_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
 // 22, 32 x 32, no return for frames 0-59.
 // - Slot 21: a mover at 1.5 m over frames 60-62 that steps to 1.3 m at 63
 //   (flagged Nearer), gone at 65, and a background at 3 m returning at 80.
-//   Frame 65 flags Vanished on every pixel, with the depth that left; the
-//   background's first sample starts a new history, which flags nothing.
+//   Frame 66, the second with no return, flags Vanished on every pixel, with
+//   the depth that left; the background's first sample starts a new
+//   history, which flags nothing.
 // - Slot 22: sporadic returns -- 2.0 m over frames 60-61, none until 70,
 //   2.5 m over 70-72, none after: the 2-sample run ends silently, the
-//   3-sample run flags Vanished at 73 with its depth.
+//   3-sample run flags Vanished at 74 with its depth.
 int no_return_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
   constexpr std::uint32_t kMover = 21;
   constexpr std::uint32_t kSporadic = 22;
@@ -433,7 +437,7 @@ int no_return_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
       const std::uint32_t p = sporadic_mask[i];
       if (t == 63) {
         nearer_63 += tsdf::change_of(m) == tsdf::PixelChange::Nearer ? 1 : 0;
-      } else if (t == 65) {
+      } else if (t == 66) {
         if (tsdf::change_of(m) == tsdf::PixelChange::Vanished) {
           ++vanished_mover;
           depth_error =
@@ -442,7 +446,7 @@ int no_return_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
       } else if (m != 0u) {
         ++other_flags;
       }
-      if (t == 73) {
+      if (t == 74) {
         if (tsdf::change_of(p) == tsdf::PixelChange::Vanished) {
           ++vanished_sporadic;
           depth_error =
@@ -474,11 +478,16 @@ int no_return_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
 
 // Over no return, a still surface with dropouts: slot 23, 32 x 32, no return
 // for frames 0-59, then a plane at 2 m whose every sample drops out (0) with
-// probability 0.1, independently. Each dropout after three valid samples ends
-// the history and flags Vanished, and the next sample starts another over no
-// return: 30 x 0.1 x 0.9^3 = 2.19 flags per pixel per second. Slot 24: a
-// surface 200 km away (max_depth the largest float), over no return for three
-// frames, then gone: its word holds the largest depth its 30 bits hold.
+// probability p = 0.1, independently, q = 1 - p. A lone dropout changes
+// nothing; the first two in a row end the history, (1 + p) / p^2 frames after
+// it began on average, and flag Vanished if two more valid samples came first,
+// each before two dropouts in a row with probability q (1 + p); the next
+// valid sample, 1 / q frames on, starts another history over no return. So
+// q^2 (1 + p)^2 / (1 / q + (1 + p) / p^2) = p^2 q^3 (1 + p)^2 flags per pixel
+// a frame: 30 x 0.01 x 0.729 x 1.21 = 0.265 a second, against 30 p q^3 = 2.19
+// when a lone dropout ended the history. Slot 24: a surface 200 km away
+// (max_depth the largest float), over no return for three frames, then gone:
+// its word holds the largest depth its 30 bits hold.
 int no_return_dropout_case(vkc::test::GpuContext& gpu,
                            tsdf::ChangeDetector& detector) {
   constexpr std::uint32_t kStill = 23;
@@ -542,7 +551,7 @@ int no_return_dropout_case(vkc::test::GpuContext& gpu,
         }
       }
     }
-    if (t == kFirst + 3) {
+    if (t == kFirst + 4) {  // the second frame it is gone
       for (const std::uint32_t m : far_mask) {
         if (tsdf::change_of(m) == tsdf::PixelChange::Vanished) {
           ++far_vanished;
@@ -552,11 +561,12 @@ int no_return_dropout_case(vkc::test::GpuContext& gpu,
     }
   }
   const double rate = double(vanished) / double(samples) * kFps;
-  const double expected = kFps * kDrop * std::pow(1.0 - kDrop, 3.0);
+  const double expected = kFps * kDrop * kDrop * std::pow(1.0 - kDrop, 3.0) *
+                          (1.0 + kDrop) * (1.0 + kDrop);
   std::printf(
-      "over no return, still with %.0f%% dropouts: Vanished %.2f per pixel per "
-      "second (30 p (1-p)^3 = %.2f), %zu other flags; 200 km: %zu of %zu "
-      "flag, at %.0f m\n",
+      "over no return, still with %.0f%% dropouts: Vanished %.3f per pixel per "
+      "second (30 p^2 (1-p)^3 (1+p)^2 = %.3f), %zu other flags; 200 km: %zu "
+      "of %zu flag, at %.0f m\n",
       100.0 * double(kDrop), rate, expected, other_flags, far_vanished,
       kFarPixels, double(far_depth));
   CHECK(rate > 0.85 * expected && rate < 1.15 * expected);
@@ -564,6 +574,98 @@ int no_return_dropout_case(vkc::test::GpuContext& gpu,
   // left a Vanished of depth 0.
   CHECK(far_vanished == kFarPixels);
   CHECK(far_depth > 1.07e5f && far_depth < 1.08e5f);
+  return 0;
+}
+
+// Over no return, single-frame dropouts: slots 25 and 26, 32 x 32, no return
+// for frames 0-59, then a plane at 2 m that steps 5 cm nearer at 120 and is
+// gone from 150. Slot 25 also drops every pixel out (0) on single frames --
+// 61 and 63, so its first valid samples alternate with dropouts, then 80,
+// 100, 125, 140, and 148, one of the last three before it leaves; its twin,
+// slot 26, is given the same samples but skips those frames. A lone dropout
+// changes nothing: slot 25 flags nothing on them and matches its twin, mask
+// for mask, on every other frame -- the step's Nearer at 120, and its
+// departure, flagged Vanished on the second frame it is gone (151), with the
+// depth that left, on every pixel of both.
+int lone_dropout_case(vkc::test::GpuContext& gpu,
+                      tsdf::ChangeDetector& detector) {
+  constexpr std::uint32_t kLone = 25;
+  constexpr std::uint32_t kTwinSlot = 26;
+  constexpr std::uint32_t kLoneSide = 32;
+  constexpr std::size_t kLonePixels = kLoneSide * kLoneSide;
+  constexpr std::array<int, 7> kDrops = {61, 63, 80, 100, 125, 140, 148};
+  const sensor::DepthCameraParams cam = camera(kLoneSide);
+  Noise noise(17u);
+  std::vector<float> depth(kLonePixels);
+  std::vector<std::uint32_t> lone(kLonePixels);
+  std::vector<std::uint32_t> twin(kLonePixels);
+  std::size_t drop_flags = 0;
+  std::size_t mismatches = 0;
+  std::size_t nearer_120 = 0;
+  std::size_t flags_150 = 0;
+  std::size_t vanished_151 = 0;
+  float depth_error = 0.0f;
+  for (int t = 0; t <= 151; ++t) {
+    const bool dropped =
+        std::find(kDrops.begin(), kDrops.end(), t) != kDrops.end();
+    const float z = t < 120 ? 2.0f : 1.95f;
+    for (float& d : depth) {
+      d = t >= 60 && t < 150 ? z + tof_sigma(z) * noise.gauss() : 0.0f;
+    }
+    const std::vector<float> lone_depth =
+        dropped ? std::vector<float>(kLonePixels, 0.0f) : depth;
+    vkc::CommandBatch batch(gpu.device, gpu.allocator);
+    CHECK(detector
+              .record_detect(batch, kLone, vkc::StorageInput(lone_depth.data()),
+                             cam)
+              .ok());
+    if (!dropped) {
+      CHECK(detector
+                .record_detect(batch, kTwinSlot,
+                               vkc::StorageInput(depth.data()), cam)
+                .ok());
+    }
+    CHECK(batch
+              .readback(*detector.mask(kLone), 0,
+                        kLonePixels * sizeof(std::uint32_t), lone.data())
+              .ok());
+    CHECK(batch
+              .readback(*detector.mask(kTwinSlot), 0,
+                        kLonePixels * sizeof(std::uint32_t), twin.data())
+              .ok());
+    CHECK(batch.submit().ok());
+    for (std::size_t i = 0; i < kLonePixels; ++i) {
+      if (dropped) {
+        drop_flags += lone[i] != 0u ? 1 : 0;
+        continue;
+      }
+      mismatches += lone[i] != twin[i] ? 1 : 0;
+      if (t == 120) {
+        nearer_120 +=
+            tsdf::change_of(lone[i]) == tsdf::PixelChange::Nearer ? 1 : 0;
+      } else if (t == 150) {
+        flags_150 += lone[i] != 0u ? 1 : 0;
+      } else if (t == 151 &&
+                 tsdf::change_of(lone[i]) == tsdf::PixelChange::Vanished) {
+        ++vanished_151;
+        depth_error = std::max(depth_error,
+                               std::abs(tsdf::vanished_depth(lone[i]) - 1.95f));
+      }
+    }
+  }
+  std::printf(
+      "over no return, single-frame dropouts: %zu flags on them, %zu words "
+      "unlike the twin's; %zu of %zu flag the step, %zu the first frame gone, "
+      "%zu the second (depth error %.2f mm)\n",
+      drop_flags, mismatches, nearer_120, kLonePixels, flags_150, vanished_151,
+      double(depth_error) * 1000.0);
+  CHECK(drop_flags == 0);
+  CHECK(mismatches == 0);
+  CHECK(nearer_120 == kLonePixels);
+  CHECK(flags_150 == 0);
+  CHECK(vanished_151 == kLonePixels);
+  // The history's mean of 27 samples since the step, its sigma 0.4 mm.
+  CHECK(depth_error < 0.005f);
   return 0;
 }
 
@@ -600,11 +702,16 @@ int refusals(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
         tsdf::ChangeDetectorConfig{0.5f, 0.0f},
         tsdf::ChangeDetectorConfig{0.5f, 8.0f, 0.0f},
         tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 0},
-        tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 1024},
+        tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 512},
         tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 30, 30, 512}}) {
     CHECK(refused(
         tsdf::ChangeDetector::create(gpu.device, gpu.allocator, bad).status()));
   }
+  // The largest memory and freeze the history's 9-bit counts hold.
+  CHECK(tsdf::ChangeDetector::create(
+            gpu.device, gpu.allocator,
+            tsdf::ChangeDetectorConfig{0.5f, 8.0f, 6.0f, 511, 30, 511})
+            .ok());
   return 0;
 }
 
@@ -630,6 +737,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   if (gate_case(gpu, detector) != 0) return 1;
   if (no_return_case(gpu, detector) != 0) return 1;
   if (no_return_dropout_case(gpu, detector) != 0) return 1;
+  if (lone_dropout_case(gpu, detector) != 0) return 1;
 
   const tsdf::DepthNoise tof{};  // the Femto's
   const tsdf::DepthNoise stereo{0.0f, 0.0f, kStereoC};

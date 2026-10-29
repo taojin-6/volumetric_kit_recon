@@ -46,10 +46,11 @@ enum class PixelChange : std::uint32_t {
   Farther = 2,  ///< The surface moved away: something left, or receded.
   /// The surface left and nothing returns behind it. A pixel first valid
   /// once its camera tests had returned nothing until then, so its history
-  /// lasts only while it returns: its first invalid sample ends it, and
-  /// flags Vanished if it had at least three valid samples in a row. The
-  /// word's high 30 bits hold the depth of the surface that left
-  /// (@ref vanished_depth).
+  /// lasts only while it returns: a lone invalid sample is a dropout and
+  /// changes nothing, and the second invalid sample in a row ends the
+  /// history, flagging Vanished if it had at least three valid samples, a
+  /// lone dropout skipped. The word's high 30 bits hold the depth of the
+  /// surface that left (@ref vanished_depth).
   Vanished = 3,
 };
 
@@ -96,7 +97,7 @@ struct ChangeDetectorConfig {
   float one_frame = 6.0f;
   /// The history's memory, in samples: a cumulative mean of the first
   /// `memory` samples, then an exponential average of weight 1/`memory`;
-  /// the noise estimate follows the same schedule. In [1, 1023].
+  /// the noise estimate follows the same schedule. In [1, 511].
   std::uint32_t memory = 30;
   /// The camera's frames (records) before its pixels test: each then tests
   /// every sample after the one that started its history, as measured. A
@@ -129,14 +130,17 @@ struct ChangeDetectorConfig {
 /// `[min_depth, max_depth]`, as fusion takes it. An invalid sample (a hole, a
 /// dropout, `NaN`) changes nothing and flags nothing -- but over no return:
 /// a pixel first valid once its camera tests had returned nothing, and its
-/// history ends at its first invalid sample, which flags
-/// @ref PixelChange::Vanished after three valid samples in a row. That is
-/// what a mover leaves where nothing behind it returns; a background's
-/// sporadic returns end silently (14-23 Vanished flags a second over the
-/// Femto rig's four cameras on its static takes). A camera missing from a
-/// set is simply not detected: on return each pixel compares with its own
-/// history. A camera whose image size changes starts a new history.
-/// History lives in the camera's pixel grid, so the cameras must be fixed.
+/// history ends at the second invalid sample in a row, which flags
+/// @ref PixelChange::Vanished after three valid samples. A lone invalid
+/// sample there is a dropout: the history, its sums and its count of valid
+/// samples go on as if it never happened. So a mover that leaves where
+/// nothing behind it returns is flagged a frame after it left, a still
+/// surface's single-frame dropouts flag nothing, and a background's sporadic
+/// returns end silently (42-69 Vanished flags a second over the Femto rig's
+/// four cameras on its static takes). A camera missing from a set is simply
+/// not detected: on return each pixel compares with its own history. A
+/// camera whose image size changes starts a new history. History lives in
+/// the camera's pixel grid, so the cameras must be fixed.
 ///
 /// Device memory: 24 bytes a pixel per camera (the history and the mask);
 /// 8.8 MB for a 640 x 576 camera.
