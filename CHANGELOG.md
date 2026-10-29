@@ -48,6 +48,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   re-pins. A consumer that declared sensor from this repository
   (`SOURCE_SUBDIR sensor`) declares it from sensor's at its re-pin, by URL
   and SHA.
+- build: **recon pins sensor 0.1.1** (sensor #2's merge, `1fc39c0`), and
+  its CI takes sensor's `install-orbbec-sdk` action at the new pin.
+  Prepared depth (sensor's `GpuFramePrep`) is the bilinear mix of the 2×2
+  raw pixels around each sample where all four return within 4 cm of each
+  other, and the nearest raw pixel otherwise, so a fused slope no longer
+  comes out in terraces. No recon API, option or test changes, and
+  `VR_SENSOR_MIN_VERSION` stays 0.1.0: recon builds and its tests pass on
+  either side of the change.
+- **Marching cubes gives each vertex the field's gradient at its own
+  position**, where it gave its cell's, so shading no longer jumps at cell
+  faces; positions and triangles are unchanged. It came with the grid 0.3.0
+  pin above (grid 0.2.1, grid #5).
 
 ## [0.1.0] - 2026-10-28
 

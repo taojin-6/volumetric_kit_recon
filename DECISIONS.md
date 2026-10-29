@@ -246,7 +246,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   GPU pre-processing is `recon_sensor_utils`: a driver hands out the frame as
   captured, the device undistorts depth and undistorts and converts colour,
   and fusion reads the buffers in place, depth and colour each with its own
-  camera rather than registered.
+  camera rather than registered. *Amended 2026-10-29:* depth mixes the four
+  raw pixels around the source where they are one surface, nearest only at
+  an edge or a hole.
 - [**2026-09-28**](#2026-09-28--memory-the-kernels-use-lives-on-the-device-on-every-platform-and-the-host-only-records-commands-against-it-one-commandbatch-per-call-parameters-inline-bulk-bytes-staged-at-the-edges-small-results-read-back) —
   Memory the kernels use lives on the device on every platform, and the host
   only records commands against it: one `CommandBatch` per call, parameters
@@ -643,7 +645,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   usage. recon builds no point clouds and makes no calibration
   measurements. The same-K depth crop and nearest resampling are accepted on
   a stand-in lens, pending a fold check of each rig camera's own (by hand,
-  not yet run).
+  not yet run). *Amended 2026-10-29:* the resampling mixes where the raw
+  pixels are one surface; the crop stands.
 - [**2026-10-17**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-17--a-p-frames-update-segments-default-to-its-segment-size-encoderconfigupdate_size-0-the-default-takes-segment_size-resolved-once-in-encodercreate-the-format-and-the-goldens-are-unchanged-amends-the-2026-10-16-codec-examples-2026-10-14-encoder-and-2026-10-12-p-frame-entries) —
   A P-frame's update segments default to its segment size:
   `EncoderConfig::update_size` 0, the default, takes `segment_size`
@@ -880,6 +883,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   alone. recon's libraries link `sensor_frame` alone, and nothing in the
   package includes recon or grid. The owner's decisions of 2026-10-28:
   repositories now, these names, Blackmagic stereo NVIDIA-only at first.
+- [**2026-10-29**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-29--prepared-depth-mixes-the-four-raw-pixels-around-each-source-position-where-they-are-one-surface-and-keeps-the-nearest-pixel-at-an-edge-or-a-hole-amends-the-2026-09-28-gpu-pre-processing-and-2026-10-16-depth-crop-entries) —
+  Prepared depth is the bilinear mix of the four raw pixels around each
+  pixel's source position where all four return within 4 cm
+  (`kBlendSpanM`, the truncation the rig fuses with), and the nearest raw
+  pixel otherwise: a slope no longer comes out in half-pixel terraces, which
+  fusion shaded as bands on floors and walls, and an edge or a hole is never
+  blended. No option; about 1-2 µs of device time a frame.
 
 ## Decision record
 
