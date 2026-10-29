@@ -224,8 +224,8 @@ class VR_TSDF_API TsdfIntegrator {
   ///        unobserved. Dynamic's reset also clears a voxel's `color` whenever
   ///        the grid carries the attribute, including on a depth-only
   ///        (`color == nullptr`) frame. Each camera's first
-  ///        @ref ChangeDetectorConfig::warm_up samples of a pixel build its
-  ///        history and reset nothing.
+  ///        @ref ChangeDetectorConfig::warm_up frames build its history and
+  ///        reset nothing.
   /// @note  A **separate/unregistered** color camera (a @p color with its own
   ///        pose or intrinsics) carries the usual projective-color limits the
   ///        registered case avoids: a voxel occluded in the color view but

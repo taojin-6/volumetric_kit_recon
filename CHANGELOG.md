@@ -29,8 +29,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Dynamic fusion evicts on change and averages conflict** (BREAKING for
   Dynamic's results; DECISIONS.md, 2026-10-29). A Dynamic set runs each
   camera's `ChangeDetector`, resets along the rays that changed (the new
-  surface's band and the free space in front, keeping the history behind),
-  then fuses in slot order; free space averages in at a tenth of the
+  surface's band and the free space in front, keeping the history behind;
+  a `Vanished` ray up to the band of the surface that left), then fuses in
+  slot order; free space averages in at a tenth of the
   weight, only into voxels that hold weight, and nothing is cleared on one
   sample. `FrameInput` gains `slot` and `noise`, distinct slots in a Dynamic
   set (`sender::fuse_inputs` gives each camera its index);

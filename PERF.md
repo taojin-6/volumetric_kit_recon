@@ -132,8 +132,7 @@ kernels.
   host's report (the 2026-08-03 decision).
 - **A batched path computes what the per-camera path computes** (a Dynamic
   set what its change tests, resets and then fuses compute). Show it with a
-  test,
-  voxel by voxel or block by block.
+  test, voxel by voxel or block by block.
 - **Changing a tier's contract or a locked decision** means updating
   its description in DESIGN.md and its index entry and rationale in
   DECISIONS.md in the same PR, plus AGENTS.md if an essential shared rule changes.
@@ -231,8 +230,7 @@ is measured.
 - **Semantics.** The per-voxel arithmetic is the same, in the same camera
   order, as today's dispatches (under Dynamic every camera's reset, then
   every camera's fuse in slot order: DECISIONS.md, 2026-10-29), since each
-  voxel belongs
-  to one thread. The one difference is that a block first allocated by a
+  voxel belongs to one thread. The one difference is that a block first allocated by a
   later camera in the set is also fused by the earlier ones: more
   observations, not fewer.
 - **Measure and accept.**

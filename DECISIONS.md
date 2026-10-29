@@ -5308,8 +5308,9 @@ silently, a 3-sample one flags.
 2. **Reset.** On a ray its camera flagged -- read at a voxel's nearest
    pixel -- every voxel in front of the new sample and in its band goes
    back to unobserved (tsdf, weight and colour 0); history behind the band,
-   which the new surface occludes, stays. Every frame's reset runs before
-   any frame's fuse.
+   which the new surface occludes, stays. A `Vanished` ray has no new
+   sample: it resets up to the band of the surface that left, the depth its
+   mask word carries. Every frame's reset runs before any frame's fuse.
 3. **Fuse,** in slot order. Free space past the band averages in as +trunc
    at a tenth of a sample's weight, geometry only (no colour), and only into
    a voxel that already holds weight.
@@ -5327,9 +5328,13 @@ each other. Only change evicts; conflict averages.
   change removed, at a tenth of a sample's weight so a camera seeing past
   another's rim shifts that surface by under a tenth of the band. Never
   making an unobserved voxel observed keeps space a reset cleared, and a
-  mover's blocks, unobserved, so the free pass frees them, as before.
-  Fusing free space into every voxel instead (known-empty at a small
-  weight) was the A/B's other arm (below).
+  mover's blocks, unobserved, so the free pass frees them, as before. The
+  A/B's other arm fused free space into every voxel (known-empty at a tenth
+  of a sample's weight). On the box that enters, stays and leaves (take3,
+  lab RTX 4090) it evicted the same -- no ghost, cleared in the set it left
+  -- with 0.3 points fewer silhouette holes (2.50% against 2.83%), but 20%
+  more bitrate (13.7 against 11.4 Mbps) and 33 MB more allocator memory, as
+  free space then holds weight wherever a camera looks. Unknown it stays.
 - **Slot order.** Whether one camera's free space meets a voxel another
   camera's band first weights in the same set depends on the order; in slot
   order the grid is the same bit for bit whatever order the frames come in.
@@ -5353,12 +5358,18 @@ scene is still or one camera misses a set; a card 2.5 cm in front of the
 wall, inside its band, and a box 0.5 m in front, leave no triangle in the
 set they leave, and the wall meshes there at once; the box meshes in the set
 it arrives and the wall it hides keeps every voxel's weight.
+A second scene puts the box where nothing returns behind it, the wall only
+on the left: in the set it goes nothing of it meshes, by its cameras'
+`Vanished` rays alone, and no weight falls in any other set.
 `recon_tsdf_integrate_dynamic_set` gives the grazing camera a colour of its
-own, which the frontal camera's band must not take. `recon_tsdf_integrate_set` now compares a
-Dynamic set with its reverse bit for bit. Run on the M5 Max (MoltenVK,
+own, which the frontal camera's band must not take.
+`recon_tsdf_integrate_set` now compares a Dynamic set with its reverse bit
+for bit. Run on the M5 Max (MoltenVK,
 validation and synchronization validation) and the RTX 4090.
 
-**Open.** A surface that leaves with no return behind it (`TODO(tsdf)`);
+**Open.** A surface over no return that was there from its camera's first
+frames, or returned for under three samples in a row, flags nothing when it
+goes (`TODO(tsdf)`);
 partial evidence lowering the weight cap so slow motion slides; pixels that
 drop in and out; the noise model's edge and incidence terms.
 

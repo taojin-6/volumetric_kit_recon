@@ -771,19 +771,21 @@ frame: every frame's change test; every frame's reset (`tsdf_reset.comp`,
 the integrate kernel's body built as `VR_TSDF_RESET`), which, on a ray its
 camera flagged -- the voxel's nearest pixel -- sets every voxel in front of
 the new sample and in its band back to unobserved (tsdf, weight and colour
-0) and keeps the history behind the band; then every frame's fuse, in slot
-order. Free space past the band averages in as +`trunc_dist` at a tenth of
-a sample's weight, geometry only (it is a sample of what lies behind, so it
-brings no colour), and only into a voxel that holds weight: it wears away
+0) and keeps the history behind the band; a `Vanished` ray, with no new
+sample, resets up to the band of the surface that left (the mask word's
+depth); then every frame's fuse, in slot order. Free space past the band
+averages in as +`trunc_dist` at a tenth of a sample's weight, geometry only
+(it is a sample of what lies behind, so it brings no colour), and only into
+a voxel that holds weight: it wears away
 a surface no change removed but never evicts one, cameras that disagree
 average into one surface, and free space never makes an unobserved voxel
 observed, so a reset region and the blocks a mover left stay unobserved
 and the free pass frees them. The grid is the same bit for bit whatever
 the frames' order. Whatever a change test would refuse (the detector's
 `check`) is refused before any work. A closed gate stops the change tests
-too, so a set fused again is tested once. A camera's first `warm_up` samples of a pixel
-reset nothing, and its first Dynamic set zeroes its history in a submit of
-its own. Integrate a grid with one mode and one integrator: the change
+too, so a set fused again is tested once. A camera's first `warm_up` frames
+build its history and reset nothing, and its first Dynamic set zeroes that
+history in a submit of its own. Integrate a grid with one mode and one integrator: the change
 histories are the integrator's, by slot, whatever grid it fuses.
 `Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). A set
 records into a caller's batch (`record_fuse`, 2026-10-25): the fuse's checks
@@ -1128,9 +1130,11 @@ of the set's fusion and coding, and 6.49 / 4.38 ms at 5 mm. A loop slower
 than the rig gets the newest set, so sets drop; that cost is unmeasured.
 
 **On `tsdf`**, Dynamic resets on change (2026-10-29). Next, each judged on
-the lab rig: a surface that leaves with no return behind it (no camera sees
-past it, so nothing flags it); partial evidence lowering the weight cap
-along a ray, so slow motion slides instead of stepping; a rule for pixels
+the lab rig: a surface over no return that was there from its camera's
+first frames, or returned for under three samples in a row, flags nothing
+when it goes (a decay gated by visibility); partial evidence lowering the
+weight cap along a ray, so slow motion slides instead of stepping; a rule for
+pixels
 that drop in and out, the source of most remaining false resets; and the
 sigma edge and incidence terms of the noise model.
 
