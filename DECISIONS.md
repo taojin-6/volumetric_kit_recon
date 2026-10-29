@@ -5391,7 +5391,9 @@ A second scene puts the box where nothing returns behind it, the wall only
 on the left: in the set it goes nothing of it meshes, by its cameras'
 `Vanished` rays alone, and no weight falls in any other set.
 `recon_tsdf_integrate_dynamic_set` gives the grazing camera a colour of its
-own, which the frontal camera's band must not take.
+own, which the frontal camera's band must not take, and requires that band
+to keep at least the weight the frontal camera alone gives it (the former
+clear left one sample's).
 `recon_tsdf_integrate_set` now compares a Dynamic set with its reverse bit
 for bit. Run on the M5 Max (MoltenVK) and the RTX 4090, with validation and
 synchronization validation.
