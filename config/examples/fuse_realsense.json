@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "operation": "fuse",
+  "source": {
+    "kind": "live",
+    "driver": "realsense"
+  },
+  "run": {
+    "frames": 300
+  },
+  "output": {
+    "path": "results/realsense.ply"
+  }
+}

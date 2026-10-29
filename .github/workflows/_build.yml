@@ -34,6 +34,15 @@ on:
         required: false
         type: boolean
         default: false
+      realsense_sdk:
+        description: >-
+          Install the pinned librealsense (Ubuntu: sensor's action, RealSense's
+          apt repository; macOS: the runner's Homebrew formula, checked) and
+          build with sensor's VS_WITH_REALSENSE=ON, so this leg builds the
+          RealSense driver and fuse_realsense and runs their tests.
+        required: false
+        type: boolean
+        default: false
       ffmpeg:
         description: >-
           Install FFmpeg and build with VS_WITH_FFMPEG=ON, so this leg builds
@@ -154,9 +163,15 @@ jobs:
             # Vulkan-touching tests a device to run against.
             pkgs="$pkgs mesa-vulkan-drivers"
           fi
-          # curl fetches the Orbbec SDK below; a bare container image lacks it.
-          if [ "${{ inputs.orbbec_sdk }}" = "true" ] || [ "${{ inputs.cuda }}" = "true" ]; then
+          # curl fetches the Orbbec SDK, the CUDA keyring and RealSense's
+          # signing key below; a bare container image lacks it, and gnupg,
+          # which dearmors that key.
+          if [ "${{ inputs.orbbec_sdk }}" = "true" ] || [ "${{ inputs.cuda }}" = "true" ] ||
+             [ "${{ inputs.realsense_sdk }}" = "true" ]; then
             pkgs="$pkgs curl ca-certificates"
+          fi
+          if [ "${{ inputs.realsense_sdk }}" = "true" ]; then
+            pkgs="$pkgs gnupg"
           fi
           # FFmpeg, found through pkg-config (sensor's cmake/vs_ffmpeg.cmake). NVDEC
           # needs nothing more: the toolkit mounts libcuda and libnvcuvid, which
@@ -235,6 +250,11 @@ jobs:
           if [ "${{ inputs.assimp }}" = "true" ]; then
             pkgs="$pkgs assimp"
           fi
+          # librealsense for sensor's VS_WITH_REALSENSE (its
+          # cmake/vs_realsense.cmake).
+          if [ "${{ inputs.realsense_sdk }}" = "true" ]; then
+            pkgs="$pkgs librealsense"
+          fi
           echo "formulae=$pkgs" >> "$GITHUB_OUTPUT"
           # Without brew every formula would look missing.
           command -v brew >/dev/null || {
@@ -281,7 +301,7 @@ jobs:
       - name: Homebrew key
         id: brew
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
-        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@2120e6294e3c7ead8bb168d757f940b21d21267c
+        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@78502552393f4f2cac0ce0409fb1c8950d5c3e5d
         with:
           formulae: ${{ steps.formulae.outputs.formulae }}
 
@@ -290,7 +310,15 @@ jobs:
       # sensor pin in third_party/CMakeLists.txt, which holds the SDK pin.
       - name: Install the Orbbec SDK
         if: steps.detect.outputs.present == 'true' && inputs.orbbec_sdk
-        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@1fc39c0cab3f77fb3613a5277287d2e25052ca8c
+        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@ffa20eac6da8fcfbbfc2475e1f8bd8b4fbbec76a
+
+      # librealsense, on the Ubuntu legs that build VS_WITH_REALSENSE: the
+      # pinned release from RealSense's apt repository, its key checked, by
+      # sensor's action at the sensor pin, which holds the pin. The Mac's
+      # formula is checked with the others above.
+      - name: Install librealsense
+        if: steps.detect.outputs.present == 'true' && inputs.realsense_sdk && runner.os == 'Linux'
+        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-librealsense@ffa20eac6da8fcfbbfc2475e1f8bd8b4fbbec76a
 
       # Report the Vulkan device the runner sees (the real GPU in a self-hosted
       # container, lavapipe on a hosted Linux runner, MoltenVK on macOS). On a
@@ -392,6 +420,7 @@ jobs:
           for attempt in 1 2 3; do
             if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
                 -DVS_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
+                -DVS_WITH_REALSENSE=${{ inputs.realsense_sdk && 'ON' || 'OFF' }} \
                 -DVS_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
                 -DVS_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }} \
                 -DVGRID_WITH_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}; then

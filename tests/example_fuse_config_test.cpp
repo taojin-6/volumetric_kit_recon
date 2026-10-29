@@ -4,10 +4,10 @@
 // The fusing examples' side of the integration boundary: every fusing
 // template loads and maps into the codec's runtime options (grid's
 // codec_config.hpp), core-validated settings reach the sender's config, the
-// Replica sensor's options and, where the driver is built, the Orbbec streams
-// unchanged, and the live templates hold what they document. The codec's side
-// is grid's example_config_test.cpp. No file assets, device or camera are
-// opened.
+// Replica sensor's options and, where each driver is built, the Orbbec streams
+// and the RealSense camera's options unchanged, and the live templates hold
+// what they document. The codec's side is grid's example_config_test.cpp. No
+// file assets, device or camera are opened.
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -20,6 +20,9 @@
 #include "volumetric_kit/grid/networking/stream_server.hpp"
 #ifdef VR_TEST_ORBBEC_CONFIG
 #include "orbbec_config.hpp"
+#endif
+#ifdef VR_TEST_REALSENSE_CONFIG
+#include "realsense_camera.hpp"
 #endif
 
 namespace cfg = volumetric_kit::core::config;
@@ -41,6 +44,7 @@ int main() {
       {"stream_orbbec", cfg::Application::FuseOrbbec},
       {"readback_orbbec", cfg::Application::FuseOrbbec},
       {"dump_orbbec", cfg::Application::FuseOrbbec},
+      {"fuse_realsense", cfg::Application::FuseRealsense},
       {"fuse_render", cfg::Application::FuseRender},
       {"fuse_viewer", cfg::Application::FuseViewer},
       {"rig_viewer", cfg::Application::RigViewer},
@@ -61,6 +65,7 @@ int main() {
     const bool coded = std::string(example.file) == "codec_orbbec";
     const bool served = std::string(example.file) == "serve_orbbec";
     const bool live = example.application == cfg::Application::FuseOrbbec ||
+                      example.application == cfg::Application::FuseRealsense ||
                       example.application == cfg::Application::RigViewer;
     CHECK(loaded->fusion.dynamic == live);
     CHECK(loaded->output.csv.empty() != coded);
@@ -228,6 +233,46 @@ int main() {
           mapped.fps == driver.fps);
     CHECK(!mapped.color_controls);
   }
+#endif
+#ifdef VR_TEST_REALSENSE_CONFIG
+  // fuse_realsense's template opens the only camera attached at the driver's
+  // own modes, the live depth gate, its projector on and its colour at auto
+  // exposure.
+  const auto realsense =
+      cfg::load(std::string(VR_CONFIG_FIXTURES) + "/fuse_realsense.json",
+                cfg::Application::FuseRealsense);
+  CHECK(realsense);
+  const sensor::RealSenseSensor::Options template_options =
+      vr_example::realsense_options(realsense.value());
+  const sensor::RealSenseSensor::Options driver;
+  CHECK(template_options.serial.empty());
+  CHECK(template_options.depth_width == driver.depth_width &&
+        template_options.depth_height == driver.depth_height &&
+        template_options.color_width == driver.color_width &&
+        template_options.color_height == driver.color_height &&
+        template_options.fps == driver.fps);
+  CHECK(template_options.min_depth == 0.25F &&
+        template_options.max_depth == 5.F);
+  CHECK(template_options.emitter && !template_options.color_controls);
+  CHECK(realsense->output.path ==
+        (results / "realsense.ply").lexically_normal().string());
+  // Every field the profile takes reaches its option, none crossed.
+  const auto named = cfg::parse(R"({
+    "version": 1, "operation": "fuse",
+    "source": {"kind": "live", "driver": "realsense", "serial": "215122251234",
+               "color_width": 640, "color_height": 480,
+               "depth_width": 848, "depth_height": 100, "fps": 15},
+    "fusion": {"min_depth_m": 0.4, "max_depth_m": 3.5}
+  })",
+                                cfg::Application::FuseRealsense);
+  CHECK(named);
+  const sensor::RealSenseSensor::Options opened =
+      vr_example::realsense_options(named.value());
+  CHECK(opened.serial == "215122251234");
+  CHECK(opened.color_width == 640 && opened.color_height == 480);
+  CHECK(opened.depth_width == 848 && opened.depth_height == 100);
+  CHECK(opened.fps == 15);
+  CHECK(opened.min_depth == 0.4F && opened.max_depth == 3.5F);
 #endif
   return 0;
 }
