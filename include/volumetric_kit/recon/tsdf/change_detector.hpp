@@ -52,7 +52,8 @@ enum class PixelChange : std::uint32_t {
 ///        the frame they happen, 98%).
 ///
 /// A pixel's residual is `r = (d - d_hist) / sigma_r`, with `d_hist` its
-/// history and `sigma_r` its own temporal noise, floored by @ref noise. Two
+/// history and `sigma_r` its own temporal noise, floored by the sensor's
+/// @ref DepthNoise at the sample's depth. Two
 /// cumulative sums, `S+ = max(0, S+ + r - k)` for farther and
 /// `S- = max(0, S- - r - k)` for nearer, alarm past @ref h; one frame with
 /// `|r|` past @ref one_frame alarms too.
@@ -160,8 +161,10 @@ class VR_TSDF_API ChangeDetector {
   /// @param noise   The camera's noise floor.
   /// @param gate    Optional word; 0 tests nothing and leaves the camera's
   ///                history and mask as they were (a set its allocation
-  ///                left incomplete, fused again later). Must be a complete,
-  ///                aligned word in a known device-local storage buffer.
+  ///                left incomplete, fused again later), but for a first
+  ///                frame at a new size, whose zeroing does not wait for
+  ///                the gate. Must be a complete, aligned word in a known
+  ///                device-local storage buffer.
   /// @param stage   Optional tag for the pass's device time.
   /// @return OK, with the pass recorded; or, with nothing recorded,
   ///         `Status::Code::InvalidArgument` for a moved-from detector, a

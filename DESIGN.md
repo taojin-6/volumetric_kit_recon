@@ -799,6 +799,8 @@ next (2026-10-10, amended 2026-10-22). Its fuser belongs to one grid.
 failures, any failed-grow status and final occupancy; failed allocation
 requests can refer to the same block repeatedly. Host allocation exceptions
 become `OutOfMemory`, and a host failure during rehash rolls the map back.
+Scanner-specific memory callbacks and allocation-stop thresholds are deferred
+to the iOS port, alongside the actual caller and peak-memory measurements.
 
 `ChangeDetector` (`tsdf/change_detector.hpp`) tells a fixed camera's real
 change from its noise, a pixel against its own past (2026-10-29). Each
@@ -813,11 +815,10 @@ one frame past 6 sigma alarms; an alarm restarts the pixel's history and
 freezes its noise estimate for 30 samples; a pixel tests once it holds 30
 samples. An invalid sample changes nothing, a camera missing from a set is
 simply not detected, and one whose image size changes starts over. A gate
-word, as `record_integrate` takes one, has a pass test nothing. Its first
-frame zeroes a camera's state in a submit of its own; 24 bytes a pixel in
+word, as `record_integrate` takes one, has a pass test nothing, though a
+camera's first frame at a new size starts its history all the same: that
+frame zeroes the camera's state in a submit of its own. 24 bytes a pixel in
 all, 8.8 MB a 640 x 576 camera.
-Scanner-specific memory callbacks and allocation-stop thresholds are deferred
-to the iOS port, alongside the actual caller and peak-memory measurements.
 
 ### texture
 

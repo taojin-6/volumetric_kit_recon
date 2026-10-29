@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 
+#include "gate_word.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
@@ -171,23 +172,8 @@ core::Status ChangeDetector::record_detect(
       max_storage_buffer_range_));
   std::uint32_t gate_word = kNoGate;
   if (gate != nullptr) {
-    constexpr VkDeviceSize word_bytes = sizeof(std::uint32_t);
-    if (gate->buffer == nullptr || gate->offset % word_bytes != 0 ||
-        gate->buffer->size() < word_bytes ||
-        gate->offset > gate->buffer->size() - word_bytes) {
-      return core::Status::invalid_argument(
-          std::string(kWhat) +
-          ": the gate's word is missing, misaligned or past its buffer");
-    }
-    VKC_TRY(core::StorageInput(*gate->buffer)
-                .check("ChangeDetector::record_detect: gate",
-                       gate->offset + word_bytes));
-    // The binding takes the whole buffer, which also keeps the word's index
-    // below the no-gate sentinel.
-    VKC_TRY(core::check_storage_buffer_range(
-        "ChangeDetector::record_detect: gate", gate->buffer->size(),
-        max_storage_buffer_range_));
-    gate_word = static_cast<std::uint32_t>(gate->offset / word_bytes);
+    VKC_ASSIGN(gate_word,
+               detail::gate_word(*gate, kWhat, max_storage_buffer_range_));
   }
 
   // A camera's first frame, or one of a new size, starts its history: both

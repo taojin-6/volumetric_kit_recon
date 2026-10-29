@@ -5242,7 +5242,11 @@ static takes with injected changes (CPU, both takes, four cameras):
 - without the freeze, sustained motion trains `sigma_r` up and doubles the
   lag at 10 mm a frame.
 h is the one knob: h 5 is 1-2 frames faster on 5-10 mm steps and resets
-0.145% of rays a frame. The warm-up counts a pixel's own samples, not the
+0.145% of rays a frame. As measured, the floor is taken at the sample's
+depth, and a restarted history is tested from its next sample at the
+pixel's `sigma_r`, not inflated by the one-sample history's own error: 5.9%
+of alarms follow another on the same pixel within 3 frames, part of the
+rates above; inflating by sqrt(1 + 1/n) is untried. The warm-up counts a pixel's own samples, not the
 camera's frames, so a pixel first seen late learns before it tests, and the
 state is all on the device: a gated-off pass changes nothing.
 

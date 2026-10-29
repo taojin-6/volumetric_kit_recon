@@ -21,6 +21,9 @@
 //   mask, a twin that skipped them.
 // - A camera that leaves and returns compares with its own history; one whose
 //   image changes size starts a new history.
+// - A closed gate word tests nothing: a 5 cm step behind it is flagged on
+//   the next frame the gate opens, as the history never saw it; the word is
+//   found at its offset, and a bad one is refused.
 // - The refusals, and move construction.
 // Skips where no device is present.
 
@@ -45,12 +48,14 @@
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/change_detector.hpp"
 
+#include "volumetric_kit/core/testing/buffer_readback.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace tsdf = volumetric_kit::recon::tsdf;
+namespace vol = volumetric_kit::grid::volume;
 
 namespace {
 
@@ -295,6 +300,62 @@ double alarms_per_pixel_second(const Masks& m, Slot slot, int from, int to,
   return double(alarms) / double(samples) * kFps;
 }
 
+// The gate: slot 20, a 32 x 32 plane at 2 m, its word the third of four.
+int gate_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
+  constexpr std::uint32_t kSlot = 20;
+  constexpr std::uint32_t kGateSide = 32;
+  const sensor::DepthCameraParams cam = camera(kGateSide);
+  auto words = vkc::device_storage_buffer(gpu.allocator, 16);
+  CHECK(words.ok());
+  const vol::DeviceCount gate{&words.value(), 8, 1};
+  const auto set_gate = [&](std::uint32_t open) {
+    return vkc::test::write_back(gpu.device, gpu.allocator, words.value(),
+                                 std::vector<std::uint32_t>{1, 1, open, 1});
+  };
+  Noise noise(7u);
+  std::vector<float> depth(kGateSide * kGateSide);
+  const auto frame = [&](float z, std::uint32_t open,
+                         std::vector<std::uint32_t>& mask) -> int {
+    for (float& d : depth) d = z + tof_sigma(z) * noise.gauss();
+    CHECK(set_gate(open).ok());
+    vkc::CommandBatch batch(gpu.device, gpu.allocator);
+    CHECK(detector
+              .record_detect(batch, kSlot, vkc::StorageInput(depth.data()), cam,
+                             {}, &gate)
+              .ok());
+    mask.assign(depth.size(), 0xFFu);
+    CHECK(batch
+              .readback(*detector.mask(kSlot), 0,
+                        mask.size() * sizeof(std::uint32_t), mask.data())
+              .ok());
+    CHECK(batch.submit().ok());
+    return 0;
+  };
+  std::vector<std::uint32_t> mask;
+  for (int t = 0; t < 40; ++t) CHECK(frame(2.0f, 1, mask) == 0);
+  const std::vector<std::uint32_t> before = mask;
+  // Closed: the step is not seen, and the mask stays as it was.
+  CHECK(frame(2.05f, 0, mask) == 0);
+  CHECK(mask == before);
+  // Open: the history never saw the step, so it is flagged now.
+  CHECK(frame(2.05f, 1, mask) == 0);
+  std::size_t farther = 0;
+  for (const std::uint32_t m : mask) farther += m == 2 ? 1 : 0;
+  CHECK(double(farther) > 0.98 * double(mask.size()));
+  // A gate word misaligned, past its buffer, or with no buffer is refused.
+  const auto refused = [&](const vol::DeviceCount& bad) {
+    vkc::CommandBatch batch(gpu.device, gpu.allocator);
+    return detector
+               .record_detect(batch, kSlot, vkc::StorageInput(depth.data()),
+                              cam, {}, &bad)
+               .domain() == vkc::Status::Code::InvalidArgument;
+  };
+  CHECK(refused({&words.value(), 6, 1}));
+  CHECK(refused({&words.value(), 16, 1}));
+  CHECK(refused({nullptr, 0, 1}));
+  return 0;
+}
+
 int refusals(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
   const sensor::DepthCameraParams cam = camera(kSide);
   const std::vector<float> depth(kPixels, 2.0f);
@@ -356,6 +417,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
               .domain() == vkc::Status::Code::InvalidArgument);
   }
   if (refusals(gpu, detector) != 0) return 1;
+  if (gate_case(gpu, detector) != 0) return 1;
 
   const tsdf::DepthNoise tof{};  // the Femto's
   const tsdf::DepthNoise stereo{0.0f, 0.0f, kStereoC};
