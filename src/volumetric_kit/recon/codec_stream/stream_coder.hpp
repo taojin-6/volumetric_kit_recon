@@ -3,13 +3,9 @@
 
 #pragma once
 
-// What a CodecStream holds and does, and the frame in halves that SetSender
-// records through it around a set's fusion: the front half recorded into the
-// set's batch, its device rows once that batch has run, the front half again
-// after a fusion done again, then the back half, the write, the serve and the
-// decode, as code does. Internal: CodecStream owns one and hands it out as an
-// incomplete type (CodecStream::coder), and only the tier's sources include
-// this header, so the halves are no public call (DECISIONS, 2026-10-26).
+// What a CodecStream holds and does, its calls each CodecStream's of the same
+// name, the frame in halves included. Internal: CodecStream owns one and
+// forwards to it, and only the tier's sources include this header.
 
 #include <cstddef>
 #include <cstdint>
@@ -24,14 +20,14 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
+#include "volumetric_kit/recon/codec_stream/codec_stream.hpp"
 #include "volumetric_kit/recon/networking/stream_server.hpp"
-#include "volumetric_kit/recon/sender/codec_stream.hpp"
 #include "volumetric_kit/recon/stream/chunks.hpp"
 #include "volumetric_kit/recon/stream/session.hpp"
 #include "volumetric_kit/recon/stream/stream_writer.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
-namespace volumetric_kit::recon::sender::detail {
+namespace volumetric_kit::recon::codec_stream::detail {
 
 class StreamCoder {
  public:
@@ -52,41 +48,14 @@ class StreamCoder {
   core::Result<SentFrame> code(volume::VoxelBlockGrid& grid, std::uint64_t set,
                                std::uint64_t pts_ns);
 
-  // Record `grid`'s frame's front half into `front`, after what it holds --
-  // a sender's fusion -- for finish_frame (Encoder::record_front), its rows
-  // the frame's own. The front half decides the frame's type, so a viewer's
-  // request for a key is read here, as code reads it; it stands until a
-  // frame is returned, so a front half recorded again (redo) keeps it.
-  // Returns the pending frame; InvalidArgument for a finished stream; or the
-  // encoder's refusal, with nothing recorded.
-  core::Result<codec::PendingEncode> record(core::CommandBatch& front,
-                                            volume::VoxelBlockGrid& grid);
-
-  // Once the front batch record recorded into has resolved: its device rows
-  // into the frame's rows where the front half placed that row
-  // (Encoder::record_front places its stage's and each breakdown's as it
-  // opens), the rest into `rest`, when given.
+  // As CodecStream::record_front, ::front_ran, ::redo and ::finish_frame.
+  core::Result<codec::PendingEncode> record_front(core::CommandBatch& front,
+                                                  volume::VoxelBlockGrid& grid);
   void front_ran(const std::vector<core::StageRow>& device_rows,
                  core::StageMetrics* rest);
-
-  // The front half again, in a batch of its own and waited on: what a sender
-  // does after a fusion done again (FuseReport::redone, rare), whose front
-  // batch encoded the grid without the set. The frame's rows keep the first
-  // front half's, which the device ran too, and add this one's. `rows`, when
-  // given, takes the wait ("wait: redo"). Returns the new pending frame,
-  // `pending` dropped; or the encoder's or the batch's failure.
   core::Result<codec::PendingEncode> redo(const codec::PendingEncode& pending,
                                           volume::VoxelBlockGrid& grid,
                                           core::StageMetrics* rows);
-
-  // Once `pending`'s front batch has resolved (front_ran): code its rANS half
-  // in a batch of its own and wait on it ("wait: frame"), finish the frame,
-  // then play it as code does -- written ("write") and served ("publish") as
-  // its head and payload lie, under one CRC (stream::RecordPayload, "crc"),
-  // `sent` run, and decoded, when the stream decodes, from the decoder's
-  // input buffer they are copied into. `rows`, when given, takes the frame's
-  // rows and the waits'. Returns as code; an order refusal drops `pending`
-  // first.
   core::Result<SentFrame> finish_frame(const codec::PendingEncode& pending,
                                        std::uint64_t set, std::uint64_t pts_ns,
                                        core::StageMetrics* rows,
@@ -153,4 +122,4 @@ class StreamCoder {
   std::uint32_t max_blocks_ = 0;
 };
 
-}  // namespace volumetric_kit::recon::sender::detail
+}  // namespace volumetric_kit::recon::codec_stream::detail

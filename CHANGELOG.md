@@ -217,6 +217,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_subproject_headers`, `recon_mesh_marching_cubes_sparse`,
   `recon_volume_hash_map`, `recon_voxelize_mesh_integrate_exact`, and the
   tests that name the attributes.
+- `codec_stream`, `sender`: **the codec stream is a tier of its own,
+  `codec_stream`, and its frame in halves is public** (the 2026-10-28
+  codec-stream decision): `codec_stream::CodecStream`, `CodecOutputs` and
+  `SentFrame` (`codec_stream/codec_stream.hpp`) in the new target
+  `volumetric_kit::recon_codec_stream`, which links the codec, the stream and
+  networking, and no fusion or sensor tier; `recon_sender` keeps `SetSender`
+  and `fuse_inputs` and links it. `CodecStream` gains `record_front`,
+  `front_ran`, `redo`, `finish_frame` and `valid()`, through which
+  `SetSender` codes its frames; `CodecStream::coder()` is gone. Frames,
+  records and rows are unchanged. Migration: include
+  `volumetric_kit/recon/codec_stream/codec_stream.hpp`, name
+  `codec_stream::` for `sender::` on those three types, and link
+  `recon_codec_stream` where `recon_sender` was linked only for the stream;
+  nothing forwards from the old names. Tests: `recon_sender_codec_stream` is
+  `recon_codec_stream`, and its case through `SetSender` is in
+  `recon_sender_set_sender`.
+- `examples`: **the codec helpers include no fusion**: `sender_config` and
+  `report_sent` move from `examples/common/codec_config.hpp` and
+  `codec_report.hpp` to the new `examples/common/fuse_sender.hpp`, so the
+  codec helpers include neither `fuse_frame.hpp` nor `sender::SetSender`,
+  and `codec_mesh` includes no fuser or sensor header (it still links
+  `recon_sender` for `CodecStream`). The functions, and every report, log
+  and parse, are unchanged. Migration: a caller of either includes
+  `fuse_sender.hpp`. Tests: `recon_example_config` and
+  `recon_example_codec_report` keep the codec halves;
+  `recon_example_fuse_config` and `recon_example_fuse_sender` (new) take the
+  fusing halves.
 - `core`, tests, build: **recon adopts core 0.29.0 and drops its own copies**
   (the 2026-10-28 core-adoption decision): the core pin, the Homebrew key
   action and `VR_CORE_MIN_VERSION` move to 0.29.0 (core #65's merge).

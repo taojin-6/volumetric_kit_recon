@@ -795,7 +795,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   `SentFrame` and `fuse_inputs`, printing nothing. The frame's halves are an
   internal class that `CodecStream` hands out only incomplete, so no
   `friend` is needed. The examples keep their reports, built from what the
-  calls return.
+  calls return. *Amended 2026-10-28:* the stream is a tier of its own,
+  `codec_stream`, and the halves are its public calls; `coder()` is gone.
 - [**2026-10-26**](#2026-10-26--meshexchanges-consumer-may-drop-a-mesh-it-took-a-third-outcome-rather-than-a-deadline-in-the-exchange-and-a-ring-slot-more-for-each-mesh-dropped-before-the-next-commit-amends-the-2026-10-08-meshexchange-entry) —
   `MeshExchange`'s commit may drop a mesh it took (`CommitDecision::kDrop`):
   it never becomes live, the next frame takes the newest mesh, and its slot
@@ -858,6 +859,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   `VKC_PACKAGE_VERSION` for a consumer's `vkc_require_sibling`, the headers
   include the core's `vulkan/fwd.hpp`, and the tests run on the core's test
   support. The core floor is 0.29.0.
+- [**2026-10-28**](#2026-10-28--the-codec-stream-is-a-tier-of-its-own-codec_stream-on-codec-and-networking-and-its-frame-in-halves-is-public-amends-the-2026-10-26-sender-entry) —
+  The codec stream is a tier of its own, `codec_stream`
+  (`recon_codec_stream`), on `codec` and `networking`: `CodecStream`,
+  `CodecOutputs` and `SentFrame` leave `recon_sender`, which keeps
+  `SetSender` and `fuse_inputs`. The frame in halves is the stream's public
+  calls (`record_front`, `front_ran`, `redo`, `finish_frame`), `SetSender`
+  codes through them, and `coder()` is gone.
 - [**2026-10-28**](#2026-10-28--the-voxel-grids-gpu-contract-has-one-home-volume-exports-grid_typesglsl-and-voxel_colorglsl-names-its-shared-attributes-and-keeps-the-hash-entries-internal-amends-the-2026-08-02-color-space-and-2026-10-13-block-list-entries) —
   The voxel grid's GPU contract has one home: `recon_volume` exports
   `grid_types.glsl` (the grid's structs, the in-block index, `vrTickAfter`)
@@ -15817,6 +15825,10 @@ no Warning on demand; and fuse_orbbec's options replaying the GOP.
 
 ### 2026-10-26 — A sender's set step and its codec stream are library calls, in `recon_sender` after `networking`; the frame's halves stay internal, with no friend (amends the 2026-10-25 two-batch sender and keys-on-demand entries).
 
+*Amended 2026-10-28 (below):* `CodecStream`, `CodecOutputs` and
+`SentFrame` are `codec_stream::`, in a tier of their own, and the frame's
+halves are the stream's public calls; `coder()` is gone.
+
 **The rule.** `SetSender`, `CodecStream`, `CodecOutputs`, `SentFrame` and
 `fuse_inputs` move from `examples/common` (`set_codec.hpp`,
 `codec_stream.hpp`, `fuse_frame.hpp`) into `recon_sender` (`sender/`), and
@@ -16476,6 +16488,68 @@ recon, and `recon_subproject_old_recon` one whose floor, a minor above,
 is refused naming recon's version. `recon_subproject_glsl` builds the
 consumer's kernel through `INCLUDE_TARGETS`.
 
+### 2026-10-28 — The codec stream is a tier of its own, `codec_stream`, on `codec` and `networking`, and its frame in halves is public (amends the 2026-10-26 sender entry).
+
+**The rule.** `CodecStream`, `CodecOutputs` and `SentFrame` are
+`codec_stream::`, in `codec_stream/codec_stream.hpp` and the target
+`recon_codec_stream`, which links `recon_codec`, `recon_stream` and
+`recon_networking` and sits right after `networking` in the tier order.
+`recon_sender` keeps `SetSender` and `fuse_inputs` and links it. The frame
+in halves is the stream's own public calls: `record_front` into the
+caller's batch, `front_ran` once that batch has resolved, `redo` for a grid
+changed after it, and `finish_frame`; `valid()` tells a moved-from stream.
+`coder()` is gone, and `stream_coder.hpp` is the stream's implementation,
+included by its source alone. No header forwards and no namespace aliases
+the old names.
+
+**Why.** The stream needs the codec, the container and the server, and
+nothing that fuses or reads a sensor. In `recon_sender` every user of the
+stream, `codec_mesh` and a consumer's stream writer among them, linked the
+fuser and the frame prep. And `coder()` handed a private type across a
+tier: `SetSender`'s source completed it from a header beside the stream's
+source. It is the prep step that lets the codec stream leave recon with the
+codec, without depth fusion.
+
+**The halves public, on the stream.** The 2026-10-26 entry kept them
+internal, so that no caller could misuse four record calls. `SetSender`
+now reaches them from another tier, through a public API only. A second
+public class would need the accessor this removes, or repeat the stream's
+calls. They are refused where they can be, as the encoder's own halves
+are: a pending frame that a later front half or `code` superseded, a frame
+out of order (its pending frame dropped), and every half of a finished or
+moved-from stream but `front_ran`, which then does nothing. The rest is a
+precondition, as the encoder's is: the front batch resolved before
+`front_ran` and `finish_frame`.
+
+**What stays.** Every frame, record and row. `SetSender::send` makes the
+calls it made, through the stream's public calls rather than the internal
+class: one call and one null check more per half, three a coded set. A set
+due a frame of a moved-from stream is still refused before anything is
+recorded, now through `valid()`.
+
+**Tests.** `recon_sender_codec_stream` is `recon_codec_stream`
+(`tests/codec_stream_test.cpp`), which links `recon_codec_stream` and no
+fuser, mesh or sensor tier. Its case through `SetSender` moves, unchanged
+but for its names, to `recon_sender_set_sender`. In its place, the halves
+alone: frames in halves around a caller's timed batch are the file `code`
+writes, byte for byte, the batch's device rows split between the frame and
+the caller's own scope; a front half on another grid, recorded again on the
+source, makes `code`'s frame of the source, its wait timed, and the pending
+frame it replaced is refused; a frame out of order is refused; a viewer
+joining between two frames makes the next frame in halves an I-frame and a
+key record; and a finished or moved-from stream refuses the halves, a frame
+whose front half ran before `finish` included.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors,
+Assimp and the Orbbec SDK, under the validation layer with a device
+required: the tree builds, and the 19 affected tests pass. Mutations each
+fail a test: `front_ran` giving the frame no device rows, or every row;
+`valid()` true on a moved-from stream; `redo` keeping the first front half;
+`finish_frame` dropping `sent`; `redo` dropping its rows; `record_front`
+not reading the viewers' key requests (`recon_sender_set_sender` too);
+`finish_frame` taking a finished stream, or refusing it as out of order;
+all in `recon_codec_stream`.
+
 ### 2026-10-28 — The voxel grid's GPU contract has one home: `volume` exports `grid_types.glsl` and `voxel_color.glsl`, names its shared attributes, and keeps the hash entries internal (amends the 2026-08-02 color-space and 2026-10-13 block-list entries).
 
 **The rule.** What a kernel outside the voxel grid's tiers may include is
@@ -16527,7 +16601,7 @@ built through `INCLUDE_TARGETS`: `vrTickAfter` against `tick_after` across
 the wrap, the in-block index for every voxel of five block sizes, and every
 field of the three structs read from the host PODs. `recon_volume_voxel_color`
 (was `recon_core_color_space_gpu`) runs `voxel_color.glsl` over every grey
-code, the unobserved word and 256 others against `voxel_color.hpp`, and holds
+code, the unobserved word and 255 others against `voxel_color.hpp`, and holds
 `voxel_color.hpp` to `color_space.hpp` bit for bit on the host.
 `recon_io_ply` writes 5,892 linear channels, every code's rounding edge
 among them, and reads back `color_space.hpp`'s codes. The subproject

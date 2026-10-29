@@ -5,7 +5,6 @@
 
 #include <utility>
 
-#include "stream_coder.hpp"
 #include "volumetric_kit/recon/sender/fuse_inputs.hpp"
 
 namespace volumetric_kit::recon::sender {
@@ -21,13 +20,15 @@ constexpr std::uint32_t kSpans = 128;
 core::Result<SetSender> SetSender::create(const core::Device& device,
                                           tsdf::Fuser& fuser,
                                           volume::VoxelBlockGrid& grid,
-                                          CodecStream* stream, Config config) {
+                                          codec_stream::CodecStream* stream,
+                                          Config config) {
   VKC_ASSIGN(core::GpuTimer timer, core::GpuTimer::create(device, kSpans));
   return SetSender(fuser, grid, stream, config, std::move(timer));
 }
 
 SetSender::SetSender(tsdf::Fuser& fuser, volume::VoxelBlockGrid& grid,
-                     CodecStream* stream, Config config, core::GpuTimer timer)
+                     codec_stream::CodecStream* stream, Config config,
+                     core::GpuTimer timer)
     : fuser_(&fuser),
       grid_(&grid),
       stream_(stream),
@@ -44,10 +45,9 @@ core::Result<SetSender::Sent> SetSender::send(
     const std::vector<std::optional<sensor::DeviceFrame>>& frames,
     std::shared_ptr<const void> inputs, std::size_t index, std::uint64_t pts_ns,
     core::StageMetrics* rows, const std::function<void()>& sent) {
-  // A coded set's frame goes through the stream's coder, in halves.
-  detail::StreamCoder* const coder =
-      code_due(index) ? stream_->coder() : nullptr;
-  if (code_due(index) && coder == nullptr) {
+  // A coded set's frame goes through the stream in halves.
+  codec_stream::CodecStream* const coder = code_due(index) ? stream_ : nullptr;
+  if (coder != nullptr && !coder->valid()) {
     return core::Status::invalid_argument(
         "SetSender: the stream is moved from");
   }
@@ -70,7 +70,8 @@ core::Result<SetSender::Sent> SetSender::send(
   }
   std::optional<codec::PendingEncode> coded;
   if (coder != nullptr) {
-    core::Result<codec::PendingEncode> recorded = coder->record(front, *grid_);
+    core::Result<codec::PendingEncode> recorded =
+        coder->record_front(front, *grid_);
     if (!recorded.ok()) {
       fuser_->abandon(fused);
       return recorded.status();

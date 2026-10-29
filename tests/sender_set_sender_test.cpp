@@ -35,7 +35,10 @@
 // make its frame a key, one however many join, the period following from it,
 // through the sender and through code, a set whose fusion is done again
 // included, and each viewer's first frame is that key. A sender over a
-// moved-from stream is refused. The device part skips with no device.
+// moved-from stream is refused. On a grid holding a sphere, with no frames to
+// fuse, a sender's frames are the file CodecStream::code writes, byte for
+// byte, frames the decoder refuses and one out of order included. The device
+// part skips with no device.
 
 #include <algorithm>
 #include <array>
@@ -52,6 +55,7 @@
 #include <utility>
 #include <vector>
 
+#include "codec_fixture.hpp"
 #include "grid_readback.hpp"
 #include "networking_loopback.hpp"
 #include "stage_rows.hpp"
@@ -63,10 +67,10 @@
 #include "volumetric_kit/recon/codec/decode_grid.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
+#include "volumetric_kit/recon/codec_stream/codec_stream.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
-#include "volumetric_kit/recon/sender/codec_stream.hpp"
 #include "volumetric_kit/recon/sender/fuse_inputs.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
@@ -78,6 +82,7 @@ namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace camera = volumetric_kit::recon::camera;
 namespace codec = volumetric_kit::recon::codec;
+namespace codec_stream = volumetric_kit::recon::codec_stream;
 namespace sender = volumetric_kit::recon::sender;
 namespace sensor = volumetric_kit::recon::sensor;
 namespace stream = volumetric_kit::recon::stream;
@@ -415,14 +420,14 @@ int code_sets(vkc::test::GpuContext& gpu, const Fusion& fusion,
   CHECK(fuser.ok());
   auto extractor = vr::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
   CHECK(extractor.ok());
-  std::optional<sender::CodecStream> coded;
+  std::optional<codec_stream::CodecStream> coded;
   if (!path.empty()) {
     codec::EncoderConfig config;
     config.intra_period = 30;
-    sender::CodecOutputs outputs;
+    codec_stream::CodecOutputs outputs;
     outputs.stream = path;
-    auto made = sender::CodecStream::create(gpu.device, gpu.allocator, config,
-                                            geometry_session(), outputs);
+    auto made = codec_stream::CodecStream::create(
+        gpu.device, gpu.allocator, config, geometry_session(), outputs);
     CHECK(made.ok());
     coded.emplace(std::move(made).value());
   }
@@ -704,14 +709,14 @@ int keyed_sets(vkc::test::GpuContext& gpu, const Keyed& run,
   CHECK(fuser.ok());
   codec::EncoderConfig config;
   config.intra_period = run.period;
-  sender::CodecOutputs outputs;
+  codec_stream::CodecOutputs outputs;
   outputs.stream = path;
   outputs.serve.emplace();
   outputs.serve->host = "127.0.0.1";
   outputs.serve->port = 0;
   outputs.serve->replay_gop = false;
-  auto coded = sender::CodecStream::create(gpu.device, gpu.allocator, config,
-                                           geometry_session(), outputs);
+  auto coded = codec_stream::CodecStream::create(
+      gpu.device, gpu.allocator, config, geometry_session(), outputs);
   CHECK(coded.ok() && coded->server() != nullptr);
   const networking::StreamServer& server = *coded->server();
   sender::SetSender::Config sending;
@@ -847,10 +852,10 @@ int moved_from(vkc::test::GpuContext& gpu) {
                                            fusion.voxel_size_m,
                                            fusion.truncation_m, 1024);
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
-  auto made = sender::CodecStream::create(gpu.device, gpu.allocator, {},
-                                          geometry_session());
+  auto made = codec_stream::CodecStream::create(gpu.device, gpu.allocator, {},
+                                                geometry_session());
   CHECK(grid.ok() && fuser.ok() && made.ok());
-  sender::CodecStream stream = std::move(made).value();
+  codec_stream::CodecStream stream = std::move(made).value();
   auto left = sender::SetSender::create(gpu.device, *fuser, *grid, &*made, {});
   auto moved =
       sender::SetSender::create(gpu.device, *fuser, *grid, &stream, {});
@@ -872,6 +877,81 @@ int moved_from(vkc::test::GpuContext& gpu) {
       CHECK(sent.ok() && sent->coded.has_value() && stream.coded() == 1);
     }
   }
+  return 0;
+}
+
+// A sender's frames (SetSender::send with no frames to fuse, so each set is
+// its frame alone), recorded into a front batch, then finished: the file
+// CodecStream::code writes, byte for byte, I- and P-frames, and two frames on
+// `other` that the decoder refuses, the second an I-frame as code() makes it,
+// where the encoder would code a P-frame on the first; each set published
+// once, before its decode, its rows its frame's encode with "crc", "write",
+// "publish" and the waits, and each frame as code() returns it. A frame out
+// of order is refused, its front dropped, and the stream goes on.
+int halves(vkc::test::GpuContext& gpu, vr::volume::VoxelBlockGrid& source,
+           vr::volume::VoxelBlockGrid& other,
+           const vkc::test::Scratch& scratch) {
+  codec::EncoderConfig config;
+  config.intra_period = 3;
+  codec_stream::CodecOutputs by_code;
+  by_code.stream = (scratch.path / "halves_code.vrst").string();
+  codec_stream::CodecOutputs by_halves;
+  by_halves.stream = (scratch.path / "halves.vrst").string();
+  by_halves.serve.emplace();
+  by_halves.serve->host = "127.0.0.1";
+  by_halves.serve->port = 0;
+  vkc::Result<codec_stream::CodecStream> a = codec_stream::CodecStream::create(
+      gpu.device, gpu.allocator, config, geometry_session(), by_code);
+  vkc::Result<codec_stream::CodecStream> b = codec_stream::CodecStream::create(
+      gpu.device, gpu.allocator, config, geometry_session(), by_halves);
+  vkc::Result<vr::tsdf::Fuser> fuser =
+      vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
+  CHECK(a.ok() && b.ok() && fuser.ok());
+  const auto send = [&](vr::volume::VoxelBlockGrid& grid, std::size_t frame,
+                        vkc::StageMetrics* rows, int* published) {
+    vkc::Result<sender::SetSender> out =
+        sender::SetSender::create(gpu.device, *fuser, grid, &*b, {});
+    if (!out.ok()) return vkc::Result<sender::SetSender::Sent>(out.status());
+    vkc::CommandBatch front(gpu.device, gpu.allocator);
+    front.time(out->timer());
+    return out->send(front, {}, nullptr, frame, set_time(frame), rows,
+                     [published] { ++*published; });
+  };
+  for (std::size_t frame = 0; frame < 5; ++frame) {
+    const bool refused = frame == 2 || frame == 3;
+    vr::volume::VoxelBlockGrid& grid = refused ? other : source;
+    const vkc::Result<codec_stream::SentFrame> x =
+        a->code(grid, frame, set_time(frame));
+    CHECK(x.ok() != refused);
+    vkc::StageMetrics rows;
+    int published = 0;
+    const vkc::Result<sender::SetSender::Sent> y =
+        send(grid, frame, &rows, &published);
+    CHECK(y.ok() != refused && published == 1);
+    for (const char* row : {"codec encode", "  ..forward", "crc", "write",
+                            "publish", "wait: front", "wait: frame"}) {
+      CHECK(vr_test::find_row(rows, row) != nullptr);
+    }
+    if (refused) continue;
+    CHECK(y->coded.has_value() && !y->fused.redone);
+    const codec_stream::SentFrame& sent = *y->coded;
+    CHECK(sent.type == x->type && sent.bytes == x->bytes &&
+          sent.blocks == x->blocks);
+    CHECK(vr_test::find_row(sent.encode, "codec encode") != nullptr &&
+          vr_test::find_row(sent.decode, "codec decode") != nullptr);
+  }
+  // Out of order: refused, its front dropped, so the next records afresh.
+  vkc::StageMetrics rows;
+  int published = 0;
+  CHECK(send(source, 4, &rows, &published).status().domain() ==
+            vkc::Status::Code::InvalidArgument &&
+        published == 0);
+  CHECK(a->code(source, 5, set_time(5)).ok());
+  CHECK(send(source, 5, &rows, &published).ok() && published == 1);
+  CHECK(a->finish().ok() && b->finish().ok());
+  CHECK(a->coded() == 6 && b->coded() == 6);
+  CHECK(vkc::test::read_bytes(by_code.stream) ==
+        vkc::test::read_bytes(by_halves.stream));
   return 0;
 }
 
@@ -947,6 +1027,15 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(code_sets(gpu, never, "", &kept) == 0);
   CHECK(keys_case(gpu, scratch) == 0);
   CHECK(moved_from(gpu) == 0);
+  // A sphere's grid, and one at twice its voxel size, which the player of a
+  // stream begun on the first refuses.
+  const codec_fixture::Sphere sphere{vr::Vec3f(0.01f, -0.02f, 0.03f), 0.09f};
+  codec_fixture::GridShape coarser;
+  coarser.voxel_size = 2.0f * codec_fixture::kVoxel;
+  auto source = codec_fixture::sphere_grid(gpu, sphere);
+  auto other = codec_fixture::sphere_grid(gpu, sphere, coarser);
+  CHECK(source.ok() && other.ok());
+  CHECK(halves(gpu, *source, *other, scratch) == 0);
   std::puts("recon_sender_set_sender: OK");
   return 0;
 }
