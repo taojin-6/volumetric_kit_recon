@@ -34,7 +34,7 @@ FuseInputs fuse_inputs(
       color = &in.colors.back();
     }
     in.frames.push_back(
-        {{core::StorageInput(*frame->depth), frame->depth_camera}, color});
+        {core::StorageInput(*frame->depth), frame->depth_camera, color});
   }
   return in;
 }

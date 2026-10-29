@@ -45,13 +45,14 @@ void fail_allocation(std::size_t bytes, const void* site = nullptr) {
 }
 
 int gpu_main(vr_test::GpuContext& gpu) {
-  std::vector<vr_test::SphereView> views;
+  std::vector<vr_test::SphereView<vr::DepthCameraParams>> views;
   views.reserve(3);
-  for (int c = 0; c < 3; ++c) views.push_back(vr_test::sphere_view(c));
+  for (int c = 0; c < 3; ++c) {
+    views.push_back(vr_test::sphere_view<vr::DepthCameraParams>(c));
+  }
   std::vector<tsdf::FrameInput> frames;
   for (auto& view : views) {
-    frames.push_back(
-        {{vkc::StorageInput(view.depth.data()), view.cam}, nullptr});
+    frames.push_back({vkc::StorageInput(view.depth.data()), view.cam, nullptr});
   }
 
   auto grid = make_grid(gpu.device, gpu.allocator, 127);
