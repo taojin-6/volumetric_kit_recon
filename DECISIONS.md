@@ -16468,17 +16468,20 @@ alone: frames in halves around a caller's timed batch are the file `code`
 writes, byte for byte, the batch's device rows split between the frame and
 the caller's own scope; a front half on another grid, recorded again on the
 source, makes `code`'s frame of the source, its wait timed, and the pending
-frame it replaced is refused; a frame out of order is refused; and a
-finished or moved-from stream refuses the halves.
+frame it replaced is refused; a frame out of order is refused; a viewer
+joining between two frames makes the next frame in halves an I-frame and a
+key record; and a finished or moved-from stream refuses the halves, a frame
+whose front half ran before `finish` included.
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors,
 Assimp and the Orbbec SDK, under the validation layer with a device
 required: the tree builds, and the 19 affected tests pass. Mutations each
 fail a test: `front_ran` giving the frame no device rows, or every row;
 `valid()` true on a moved-from stream; `redo` keeping the first front half;
-`finish_frame` dropping `sent`; `redo` dropping its rows; all in
-`recon_codec_stream`. `record_front` not reading the viewers' key requests
-fails `recon_sender_set_sender`.
+`finish_frame` dropping `sent`; `redo` dropping its rows; `record_front`
+not reading the viewers' key requests (`recon_sender_set_sender` too);
+`finish_frame` taking a finished stream, or refusing it as out of order;
+all in `recon_codec_stream`.
 
 ## Measured lessons
 
