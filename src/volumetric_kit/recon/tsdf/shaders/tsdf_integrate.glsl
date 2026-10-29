@@ -32,7 +32,7 @@
 // integration's reset along one camera's changed rays, which a dynamic set runs
 // for every frame before any frame's fuse, so the set's cameras act as one
 // instant. A ray its camera's change detector flagged this set
-// (tsdf::ChangeDetector's mask, at binding 5) resets every voxel in front of
+// (tsdf::ChangeDetector's mask, at binding 10) resets every voxel in front of
 // its new sample and in that sample's band -- the newly exposed free space and
 // the new surface -- to the unobserved state, and keeps the history behind the
 // band, which the new surface occludes; a Vanished ray, with no new sample,
@@ -129,6 +129,13 @@ layout(set = 0, binding = 10, scalar) readonly buffer ChangeMask {
 };
 layout(set = 0, binding = 11, scalar) readonly buffer ChangeReach {
   uint change_reach[];
+};
+// The frame's outlines (tsdf_rim_map.comp): a word a pixel, the smallest
+// window around it, +-1 to +-3 pixels, that holds a return and a gap or a
+// depth range past the band; 0 for none. The fuse's rim distance reads it;
+// a 1-word dummy for the reset, which does not.
+layout(set = 0, binding = 12, scalar) readonly buffer RimMap {
+  uint rim_map[];
 };
 
 // A return the kernel fuses: positive and inside the camera's depth range.
@@ -264,7 +271,8 @@ const float kRimGapWeight = 0.25;
 // The true distance near an outline. A voxel is a rim voxel when the window
 // of its footprint -- +-ceil(half a voxel's footprint in pixels) around its
 // nearest pixel, at least 3x3, at most 7x7 -- holds a return and either a
-// pixel with none or a depth range past the band. Its distance is then the
+// pixel with none or a depth range past the band, as the frame's rim map
+// says in one read (binding 12). Its distance is then the
 // Euclidean one to the nearest back-projected return within
 // +-ceil(the footprint + 1) pixels (2 to 6), kept only under trunc_dist: a
 // voxel no return comes that near is not a rim voxel. Its sign comes from its
@@ -279,33 +287,17 @@ const float kRimGapWeight = 0.25;
 int rim_distance(vec2 px, float zc, out float sdf, out float behind) {
   sdf = 0.0;
   behind = 0.0;
-  int w = int(cam.width);
-  int h = int(cam.height);
   uvec2 n = nearest_pixel(px, cam.width, cam.height);
-  int nx = int(n.x);
-  int ny = int(n.y);
+  uint pixel = n.y * cam.width + n.x;
   float t = pc.grid.trunc_dist;
-  int rf = int(clamp(ceil(0.5 * footprint(zc)), 1.0, 3.0));
-  bool any_return = false;
-  bool any_gap = false;
-  float lo = 1e30;
-  float hi = -1e30;
-  for (int y = max(ny - rf, 0); y <= min(ny + rf, h - 1); ++y) {
-    for (int x = max(nx - rf, 0); x <= min(nx + rf, w - 1); ++x) {
-      float d = depth[y * w + x];
-      if (returned(d)) {
-        any_return = true;
-        lo = min(lo, d);
-        hi = max(hi, d);
-      } else {
-        any_gap = true;
-      }
-    }
-  }
-  if (!any_return || !(any_gap || hi - lo > t)) {
+  // The footprint's window touches an outline exactly when the frame's rim
+  // map holds 1 to its half-width there (tsdf_rim_map.comp).
+  uint rf = uint(clamp(ceil(0.5 * footprint(zc)), 1.0, 3.0));
+  uint outline = rim_map[pixel];
+  if (outline == 0u || outline > rf) {
     return kRimNone;
   }
-  float dn = depth[ny * w + nx];
+  float dn = depth[pixel];
   bool own = returned(dn);
   if (own && zc - dn > t) {
     return kRimNone;  // occluded: well behind its own pixel's surface

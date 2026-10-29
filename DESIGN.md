@@ -735,7 +735,10 @@ a sample's weight); a voxel more than a voxel behind its nearest return,
 beside it, is in the shadow behind the outline and keeps the projective
 sample. A positive one brings no colour, and under Dynamic may make a voxel
 observed, as a band sample does. Outlines then lie at the true edge instead
-of a cell's step, and thin parts mesh solid. `IntegrationMode` selects
+of a cell's step, and thin parts mesh solid. A pass a frame over its pixels
+(`tsdf_rim_map.comp`) finds where its outlines are first, the smallest
+window around each pixel that holds one, so a voxel tests its footprint's
+window with one read. `IntegrationMode` selects
 **classic** (accumulate: free space ahead of the surface fuses as
 +`trunc_dist` at a sample's weight) or **dynamic** (change evicts, conflict
 averages; below). An optional `ColorFrame` fuses colour through its own

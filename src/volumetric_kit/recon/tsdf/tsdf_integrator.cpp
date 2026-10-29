@@ -29,6 +29,7 @@
 #include "tsdf_change_reach_comp.spv.hpp"
 #include "tsdf_integrate_comp.spv.hpp"
 #include "tsdf_reset_comp.spv.hpp"
+#include "tsdf_rim_map_comp.spv.hpp"
 
 namespace volumetric_kit::recon::tsdf {
 namespace {
@@ -64,6 +65,17 @@ struct ReachPush {
   std::uint32_t gate_word;
 };
 static_assert(sizeof(ReachPush) == 20, "ReachPush must be 20 bytes");
+
+// The rim map kernel's push constants (mirrors Push in tsdf_rim_map.comp):
+// the frame's size and depth range, as its camera's, and the grid's band.
+struct RimMapPush {
+  std::uint32_t width;
+  std::uint32_t height;
+  float min_depth;
+  float max_depth;
+  float trunc_dist;
+};
+static_assert(sizeof(RimMapPush) == 20, "RimMapPush must be 20 bytes");
 
 // The push-constant block (mirrors `PushConstants` in tsdf_common.glsl): the
 // grid, the fusion weight cap, the integration mode, two color flags, the
@@ -230,30 +242,35 @@ core::Result<TsdfIntegrator> TsdfIntegrator::create(
              ChangeDetector::create(device, allocator, change));
   integ.detector_ = std::make_unique<ChangeDetector>(std::move(detector));
 
-  // The integrate and reset kernels, one body (tsdf_integrate.glsl): 11
+  // The integrate and reset kernels, one body (tsdf_integrate.glsl): 13
   // storage-buffer bindings each, one layout for both (0 tsdf, 1 weight,
   // 2 active, 3 depth, 4 depth-camera, 5 color image and 7 color camera
   // (both unused by the reset), 6 color attribute, 8 the map's block stamps,
   // 9 the active count, 10 the camera's change mask and 11 its reach
-  // (Dynamic)) + the PushConstants range; the change reach kernel (0 the
-  // mask, 1 the reach, 2 the gate) + its own; and recon's count-to-slices
-  // kernel sizing their
-  // dispatches (vgrid::detail::add_dispatch_args). These counts are the
-  // single source of truth for
-  // both the layouts (KernelSetBuilder::add creates bindings 0..N-1) and the
-  // auto-sized pool -- the deliberate cost of the "explicit, not reflected"
-  // decision -- so they and the lists above have to move together with the
-  // shaders. KernelSetBuilder builds each layout + pipeline and allocates its
-  // set from a shared pool (sized to the exact descriptor total).
+  // (Dynamic), 12 the frame's rim map (unused by the reset)) + the
+  // PushConstants range; the rim map kernel (0 the depth, 1 the map) and the
+  // change reach kernel (0 the mask, 1 the reach, 2 the gate), each + its
+  // own; and recon's count-to-slices kernel sizing their dispatches
+  // (vgrid::detail::add_dispatch_args). These counts are the single source
+  // of truth for both the layouts (KernelSetBuilder::add creates bindings
+  // 0..N-1) and the auto-sized pool -- the deliberate cost of the "explicit,
+  // not reflected" decision -- so they and the lists above have to move
+  // together with the shaders. KernelSetBuilder builds each layout + pipeline
+  // and allocates its set from a shared pool (sized to the exact descriptor
+  // total).
   VkPushConstantRange push_range{};
   push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   push_range.offset = 0;
   push_range.size = sizeof(PushConstants);
   core::KernelSetBuilder kb(device);
   VKC_TRY(kb.add(integ.kernel_, "tsdf_integrate", vr_tsdf_integrate_comp_spv,
-                 vr_tsdf_integrate_comp_spv_size, 12, &push_range));
+                 vr_tsdf_integrate_comp_spv_size, 13, &push_range));
   VKC_TRY(kb.add(integ.reset_kernel_, "tsdf_reset", vr_tsdf_reset_comp_spv,
-                 vr_tsdf_reset_comp_spv_size, 12, &push_range));
+                 vr_tsdf_reset_comp_spv_size, 13, &push_range));
+  VkPushConstantRange rim_range = push_range;
+  rim_range.size = sizeof(RimMapPush);
+  VKC_TRY(kb.add(integ.rim_kernel_, "tsdf_rim_map", vr_tsdf_rim_map_comp_spv,
+                 vr_tsdf_rim_map_comp_spv_size, 2, &rim_range));
   VkPushConstantRange reach_range = push_range;
   reach_range.size = sizeof(ReachPush);
   VKC_TRY(kb.add(integ.reach_kernel_, "tsdf_change_reach",
@@ -558,6 +575,7 @@ core::Status TsdfIntegrator::record_checked(
   // apart in the two camera buffers, grown for the set (every batch this
   // integrator recorded into before has resolved).
   VKC_TRY(frame_sets_.reserve(*device_, kernel_, count));
+  VKC_TRY(rim_sets_.reserve(*device_, rim_kernel_, count));
   if (dynamic) {
     VKC_TRY(reset_sets_.reserve(*device_, reset_kernel_, count));
     VKC_TRY(reach_sets_.reserve(*device_, reach_kernel_, count));
@@ -576,6 +594,10 @@ core::Status TsdfIntegrator::record_checked(
   };
   VKC_TRY(ensure(cam_buf_, cam_bytes, "tsdf.depth_cam"));
   VKC_TRY(ensure(color_cam_buf_, color_cam_bytes, "tsdf.color_cam"));
+  if (rim_maps_.size() < live.size()) rim_maps_.resize(live.size());
+  for (std::size_t k = 0; k < live.size(); ++k) {
+    VKC_TRY(ensure(rim_maps_[k], checked.depth_bytes[live[k]], "tsdf.rim_map"));
+  }
 
   // The call is one tick: every block it changes is stamped with the new one,
   // so a reader that recorded the tick before sees the change as newer.
@@ -626,16 +648,34 @@ core::Status TsdfIntegrator::record_checked(
     }
   }
 
-  // Dynamic: each camera's change test and its reach, their own
-  // `"  ..detect"` breakdown, ahead of the compaction. Behind a closed gate
-  // they test and mark nothing, so a set fused again later is tested once.
+  // Every frame's rim map, where its outlines are, which the fuse's rim
+  // distance reads (tsdf_rim_map.comp): a uint32 a pixel, as many bytes as
+  // its depth. Then, under Dynamic, each camera's change test and its reach,
+  // their own `"  ..detect"` breakdown, ahead of the compaction. Behind a
+  // closed gate they test and mark nothing, so a set fused again later is
+  // tested once.
   core::StageMetrics parts;
   const bool rows =
       metrics != nullptr && stage != nullptr && stage->timer() != nullptr;
-  // The uploads go to the batch whatever the tests do: the batch has
+  // The uploads go to the batch whatever the passes do: the batch has
   // recorded their copies.
   core::Status detected;
-  if (dynamic) {
+  for (std::size_t k = 0; k < live.size() && detected.ok(); ++k) {
+    const std::size_t i = live[k];
+    const sensor::DepthCameraParams& cam = frames[i].camera;
+    const core::DescriptorSet& set = rim_sets_[k];
+    set.write_storage_buffer(0, depth_handles[k], 0, checked.depth_bytes[i]);
+    set.write_storage_buffer(1, rim_maps_[k].handle(), 0,
+                             checked.depth_bytes[i]);
+    const RimMapPush push{cam.width, cam.height, cam.min_depth, cam.max_depth,
+                          grid_params.trunc_dist};
+    const std::uint32_t groups =
+        std::min(core::group_count(cam.width * cam.height, kLocalSize),
+                 max_workgroup_count_x_);
+    detected = batch.dispatch(rim_kernel_, set, &push, sizeof(push), groups,
+                              max_workgroup_count_x_, stage);
+  }
+  if (dynamic && detected.ok()) {
     VKC_TRY(make_reach(frames, live));
     if (rows) metrics->add_cpu("  ..detect", 0.0);
     core::GpuStageScope detect(rows ? &parts : nullptr, gpu_timer_,
@@ -779,7 +819,13 @@ core::Status TsdfIntegrator::record_checked(
       set.write_storage_buffer(11, reach_handle, 0, mask_range);
     };
     write(frame_sets_[k], color_handle, color_range);
-    if (dynamic) write(reset_sets_[k], color_dummy_.handle(), VK_WHOLE_SIZE);
+    frame_sets_[k].write_storage_buffer(12, rim_maps_[k].handle(), 0,
+                                        checked.depth_bytes[i]);
+    if (dynamic) {
+      write(reset_sets_[k], color_dummy_.handle(), VK_WHOLE_SIZE);
+      reset_sets_[k].write_storage_buffer(12, color_dummy_.handle(), 0,
+                                          VK_WHOLE_SIZE);
+    }
   }
   // Dynamic fuses in slot order, not the caller's: its free space averages
   // only into a voxel holding weight, so whether a camera's free space meets

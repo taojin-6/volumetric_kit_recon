@@ -1,0 +1,78 @@
+#version 450
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+// Where one frame's outlines are, for the fuse's rim distance
+// (tsdf::TsdfIntegrator, both modes): a thread a pixel writes the smallest
+// window around it -- +-1, +-2 or +-3 pixels, the sizes tsdf_integrate.glsl's
+// rim_distance gives a voxel's footprint -- that holds a return and either a
+// pixel with none or a depth range past the band; 0 where even +-3 holds no
+// outline. A window that holds an outline holds it in every larger one, so a
+// voxel whose footprint window is +-r and whose nearest pixel is this one
+// touches an outline exactly when the word is 1 to r: one read, where the
+// voxel used to scan the window itself. Most voxels a frame reaches lie in
+// free space far from any outline, which made that scan the rim distance's
+// main cost.
+
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, scalar) readonly buffer Depth { float depth[]; };
+layout(set = 0, binding = 1, scalar) writeonly buffer RimMap {
+  uint rim_map[];
+};
+
+// Mirrors RimMapPush in tsdf_integrator.cpp: the frame's size and depth range,
+// as its camera's, and the grid's band, as the fuse's.
+layout(push_constant, scalar) uniform Push {
+  uint width;
+  uint height;
+  float min_depth;
+  float max_depth;
+  float trunc_dist;
+} pc;
+
+// A return the fuse takes (tsdf_integrate.glsl's returned).
+bool returned(float d) {
+  return d > 0.0 && d >= pc.min_depth && d <= pc.max_depth;
+}
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= pc.width * pc.height) {
+    return;
+  }
+  int w = int(pc.width);
+  int h = int(pc.height);
+  int x = int(i % pc.width);
+  int y = int(i / pc.width);
+  bool any_return = false;
+  bool any_gap = false;
+  float lo = 1e30;
+  float hi = -1e30;
+  uint outline = 0u;
+  // Window r is window r - 1 and its ring (the pixels r away), clipped to the
+  // image as the fuse clips it, so each pixel is read once.
+  for (int r = 1; r <= 3 && outline == 0u; ++r) {
+    for (int yy = max(y - r, 0); yy <= min(y + r, h - 1); ++yy) {
+      for (int xx = max(x - r, 0); xx <= min(x + r, w - 1); ++xx) {
+        if (r > 1 && max(abs(xx - x), abs(yy - y)) < r) {
+          continue;  // inside window r - 1: read already
+        }
+        float d = depth[yy * w + xx];
+        if (returned(d)) {
+          any_return = true;
+          lo = min(lo, d);
+          hi = max(hi, d);
+        } else {
+          any_gap = true;
+        }
+      }
+    }
+    if (any_return && (any_gap || hi - lo > pc.trunc_dist)) {
+      outline = uint(r);
+    }
+  }
+  rim_map[i] = outline;
+}
