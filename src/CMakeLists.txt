@@ -5,9 +5,8 @@
 # and build settings; the strict dependency rule (a tier may depend only on
 # tiers to its left) is expressed by what each links.
 
-# The camera and sensor tiers are the sensor package's (sensor/), which
-# third_party/ adds first: recon's libraries link its frame contract,
-# sensor_frame, alone.
+# The camera and sensor tiers are volumetric_kit_sensor's, which third_party/
+# adds first: recon's libraries link its frame contract, sensor_frame, alone.
 add_subdirectory(volumetric_kit/recon/core)
 # tsdf fuses into grid's VoxelBlockGrid (volumetric_kit_grid).
 add_subdirectory(volumetric_kit/recon/tsdf)

@@ -25,11 +25,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # (tests/subproject checks the extras and -Werror). recon has no install rules:
 # a consumer fetches it by commit (DECISIONS.md, 2026-10-22).
 #
-# The camera and sensor options are the sensor package's (sensor/CMakeLists.txt:
-# VS_WITH_ORBBEC, VS_WITH_FFMPEG, VS_WITH_CUDA); a -D on recon's configure
-# reaches it as a cache variable. Its tests and -Werror follow recon's
-# (third_party/). Its camera-only build is the package's alone: recon needs its
-# frame contract.
+# The camera and sensor options are volumetric_kit_sensor's (VS_WITH_ORBBEC,
+# VS_WITH_FFMPEG, VS_WITH_CUDA); a -D on recon's configure reaches it as a cache
+# variable. Its camera-only build is the package's alone: recon needs its frame
+# contract.
 if(PROJECT_IS_TOP_LEVEL)
   set(_vr_examples_default ON)
 else()
@@ -41,7 +40,7 @@ option(VR_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
        ${PROJECT_IS_TOP_LEVEL})
 
 # Semicolon list of sanitizers (e.g. "address;undefined"); empty = off. Applied
-# globally, the sensor package included -- see cmake/vr_sanitizers.cmake for
+# globally, the fetched packages included -- see cmake/vr_sanitizers.cmake for
 # why.
 set(VR_SANITIZE
     ""
@@ -68,28 +67,24 @@ include(vr_sanitizers)
 # Mirrors volumetric_kit_gfx.
 find_package(Vulkan REQUIRED)
 
-# Pinned dependencies: volumetric_kit_core and volumetric_kit_grid, linked
-# PUBLIC, and the in-tree sensor package. The oldest core recon's libraries
-# build with is checked in the core that arrives (third_party/, which also
-# checks the config tier the examples and tests need): 0.30.0, whose
-# output.max_viewers fuse_orbbec serves by; 0.29.0 brought the vulkan/fwd.hpp
-# the public headers include, and 0.28.0 the test support the tests run on. The
-# oldest sensor package is 0.1.0, its first, whose sensor_frame recon's
-# libraries link; the oldest grid is VR_GRID_MIN_VERSION: 0.3.0, whose
-# codec_outputs passes output.max_viewers to the server.
+# Pinned dependencies: volumetric_kit_core, volumetric_kit_sensor and
+# volumetric_kit_grid, linked PUBLIC. The oldest core recon's libraries build
+# with is checked in the core that arrives (third_party/, which also checks the
+# config tier the examples and tests need): 0.30.0, whose output.max_viewers
+# fuse_orbbec serves by; 0.29.0 brought the vulkan/fwd.hpp the public headers
+# include, and 0.28.0 the test support the tests run on. The oldest sensor is
+# 0.1.0, its first, whose sensor_frame recon's libraries link; the oldest grid
+# is VR_GRID_MIN_VERSION: 0.3.0, whose codec_outputs passes output.max_viewers
+# to the server.
 set(VR_CORE_MIN_VERSION 0.30.0)
 set(VR_SENSOR_MIN_VERSION 0.1.0)
 set(VR_GRID_MIN_VERSION 0.3.0)
-# Testing is on before third_party/ adds the sensor package, so its tests join
-# this build's CTest tree.
-if(VR_BUILD_TESTS)
-  enable_testing()
-endif()
 add_subdirectory(third_party)
 
 add_subdirectory(src)
 
 if(VR_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
+  enable_testing()
   add_subdirectory(tests)
 endif()
 
