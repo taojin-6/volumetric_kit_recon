@@ -1166,8 +1166,8 @@ than the rig gets the newest set, so sets drop; that cost is unmeasured.
 **On `tsdf`**, Dynamic resets on change (2026-10-29). Next, each judged on
 the lab rig: a surface that leaves to no return flags nothing where its
 pixel returned anything in its camera's warm-up, or where it returned for
-under three samples (a decay gated by visibility; what stays of a
-walking column that vanishes, 0.49 m², and of a slow sphere, 38 cm²);
+under three samples (a decay gated by visibility, for what stays of a
+walking column that vanishes and of a slow sphere);
 partial evidence lowering the weight cap along a ray, so slow motion slides
 instead of stepping; a rule for pixels that drop in and out, the source of
 most remaining false resets; and the sigma edge and incidence terms of the
