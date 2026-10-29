@@ -25,6 +25,7 @@
 #include "codec_report.hpp"
 #include "codec_sweep.hpp"
 #include "config.hpp"
+#include "fuse_sender.hpp"
 #include "replica_config.hpp"
 #include "replica_sensor.hpp"
 #include "set_log.hpp"

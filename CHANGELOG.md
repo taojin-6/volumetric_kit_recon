@@ -203,6 +203,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nothing forwards from the old names. Tests: `recon_sender_codec_stream` is
   `recon_codec_stream`, and its case through `SetSender` is in
   `recon_sender_set_sender`.
+- `examples`: **the codec helpers include no fusion**: `sender_config` and
+  `report_sent` move from `examples/common/codec_config.hpp` and
+  `codec_report.hpp` to the new `examples/common/fuse_sender.hpp`, so the
+  codec helpers include neither `fuse_frame.hpp` nor `sender::SetSender`,
+  and `codec_mesh` includes no fuser or sensor header (it still links
+  `recon_sender` for `CodecStream`). The functions, and every report, log
+  and parse, are unchanged. Migration: a caller of either includes
+  `fuse_sender.hpp`. Tests: `recon_example_config` and
+  `recon_example_codec_report` keep the codec halves;
+  `recon_example_fuse_config` and `recon_example_fuse_sender` (new) take the
+  fusing halves.
 - `core`, tests, build: **recon adopts core 0.29.0 and drops its own copies**
   (the 2026-10-28 core-adoption decision): the core pin, the Homebrew key
   action and `VR_CORE_MIN_VERSION` move to 0.29.0 (core #65's merge).

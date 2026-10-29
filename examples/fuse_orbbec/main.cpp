@@ -69,6 +69,7 @@
 #include "codec_sweep.hpp"
 #include "config.hpp"
 #include "fuse_orbbec_sets.hpp"
+#include "fuse_sender.hpp"
 #include "info_log.hpp"
 #include "interrupt.hpp"
 #include "set_dump.hpp"

@@ -2401,11 +2401,14 @@ and sampling it would measure the fusion's bias too. `codec.sweep` prints the
 rate–distortion table the defaults are chosen from. The codec examples
 stream through `CodecStream` ([codec_stream](#codec_stream)); their
 report and the sweep are `examples/common/codec_report.hpp` and
-`codec_sweep.hpp`. The report (`CodecReport`) keeps a row per frame that
-went out whole, from its `SentFrame` (source index, frame type, bytes,
-blocks, and encode and decode host and device ms), sums each type's stage
-rows, and writes `output.csv` as each row comes; the core cannot append, so
-the file is the report's own. A stream that does not decode
+`codec_sweep.hpp`. These and `codec_config.hpp` include no fusion, so
+`codec_mesh` includes no fuser or sensor header; a fusing sender's config
+and the figures of each set it sends (`sender_config`, `report_sent`) are
+`fuse_sender.hpp`'s. The report (`CodecReport`) keeps a
+row per frame that went out whole, from its `SentFrame` (source index, frame
+type, bytes, blocks, and encode and decode host and device ms), sums each
+type's stage rows, and writes `output.csv` as each row comes; the core cannot
+append, so the file is the report's own. A stream that does not decode
 (`CodecOutputs::decode` off) has rows with empty decode columns.
 `codec_outputs` maps `output.stream` and `output.serve` to `CodecOutputs`,
 and `codec_session` gives the `.vrst` one Geometry track at the source's
