@@ -188,6 +188,16 @@ void main() {
   // constant, so the divide is a real reciprocal sequence -- it used to be
   // recomputed inline at each mark site.
   uint block_slot = uint(block.ptr) / vpb;
+  uint idx = uint(block.ptr) + local;
+#ifdef VR_TSDF_RESET
+  // Nothing to reset in a voxel holding no weight, which is most of what a
+  // set reaches -- free space never gains weight under Dynamic -- so the
+  // weight is tested before the voxel is projected (DECISIONS.md, 2026-10-08
+  // and 2026-10-29).
+  if (!(weight[idx] > 0.0)) {
+    return;
+  }
+#endif
 
   // Voxel world position: node convention (voxel * voxel_size), matching
   // volume/voxel_coords.hpp::voxel_to_world and the prior engine.
@@ -203,12 +213,10 @@ void main() {
     return;
   }
   float trunc_dist = pc.grid.trunc_dist;
-  uint idx = uint(block.ptr) + local;
 #ifdef VR_TSDF_RESET
   // A changed ray resets what lies in front of its new sample and in that
   // sample's band, read at the voxel's nearest pixel, as the mask is per
-  // pixel: change is never interpolated across a silhouette. The mask is
-  // tested before the voxel is read, as most rays did not change; a flagged
+  // pixel: change is never interpolated across a silhouette. A flagged
   // pixel's sample is valid (the detector flags only valid samples).
   uvec2 n = nearest_pixel(px, cam.width, cam.height);
   uint pixel = n.y * cam.width + n.x;
@@ -218,16 +226,17 @@ void main() {
   if (depth[pixel] - zc < -trunc_dist) {
     return;  // behind the new surface's band: occluded history stays
   }
-  if (weight[idx] > 0.0) {
-    tsdf[idx] = 0.0;
-    weight[idx] = 0.0;
-    if (pc.has_color_attr != 0u) {
-      color_attr[idx] = kVoxelColorUnobserved;
-    }
-    // The weight > 0.0 guard is the "did anything change" test: a voxel at
-    // weight 0 is in the state the reset writes.
-    stamp_changed(block_slot);
+  // TODO(tsdf): a surface that leaves with no return behind it flags no ray,
+  // so nothing resets it; a decay gated by visibility is the rule to try
+  // (DECISIONS.md, 2026-10-29).
+  // The weight > 0.0 test above is the "did anything change" test: a voxel
+  // at weight 0 is in the state the reset writes.
+  tsdf[idx] = 0.0;
+  weight[idx] = 0.0;
+  if (pc.has_color_attr != 0u) {
+    color_attr[idx] = kVoxelColorUnobserved;
   }
+  stamp_changed(block_slot);
 #else
   float u = px.x;
   float v = px.y;
