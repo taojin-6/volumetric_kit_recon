@@ -907,6 +907,15 @@ entries relevant to your task; later amendments supersede earlier rules.
   history behind), then fuses in slot order; free space averages in at a
   tenth of the weight, only into voxels that hold weight. Nothing is
   cleared on one sample any more. Classic is unchanged.
+- [**2026-10-29**](#2026-10-29--near-an-outline-a-voxel-takes-the-true-distance-in-both-modes-under-dynamic-not-where-its-camera-saw-a-change-and-a-departure-takes-what-it-left) —
+  Near an outline a voxel takes the true distance, in both modes: the
+  Euclidean distance to the nearest return around it, where the projective
+  sample sees past the outline or into a gap. Under Dynamic not within
+  6 pixels of a change its camera saw this set; and within 6 pixels of a
+  departure the reset also clears the positive voxels the camera's rays see
+  past or into a gap whose nearest return left, whoever fused them (a
+  camera that supports them fuses them again that set, at one sample's
+  weight).
 
 ## Decision record
 
@@ -5463,6 +5472,151 @@ in a row on a still surface over no return, which still flag and reset
 (the standing column's 8.1k a second; a real sensor's dropouts cluster on
 hair and silhouettes, so there they come in a row more often than
 i.i.d.).
+
+### 2026-10-29 — Near an outline a voxel takes the true distance, in both modes; under Dynamic not where its camera saw a change, and a departure takes what it left.
+
+**The rule.** A voxel whose depth sample is not a clean bilinear
+interpolation inside the band -- a jump or a gap across its taps, past the
+band, or no return -- and whose footprint window (+-1 to +-3 pixels, half a
+voxel's footprint) holds a return and a gap or a depth range past the band
+takes the Euclidean distance to the nearest back-projected return within
++-2 to +-6 pixels (the footprint + 1), kept only under `trunc_dist`. Its
+sign is its own pixel's: negative behind that pixel's surface (faded as a
+band sample), positive in front of it, beside it, or over a gap (a quarter
+of a sample's weight). A voxel more than a voxel behind its nearest return,
+beside it, is in the shadow behind the outline and keeps the projective
+sample. A positive one brings no colour. A pass a frame over its pixels
+finds where its outlines are and the depth range of the returns around each
+pixel, so a voxel tests its window with one read and skips a search that
+would find nothing. Under Dynamic, two more rules:
+1. **No rim distance within the reach of a change.** Each camera's change
+   test also marks its reach: every pixel within 6 -- the widest search --
+   of a pixel it flagged this set, with a bit near a departure (`Farther`
+   or `Vanished`). A voxel there is fused from its projective sample
+   alone.
+2. **A departure takes what it left beside it.** Within the reach of a
+   departure, the reset also clears a positive voxel whose own ray sees
+   past its band or into a gap and whose nearest return is gone from the
+   band or is a pixel that changed, whoever fused it: a rim distance, or
+   the front of another camera's band, which that camera fuses again the
+   same set at one sample's weight. A gap counts at once there: within the
+   reach of a departure, pixels that return nothing around a voxel are not
+   taken for a dropout, as a lone invalid sample is elsewhere (the detector
+   flags `Vanished` on the second). An arrival clears nothing.
+
+**Why.** Beside a silhouette the projective distance is the background's,
+so marching cubes steps the outline a cell at a time and leaves thin parts
+open: on take1 3.9% of the pixels at depth edges show no surface, and on
+the ground-truth bench today's Dynamic rims lie 2.6 mm inside the true
+silhouette with a 4.8 mm sawtooth. An earlier study's true rim distance
+was its best still-scene fix (holes 3.9% to 0.65%), but on its own, under
+the former Dynamic, it shredded a sphere moving at 1 m/s and left more
+debris (131 against 80 cm²): next to a moving outline, distances to where
+the surface was or is going averaged into its fresh samples.
+- **Rule 1** keeps a moving surface's own samples whole. Without it, the
+  test's plate moving 3 cm a set kept 42 voxels beside its moving sides
+  holding distances in the set it moved.
+- **Rule 2.** A beside voxel lies on a ray that does not hit the object, so
+  the reset along changed rays (the entry above) never reaches it when
+  the object leaves
+  (the test's sphere: 779 weighted voxels off the wall in the set it
+  left). Clearing on any change instead let an arriving box clear one
+  camera's barely-past-band view of the other camera's wall band (653
+  weights fell); departures only, with the nearest-return test, clear none
+  there. A camera clears only beside a departure it saw itself, and the
+  resets run before any fuse, so another camera's band fuses again in the
+  same set, though at one sample's weight where it had up to the cap: on
+  rays its camera did not flag, so whether that keeps "cameras never evict
+  each other" is open (below).
+- **That rule otherwise,** with its fix for walls behind rims (the
+  shadow rule) and its gap weight.
+
+**Measured** on replays of the rig's recorded takes with synthetic movers
+drawn in (lab RTX 4090), against main and against the entry above alone
+("change-driven"):
+- **Still scenes** (take1 / take3): silhouette holes 3.9 / 4.5% on main,
+  2.7 / 2.9% change-driven, 0.80 / 0.26% now; edge flicker 11.5 / 9.2, 1.1 / 0.85,
+  2.2 / 1.2%; the stream 74.8 / 64.9, 15.0 / 11.3, 24.7 / 18.1 Mbps.
+  Classic, take1: holes 0.96% (2.6% before), edge flicker 1.0% (0.83%),
+  20.2 Mbps (17.0).
+- **Against the ground-truth bench** (realistic noise, against main): Dynamic
+  rims lie 1.2 mm inside the true silhouette (2.6 before), the surface
+  within 2 cm of a rim is 97.4% covered (92.5%), and 0.77% of triangles
+  are flipped (1.09%); the sawtooth stays 4.6 mm (4.8). Classic: a 2.3 mm
+  sawtooth (3.0) and 2.3 cm² of fattening (13.7), but rims 1.5 mm inside
+  (0.7) and 19.6 cm² of sheets more than 1 cm inside the objects (0.5).
+- **Movers.** What a mover leaves where nothing is, the set after it goes
+  (main / change-driven / now): the 1 m/s sphere 81 / 50 / 4.4 cm², gone in one set
+  now and never before; the 0.1 m/s sphere 81 / 44 / 0.6 cm²; the walking
+  column 2.23 / 0.47 / 0.05 m²; the box 169 / 0 / 0 cm². The moving surface
+  shows 99% of its visible area while it moves, as before. Replayed again
+  with the detector's second-invalid rule (the entries above), the 1 m/s
+  sphere gives the same: 4.5 cm² left the set after it goes, gone in one
+  set, 99% shown while it moves; the still take1 0.80% holes, 2.3% edge
+  flicker, 25.1 Mbps.
+- **What it costs movers:** background beside a mover's path goes missing
+  while it moves. Each run above is scored against its own still run, and
+  against this mode's that counts the outline surface rule 1 withholds near
+  a change (means 25, 104 and 362 cm² for the fast sphere, the slow one and
+  the column). The same meshes scored against the change-driven still run
+  give means of 10, 44 and 182 cm² (the fast sphere 11 with the
+  second-invalid rule), of which the two still runs' own difference there
+  is 6, 6 and 108; change-driven, 5, 14 and 80. That is
+  about change-driven's loss for the fast sphere and the column and about
+  two and a half times it for the slow one, with higher peaks (75, 86 and
+  951 cm² against 25, 34 and 644); the cause is not isolated, as no rule
+  was taken out on the replays. By the end of each run no more is missing
+  than the still runs' difference, within 1 cm². Against its own still run
+  19-29 cm² reads as missing at the end; for the box that is surface this
+  mode's still run holds in the footprint (25-29 cm², more than 2 cm from
+  the change-driven still surface), which the box run does not grow back
+  once the box leaves, its cause not isolated either. Edge flicker at the
+  still sets after a mover is 2.7-4.3%, against 1.2-2.2% on the still run.
+
+**Cost.** Release, take1 replay (four Femto cameras, 1 cm), sets 40-119,
+interleaved: integrate a set takes 2.79 ms on the RTX 4090 against 1.63
+change-driven (Classic 1.93 against 0.98): about 0.3 ms the rim map and change reach
+passes, the rest the nearest-return search beside outlines. The first
+cut, which scanned each voxel's window and searched wherever a window held
+an outline, took 3.81 ms; reading the rim map and skipping searches that
+find nothing changes no result (take1, 120 sets, the same triangles in
+both modes). Memory: 23.6 MB more for the rig, a rim map, return range and
+change reach a camera. The M5 Max is not measured yet.
+
+**Tests.** `recon_tsdf_rim_distance` fuses noise-free ray-cast depth from a
+Femto-like camera (640x576, fx 504) into 1 cm voxels through the `Fuser`.
+In both modes, a plate turned 20 degrees in its plane meshes its outline
+within 2 mm of the true edge on average and 6 mm anywhere (projective:
+2.9 / 8.1 mm Classic, 6.5 / 12.8 mm Dynamic), a voxel beside its edge
+holds its Euclidean distance to within the pixel pitch, and a rod 1.6 cm
+across meshes along its whole length. Under Dynamic, a plate moving 3 cm a
+set leaves no weight beside its moving sides in a set it moves, and takes
+its distances in the first set it is still; a sphere at 1 m/s past a wall,
+seen by three cameras, is 97% covered in every set it moves, 99.5% once it
+stops, and leaves nothing off the wall's band in the set it goes. Each rule
+was taken out in turn, and its check failed. In the change-driven test's
+box over no return, the set the box goes clears it also within 6 pixels of
+where a camera sees the wall past it (to 4 cm past where nothing returns
+behind it), and the rest the next set, as before. Run on the RTX 4090 and
+the M4 Mac mini with validation (the full suite) and synchronization
+validation (the tsdf and sender tests); the rim test prints the same
+figures on both, on the M5 Max (at the first cut), and before and after
+the rim map.
+
+**Open.** Rule 2 clears the front of another camera's band beside a
+departure, on rays that camera did not flag, and that camera fuses it again
+at one sample's weight: whether that keeps cameras from evicting each other
+is open. Narrowing rule 2 to voxels a rim distance wrote, at a bit a voxel,
+would keep that band, but must keep the movers' figures above:
+change-driven alone, with no rim distance, leaves 46-50 cm² behind the fast
+sphere, and part of what clears it here may be rule 2, which a narrowed rule
+would lose. The extra background
+missing beside a slow mover (above). Classic's sheets inside objects. The
+M5 Max's cost, and a nearest-return search that stops early (PERF.md, P11).
+The rim test's footprint and search are in pixels of one voxel
+size; a finer grid changes them with it, unmeasured. A static outline
+within 6 pixels of a change takes no rim distance that set, so it shows
+its projective steps while something moves beside it.
 
 ## Measured lessons
 

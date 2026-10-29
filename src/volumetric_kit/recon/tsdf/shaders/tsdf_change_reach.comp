@@ -1,0 +1,74 @@
+#version 450
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+// The reach of one camera's change this set (tsdf::TsdfIntegrator, Dynamic):
+// every pixel within pc.reach pixels (a square) of one the camera's change
+// detector flagged takes this set's stamp, shifted up a bit, and that bit set
+// where one of them is a departure -- a surface farther or vanished. The
+// reach is the rim distance's widest search (tsdf_integrate.glsl's
+// rim_distance), so a pixel without the stamp has no change anywhere a rim
+// voxel projecting to it searches: the fuse gives such a voxel its rim
+// distance, and the reset clears beside a departure what a rim distance can
+// have left there.
+//
+// A thread a pixel; a flagged one marks its square with the larger word, as
+// a later set's stamp and a departure are. Neighbours share pixels, so a word
+// is read first and raised only when it is lower: a dense change costs
+// reads, not atomics. The integrator starts the stamps again over a zeroed
+// map before they overflow, so the larger word is always the newer.
+
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_memory_scope_semantics : require
+#include "tsdf_change_mask.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, scalar) readonly buffer ChangeMask {
+  uint change_mask[];
+};
+layout(set = 0, binding = 1, scalar) buffer ChangeReach {
+  uint change_reach[];
+};
+// The gate: a word that, 0, has the pass mark nothing, as the change test it
+// follows tests nothing; a dummy word when the record has none.
+layout(set = 0, binding = 2, scalar) readonly buffer Gate { uint gate[]; };
+
+// Mirrors ReachPush in tsdf_integrator.cpp.
+layout(push_constant, scalar) uniform Push {
+  uint width;
+  uint height;
+  uint stamp;      // this set's: from 1, below 2^31
+  uint reach;      // pixels
+  uint gate_word;  // the gate's word index; 0xFFFFFFFF for no gate
+} pc;
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= pc.width * pc.height) {
+    return;
+  }
+  if (pc.gate_word != 0xFFFFFFFFu && gate[pc.gate_word] == 0u) {
+    return;
+  }
+  uint kind = change_kind(change_mask[i]);
+  if (kind == kChangeNone) {
+    return;
+  }
+  uint mark = (pc.stamp << 1) | (kind == kChangeNearer ? 0u : 1u);
+  int w = int(pc.width);
+  int h = int(pc.height);
+  int r = int(pc.reach);
+  int x = int(i % pc.width);
+  int y = int(i / pc.width);
+  for (int yy = max(y - r, 0); yy <= min(y + r, h - 1); ++yy) {
+    for (int xx = max(x - r, 0); xx <= min(x + r, w - 1); ++xx) {
+      uint j = uint(yy * w + xx);
+      if (atomicLoad(change_reach[j], gl_ScopeDevice, gl_StorageSemanticsNone,
+                     gl_SemanticsRelaxed) < mark) {
+        atomicMax(change_reach[j], mark);
+      }
+    }
+  }
+}

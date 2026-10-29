@@ -34,12 +34,18 @@ namespace volumetric_kit::recon::tsdf {
 enum class IntegrationMode : std::uint32_t {
   /// Accumulate: a voxel in free space ahead of the surface (its projective
   /// SDF exceeds `trunc_dist`) is fused as +`trunc_dist` at a surface
-  /// sample's weight, a smooth field ahead of surfaces.
+  /// sample's weight, a smooth field ahead of surfaces; beside an outline,
+  /// as its true distance (@ref TsdfIntegrator).
   Classic = 0,
   /// Change evicts, conflict averages: each fixed camera's
   /// @ref ChangeDetector finds the rays whose depth changed for real, and a
   /// set resets along them -- the newly exposed free space and the new
-  /// surface's band -- before any camera fuses; everything else accumulates.
+  /// surface's band -- before any camera fuses. Within a few pixels of a ray
+  /// whose surface went farther or vanished, it also resets a positive voxel
+  /// that camera's own ray sees past or into a gap, if the voxel's nearest
+  /// return is gone or changed, whichever camera fused it: a camera that
+  /// still sees it fuses it again that set, at one sample's weight
+  /// (@ref TsdfIntegrator). Everything else accumulates.
   /// Free space past the band averages in at a tenth of a sample's weight,
   /// only into a voxel that holds weight, so it never evicts and cameras that
   /// disagree average into one surface (moving scenes, fixed cameras).
@@ -145,6 +151,23 @@ VR_TSDF_API volumetric_kit::grid::volume::DepthPinhole to_depth_pinhole(
 /// (classic fuses it whole). Depth is sampled bilinearly, falling back to
 /// nearest-neighbour at image edges and across depth discontinuities or taps
 /// that are non-positive or non-finite.
+///
+/// Near an outline, in either mode, a voxel takes the true distance instead
+/// of the projective one: one whose sample is not a clean interpolation
+/// inside the band (a jump or a gap across its taps, past the band, or no
+/// return) and whose footprint touches an outline takes the signed Euclidean
+/// distance to the nearest back-projected return around it, when that is
+/// under `trunc_dist` -- negative behind its own pixel's surface, positive
+/// in front of it, beside it or over a gap. Outlines then lie at the true
+/// edge rather than a cell's step, and thin parts close. Under
+/// @ref IntegrationMode::Dynamic, a camera fuses no such distance within a
+/// few pixels of a change it saw this set, so a moving surface is fused from
+/// its own samples alone. Within a few pixels of a departure (a surface that
+/// went farther or vanished), the reset also clears a positive voxel the
+/// camera's ray sees past or into a gap whose nearest return is gone from the
+/// band or changed, whoever fused it: a rim distance the departed surface
+/// left, or the front of another camera's band, which that camera fuses
+/// again the same set at one sample's weight.
 ///
 /// @warning The `Device` and `Allocator` passed to @ref create must
 ///          outlive this object; it stores references to them.
@@ -348,9 +371,10 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    size fits the device's storage-buffer binding limit.
   /// @param stage       Optional: the caller's scope, whose tile every pass
   ///                    counts to; the compaction is its `"  ..active set"`
-  ///                    breakdown, and under Dynamic the change tests its
-  ///                    `"  ..detect"` and the resets its `"  ..reset"`, the
-  ///                    device half alone, from `PendingBatch::device_rows`.
+  ///                    breakdown, and under Dynamic the change tests and
+  ///                    their reach its `"  ..detect"` and the resets its
+  ///                    `"  ..reset"`, the device half alone, from
+  ///                    `PendingBatch::device_rows`.
   /// @param metrics     Optional: @p stage's own rows, in which the
   ///                    breakdown's rows are placed now, after the stage's
   ///                    rows before them, their host halves 0.
@@ -398,6 +422,15 @@ class VR_TSDF_API TsdfIntegrator {
       const volumetric_kit::grid::volume::DeviceCount* gate,
       std::uint32_t max_blocks, core::GpuStageScope* stage,
       core::StageMetrics* metrics);
+  // Dynamic: make and zero the reach of every camera of `live` that has none
+  // at its size; and record the reach of `frame`'s change this set, live
+  // frame `k`'s (tsdf_integrator.cpp).
+  core::Status make_reach(const std::vector<FrameInput>& frames,
+                          const std::vector<std::size_t>& live);
+  core::Status record_reach(
+      core::CommandBatch& batch, const FrameInput& frame, std::size_t k,
+      const volumetric_kit::grid::volume::DeviceCount* gate,
+      core::GpuStageScope* stage);
 
   // Borrowed (must outlive this).
   core::Device* device_ = nullptr;
@@ -416,6 +449,13 @@ class VR_TSDF_API TsdfIntegrator {
   // KernelSetBuilder at create().
   core::ComputeKernel kernel_;
   core::ComputeKernel reset_kernel_;
+  // Dynamic's change reach kernel: the pixels within the rim distance's
+  // search of a camera's change this set.
+  core::ComputeKernel reach_kernel_;
+  // The rim map kernel: where a frame's outlines are and its returns' depth
+  // range around each pixel, which the fuse's rim distance reads in place of
+  // scanning a voxel's window, and to skip a search that finds nothing.
+  core::ComputeKernel rim_kernel_;
   // recon's count-to-slices kernel, sizing their dispatches from the
   // compaction's device count into args_, a VkDispatchIndirectCommand a
   // dispatch, grown to the most a call has had.
@@ -428,8 +468,25 @@ class VR_TSDF_API TsdfIntegrator {
   // has had; every set a call dispatches is written whole first.
   core::KernelSets frame_sets_;
   core::KernelSets reset_sets_;
+  core::KernelSets reach_sets_;
+  core::KernelSets rim_sets_;
+  // Each frame of a call's rim map, a uint32 a pixel, and its return range,
+  // two floats a pixel, grown to the most frames and the largest frame a
+  // call has had.
+  std::vector<core::Buffer> rim_maps_;
+  std::vector<core::Buffer> rim_ranges_;
   // Dynamic's per-camera change histories, a slot a camera.
   std::unique_ptr<ChangeDetector> detector_;
+  // Each camera slot's change reach: a uint32 a pixel, this set's stamp
+  // where a change lies within the rim distance's search; made, zeroed, at
+  // the camera's first set or a new size, and stamped a set at a time from 1.
+  struct Reach {
+    core::Buffer map;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t stamp = 0;
+  };
+  std::vector<Reach> reach_;
   // The device-span collector, created once rather than per call: a query pool
   // of a few timestamps is negligible, and a lazily-created one would need a
   // mutable member and a failure path on a diagnostic. Idle -- no query

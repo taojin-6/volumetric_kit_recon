@@ -1,0 +1,100 @@
+#version 450
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+// Where one frame's outlines are, for the fuse's rim distance
+// (tsdf::TsdfIntegrator, both modes). A thread a pixel writes two things:
+//
+// - The smallest window around it -- +-1, +-2 or +-3 pixels, the sizes
+//   tsdf_integrate.glsl's rim_distance gives a voxel's footprint -- that
+//   holds a return and either a pixel with none or a depth range past the
+//   band; 0 where even +-3 holds no outline. A window that holds an outline
+//   holds it in every larger one, so a voxel whose footprint window is +-r
+//   and whose nearest pixel is this one touches an outline exactly when the
+//   word is 1 to r: one read, where the voxel used to scan the window.
+// - The nearest and farthest return within the rim distance's widest search
+//   (pc.search pixels); (1e30, -1e30) for none. A voxel a band or more in
+//   depth from both has no return within the band anywhere its search looks,
+//   so it skips the search, which finds none -- most voxels over a gap, far
+//   in front of or behind what lies around it.
+//
+// Most voxels a frame reaches lie in free space far from any outline, or over
+// a gap far from any return, which made those scans the rim distance's cost.
+
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, scalar) readonly buffer Depth { float depth[]; };
+layout(set = 0, binding = 1, scalar) writeonly buffer RimMap {
+  uint rim_map[];
+};
+layout(set = 0, binding = 2, scalar) writeonly buffer RimRange {
+  vec2 rim_range[];
+};
+
+// Mirrors RimMapPush in tsdf_integrator.cpp: the frame's size and depth range,
+// as its camera's, the grid's band, as the fuse's, and the widest search.
+layout(push_constant, scalar) uniform Push {
+  uint width;
+  uint height;
+  float min_depth;
+  float max_depth;
+  float trunc_dist;
+  uint search;  // pixels, at least 3
+} pc;
+
+// A return the fuse takes (tsdf_integrate.glsl's returned).
+bool returned(float d) {
+  return d > 0.0 && d >= pc.min_depth && d <= pc.max_depth;
+}
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= pc.width * pc.height) {
+    return;
+  }
+  int w = int(pc.width);
+  int h = int(pc.height);
+  int x = int(i % pc.width);
+  int y = int(i / pc.width);
+  int s = int(pc.search);
+  // Window r (1 to 3): a return in it, a pixel with none, and its returns'
+  // depth range; clipped to the image as the fuse clips it.
+  bool any_return[3] = bool[3](false, false, false);
+  bool any_gap[3] = bool[3](false, false, false);
+  float lo[3] = float[3](1e30, 1e30, 1e30);
+  float hi[3] = float[3](-1e30, -1e30, -1e30);
+  // The whole search's returns.
+  float near = 1e30;
+  float far = -1e30;
+  for (int yy = max(y - s, 0); yy <= min(y + s, h - 1); ++yy) {
+    for (int xx = max(x - s, 0); xx <= min(x + s, w - 1); ++xx) {
+      float d = depth[yy * w + xx];
+      bool ret = returned(d);
+      if (ret) {
+        near = min(near, d);
+        far = max(far, d);
+      }
+      // The windows this pixel lies in: from its ring, at least 1, to 3.
+      for (int r = max(max(abs(xx - x), abs(yy - y)), 1); r <= 3; ++r) {
+        if (ret) {
+          any_return[r - 1] = true;
+          lo[r - 1] = min(lo[r - 1], d);
+          hi[r - 1] = max(hi[r - 1], d);
+        } else {
+          any_gap[r - 1] = true;
+        }
+      }
+    }
+  }
+  uint outline = 0u;
+  for (int r = 3; r >= 1; --r) {
+    if (any_return[r - 1] &&
+        (any_gap[r - 1] || hi[r - 1] - lo[r - 1] > pc.trunc_dist)) {
+      outline = uint(r);
+    }
+  }
+  rim_map[i] = outline;
+  rim_range[i] = vec2(near, far);
+}

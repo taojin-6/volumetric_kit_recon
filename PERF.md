@@ -151,6 +151,7 @@ kernels.
 | P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | landed (#132); device-list follow-up landed (#146); recorded into the set's batch (`record_free_stale`, 2026-10-25) |
 | P9 | Allocate only the band blocks a sample can weight | ~60% of a static room's active set holds no weight; compaction, integrate and meshing scale with it | M | — | open, measure first |
 | P10 | Reset a Dynamic set's cameras in one dispatch | up to ~0.45 ms/set on the RTX 4090 and ~1.1 on the M5 Max (three of four sweeps; an upper bound, unmeasured) | M | — | open, measure first |
+| P11 | Stop the rim distance's nearest-return search once no farther pixel can beat it | a third to a half of the search: ~0.3–0.4 ms/set on the RTX 4090, ~1 on the M5 Max (an estimate, unmeasured) | S | — | open, measure first (the M5 Max's cost of the rim distance first) |
 | D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | superseded: the decoders hand out device pictures only |
 | D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | landed (#130) |
 | D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed (#130) |
@@ -560,6 +561,30 @@ improvement awaits measurement; the figures below describe the original GC.
   image; every camera's mask lives in one buffer, at an offset a slot.
 - **Expected.** Three of the four sweeps go: up to ~0.45 ms a set on the
   RTX 4090 and ~1.1 ms on the M5 Max, an upper bound until measured.
+- **Since the rim distance** (2026-10-29), the reset beside a departure
+  reads its camera's depth and searches it for the nearest return, so the
+  one dispatch binds every camera's depth image as well as its mask.
+
+### P11 — Stop the nearest-return search once no farther pixel can beat it
+
+- **Problem.** The rim distance (2026-10-29) searches every pixel of a
+  window up to 13 x 13 for the nearest return, for each voxel beside an
+  outline that lies within a band in depth of a return around it: about
+  0.86 ms of integrate's 2.79 ms a set on the RTX 4090 (four Femtos, take1,
+  Dynamic; a build without the search measures 1.93 ms). The M5 Max is not
+  timed yet; by the RTX 4090 to M5 Max ratio of the change-driven reset
+  (1.63 to 4.63 ms), the rim distance adds about 3 ms a set there, an
+  estimate.
+- **Change.** Visit the window ring by ring outward from the voxel's pixel,
+  and stop once ring k's lower bound passes the best distance found: the
+  return at any pixel of ring k lies at least zc (k - 1/2) / (f |r|max)
+  from the voxel, where zc is the voxel's depth, f the focal length and
+  |r|max the longest ray direction of depth 1 in the image (about 1.32 for
+  the Femto's narrow mode). The result is the same, ties aside. A rim
+  voxel's nearest return is usually 1 to 3 pixels away.
+- **Expected.** A third to a half of the search: about 0.3–0.4 ms a set on
+  the RTX 4090 and about 1 ms on the M5 Max, an estimate until measured;
+  divergence within a subgroup may take some of it.
 
 ### D1 — Report a decoder's fallback to host pictures
 
