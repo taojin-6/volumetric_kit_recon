@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <map>
 #include <tuple>
 #include <vector>
 
@@ -485,9 +486,19 @@ std::vector<float> render_moving(const sensor::DepthCameraParams& cam, int s) {
 }
 
 // The share of the sphere's surface the cameras see -- every 4th pixel's --
-// with a vertex within 1 cm.
+// with a vertex within 1 cm: the vertices binned by 1 cm cell, so a point
+// looks in the 27 cells around its own.
 float sphere_cover(const std::vector<sensor::DepthCameraParams>& cams,
                    const vr::Vec3f& c, const mesh::Mesh& m) {
+  const auto cell = [](const vr::Vec3f& p) {
+    return std::make_tuple(int(std::floor(p.x / 0.01f)),
+                           int(std::floor(p.y / 0.01f)),
+                           int(std::floor(p.z / 0.01f)));
+  };
+  std::map<std::tuple<int, int, int>, std::vector<vr::Vec3f>> bins;
+  for (const mesh::Vertex& vtx : m.vertices) {
+    bins[cell(vtx.position)].push_back(vtx.position);
+  }
   std::size_t seen = 0;
   std::size_t covered = 0;
   for (const sensor::DepthCameraParams& cam : cams) {
@@ -498,12 +509,23 @@ float sphere_cover(const std::vector<sensor::DepthCameraParams>& cams,
         if (!std::isfinite(t)) continue;
         const vr::Vec3f p = r.o + t * r.d;
         ++seen;
-        for (const mesh::Vertex& vtx : m.vertices) {
-          if (glm::length(vtx.position - p) <= 0.01f) {
-            ++covered;
-            break;
+        const auto [x, y, z] = cell(p);
+        bool near = false;
+        for (int dz = -1; dz <= 1 && !near; ++dz) {
+          for (int dy = -1; dy <= 1 && !near; ++dy) {
+            for (int dx = -1; dx <= 1 && !near; ++dx) {
+              const auto it = bins.find({x + dx, y + dy, z + dz});
+              if (it == bins.end()) continue;
+              for (const vr::Vec3f& q : it->second) {
+                if (glm::length(q - p) <= 0.01f) {
+                  near = true;
+                  break;
+                }
+              }
+            }
           }
         }
+        covered += near ? 1 : 0;
       }
     }
   }
