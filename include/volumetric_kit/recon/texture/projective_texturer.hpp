@@ -18,11 +18,11 @@
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/fwd.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
-#include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/export.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
+#include "volumetric_kit/sensor/frame/camera_params.hpp"
 
 namespace volumetric_kit::recon::texture {
 
@@ -197,7 +197,7 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         dispatch, or a vertex / depth buffer would exceed the device
   ///         `maxStorageBufferRange`; otherwise a buffer or dispatch failure.
   core::Status texture(mesh::Mesh& mesh, const float* depth,
-                       const DepthCameraParams& cam,
+                       const sensor::DepthCameraParams& cam,
                        float occlusion_threshold = 0.02f,
                        core::StageMetrics* metrics = nullptr);
 
@@ -230,7 +230,7 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         those about host arrays; `Status::Code::InvalidArgument` if
   ///         @p mesh names no buffers or has been superseded.
   core::Status texture(const mesh::DeviceMesh& mesh, const float* depth,
-                       const DepthCameraParams& cam,
+                       const sensor::DepthCameraParams& cam,
                        float occlusion_threshold = 0.02f,
                        core::StageMetrics* metrics = nullptr);
 

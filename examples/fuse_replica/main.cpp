@@ -27,6 +27,7 @@
 #include <thread>
 
 #include "config.hpp"
+#include "fuse_device.hpp"
 #include "fuse_frame.hpp"
 #include "remesh_report.hpp"
 #include "replica_config.hpp"
@@ -37,23 +38,22 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
-#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
+#include "volumetric_kit/sensor/rgbd_frame.hpp"
+#include "volumetric_kit/sensor/rgbd_sensor.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 namespace mesh = volumetric_kit::recon::mesh;
-namespace sensor = volumetric_kit::recon::sensor;
+namespace sensor = volumetric_kit::sensor;
 
 namespace {
 
@@ -63,10 +63,11 @@ using Options = vr_example::config::Config;
 vkc::Status run(const Options& opt) {
   // --- Device bring-up (headless: no surface needed) ---
   VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
+  VKC_ASSIGN(const vkc::DeviceRequirements reqs,
+             vr_example::fuse_device_requirements());
   VKC_ASSIGN(vkc::PhysicalDeviceInfo gpu,
-             instance.select_physical_device(vr::device_requirements()));
-  VKC_ASSIGN(vkc::Device device,
-             vkc::Device::create(instance, gpu, vr::device_requirements()));
+             instance.select_physical_device(reqs));
+  VKC_ASSIGN(vkc::Device device, vkc::Device::create(instance, gpu, reqs));
   VKC_ASSIGN(vkc::Allocator allocator,
              vkc::Allocator::create(instance.handle(), device));
 
@@ -76,7 +77,7 @@ vkc::Status run(const Options& opt) {
   // each frame, and the loop below never learns it is reading a disk. A live
   // source replaces this one construction.
   VKC_ASSIGN(vr_example::ReplicaSensor replica, vr_example::open_replica(opt));
-  const vr::camera::CameraModel& cam = *replica.info().color;
+  const sensor::camera::CameraModel& cam = *replica.info().color;
   std::printf(
       "capture: %zu frames to play, %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n",
       replica.frame_count(), cam.size.width, cam.size.height, cam.intrinsics.fx,

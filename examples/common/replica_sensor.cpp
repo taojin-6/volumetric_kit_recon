@@ -20,15 +20,15 @@
 
 #include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/file_io.hpp"
-#include "volumetric_kit/recon/io/image_io.hpp"
+#include "volumetric_kit/sensor/io/image_io.hpp"
 
 namespace vkc = volumetric_kit::core;
 
 namespace vr_example {
 namespace {
 
-namespace camera = vr::camera;
-namespace sensor = vr::sensor;
+namespace camera = volumetric_kit::sensor::camera;
+namespace sensor = volumetric_kit::sensor;
 
 // True if a file is at the path. A stat, not an open: the probe at open() runs
 // once per frame that will play, and constructing an ifstream costs ~10x a
@@ -253,11 +253,11 @@ vkc::Result<sensor::RgbdFrame> ReplicaSensor::load(const Entry& entry) const {
   // Size-checked against the camera the frame is stamped with, so the arrays
   // a consumer indexes by its size are exactly that long.
   VKC_ASSIGN(pixels->color,
-             vr::io::load_color_packed(
+             sensor::io::load_color_packed(
                  frame_path(results_dir_, "frame", entry.index, ".jpg"),
                  cam.size.width, cam.size.height));
   VKC_ASSIGN(pixels->depth,
-             vr::io::load_depth_u16(
+             sensor::io::load_depth_u16(
                  frame_path(results_dir_, "depth", entry.index, ".png"),
                  cam.size.width, cam.size.height));
   // color_encoding stays defaulted -- the default *is* the declaration

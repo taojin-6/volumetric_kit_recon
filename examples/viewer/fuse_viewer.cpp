@@ -92,13 +92,9 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/shared_device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh_exchange.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
-#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
@@ -106,6 +102,9 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
+#include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
+#include "volumetric_kit/sensor/rgbd_frame.hpp"
+#include "volumetric_kit/sensor/rgbd_sensor.hpp"
 
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
@@ -122,12 +121,13 @@
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace rtsdf = volumetric_kit::recon::tsdf;
 namespace rmesh = volumetric_kit::recon::mesh;
 namespace rtex = volumetric_kit::recon::texture;
-namespace rsensor = volumetric_kit::recon::sensor;
+namespace rsensor = volumetric_kit::sensor;
 namespace vg = volumetric_kit::gfx;
 namespace glfw = volumetric_kit::gfx::glfw;
 namespace vgp = volumetric_kit::gfx::pipelines;
@@ -181,8 +181,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // recon takes its share of the same device. It gets its own VMA allocator --
   // allocators are independent bookkeeping over one VkDevice's memory, so each
   // library manages its own even when the device is shared.
-  auto recon_device_result =
-      vkc::Device::adopt(shared->compute_payload(), vr::device_requirements());
+  auto recon_device_result = fuse_viewer::adopt_fuse_device(*shared);
   if (!recon_device_result) {
     std::fprintf(stderr, "recon Device::adopt: %s\n",
                  recon_device_result.status().message().c_str());
@@ -210,7 +209,7 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   vr_example::ReplicaSensor replica = std::move(capture_result).value();
-  const vr::camera::CameraModel& cam = *replica.info().color;
+  const sensor::camera::CameraModel& cam = *replica.info().color;
   // The far plane follows the depth gate the frames carry.
   const float max_depth = opt.fusion.max_depth_m;
 

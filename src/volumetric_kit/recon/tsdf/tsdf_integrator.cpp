@@ -103,12 +103,12 @@ bool finite(const Mat4f& m) {
   }
   return true;
 }
-bool finite(const ColorCameraParams& cam) {
+bool finite(const sensor::ColorCameraParams& cam) {
   return std::isfinite(cam.fx) && std::isfinite(cam.fy) &&
          std::isfinite(cam.cx) && std::isfinite(cam.cy) &&
          finite(cam.cam_to_world);
 }
-bool finite(const DepthCameraParams& cam) {
+bool finite(const sensor::DepthCameraParams& cam) {
   return std::isfinite(cam.fx) && std::isfinite(cam.fy) &&
          std::isfinite(cam.cx) && std::isfinite(cam.cy) &&
          std::isfinite(cam.min_depth) && std::isfinite(cam.max_depth) &&
@@ -131,8 +131,8 @@ core::StorageInput color_input(const ColorFrame& color) noexcept {
 // while the principal point lies inside it; and it carries the planes to world
 // by the pose's inverse-transpose where the kernel uses transpose(R), the same
 // for the rigid pose DepthCameraParams requires.
-std::optional<volume::FrustumPlanes> fusion_reach(const DepthCameraParams& cam,
-                                                  float trunc_dist) {
+std::optional<volume::FrustumPlanes> fusion_reach(
+    const sensor::DepthCameraParams& cam, float trunc_dist) {
   if (!(cam.fx > 0.0f && cam.fy > 0.0f && cam.cx >= 0.0f &&
         cam.cx <= static_cast<float>(cam.width) && cam.cy >= 0.0f &&
         cam.cy <= static_cast<float>(cam.height))) {
@@ -155,25 +155,29 @@ std::optional<volume::FrustumPlanes> fusion_reach(const DepthCameraParams& cam,
 // The voxel layer's depth camera is a copy of the camera vocabulary's: the same
 // fields at the same offsets, so the kernel reads the bytes it read before.
 static_assert(
-    sizeof(volume::DepthPinhole) == sizeof(DepthCameraParams) &&
-        offsetof(volume::DepthPinhole, fx) == offsetof(DepthCameraParams, fx) &&
-        offsetof(volume::DepthPinhole, fy) == offsetof(DepthCameraParams, fy) &&
-        offsetof(volume::DepthPinhole, cx) == offsetof(DepthCameraParams, cx) &&
-        offsetof(volume::DepthPinhole, cy) == offsetof(DepthCameraParams, cy) &&
+    sizeof(volume::DepthPinhole) == sizeof(sensor::DepthCameraParams) &&
+        offsetof(volume::DepthPinhole, fx) ==
+            offsetof(sensor::DepthCameraParams, fx) &&
+        offsetof(volume::DepthPinhole, fy) ==
+            offsetof(sensor::DepthCameraParams, fy) &&
+        offsetof(volume::DepthPinhole, cx) ==
+            offsetof(sensor::DepthCameraParams, cx) &&
+        offsetof(volume::DepthPinhole, cy) ==
+            offsetof(sensor::DepthCameraParams, cy) &&
         offsetof(volume::DepthPinhole, min_depth) ==
-            offsetof(DepthCameraParams, min_depth) &&
+            offsetof(sensor::DepthCameraParams, min_depth) &&
         offsetof(volume::DepthPinhole, max_depth) ==
-            offsetof(DepthCameraParams, max_depth) &&
+            offsetof(sensor::DepthCameraParams, max_depth) &&
         offsetof(volume::DepthPinhole, width) ==
-            offsetof(DepthCameraParams, width) &&
+            offsetof(sensor::DepthCameraParams, width) &&
         offsetof(volume::DepthPinhole, height) ==
-            offsetof(DepthCameraParams, height) &&
+            offsetof(sensor::DepthCameraParams, height) &&
         offsetof(volume::DepthPinhole, cam_to_world) ==
-            offsetof(DepthCameraParams, cam_to_world),
-    "volume::DepthPinhole must keep DepthCameraParams' layout");
+            offsetof(sensor::DepthCameraParams, cam_to_world),
+    "volume::DepthPinhole must keep sensor::DepthCameraParams' layout");
 
 volume::DepthPinhole to_depth_pinhole(
-    const DepthCameraParams& camera) noexcept {
+    const sensor::DepthCameraParams& camera) noexcept {
   volume::DepthPinhole out;
   out.fx = camera.fx;
   out.fy = camera.fy;
@@ -243,8 +247,8 @@ core::Result<TsdfIntegrator> TsdfIntegrator::create(
   const auto stride = [alignment](VkDeviceSize bytes) {
     return (bytes + alignment - 1) / alignment * alignment;
   };
-  integ.cam_stride_ = stride(sizeof(DepthCameraParams));
-  integ.color_cam_stride_ = stride(sizeof(ColorCameraParams));
+  integ.cam_stride_ = stride(sizeof(sensor::DepthCameraParams));
+  integ.color_cam_stride_ = stride(sizeof(sensor::ColorCameraParams));
   VKC_ASSIGN(integ.cam_buf_,
              core::device_storage_buffer(allocator, integ.cam_stride_));
   VKC_ASSIGN(integ.color_cam_buf_,
@@ -269,7 +273,7 @@ core::Result<TsdfIntegrator> TsdfIntegrator::create(
 }
 
 core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
-                                       const DepthCameraParams& cam,
+                                       const sensor::DepthCameraParams& cam,
                                        float max_weight, IntegrationMode mode,
                                        const ColorFrame* color,
                                        core::StageMetrics* metrics) {
@@ -279,7 +283,7 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
 
 core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                                        const core::Buffer& depth,
-                                       const DepthCameraParams& cam,
+                                       const sensor::DepthCameraParams& cam,
                                        float max_weight, IntegrationMode mode,
                                        const ColorFrame* color,
                                        core::StageMetrics* metrics) {
@@ -379,7 +383,7 @@ core::Result<TsdfIntegrator::Checked> TsdfIntegrator::check(
   out.color_bytes.assign(frames.size(), 0);
   bool any_color = false;
   for (std::size_t i = 0; i < frames.size(); ++i) {
-    const DepthCameraParams& cam = frames[i].camera;
+    const sensor::DepthCameraParams& cam = frames[i].camera;
     const auto pixels = static_cast<std::size_t>(cam.width) *
                         static_cast<std::size_t>(cam.height);
     out.depth_bytes[i] = VkDeviceSize(pixels) * sizeof(float);
@@ -428,7 +432,7 @@ core::Result<TsdfIntegrator::Checked> TsdfIntegrator::check(
     // silently-misinterpreted curve is precisely the quiet error the
     // 2026-08-02 color-space decision exists to prevent. `sensor::to_canonical`
     // is the conversion; it is a copy when the declaration already matches.
-    if (!is_canonical(color->encoding)) {
+    if (!sensor::is_canonical(color->encoding)) {
       return core::Status::invalid_argument(
           "TsdfIntegrator::integrate: color frame is not in the canonical "
           "encoded form (sRGB transfer, BT.709 primaries); convert it at the "
@@ -541,10 +545,10 @@ core::Status TsdfIntegrator::record_checked(
   for (std::size_t k = 0; k < live.size(); ++k) {
     const FrameInput& frame = frames[live[k]];
     std::memcpy(cams.data() + k * cam_stride_, &frame.camera,
-                sizeof(DepthCameraParams));
+                sizeof(sensor::DepthCameraParams));
     if (frame.color != nullptr) {
       std::memcpy(color_cams.data() + k * color_cam_stride_, &frame.color->cam,
-                  sizeof(ColorCameraParams));
+                  sizeof(sensor::ColorCameraParams));
     }
   }
   VKC_TRY(batch.upload(cam_buf_, 0, cams.data(), cam_bytes));
@@ -652,7 +656,7 @@ core::Status TsdfIntegrator::record_checked(
       // be past maxStorageBufferRange where the image it holds is not.
       set.write_storage_buffer(3, depth_handle, 0, checked.depth_bytes[i]);
       set.write_storage_buffer(4, cam_buf_.handle(), k * cam_stride_,
-                               sizeof(DepthCameraParams));
+                               sizeof(sensor::DepthCameraParams));
       set.write_storage_buffer(5, color_handle, 0, color_range);
       // Slot 6 is the grid's `color` attribute whenever it carries one, so
       // dynamic can clear a stale color even on a depth-only frame.
@@ -663,7 +667,7 @@ core::Status TsdfIntegrator::record_checked(
                                0, VK_WHOLE_SIZE);
       set.write_storage_buffer(7, color_cam_buf_.handle(),
                                k * color_cam_stride_,
-                               sizeof(ColorCameraParams));
+                               sizeof(sensor::ColorCameraParams));
       set.write_storage_buffer(8, map.stamps_buffer().handle(), 0,
                                VK_WHOLE_SIZE);
       set.write_storage_buffer(9, active.count->handle(), 0,

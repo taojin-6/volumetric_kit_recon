@@ -44,7 +44,7 @@ using Vec3i = glm::ivec3;
 using Vec4f = glm::vec4;
 /// @brief 3x3 column-major matrix (36 B; element (row, col) is `m[col][row]`).
 ///        Linear-only transforms -- the color primaries conversion of
-///        `core/color_space.hpp`, which needs no translation column.
+///        `sensor/frame/color_space.hpp`, which needs no translation column.
 using Mat3f = glm::mat3;
 /// @brief 4x4 column-major matrix (64 B; element (row, col) is `m[col][row]`).
 using Mat4f = glm::mat4;

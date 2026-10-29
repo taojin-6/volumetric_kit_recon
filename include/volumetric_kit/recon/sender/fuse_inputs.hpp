@@ -5,14 +5,15 @@
 
 /// @file sender/fuse_inputs.hpp
 /// @brief The hand-off from frames prepared on the device
-///        (@ref sensor::DeviceFrame) to the fuser's inputs.
+///        (the sensor package's `sensor::DeviceFrame`) to the fuser's
+///        inputs.
 
 #include <optional>
 #include <vector>
 
 #include "volumetric_kit/recon/sender/export.hpp"
-#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/sensor/frame/device_frame.hpp"
 
 namespace volumetric_kit::recon::sender {
 
@@ -27,11 +28,11 @@ struct FuseInputs {
   std::vector<tsdf::FrameInput> frames;
 };
 
-/// @brief The fuser's inputs for @p frames, as @ref sensor::GpuFramePrep
-///        hands them out: nothing is uploaded, and depth and colour are fused
-///        through their own cameras, a colour pixel's coverage read off its
-///        high byte (@ref tsdf::ColorFrame::coverage_in_alpha). An empty
-///        entry is skipped.
+/// @brief The fuser's inputs for @p frames, as a producer such as
+///        `sensor::GpuFramePrep` hands them out: nothing is uploaded, and depth
+///        and colour are fused through their own cameras, a colour pixel's
+///        coverage read off its high byte (@ref
+///        tsdf::ColorFrame::coverage_in_alpha). An empty entry is skipped.
 /// @param frames  The prepared frames; they must outlive the inputs, which
 ///                borrow their buffers.
 VR_SENDER_API FuseInputs

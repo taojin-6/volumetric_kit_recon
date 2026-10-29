@@ -23,18 +23,18 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/recon/camera/geometry.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
+#include "volumetric_kit/sensor/camera/geometry.hpp"
+#include "volumetric_kit/sensor/rgbd_frame.hpp"
+#include "volumetric_kit/sensor/rgbd_sensor.hpp"
 
 namespace vr_example {
 
-namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 
 /// @brief A Replica-SLAM RGB-D sequence -- `<scene>/results/frameNNNNNN.jpg` +
 ///        `depthNNNNNN.png`, per-frame poses in `<scene>/traj.txt`, intrinsics
-///        in a `cam_params.json` -- as a @ref vr::sensor::IRgbdSensor.
+///        in a `cam_params.json` -- as a @ref sensor::IRgbdSensor.
 ///
 /// Playback is **consumer-paced**: every @ref poll hands out the next frame of
 /// the sequence, decoded on demand or served from the @ref preload cache, and
@@ -56,7 +56,7 @@ namespace vkc = volumetric_kit::core;
 /// @ref frame_count is the number of frames the sequence will really play,
 /// after the limit and stride in @ref Options. The pose file lists one
 /// flattened **row-major** 4x4 camera->world matrix per line.
-class ReplicaSensor final : public vr::sensor::IRgbdSensor {
+class ReplicaSensor final : public sensor::IRgbdSensor {
  public:
   /// @brief Which frames to play, and the depth range to stamp on them.
   struct Options {
@@ -138,7 +138,7 @@ class ReplicaSensor final : public vr::sensor::IRgbdSensor {
   std::size_t preloaded_bytes() const noexcept;
 
   /// @return What @ref open read: one camera for depth and colour.
-  const vr::sensor::SensorInfo& info() const noexcept override { return info_; }
+  const sensor::SensorInfo& info() const noexcept override { return info_; }
 
   /// @brief Accepts any depth of at least 1 before @ref start, and changes
   ///        nothing: no frame is held between polls, each decoding the next.
@@ -160,12 +160,12 @@ class ReplicaSensor final : public vr::sensor::IRgbdSensor {
   ///         started; or the decode error of a frame that is on disk but
   ///         unreadable, which leaves the position unchanged so the next poll
   ///         retries the same frame.
-  vkc::Result<std::optional<vr::sensor::RgbdFrame>> poll() override;
+  vkc::Result<std::optional<sensor::RgbdFrame>> poll() override;
 
   /// @brief Append what @ref poll would return: the next frame, or nothing.
   /// @param out  Receives the frame; not null.
   /// @return OK, or @ref poll's error.
-  vkc::Status drain(std::vector<vr::sensor::RgbdFrame>* out) override;
+  vkc::Status drain(std::vector<sensor::RgbdFrame>* out) override;
 
   /// @return `true` once every frame this sensor plays has been handed out
   ///         (or there were none) -- the replay's end of sequence, which its
@@ -175,15 +175,15 @@ class ReplicaSensor final : public vr::sensor::IRgbdSensor {
 
   /// @return Frames received and delivered since the last @ref start: one
   ///         each a poll that hands a frame out.
-  vr::sensor::SensorStats stats() const noexcept override { return stats_; }
+  sensor::SensorStats stats() const noexcept override { return stats_; }
 
  private:
   // A frame this sensor plays: its index on disk, its pose, and its decode
   // once preloaded.
   struct Entry {
     std::size_t index = 0;
-    vr::camera::Mat4d pose{1.0};
-    std::optional<vr::sensor::RgbdFrame> cached;
+    sensor::camera::Mat4d pose{1.0};
+    std::optional<sensor::RgbdFrame> cached;
   };
 
   ReplicaSensor() = default;
@@ -191,19 +191,19 @@ class ReplicaSensor final : public vr::sensor::IRgbdSensor {
   // Decode one frame straight from disk, bypassing the cache, stamped with
   // everything but its sequence number. The preload path shares it, so both
   // decode identically.
-  vkc::Result<vr::sensor::RgbdFrame> load(const Entry& entry) const;
+  vkc::Result<sensor::RgbdFrame> load(const Entry& entry) const;
 
   // Bytes of one decoded frame: u16 depth and a packed colour word a pixel.
   std::size_t frame_bytes() const noexcept;
 
   Options options_{};
   float metres_per_unit_ = 0.0f;
-  vr::sensor::SensorInfo info_;
+  sensor::SensorInfo info_;
   std::string results_dir_;
   std::vector<Entry> frames_;  // the frames to play, in order
   bool running_ = false;
   std::size_t next_ = 0;  // position in `frames_` of the next poll
-  vr::sensor::SensorStats stats_;
+  sensor::SensorStats stats_;
 };
 
 }  // namespace vr_example

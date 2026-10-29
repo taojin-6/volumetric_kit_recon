@@ -30,14 +30,9 @@ namespace volumetric_kit::recon {
 ///
 /// A compute queue with timeline semaphores (the core's defaults) and
 /// `scalarBlockLayout`, the buffer ABI every recon shader declares
-/// (`layout(scalar)`; DECISIONS.md, 2026-07-05). Two extensions are optional
-/// and enabled where offered: `VK_KHR_external_memory_fd`, through which a
-/// hardware decoder's picture lands in recon's buffers without a host trip
-/// (`volumetric_kit/core/vulkan/external_memory.hpp`), and
-/// `VK_EXT_metal_objects`, through which a VideoToolbox picture does on Apple.
-/// They are named here, not left to the device's creator, so a merged
-/// bootstrap that never hears of them does not silently send every decoded
-/// picture through the host.
+/// (`layout(scalar)`; DECISIONS.md, 2026-07-05). The decoders' optional
+/// extensions are the sensor package's (`sensor::device_requirements`): a
+/// program that runs both merges the two lists with the core's `merge`.
 ///
 /// Pass these to every `Device::create` and `Device::adopt` recon runs on.
 /// The core's default requirements leave `scalarBlockLayout` off, and a
@@ -52,8 +47,6 @@ namespace volumetric_kit::recon {
 inline core::DeviceRequirements device_requirements() {
   core::DeviceRequirements reqs;
   reqs.scalar_block_layout = true;
-  reqs.optional_extensions = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
-                              "VK_EXT_metal_objects"};
   return reqs;
 }
 

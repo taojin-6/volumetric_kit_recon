@@ -20,6 +20,7 @@
 
 #include <glm/glm.hpp>
 
+#include "fuse_device.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/shared_device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
@@ -29,7 +30,6 @@
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/glfw/shared_device.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/volume/frustum.hpp"
@@ -60,9 +60,10 @@ inline vg::app::WindowDeviceConfig viewer_device_config(
   return config;
 }
 
-/// @brief The one device gfx and recon both adopt, with @p window's surface:
-///        gfx's `make_shared_device` for recon's requirements and
-///        @ref viewer_device_config. Prints the device's summary.
+/// @brief The one device gfx, recon and the sensor package all adopt, with
+///        @p window's surface: gfx's `make_shared_device` for recon's and the
+///        sensor package's requirements and @ref viewer_device_config. Prints
+///        the device's summary.
 /// @param window      The window the app presents to; it must outlive the
 ///                    device.
 /// @param app         As @ref viewer_device_config.
@@ -73,12 +74,22 @@ inline vg::app::WindowDeviceConfig viewer_device_config(
 inline vkc::Result<std::unique_ptr<vkc::SharedDevice>> make_viewer_device(
     GLFWwindow* window, const vg::app::WindowedAppConfig& app,
     bool validation) {
-  VKC_ASSIGN(
-      std::unique_ptr<vkc::SharedDevice> shared,
-      vg::glfw::make_shared_device(window, vr::device_requirements(),
-                                   viewer_device_config(app, validation)));
+  VKC_ASSIGN(const vkc::DeviceRequirements reqs,
+             vr_example::fuse_device_requirements());
+  VKC_ASSIGN(std::unique_ptr<vkc::SharedDevice> shared,
+             vg::glfw::make_shared_device(
+                 window, reqs, viewer_device_config(app, validation)));
   std::printf("shared device: %s\n", shared->summary().c_str());
   return shared;
+}
+
+/// @brief recon's and the sensor package's share of @p shared: the device
+///        both adopt, held to their requirements.
+inline vkc::Result<vkc::Device> adopt_fuse_device(
+    const vkc::SharedDevice& shared) {
+  VKC_ASSIGN(const vkc::DeviceRequirements reqs,
+             vr_example::fuse_device_requirements());
+  return vkc::Device::adopt(shared.compute_payload(), reqs);
 }
 
 /// @brief gfx's app on @p shared, presenting to the surface @p shared made:

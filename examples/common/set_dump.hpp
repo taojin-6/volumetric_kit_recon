@@ -22,14 +22,14 @@
 
 #include "volumetric_kit/core/base/file_io.hpp"
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/recon/io/image_io.hpp"
-#include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
-#include "volumetric_kit/recon/sensor/utils/picture_readback.hpp"
+#include "volumetric_kit/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/sensor/io/image_io.hpp"
+#include "volumetric_kit/sensor/prep/picture_readback.hpp"
+#include "volumetric_kit/sensor/rgbd_frame.hpp"
 
 namespace vr_example {
 
-namespace vr = volumetric_kit::recon;
+namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 
 /// @return Where @ref dump_set writes camera @p id's file of set @p set:
@@ -44,8 +44,7 @@ inline std::string dump_file(const std::string& directory, std::size_t set,
 
 /// @return @p view's luma as packed RGBA8 rows, R = G = B = Y and A = 255,
 ///         as `io::write_png_rgba8` takes them.
-inline std::vector<std::uint8_t> luma_rgba(
-    const vr::sensor::PictureView& view) {
+inline std::vector<std::uint8_t> luma_rgba(const sensor::PictureView& view) {
   std::vector<std::uint8_t> rgba(std::size_t{view.width} * view.height * 4);
   std::uint8_t* out = rgba.data();
   for (std::uint32_t y = 0; y < view.height; ++y) {
@@ -64,8 +63,8 @@ inline std::vector<std::uint8_t> luma_rgba(
 ///         whose frame carries no JPEG (colour that was not MJPEG), or for
 ///         ids or views not one per frame.
 inline vkc::Status check_set(
-    const vr::sensor::FrameSet& set, const std::vector<std::string>& ids,
-    const std::vector<std::optional<vr::sensor::PictureView>>* luma) {
+    const sensor::FrameSet& set, const std::vector<std::string>& ids,
+    const std::vector<std::optional<sensor::PictureView>>* luma) {
   if (ids.size() != set.frames.size() ||
       (luma != nullptr && luma->size() != set.frames.size())) {
     return vkc::Status::invalid_argument(
@@ -73,7 +72,7 @@ inline vkc::Status check_set(
   }
   for (std::size_t c = 0; c < set.frames.size(); ++c) {
     if (set.frames[c] && set.frames[c]->color_bitstream.codec !=
-                             vr::sensor::ColorBitstream::Codec::Jpeg) {
+                             sensor::ColorBitstream::Codec::Jpeg) {
       return vkc::Status::invalid_argument(
           "dump_set: camera " + ids[c] +
           "'s frame carries no JPEG; the dump takes MJPEG colour");
@@ -98,20 +97,20 @@ inline vkc::Status check_set(
 ///         `io::write_png_rgba8`.
 inline vkc::Status dump_set(
     const std::string& directory, std::size_t index,
-    const vr::sensor::FrameSet& set, const std::vector<std::string>& ids,
-    const std::vector<std::optional<vr::sensor::PictureView>>* luma) {
+    const sensor::FrameSet& set, const std::vector<std::string>& ids,
+    const std::vector<std::optional<sensor::PictureView>>* luma) {
   VKC_TRY(check_set(set, ids, luma));
   for (std::size_t c = 0; c < set.frames.size(); ++c) {
     if (!set.frames[c]) continue;
-    const vr::sensor::ColorBitstream& jpeg = set.frames[c]->color_bitstream;
+    const sensor::ColorBitstream& jpeg = set.frames[c]->color_bitstream;
     VKC_TRY(vkc::write_file(
         dump_file(directory, index, ids[c], ".jpg"),
         std::string_view(reinterpret_cast<const char*>(jpeg.data), jpeg.size),
         vkc::WriteMode::CreateNew));
     if (luma == nullptr || !(*luma)[c]) continue;
-    const vr::sensor::PictureView& view = *(*luma)[c];
+    const sensor::PictureView& view = *(*luma)[c];
     const std::vector<std::uint8_t> rgba = luma_rgba(view);
-    VKC_TRY(vr::io::write_png_rgba8(
+    VKC_TRY(sensor::io::write_png_rgba8(
         dump_file(directory, index, ids[c], "_luma.png"), rgba.data(),
         rgba.size(), view.width, view.height));
   }
@@ -175,8 +174,8 @@ class SetDump {
   /// @return OK; or the error of @ref check_set, `create_new_directory` or
   ///         @ref dump_set.
   vkc::Status write(
-      const vr::sensor::FrameSet& set, const std::vector<std::string>& ids,
-      const std::vector<std::optional<vr::sensor::PictureView>>* luma) {
+      const sensor::FrameSet& set, const std::vector<std::string>& ids,
+      const std::vector<std::optional<sensor::PictureView>>* luma) {
     if (written_ >= limit_) return {};
     if (written_ == 0) {
       VKC_TRY(check_set(set, ids, luma));

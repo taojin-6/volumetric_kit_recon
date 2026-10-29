@@ -5,7 +5,7 @@
 // (voxel_hash_map.hpp), byte-identical under scalar block layout (floats and
 // uints at their 4-byte offsets, the mat4 at offset 32), and the one line of
 // pinhole arithmetic depth allocation needs. The unprojection is
-// core/shaders/pinhole.glsl's vr_unproject_pinhole, operation for operation,
+// sensor/frame/shaders/pinhole.glsl's vs_unproject_pinhole, operation for operation,
 // copied so the voxel layer needs no camera vocabulary;
 // tests/volume_depth_unproject_test.cpp holds the two to the same bits.
 
