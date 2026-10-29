@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`fuse_orbbec` serves `output.max_viewers` viewers at once** (default 4),
+  so a scenario serves more than 4 without a code change
+  ([config/README.md](config/README.md)). recon pins core 0.30.0, which
+  reads the key, and grid 0.3.0, whose `codec_outputs` passes it to the
+  server; both floors rise with them.
+
 ### Changed
 
 - **grid is fetched from its own repository**
