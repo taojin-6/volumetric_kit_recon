@@ -57,13 +57,12 @@ class FakeSensor final : public sensor::IRgbdSensor {
 };
 
 // An array of one fake sensor, opened with no device.
-sensor::SensorArray array_of(std::string id, sensor::ClockDomain clock,
-                             sensor::SensorStats stats) {
+vkc::Result<sensor::SensorArray> array_of(std::string id,
+                                          sensor::ClockDomain clock,
+                                          sensor::SensorStats stats) {
   std::vector<std::unique_ptr<sensor::IRgbdSensor>> sensors;
   sensors.push_back(std::make_unique<FakeSensor>(std::move(id), clock, stats));
-  auto opened = sensor::SensorArray::open(std::move(sensors), {});
-  CHECK(opened);
-  return std::move(opened).value();
+  return sensor::SensorArray::open(std::move(sensors), {});
 }
 
 std::string marked(const sensor::IRgbdSensor& camera) {
@@ -71,19 +70,20 @@ std::string marked(const sensor::IRgbdSensor& camera) {
 }
 
 int report() {
-  sensor::SensorArray array =
+  auto array =
       array_of("215122251234", sensor::ClockDomain::Host, {7, 5, 1, 2});
+  CHECK(array);
   // The array's sets, then the camera's line: its id and the interface's
   // counters, in their order.
   const std::string expected =
       "0 sets, 0 missing a camera, 0 frames unmatched\n"
       "  215122251234: 7 received, 5 delivered, 1 dropped, 2 failed\n";
   const std::string got =
-      vr_example::array_report(array, nullptr, vr_example::sensor_counters);
+      vr_example::array_report(*array, nullptr, vr_example::sensor_counters);
   if (got != expected) std::fprintf(stderr, "report:\n%s", got.c_str());
   CHECK(got == expected);
   // A driver's own counters take the line's place after the id.
-  CHECK(vr_example::array_report(array, nullptr, marked) ==
+  CHECK(vr_example::array_report(*array, nullptr, marked) ==
         "0 sets, 0 missing a camera, 0 frames unmatched\n"
         "  215122251234: counters of 215122251234\n");
   return 0;
@@ -92,12 +92,11 @@ int report() {
 int host_clock() {
   // A set's time is the system clock's only where its camera stamps on the
   // host's.
-  sensor::SensorArray host =
-      array_of("A", sensor::ClockDomain::Host, sensor::SensorStats{});
-  sensor::SensorArray own =
-      array_of("B", sensor::ClockDomain::Device, sensor::SensorStats{});
-  CHECK(vr_example::on_host_clock(host));
-  CHECK(!vr_example::on_host_clock(own));
+  auto host = array_of("A", sensor::ClockDomain::Host, sensor::SensorStats{});
+  auto own = array_of("B", sensor::ClockDomain::Device, sensor::SensorStats{});
+  CHECK(host && own);
+  CHECK(vr_example::on_host_clock(*host));
+  CHECK(!vr_example::on_host_clock(*own));
   return 0;
 }
 
