@@ -49,7 +49,7 @@ required where the application needs them.
 | `--max-frames` / `--frames` / `--sets` | `run.frames` / `run.frames` / `run.sets` |
 | `--width` / `--height` for a window or image | `window.width` / `window.height` |
 | `--height` / `--up-vector` for a mesh | `source.height_m` / `source.up_vector` (three numbers) |
-| `--dynamic` / `--static` | `fusion.dynamic: true` / `false` |
+| `--dynamic` / `--static` | `fusion.dynamic: true` / `false` (Dynamic is for fixed cameras, a rig: it compares each camera with its own past, which means nothing for a moving camera) |
 | `-o` for fusion/render | `output.path` or `output.prefix` |
 | `-o` for a codec | `output.prefix` (PLYs) and `output.stream` (coded frames) |
 
@@ -76,8 +76,8 @@ they are recorded ([Live streaming](../README.md#live-streaming)); 0, the
 default, serves nothing. `output.max_viewers`, given only with a port, is how
 many viewers it serves at once, first come (default 4); a connection past
 them is closed.
-Like `rig_viewer`, it fuses Dynamic by default, clearing a surface the
-cameras see past, so the frames and the PLY follow a changing scene, and it
+Like `rig_viewer`, it fuses Dynamic by default, resetting where a camera
+sees change, so the frames and the PLY follow a changing scene, and it
 frees stale blocks every `fusion.free_after` sets (default 30).
 `fusion.dynamic: false` selects Classic, under which such a surface stays
 coded in every frame. `codec_orbbec.json` codes 150 sets of a four-camera

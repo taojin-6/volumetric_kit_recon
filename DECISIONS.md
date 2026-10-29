@@ -5322,11 +5322,14 @@ cleared debris within 4 cm of a surface after an object left (measured:
 the moving sphere's 80 / 72 cm² ghost, fast / slow, stays). Change is a
 camera disagreeing with its own past; conflict is cameras disagreeing with
 each other. Only change evicts; conflict averages.
-- **Reset rule:** the 10-26 prototype's, tested there (an object that
+- **Reset rule:** an earlier prototype's, tested there (an object that
   approaches and recedes leaves no older layer; occluded history survives).
 - **Free space only into weighted voxels.** It wears away a surface no
-  change removed, at a tenth of a sample's weight so a camera seeing past
-  another's rim shifts that surface by under a tenth of the band. Never
+  change removed, at a tenth of a sample's weight, so a camera seeing past
+  another's rim shifts that surface by about a tenth of the band at equal
+  depth, more when the camera seeing past is nearer (weights go as 1/z^2):
+  one 1.6 times nearer or more carves the other's rim, as the former clear
+  did (the shader's arithmetic run to equilibrium). Never
   making an unobserved voxel observed keeps space a reset cleared, and a
   mover's blocks, unobserved, so the free pass frees them, as before. The
   A/B's other arm fused free space into every voxel (known-empty at a tenth
@@ -5354,8 +5357,9 @@ drawn into the depth (lab RTX 4090, against main):
 - A box that enters, stays 10 s and leaves (take3): whole in the set it
   arrives, and nothing of it left the set it goes (main: a 169 cm² ring at
   its foot, 9 sets to clear).
-- A sphere at 0.1 m/s (take1): 38 cm² of ghost stays (main 68). At 1 m/s,
-  before the `Vanished` reset, 102 (main 85); not replayed since.
+- A sphere at 0.1 m/s (take1): 38 cm² of ghost stays (main 68). At 1 m/s:
+  46.5 cm² while it moves, 50.2 the set after it leaves, 46.4 for good
+  (main 77.9 / 81.3 / 84.8); shown while moving 98.6% (main 90.5%).
 - A walking column that vanishes mid-walk (take3): 0.49 m² stays along its
   last pose and in slivers at its first (main 2.16 m²; 1.27 m² before the
   `Vanished` reset).
