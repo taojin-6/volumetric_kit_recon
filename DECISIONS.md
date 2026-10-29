@@ -16612,6 +16612,17 @@ public header. Mutation-checked: of 19 mutants 18 fail a test; the one
 left is equivalent (the decode toe moved from 0.04045 to 0.04, between
 which no 8-bit code lies).
 
+**Validation.** Apple M5 Max, MoltenVK, Release with warnings as errors
+and Assimp, under the validation layer: the 128 tests pass, the codec's
+golden frames unchanged. Main (7e93e85e) and this change, twice each:
+`codec_replica` on Replica `room0` (400 frames, 1 cm, every frame coded)
+and `codec_mesh` on Rafa2 frames 1–12 write the same stream bytes;
+`fuse_replica` on `room0` (400 frames, 2 cm, colour) ends at 8,692 blocks
+and 330,324 triangles, and its mesh and `codec_mesh`'s uncompressed and
+decoded meshes hold the same vertices, colour bytes included, and the same
+triangles. Their PLY bytes differ only in vertex order, as between any two
+runs of main. The kernels' cost is unchanged, so no timing was run.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
