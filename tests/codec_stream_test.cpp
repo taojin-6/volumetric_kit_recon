@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// A sender's codec stream (sender/codec_stream.hpp), on a grid holding a
+// A codec stream (codec_stream/codec_stream.hpp), on a grid holding a
 // sphere: outputs it cannot make refused on create, before the encoder, whose
 // refusal takes the stream's file back, a session that is not one Geometry
 // track refused, and none written without outputs; each frame as it
@@ -11,19 +11,21 @@
 // coded(), and the stream going on after it, byte for byte what an encoder
 // returns, a key exactly when an I-frame, and the same file on a rerun; after
 // a frame encoded but not decoded, an I-frame where the encoder would code a
-// P-frame, through code() and through SetSender; a frame out of order, or any
-// call once finished or moved from, refused before anything is encoded; a
-// stream never finished still read whole, and one dropped before its first
-// frame removed; a sender's frames, through SetSender, the file code()
-// writes, byte for byte; and, served on
-// 127.0.0.1 port 0 (never every interface), every frame the file records
-// reaching a client as it is coded, with the file's seq, key, pts, set, bytes
-// and offset, and the end once finished, a frame the file refuses never
-// served, serving alone writing no file, a port in use refused before any
-// file is made, and neither a client that leaves nor a record the server
-// refuses failing a frame. Without the decode, the same file and records,
-// frames with no decode rows, and no player grid. The device part skips with
-// no device.
+// P-frame, whole and in halves; a frame out of order, or any call once
+// finished or moved from, refused before anything is encoded; a stream never
+// finished still read whole, and one dropped before its first frame removed;
+// frames in halves around a caller's batch the file code() writes, byte for
+// byte, the batch's device rows split between the frame and the caller, the
+// front half again on a grid changed after it, a pending frame since
+// superseded refused, and a viewer's request for a key read by the front
+// half; and, served on 127.0.0.1 port 0 (never every interface), every
+// frame the file records reaching a client as it is coded,
+// with the file's seq, key, pts, set, bytes and offset, and the end once
+// finished, a frame the file refuses never served, serving alone writing no
+// file, a port in use refused before any file is made, and neither a client
+// that leaves nor a record the server refuses failing a frame. Without the
+// decode, the same file and records, frames with no decode rows, and no
+// player grid. The device part skips with no device.
 
 #include <signal.h>
 #include <sys/resource.h>
@@ -44,26 +46,25 @@
 #include "networking_loopback.hpp"
 #include "stage_rows.hpp"
 #include "volumetric_kit/core/base/file_io.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 #include "volumetric_kit/core/testing/scratch_dir.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
+#include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
+#include "volumetric_kit/recon/codec_stream/codec_stream.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/networking/stream_client.hpp"
 #include "volumetric_kit/recon/networking/stream_server.hpp"
-#include "volumetric_kit/recon/sender/codec_stream.hpp"
-#include "volumetric_kit/recon/sender/set_sender.hpp"
 #include "volumetric_kit/recon/stream/stream_reader.hpp"
-#include "volumetric_kit/recon/tsdf/fuser.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace codec = volumetric_kit::recon::codec;
+namespace codec_stream = volumetric_kit::recon::codec_stream;
 namespace networking = volumetric_kit::recon::networking;
-namespace sender = volumetric_kit::recon::sender;
 namespace stream = volumetric_kit::recon::stream;
-namespace tsdf = volumetric_kit::recon::tsdf;
 namespace net = vr_test::net;
 namespace fs = std::filesystem;
 using namespace codec_fixture;
@@ -78,7 +79,7 @@ std::uint64_t pts(std::size_t frame) {
 // The session the tests write: one Geometry track at `rate`.
 stream::Session session(stream::Rate rate = {}) {
   stream::Session s;
-  s.writer = "recon_sender_codec_stream";
+  s.writer = "recon_codec_stream";
   stream::Track track;
   track.kind = stream::TrackKind::Geometry;
   track.rate = rate;
@@ -95,7 +96,7 @@ codec::EncoderConfig unusable_config() {
 }
 
 // Whether `frame` holds its encode's rows and, when decoded, its decode's.
-bool rows_of(const sender::SentFrame& frame, bool decoded) {
+bool rows_of(const codec_stream::SentFrame& frame, bool decoded) {
   return vr_test::find_row(frame.encode, "codec encode") != nullptr &&
          (vr_test::find_row(frame.decode, "codec decode") != nullptr) ==
              decoded;
@@ -106,16 +107,17 @@ bool rows_of(const sender::SentFrame& frame, bool decoded) {
 // encoder's refusal, and their file is taken back. A session that is not one
 // Geometry track is refused before any output is made.
 int refused(vkc::test::GpuContext& gpu, const vkc::test::Scratch& scratch) {
-  const auto refuses = [&gpu](const sender::CodecOutputs& outputs,
+  const auto refuses = [&gpu](const codec_stream::CodecOutputs& outputs,
                               const stream::Session& s, vkc::Status::Code code,
                               const std::string& named) {
-    vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
-        gpu.device, gpu.allocator, unusable_config(), s, outputs);
+    vkc::Result<codec_stream::CodecStream> made =
+        codec_stream::CodecStream::create(gpu.device, gpu.allocator,
+                                          unusable_config(), s, outputs);
     return !made.ok() && made.status().domain() == code &&
            made.status().message().find(named) != std::string::npos;
   };
   // A stream must be new: what is at its path is left as it was.
-  sender::CodecOutputs existing;
+  codec_stream::CodecOutputs existing;
   existing.stream = (scratch.path / "earlier.vrst").string();
   CHECK(vkc::write_file(existing.stream, "earlier", vkc::WriteMode::CreateNew)
             .ok());
@@ -123,10 +125,10 @@ int refused(vkc::test::GpuContext& gpu, const vkc::test::Scratch& scratch) {
                 existing.stream));
   const vkc::Result<std::string> kept = vkc::read_file(existing.stream);
   CHECK(kept.ok() && *kept == "earlier");
-  sender::CodecOutputs orphan;
+  codec_stream::CodecOutputs orphan;
   orphan.stream = (scratch.path / "missing" / "frames.vrst").string();
   CHECK(refuses(orphan, session(), vkc::Status::Code::NotFound, orphan.stream));
-  sender::CodecOutputs made;
+  codec_stream::CodecOutputs made;
   made.stream = (scratch.path / "uncoded.vrst").string();
   CHECK(refuses(made, session(), vkc::Status::Code::InvalidArgument,
                 "intra_period"));
@@ -147,14 +149,17 @@ int refused(vkc::test::GpuContext& gpu, const vkc::test::Scratch& scratch) {
 
 // With no outputs, the stream codes but writes no file, so nothing lands in
 // the working directory; a frame out of order, and any call once finished, is
-// refused all the same, with no writer to refuse it. A stream moved from
-// refuses every call and reports nothing, the one it moved into going on.
+// refused all the same, with no writer to refuse it, a front half included,
+// and a frame whose front half ran before finish, nothing coded.
+// A stream moved from refuses every call,
+// its halves' too, and reports nothing, the one it moved into going on.
 int writes_nothing(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                    const vkc::test::Scratch& scratch) {
   const fs::path quiet = scratch.path / "quiet";
   CHECK(fs::create_directory(quiet));
-  vkc::Result<sender::CodecStream> made =
-      sender::CodecStream::create(gpu.device, gpu.allocator, {}, session());
+  vkc::Result<codec_stream::CodecStream> made =
+      codec_stream::CodecStream::create(gpu.device, gpu.allocator, {},
+                                        session());
   CHECK(made.ok());
   const fs::path before = fs::current_path();
   fs::current_path(quiet);
@@ -173,17 +178,55 @@ int writes_nothing(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   }
   CHECK(made->coded() == 2 && made->last_pts_ns() == pts(2));
   CHECK(fs::is_empty(quiet));
+  {
+    vkc::CommandBatch front(gpu.device, gpu.allocator);
+    CHECK(made->record_front(front, source).status().domain() ==
+          vkc::Status::Code::InvalidArgument);
+    CHECK(made->coded() == 2);
+  }
+  {  // A front half run before finish, its frame finished after it.
+    vkc::Result<codec_stream::CodecStream> halted =
+        codec_stream::CodecStream::create(gpu.device, gpu.allocator, {},
+                                          session());
+    CHECK(halted.ok());
+    vkc::CommandBatch front(gpu.device, gpu.allocator);
+    const vkc::Result<codec::PendingEncode> pending =
+        halted->record_front(front, source);
+    CHECK(pending.ok());
+    vkc::Result<vkc::PendingBatch> done = front.submit_async({}, {});
+    CHECK(done.ok() && done->wait().ok());
+    halted->front_ran(done->device_rows());
+    CHECK(halted->finish().ok());
+    const vkc::Status late = halted->finish_frame(*pending, 0, pts(0)).status();
+    CHECK(late.domain() == vkc::Status::Code::InvalidArgument &&
+          late.message() == "CodecStream: finished");
+    CHECK(halted->coded() == 0 && halted->player() == nullptr);
+  }
 
-  vkc::Result<sender::CodecStream> first =
-      sender::CodecStream::create(gpu.device, gpu.allocator, {}, session());
+  vkc::Result<codec_stream::CodecStream> first =
+      codec_stream::CodecStream::create(gpu.device, gpu.allocator, {},
+                                        session());
   CHECK(first.ok() && first->code(source, 0, pts(0)).ok());
-  sender::CodecStream moved = std::move(first).value();
+  codec_stream::CodecStream moved = std::move(first).value();
   CHECK(first->code(source, 1, pts(1)).status().domain() ==
         vkc::Status::Code::InvalidArgument);
   CHECK(first->finish().domain() == vkc::Status::Code::InvalidArgument);
   CHECK(first->coded() == 0 && first->last_pts_ns() == 0);
   CHECK(first->player() == nullptr && first->server() == nullptr);
-  CHECK(first->coder() == nullptr && moved.coder() != nullptr);
+  CHECK(!first->valid() && moved.valid());
+  {
+    vkc::CommandBatch front(gpu.device, gpu.allocator);
+    CHECK(first->record_front(front, source).status().domain() ==
+          vkc::Status::Code::InvalidArgument);
+    vkc::StageMetrics rest;
+    first->front_ran({vkc::StageRow{"codec encode", 0.0, 1.0, true}}, &rest);
+    CHECK(rest.rows().empty());
+    const codec::PendingEncode none;
+    CHECK(first->redo(none, source).status().domain() ==
+          vkc::Status::Code::InvalidArgument);
+    CHECK(first->finish_frame(none, 1, pts(1)).status().domain() ==
+          vkc::Status::Code::InvalidArgument);
+  }
   CHECK(moved.coded() == 1 && moved.player() != nullptr);
   CHECK(moved.code(source, 1, pts(1)).ok() && moved.coded() == 2);
   return 0;
@@ -193,12 +236,14 @@ int writes_nothing(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // the decoder refuses, `source`'s frame 10, then finish, into `outputs`.
 // `sent` receives the frames that went out whole.
 int code_frames(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
-                vol::VoxelBlockGrid& other, const sender::CodecOutputs& outputs,
-                std::vector<sender::SentFrame>* sent) {
-  vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
-      gpu.device, gpu.allocator, {}, session({30000, 1001}), outputs);
+                vol::VoxelBlockGrid& other,
+                const codec_stream::CodecOutputs& outputs,
+                std::vector<codec_stream::SentFrame>* sent) {
+  vkc::Result<codec_stream::CodecStream> made =
+      codec_stream::CodecStream::create(gpu.device, gpu.allocator, {},
+                                        session({30000, 1001}), outputs);
   CHECK(made.ok());
-  sender::CodecStream coder = std::move(made).value();
+  codec_stream::CodecStream coder = std::move(made).value();
   // The stream's file is there before any frame is coded.
   CHECK(fs::is_regular_file(outputs.stream));
   CHECK(coder.coded() == 0 && coder.player() == nullptr);
@@ -206,7 +251,8 @@ int code_frames(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 
   sent->clear();
   for (const std::size_t frame : {3, 7}) {
-    vkc::Result<sender::SentFrame> out = coder.code(source, frame, pts(frame));
+    vkc::Result<codec_stream::SentFrame> out =
+        coder.code(source, frame, pts(frame));
     CHECK(out.ok() && out->type == codec::FrameType::kIntra);
     CHECK(out->bytes > 0 && out->blocks > 0 && !out->tail);
     CHECK(rows_of(*out, true));
@@ -229,7 +275,7 @@ int code_frames(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(coder.code(other, 9, pts(9)).status().domain() ==
         vkc::Status::Code::InvalidArgument);
   CHECK(coder.coded() == 3 && coder.last_pts_ns() == pts(9));
-  vkc::Result<sender::SentFrame> last = coder.code(source, 10, pts(10));
+  vkc::Result<codec_stream::SentFrame> last = coder.code(source, 10, pts(10));
   CHECK(last.ok() && coder.coded() == 4);
   sent->push_back(std::move(last).value());
 
@@ -247,14 +293,14 @@ int code_frames(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // encoder returns for the same grid.
 int check_records(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                   const std::string& path,
-                  const std::vector<sender::SentFrame>& sent,
+                  const std::vector<codec_stream::SentFrame>& sent,
                   float other_voxel) {
   vkc::Result<std::unique_ptr<stream::StreamReader>> opened =
       stream::StreamReader::open(path);
   CHECK(opened.ok());
   const stream::StreamReader& reader = **opened;
   const stream::Session& s = reader.session();
-  CHECK(s.writer == "recon_sender_codec_stream");
+  CHECK(s.writer == "recon_codec_stream");
   CHECK(s.id == (std::array<std::uint8_t, 16>{}));
   CHECK(s.created_ns == 0 && s.calibration.empty());
   CHECK(s.tracks.size() == 1);
@@ -307,17 +353,19 @@ int check_records(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // frame, it leaves none, so a rerun onto its path is not refused.
 int unfinished(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                const vkc::test::Scratch& scratch) {
-  sender::CodecOutputs outputs;
+  codec_stream::CodecOutputs outputs;
   outputs.stream = (scratch.path / "unfinished.vrst").string();
   {  // Dropped before its first frame: the file is taken back.
-    vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
-        gpu.device, gpu.allocator, {}, session(), outputs);
+    vkc::Result<codec_stream::CodecStream> made =
+        codec_stream::CodecStream::create(gpu.device, gpu.allocator, {},
+                                          session(), outputs);
     CHECK(made.ok() && fs::exists(outputs.stream));
   }
   CHECK(!fs::exists(outputs.stream));
   {  // Created again at the same path, and dropped with two frames.
-    vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
-        gpu.device, gpu.allocator, {}, session(), outputs);
+    vkc::Result<codec_stream::CodecStream> made =
+        codec_stream::CodecStream::create(gpu.device, gpu.allocator, {},
+                                          session(), outputs);
     CHECK(made.ok());
     CHECK(made->code(source, 0, pts(0)).ok());
     CHECK(made->code(source, 1, pts(1)).ok());
@@ -349,18 +397,19 @@ int periodic(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
              vol::VoxelBlockGrid& other, const vkc::test::Scratch& scratch) {
   constexpr codec::FrameType I = codec::FrameType::kIntra;
   constexpr codec::FrameType P = codec::FrameType::kInter;
-  sender::CodecOutputs outputs;
+  codec_stream::CodecOutputs outputs;
   outputs.stream = (scratch.path / "periodic.vrst").string();
   codec::EncoderConfig config;
   config.intra_period = 4;
-  vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
-      gpu.device, gpu.allocator, config, session(), outputs);
+  vkc::Result<codec_stream::CodecStream> made =
+      codec_stream::CodecStream::create(gpu.device, gpu.allocator, config,
+                                        session(), outputs);
   CHECK(made.ok());
-  sender::CodecStream& coder = made.value();
+  codec_stream::CodecStream& coder = made.value();
   const codec::FrameType types[] = {I, P, P, I, I, I, P, P, P, I};
   for (std::size_t frame = 0; frame < std::size(types); ++frame) {
     const bool refused = frame == 3 || frame == 4;
-    const vkc::Result<sender::SentFrame> s =
+    const vkc::Result<codec_stream::SentFrame> s =
         coder.code(refused ? other : source, frame, pts(frame));
     CHECK(s.ok() != refused);
     CHECK(refused ==
@@ -391,8 +440,9 @@ int periodic(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 
 // Outputs serving on 127.0.0.1, a free port, besides the stream at
 // `stream_path`, if any.
-sender::CodecOutputs served_on_loopback(const fs::path& stream_path = {}) {
-  sender::CodecOutputs outputs;
+codec_stream::CodecOutputs served_on_loopback(
+    const fs::path& stream_path = {}) {
+  codec_stream::CodecOutputs outputs;
   outputs.stream = stream_path.string();
   outputs.serve.emplace();
   outputs.serve->host = "127.0.0.1";
@@ -403,7 +453,7 @@ sender::CodecOutputs served_on_loopback(const fs::path& stream_path = {}) {
 // A client of `coder`'s server that has its session, so it misses no frame
 // coded after; null, the reason on stderr, if it cannot.
 std::unique_ptr<networking::StreamClient> joined(
-    const sender::CodecStream& coder) {
+    const codec_stream::CodecStream& coder) {
   if (coder.server() == nullptr) return nullptr;
   std::unique_ptr<networking::StreamClient> client =
       net::connect(coder.server()->port());
@@ -419,14 +469,15 @@ std::unique_ptr<networking::StreamClient> joined(
 // leaves the stream without a server.
 int serves(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
            vol::VoxelBlockGrid& other, const vkc::test::Scratch& scratch) {
-  const sender::CodecOutputs outputs =
+  const codec_stream::CodecOutputs outputs =
       served_on_loopback(scratch.path / "served.vrst");
   codec::EncoderConfig config;
   config.intra_period = 3;
-  vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
-      gpu.device, gpu.allocator, config, session(), outputs);
+  vkc::Result<codec_stream::CodecStream> made =
+      codec_stream::CodecStream::create(gpu.device, gpu.allocator, config,
+                                        session(), outputs);
   CHECK(made.ok());
-  sender::CodecStream& coder = made.value();
+  codec_stream::CodecStream& coder = made.value();
   CHECK(coder.server() != nullptr && coder.server()->port() != 0);
   const std::uint16_t port = coder.server()->port();
   const std::unique_ptr<networking::StreamClient> client = joined(coder);
@@ -466,72 +517,149 @@ int serves(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   return 0;
 }
 
-// A sender's frames (SetSender::send with no frames to fuse, so each set is
-// its frame alone), recorded into a front batch, then finished: the file
-// code() writes, byte for byte, I- and P-frames, and two frames on `other`
-// that the decoder refuses, the second an I-frame as code() makes it, where
-// the encoder would code a P-frame on the first; each set published once,
-// before its decode, its rows its frame's encode with "crc", "write",
-// "publish" and the waits, and each frame as code() returns it. A frame out
-// of order is refused, its front dropped, and the stream goes on.
+// Frames in halves around a caller's timed batch, each front half recorded
+// inside the caller's own scope ("set"), then finished: the file code()
+// writes, byte for byte, I- and P-frames, and two frames on `other` that the
+// decoder refuses, the second an I-frame as code() makes it, where the
+// encoder would code a P-frame on the first; each frame published once,
+// before its decode, its rows its encode with "crc", "write", "publish" and
+// its wait, and each frame as code() returns it. Of the batch's device rows,
+// the front half's are the frame's alone and the caller's scope the
+// caller's. A frame out of order is refused, its pending frame dropped, and
+// the stream goes on. A front half on `other`, then again on `source` once
+// its batch ran, makes code()'s frame of `source`, the wait timed, and the
+// pending frame it replaced is refused.
 int halves(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
            vol::VoxelBlockGrid& other, const vkc::test::Scratch& scratch) {
   codec::EncoderConfig config;
   config.intra_period = 3;
-  sender::CodecOutputs by_code;
+  codec_stream::CodecOutputs by_code;
   by_code.stream = (scratch.path / "halves_code.vrst").string();
-  const sender::CodecOutputs by_halves =
+  const codec_stream::CodecOutputs by_halves =
       served_on_loopback(scratch.path / "halves.vrst");
-  vkc::Result<sender::CodecStream> a = sender::CodecStream::create(
+  vkc::Result<codec_stream::CodecStream> a = codec_stream::CodecStream::create(
       gpu.device, gpu.allocator, config, session(), by_code);
-  vkc::Result<sender::CodecStream> b = sender::CodecStream::create(
+  vkc::Result<codec_stream::CodecStream> b = codec_stream::CodecStream::create(
       gpu.device, gpu.allocator, config, session(), by_halves);
-  vkc::Result<tsdf::Fuser> fuser =
-      tsdf::Fuser::create(gpu.device, gpu.allocator);
-  CHECK(a.ok() && b.ok() && fuser.ok());
-  const auto send = [&](vol::VoxelBlockGrid& grid, std::size_t frame,
-                        vkc::StageMetrics* rows, int* published) {
-    vkc::Result<sender::SetSender> out =
-        sender::SetSender::create(gpu.device, *fuser, grid, &*b, {});
-    if (!out.ok()) return vkc::Result<sender::SetSender::Sent>(out.status());
+  vkc::Result<vkc::GpuTimer> timer = vkc::GpuTimer::create(gpu.device, 64);
+  CHECK(a.ok() && b.ok() && timer.ok());
+  // `grid`'s front half into a timed batch, inside the caller's "set" scope,
+  // run; its rows, the caller's included, into `rows`.
+  const auto front_half =
+      [&](vol::VoxelBlockGrid& grid,
+          vkc::StageMetrics* rows) -> vkc::Result<codec::PendingEncode> {
     vkc::CommandBatch front(gpu.device, gpu.allocator);
-    front.time(out->timer());
-    return out->send(front, {}, nullptr, frame, pts(frame), rows,
-                     [published] { ++*published; });
+    front.time(*timer);
+    vkc::Result<codec::PendingEncode> pending = [&] {
+      const vkc::StageScope set(rows, "set");
+      return b->record_front(front, grid);
+    }();
+    if (!pending.ok()) return pending;
+    vkc::Result<vkc::PendingBatch> done = front.submit_async({}, {});
+    if (!done.ok()) return vkc::Result<codec::PendingEncode>(done.status());
+    const vkc::Status waited = done->wait();
+    if (!waited.ok()) return vkc::Result<codec::PendingEncode>(waited);
+    b->front_ran(done->device_rows(), rows);
+    return pending;
+  };
+  const auto timed = [](const vkc::StageMetrics& rows, const char* name) {
+    const vkc::StageRow* row = vr_test::find_row(rows, name);
+    return row != nullptr && row->device != vkc::DeviceTime::None;
   };
   for (std::size_t frame = 0; frame < 5; ++frame) {
     const bool refused = frame == 2 || frame == 3;
     vol::VoxelBlockGrid& grid = refused ? other : source;
-    const vkc::Result<sender::SentFrame> x = a->code(grid, frame, pts(frame));
+    const vkc::Result<codec_stream::SentFrame> x =
+        a->code(grid, frame, pts(frame));
     CHECK(x.ok() != refused);
     vkc::StageMetrics rows;
+    const vkc::Result<codec::PendingEncode> pending = front_half(grid, &rows);
+    CHECK(pending.ok());
+    // The caller's scope holds its device half; the frame's are not here.
+    CHECK(timed(rows, "set") &&
+          vr_test::find_row(rows, "  ..forward") == nullptr);
     int published = 0;
-    const vkc::Result<sender::SetSender::Sent> y =
-        send(grid, frame, &rows, &published);
+    const vkc::Result<codec_stream::SentFrame> y = b->finish_frame(
+        *pending, frame, pts(frame), &rows, [&published] { ++published; });
     CHECK(y.ok() != refused && published == 1);
     for (const char* row : {"codec encode", "  ..forward", "crc", "write",
-                            "publish", "wait: front", "wait: frame"}) {
+                            "publish", "wait: frame"}) {
       CHECK(vr_test::find_row(rows, row) != nullptr);
     }
     if (refused) continue;
-    CHECK(y->coded.has_value() && !y->fused.redone);
-    const sender::SentFrame& sent = *y->coded;
-    CHECK(sent.type == x->type && sent.bytes == x->bytes &&
-          sent.blocks == x->blocks);
-    CHECK(rows_of(sent, true));
+    CHECK(y->type == x->type && y->bytes == x->bytes && y->blocks == x->blocks);
+    CHECK(rows_of(*y, true) && timed(y->encode, "  ..forward"));
+    CHECK(vr_test::find_row(y->encode, "set") == nullptr);
   }
-  // Out of order: refused, its front dropped, so the next records afresh.
+  // Out of order: refused, its pending frame dropped, so the next records
+  // afresh.
   vkc::StageMetrics rows;
   int published = 0;
-  CHECK(send(source, 4, &rows, &published).status().domain() ==
+  const auto count = [&published] { ++published; };
+  vkc::Result<codec::PendingEncode> late = front_half(source, &rows);
+  CHECK(late.ok());
+  CHECK(b->finish_frame(*late, 4, pts(4), &rows, count).status().domain() ==
             vkc::Status::Code::InvalidArgument &&
         published == 0);
   CHECK(a->code(source, 5, pts(5)).ok());
-  CHECK(send(source, 5, &rows, &published).ok() && published == 1);
+  vkc::Result<codec::PendingEncode> next = front_half(source, &rows);
+  CHECK(next.ok());
+  CHECK(b->finish_frame(*next, 5, pts(5), &rows, count).ok() && published == 1);
+  // On `other`, then again on `source`: code()'s frame of `source`.
+  CHECK(a->code(source, 6, pts(6)).ok());
+  vkc::StageMetrics again_rows;
+  vkc::Result<codec::PendingEncode> first = front_half(other, &again_rows);
+  CHECK(first.ok());
+  vkc::Result<codec::PendingEncode> again =
+      b->redo(*first, source, &again_rows);
+  CHECK(again.ok() && vr_test::find_row(again_rows, "wait: redo") != nullptr);
+  CHECK(b->finish_frame(*first, 6, pts(6)).status().domain() ==
+        vkc::Status::Code::InvalidArgument);
+  const vkc::Result<codec_stream::SentFrame> redone =
+      b->finish_frame(*again, 6, pts(6), &again_rows, count);
+  CHECK(redone.ok() && published == 2 && rows_of(*redone, true));
   CHECK(a->finish().ok() && b->finish().ok());
-  CHECK(a->coded() == 6 && b->coded() == 6);
+  CHECK(a->coded() == 7 && b->coded() == 7);
   CHECK(vkc::test::read_bytes(by_code.stream) ==
         vkc::test::read_bytes(by_halves.stream));
+  return 0;
+}
+
+// Served without replay_gop at a period of 3, a viewer joining after frame
+// 0 asks for a key, which frame 1's front half reads: frame 1, coded in
+// halves, is an I-frame where the encoder would code a P-frame, and the
+// viewer's first record, a key; frame 2 a P-frame on it.
+int keyed_halves(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source) {
+  constexpr codec::FrameType I = codec::FrameType::kIntra;
+  constexpr codec::FrameType P = codec::FrameType::kInter;
+  codec_stream::CodecOutputs outputs = served_on_loopback();
+  outputs.serve->replay_gop = false;
+  codec::EncoderConfig config;
+  config.intra_period = 3;
+  vkc::Result<codec_stream::CodecStream> made =
+      codec_stream::CodecStream::create(gpu.device, gpu.allocator, config,
+                                        session(), outputs);
+  CHECK(made.ok());
+  codec_stream::CodecStream& coder = made.value();
+  CHECK(coder.code(source, 0, pts(0)).ok());
+  const std::unique_ptr<networking::StreamClient> client = joined(coder);
+  CHECK(client != nullptr && coder.server()->key_wanted() == 1);
+  for (std::size_t frame = 1; frame < 3; ++frame) {
+    vkc::CommandBatch front(gpu.device, gpu.allocator);
+    const vkc::Result<codec::PendingEncode> pending =
+        coder.record_front(front, source);
+    CHECK(pending.ok());
+    vkc::Result<vkc::PendingBatch> done = front.submit_async({}, {});
+    CHECK(done.ok() && done->wait().ok());
+    coder.front_ran(done->device_rows());
+    const vkc::Result<codec_stream::SentFrame> sent =
+        coder.finish_frame(*pending, frame, pts(frame));
+    CHECK(sent.ok() && sent->type == (frame == 1 ? I : P));
+    net::Got got;
+    CHECK(net::next_within(*client, &got));
+    CHECK(got.record.info.seq == frame && got.record.info.key == (frame == 1));
+  }
+  CHECK(coder.finish().ok());
   return 0;
 }
 
@@ -541,20 +669,22 @@ int serves_alone(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                  const vkc::test::Scratch& scratch) {
   const fs::path quiet = scratch.path / "serving";
   CHECK(fs::create_directory(quiet));
-  vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
-      gpu.device, gpu.allocator, {}, session(), served_on_loopback());
+  vkc::Result<codec_stream::CodecStream> made =
+      codec_stream::CodecStream::create(gpu.device, gpu.allocator, {},
+                                        session(), served_on_loopback());
   CHECK(made.ok());
-  sender::CodecStream& coder = made.value();
+  codec_stream::CodecStream& coder = made.value();
   const std::unique_ptr<networking::StreamClient> client = joined(coder);
   CHECK(client != nullptr);
   const std::uint16_t port = coder.server()->port();
   const fs::path before = fs::current_path();
   fs::current_path(quiet);
-  std::optional<sender::SentFrame> coded[3];
+  std::optional<codec_stream::SentFrame> coded[3];
   net::Got got[3];
   bool arrived[3] = {};
   for (std::size_t frame = 0; frame < 3; ++frame) {
-    vkc::Result<sender::SentFrame> sent = coder.code(source, frame, pts(frame));
+    vkc::Result<codec_stream::SentFrame> sent =
+        coder.code(source, frame, pts(frame));
     if (sent.ok()) coded[frame] = std::move(sent).value();
     arrived[frame] = net::next_within(*client, &got[frame]);
   }
@@ -577,11 +707,12 @@ int serves_alone(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 int port_in_use(vkc::test::GpuContext& gpu, const vkc::test::Scratch& scratch) {
   const net::Listener taken = net::bind_loopback();
   CHECK(taken.port != 0);
-  sender::CodecOutputs outputs =
+  codec_stream::CodecOutputs outputs =
       served_on_loopback(scratch.path / "unserved.vrst");
   outputs.serve->port = taken.port;
-  vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
-      gpu.device, gpu.allocator, unusable_config(), session(), outputs);
+  vkc::Result<codec_stream::CodecStream> made =
+      codec_stream::CodecStream::create(gpu.device, gpu.allocator,
+                                        unusable_config(), session(), outputs);
   CHECK(!made.ok() && made.status().domain() == vkc::Status::Code::IoError);
   CHECK(made.status().message().find(":" + std::to_string(taken.port)) !=
         std::string::npos);
@@ -593,14 +724,15 @@ int port_in_use(vkc::test::GpuContext& gpu, const vkc::test::Scratch& scratch) {
 // rest are coded and recorded as before.
 int viewer_leaves(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                   const vkc::test::Scratch& scratch) {
-  const sender::CodecOutputs outputs =
+  const codec_stream::CodecOutputs outputs =
       served_on_loopback(scratch.path / "left.vrst");
   codec::EncoderConfig config;
   config.intra_period = 3;
-  vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
-      gpu.device, gpu.allocator, config, session(), outputs);
+  vkc::Result<codec_stream::CodecStream> made =
+      codec_stream::CodecStream::create(gpu.device, gpu.allocator, config,
+                                        session(), outputs);
   CHECK(made.ok());
-  sender::CodecStream& coder = made.value();
+  codec_stream::CodecStream& coder = made.value();
   std::unique_ptr<networking::StreamClient> client = joined(coder);
   CHECK(client != nullptr);
   for (std::size_t frame = 0; frame < 2; ++frame) {
@@ -625,12 +757,13 @@ int viewer_leaves(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // nothing between.
 int unrecorded_unserved(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                         const vkc::test::Scratch& scratch) {
-  const sender::CodecOutputs outputs =
+  const codec_stream::CodecOutputs outputs =
       served_on_loopback(scratch.path / "full.vrst");
-  vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
-      gpu.device, gpu.allocator, {}, session(), outputs);
+  vkc::Result<codec_stream::CodecStream> made =
+      codec_stream::CodecStream::create(gpu.device, gpu.allocator, {},
+                                        session(), outputs);
   CHECK(made.ok());
-  sender::CodecStream& coder = made.value();
+  codec_stream::CodecStream& coder = made.value();
   const std::unique_ptr<networking::StreamClient> client = joined(coder);
   CHECK(client != nullptr);
   const std::uint16_t port = coder.server()->port();
@@ -663,12 +796,13 @@ int unrecorded_unserved(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // yet every frame is coded and recorded, each refusal a Warning naming it.
 int refused_publish(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                     const vkc::test::Scratch& scratch) {
-  const sender::CodecOutputs outputs =
+  const codec_stream::CodecOutputs outputs =
       served_on_loopback(scratch.path / "refused.vrst");
-  vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
-      gpu.device, gpu.allocator, {}, session(), outputs);
+  vkc::Result<codec_stream::CodecStream> made =
+      codec_stream::CodecStream::create(gpu.device, gpu.allocator, {},
+                                        session(), outputs);
   CHECK(made.ok());
-  sender::CodecStream& coder = made.value();
+  codec_stream::CodecStream& coder = made.value();
   // server() hands the stream's own server out as const.
   auto* const server = const_cast<networking::StreamServer*>(coder.server());
   CHECK(server != nullptr);
@@ -713,17 +847,18 @@ int decode_off(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   std::vector<std::uint8_t> recorded[2];  // without the decode, then with
   for (const bool decode : {false, true}) {
     const std::string name = decode ? "decoded" : "undecoded";
-    sender::CodecOutputs outputs =
+    codec_stream::CodecOutputs outputs =
         served_on_loopback(scratch.path / (name + ".vrst"));
     outputs.decode = decode;
-    vkc::Result<sender::CodecStream> made = sender::CodecStream::create(
-        gpu.device, gpu.allocator, config, session(), outputs);
+    vkc::Result<codec_stream::CodecStream> made =
+        codec_stream::CodecStream::create(gpu.device, gpu.allocator, config,
+                                          session(), outputs);
     CHECK(made.ok());
-    sender::CodecStream& coder = made.value();
+    codec_stream::CodecStream& coder = made.value();
     const std::unique_ptr<networking::StreamClient> client = joined(coder);
     CHECK(client != nullptr);
     for (std::size_t frame = 0; frame < std::size(types); ++frame) {
-      const vkc::Result<sender::SentFrame> sent =
+      const vkc::Result<codec_stream::SentFrame> sent =
           coder.code(source, frame, pts(frame));
       CHECK(sent.ok() && sent->type == types[frame] && sent->bytes > 0);
       CHECK(rows_of(*sent, decode) && sent->decode.rows().empty() != decode);
@@ -747,25 +882,25 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::Result<vol::VoxelBlockGrid> other = sphere_grid(gpu, sphere, coarser);
   CHECK(other.ok());
 
-  vkc::test::Scratch scratch("recon_sender_codec_stream_");
+  vkc::test::Scratch scratch("recon_codec_stream_");
   CHECK(refused(gpu, scratch) == 0);
   CHECK(writes_nothing(gpu, *source, scratch) == 0);
 
   const auto outputs_in = [&scratch](const char* name) {
     const fs::path dir = scratch.path / name;
     fs::create_directory(dir);
-    sender::CodecOutputs outputs;
+    codec_stream::CodecOutputs outputs;
     outputs.stream = (dir / "frames.vrst").string();
     return outputs;
   };
-  const sender::CodecOutputs first = outputs_in("first");
-  std::vector<sender::SentFrame> sent;
+  const codec_stream::CodecOutputs first = outputs_in("first");
+  std::vector<codec_stream::SentFrame> sent;
   CHECK(code_frames(gpu, *source, *other, first, &sent) == 0);
   CHECK(check_records(gpu, *source, first.stream, sent, coarser.voxel_size) ==
         0);
   // A rerun writes the same file, byte for byte.
-  const sender::CodecOutputs second = outputs_in("second");
-  std::vector<sender::SentFrame> rerun;
+  const codec_stream::CodecOutputs second = outputs_in("second");
+  std::vector<codec_stream::SentFrame> rerun;
   CHECK(code_frames(gpu, *source, *other, second, &rerun) == 0);
   const std::vector<std::uint8_t> bytes = vkc::test::read_bytes(first.stream);
   CHECK(!bytes.empty() && bytes == vkc::test::read_bytes(second.stream));
@@ -774,13 +909,14 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(unfinished(gpu, *source, scratch) == 0);
   CHECK(serves(gpu, *source, *other, scratch) == 0);
   CHECK(halves(gpu, *source, *other, scratch) == 0);
+  CHECK(keyed_halves(gpu, *source) == 0);
   CHECK(serves_alone(gpu, *source, scratch) == 0);
   CHECK(port_in_use(gpu, scratch) == 0);
   CHECK(viewer_leaves(gpu, *source, scratch) == 0);
   CHECK(unrecorded_unserved(gpu, *source, scratch) == 0);
   CHECK(refused_publish(gpu, *source, scratch) == 0);
   CHECK(decode_off(gpu, *source, scratch) == 0);
-  std::puts("recon_sender_codec_stream: OK");
+  std::puts("recon_codec_stream: OK");
   return 0;
 }
 

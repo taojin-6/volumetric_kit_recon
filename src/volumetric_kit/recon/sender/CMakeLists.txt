@@ -1,15 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
 
-# --- recon_sender: a sender's set step and its codec stream ------------------
+# --- recon_sender: a sender's set step ----------------------------------------
 # What a sender does with a set once its prep is recorded: fuse it, free stale
-# blocks on schedule and code its frame in two batches (SetSender), the frame
-# written to a .vrst file, served to live viewers and decoded back as a viewer
-# would (CodecStream), and the fuser's inputs for prepared frames (fuse_inputs).
-# The tier after networking: it links the GPU frame prep's types
-# (recon_sensor_utils), the fuser (recon_tsdf), the codec, the container and the
-# server. The frame's halves around a set's fusion are internal
-# (stream_coder.hpp), reached by SetSender alone.
+# blocks on schedule and code its frame in two batches through the codec
+# stream's halves (SetSender), and the fuser's inputs for prepared frames
+# (fuse_inputs). The tier after codec_stream: it links the GPU frame prep's
+# types (recon_sensor_utils), the fuser (recon_tsdf) and the codec stream.
 include(GenerateExportHeader)
 
 set(_vr_sender_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
@@ -17,8 +14,7 @@ set(_vr_sender_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_sender)
 add_library(volumetric_kit::recon_sender ALIAS recon_sender)
 
-target_sources(recon_sender PRIVATE codec_stream.cpp fuse_inputs.cpp
-                                    set_sender.cpp)
+target_sources(recon_sender PRIVATE fuse_inputs.cpp set_sender.cpp)
 
 generate_export_header(
   recon_sender
@@ -42,11 +38,10 @@ endif()
 
 target_compile_features(recon_sender PUBLIC cxx_std_17)
 
-# PUBLIC: the headers take the prep's DeviceFrame, the fuser and its report, the
-# encoder's settings, the session and the server's options.
-target_link_libraries(
-  recon_sender PUBLIC recon_sensor_utils recon_tsdf recon_codec recon_stream
-                      recon_networking)
+# PUBLIC: the headers take the prep's DeviceFrame, the fuser and its report, and
+# the codec stream and its frame.
+target_link_libraries(recon_sender PUBLIC recon_sensor_utils recon_tsdf
+                                          recon_codec_stream)
 
 target_include_directories(
   recon_sender PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"

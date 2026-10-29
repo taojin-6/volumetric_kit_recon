@@ -19,7 +19,7 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/fwd.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
-#include "volumetric_kit/recon/sender/codec_stream.hpp"
+#include "volumetric_kit/recon/codec_stream/codec_stream.hpp"
 #include "volumetric_kit/recon/sender/export.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
@@ -32,8 +32,9 @@ namespace volumetric_kit::recon::sender {
 ///        set's front batch: fuse it, free stale blocks on schedule, record
 ///        its frame's front half, submit and wait; then code the frame's rANS
 ///        half in a batch of its own, wait, and write, serve and decode the
-///        frame (@ref CodecStream). A coded set is two submits and two waits,
-///        none a readback; a set not coded, one.
+///        frame (@ref codec_stream::CodecStream::finish_frame). A coded set
+///        is two submits and two waits, none a readback; a set not coded,
+///        one.
 ///
 /// The free pass runs before the frame's front half, so the coder scans the
 /// smaller set; the frame is the same either way, since the pass frees only
@@ -41,7 +42,7 @@ namespace volumetric_kit::recon::sender {
 /// device refused is done again in the fuser's finish
 /// (@ref tsdf::FuseReport::redone), and the frame's front half, which saw the
 /// grid without it, again after it (`"wait: redo"`). The frames are the ones
-/// @ref CodecStream::code makes of the same grids.
+/// @ref codec_stream::CodecStream::code makes of the same grids.
 ///
 /// @code
 /// VKC_ASSIGN(sender::SetSender out,
@@ -78,7 +79,7 @@ class VR_SENDER_API SetSender {
     /// A free pass's refusal, or its settle's; the set goes on.
     core::Status freed;
     /// The set's frame; none for a set not coded.
-    std::optional<SentFrame> coded;
+    std::optional<codec_stream::SentFrame> coded;
   };
 
   /// @brief A sender over @p fuser, @p grid and @p stream, its front
@@ -94,7 +95,8 @@ class VR_SENDER_API SetSender {
   static core::Result<SetSender> create(const core::Device& device,
                                         tsdf::Fuser& fuser,
                                         volume::VoxelBlockGrid& grid,
-                                        CodecStream* stream, Config config);
+                                        codec_stream::CodecStream* stream,
+                                        Config config);
 
   /// @return Whether set @p index is coded: with a stream, every
   ///         @ref Config::code_every th set.
@@ -105,8 +107,8 @@ class VR_SENDER_API SetSender {
   ///        (`"wait: front"`), and finish the fusion; then, for a coded set,
   ///        finish its frame: the back half in a batch of its own and its
   ///        wait (`"wait: frame"`), the write and the serve, and the decode
-  ///        back, as @ref CodecStream::code does. The frame is a key when a
-  ///        viewer waits for one, its fusion done again or not.
+  ///        back, as @ref codec_stream::CodecStream::code does. The frame is
+  ///        a key when a viewer waits for one, its fusion done again or not.
   /// @param front   Holds the set's prep, timed in @ref timer; submitted
   ///                here.
   /// @param frames  The prepared frames; the caller keeps them for as long
@@ -116,7 +118,7 @@ class VR_SENDER_API SetSender {
   /// @param index   The set's index in the run: its frame's set, above every
   ///                frame's coded before.
   /// @param pts_ns  Its frame's time, no earlier than the last frame's
-  ///                (@ref CodecStream::last_pts_ns).
+  ///                (@ref codec_stream::CodecStream::last_pts_ns).
   /// @param rows    Optional: the set's rows -- the device halves of its
   ///                front batch, the fusion's, the free pass's, its frame's
   ///                encode, `"crc"`, `"write"` and `"publish"`, and the
@@ -141,11 +143,12 @@ class VR_SENDER_API SetSender {
 
  private:
   SetSender(tsdf::Fuser& fuser, volume::VoxelBlockGrid& grid,
-            CodecStream* stream, Config config, core::GpuTimer timer);
+            codec_stream::CodecStream* stream, Config config,
+            core::GpuTimer timer);
 
   tsdf::Fuser* fuser_;
   volume::VoxelBlockGrid* grid_;
-  CodecStream* stream_;
+  codec_stream::CodecStream* stream_;
   Config config_;
   core::GpuTimer timer_;
 };

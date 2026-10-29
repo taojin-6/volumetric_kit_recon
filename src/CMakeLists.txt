@@ -48,8 +48,12 @@ if(NOT VR_CAMERA_ONLY)
   # A session served and read live over TCP: the stream's chunks on sockets, off
   # stream (and recon's header-only log seam).
   add_subdirectory(volumetric_kit/recon/networking)
-  # A sender's set step and its codec stream, after networking: it links the
-  # frame prep's types, the fuser, the codec, the container and the server.
+  # A codec stream, after networking: grids coded as frames into a .vrst file
+  # and to live viewers, decoded back. It links the codec, the container and the
+  # server, and no fuser or sensor tier.
+  add_subdirectory(volumetric_kit/recon/codec_stream)
+  # A sender's set step, after codec_stream: it links the frame prep's types,
+  # the fuser and the codec stream.
   add_subdirectory(volumetric_kit/recon/sender)
   # TODO: add_subdirectory() for interop as that tier lands.
   list(
@@ -71,6 +75,7 @@ if(NOT VR_CAMERA_ONLY)
     recon_mesh_io
     recon_stream
     recon_networking
+    recon_codec_stream
     recon_sender)
 endif()
 

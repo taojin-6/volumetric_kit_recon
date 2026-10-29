@@ -187,6 +187,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec_stream`, `sender`: **the codec stream is a tier of its own,
+  `codec_stream`, and its frame in halves is public** (the 2026-10-28
+  codec-stream decision): `codec_stream::CodecStream`, `CodecOutputs` and
+  `SentFrame` (`codec_stream/codec_stream.hpp`) in the new target
+  `volumetric_kit::recon_codec_stream`, which links the codec, the stream and
+  networking, and no fusion or sensor tier; `recon_sender` keeps `SetSender`
+  and `fuse_inputs` and links it. `CodecStream` gains `record_front`,
+  `front_ran`, `redo`, `finish_frame` and `valid()`, through which
+  `SetSender` codes its frames; `CodecStream::coder()` is gone. Frames,
+  records and rows are unchanged. Migration: include
+  `volumetric_kit/recon/codec_stream/codec_stream.hpp`, name
+  `codec_stream::` for `sender::` on those three types, and link
+  `recon_codec_stream` where `recon_sender` was linked only for the stream;
+  nothing forwards from the old names. Tests: `recon_sender_codec_stream` is
+  `recon_codec_stream`, and its case through `SetSender` is in
+  `recon_sender_set_sender`.
 - `examples`: **the codec helpers include no fusion**: `sender_config` and
   `report_sent` move from `examples/common/codec_config.hpp` and
   `codec_report.hpp` to the new `examples/common/fuse_sender.hpp`, so the
