@@ -35,6 +35,7 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
+#include "depth_inputs.hpp"
 #include "gpu_test.hpp"
 #include "grid_readback.hpp"
 #include "sphere_scene.hpp"
@@ -51,16 +52,6 @@ constexpr std::uint32_t kHeight = vr_test::kSphereHeight;
 constexpr int kCameras = 3;
 
 using View = vr_test::SphereView<vr::DepthCameraParams>;
-
-// The frames' depth, as allocation takes it.
-std::vector<vol::DepthInput> depth_inputs(
-    const std::vector<tsdf::FrameInput>& frames) {
-  std::vector<vol::DepthInput> out;
-  for (const tsdf::FrameInput& f : frames) {
-    out.push_back({f.depth, tsdf::to_depth_pinhole(f.camera)});
-  }
-  return out;
-}
 
 vol::VoxelGridParams grid_params() {
   vol::VoxelGridParams grid{};
@@ -194,12 +185,13 @@ int gpu_main(vr_test::GpuContext& gpu) {
       {vkc::StorageInput(views[1].depth.data()), empty_cam, &c1},
       frames[1],
       frames[2]};
-  const std::vector<vol::DepthInput> depths = depth_inputs(set_frames);
+  const std::vector<vol::DepthInput> depths = vr_test::depth_inputs(set_frames);
 
   // The set in the other order, dynamic's reference.
   const std::vector<tsdf::FrameInput> reversed(set_frames.rbegin(),
                                                set_frames.rend());
-  const std::vector<vol::DepthInput> reversed_depths = depth_inputs(reversed);
+  const std::vector<vol::DepthInput> reversed_depths =
+      vr_test::depth_inputs(reversed);
 
   auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
   CHECK(integrator.ok());
@@ -280,7 +272,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     auto small = vr_test::upload_device_buffer(
         dev, alloc, views[2].depth.data(), sizeof(float) * kWidth);
     CHECK(small.ok());
-    std::vector<vol::DepthInput> bad_depths = depth_inputs(frames);
+    std::vector<vol::DepthInput> bad_depths = vr_test::depth_inputs(frames);
     bad_depths[2].depth = vkc::StorageInput(small.value());
     CHECK(grid->map().allocate_from_depth(bad_depths).status().domain() ==
           vkc::Status::Code::InvalidArgument);

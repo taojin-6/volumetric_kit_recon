@@ -30,6 +30,7 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
+#include "depth_inputs.hpp"
 #include "gpu_test.hpp"
 #include "grid_readback.hpp"
 #include "sphere_scene.hpp"
@@ -44,16 +45,6 @@ namespace {
 constexpr int kCameras = 3;
 
 using View = vr_test::SphereView<vr::DepthCameraParams>;
-
-// The frames' depth, as allocation takes it.
-std::vector<vol::DepthInput> depth_inputs(
-    const std::vector<tsdf::FrameInput>& frames) {
-  std::vector<vol::DepthInput> out;
-  for (const tsdf::FrameInput& f : frames) {
-    out.push_back({f.depth, tsdf::to_depth_pinhole(f.camera)});
-  }
-  return out;
-}
 
 vol::VoxelGridParams params(std::int32_t num_buckets) {
   vol::VoxelGridParams grid{};
@@ -176,7 +167,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
   auto reference = make_grid(dev, alloc, params(256));
   CHECK(integrator.ok() && reference.ok());
-  const std::vector<vol::DepthInput> depths = depth_inputs(set);
+  const std::vector<vol::DepthInput> depths = vr_test::depth_inputs(set);
   for (int pass = 0; pass < 2; ++pass) {
     auto failed = reference->map().allocate_from_depth(depths);
     CHECK(failed.ok() && failed.value() == 0);
@@ -300,7 +291,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       for (const std::size_t cameras : {std::size_t{1}, set.size()}) {
         const std::vector<tsdf::FrameInput> frames(set.begin(),
                                                    set.begin() + cameras);
-        const std::vector<vol::DepthInput> band = depth_inputs(frames);
+        const std::vector<vol::DepthInput> band = vr_test::depth_inputs(frames);
         tsdf::FuserConfig config;
         config.allow_partial = partial;
         auto fuser = make_fuser(dev, alloc, config);
@@ -422,7 +413,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     std::vector<tsdf::FrameInput> first{set[0]};
     std::uint32_t first_blocks = 0;
     for (const std::vector<tsdf::FrameInput>* frames : {&first, &set}) {
-      const std::vector<vol::DepthInput> band = depth_inputs(*frames);
+      const std::vector<vol::DepthInput> band = vr_test::depth_inputs(*frames);
       auto failed = expected->map().allocate_from_depth(band);
       CHECK(failed.ok() && failed.value() == 0);
       CHECK(integrator->integrate(*expected, *frames).ok());
