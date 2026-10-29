@@ -55,7 +55,8 @@ int main() {
     CHECK(loaded);
     // codec_orbbec alone writes codec rows, and it and serve_orbbec frames;
     // serve_orbbec alone serves them, on the default port to every interface,
-    // a joiner waiting for the key the stream makes for it.
+    // to the server's default count of viewers, a joiner waiting for the key
+    // the stream makes for it.
     // Every live example fuses Dynamic, by core's default, the rest Classic.
     const bool coded = std::string(example.file) == "codec_orbbec";
     const bool served = std::string(example.file) == "serve_orbbec";
@@ -70,11 +71,24 @@ int main() {
     CHECK(outputs.serve.has_value() == served);
     CHECK(!served || (outputs.serve->host.empty() &&
                       outputs.serve->port == vgrid::networking::kDefaultPort &&
+                      outputs.serve->max_viewers ==
+                          vgrid::networking::ServerOptions{}.max_viewers &&
                       !outputs.serve->replay_gop));
     // No scenario codes a true SDF: codec_mesh alone sets it, in code.
     const auto encoder = vgrid_example::encoder_config(loaded->codec);
     CHECK(encoder.ok() && !encoder->true_sdf);
   }
+
+  // fuse_orbbec serves as many viewers as its scenario's output.max_viewers,
+  // through the outputs it codes to.
+  const auto many = cfg::parse(
+      R"({"version":1,"operation":"fuse","source":{"kind":"live","sync_config":"sync.json"},"codec":{"intra_period":30},"output":{"serve":47801,"max_viewers":16}})",
+      cfg::Application::FuseOrbbec);
+  CHECK(many);
+  const vgrid::codec_stream::CodecOutputs many_outputs =
+      vgrid_example::set_codec_outputs(many.value());
+  CHECK(many_outputs.serve && many_outputs.serve->port == 47801 &&
+        many_outputs.serve->max_viewers == 16);
 
   // codec_replica codes every frame, then its sweep, at period 30 with U = R,
   // as the freeze measured it (DECISIONS, the 2026-10-17 freeze).
