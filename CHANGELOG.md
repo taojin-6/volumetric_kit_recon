@@ -8,6 +8,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`fuse_realsense`**, live fusion of one RealSense D400 camera (the D455)
+  with its own depth, its projector on, to a PLY (README, "Optional:
+  librealsense"; [config/README.md](config/README.md)). It is built where
+  sensor's RealSense driver is (`VS_WITH_REALSENSE`, librealsense 2.59.1 or
+  later), loads core's `FuseRealsense` scenario, and runs `fuse_orbbec`'s
+  run on the camera as a sensor array of one: its YUYV colour converted on
+  the GPU. That run moves into `examples/common/live_fusion.hpp`
+  (`run_live_fusion`), so the two programs share one loop; `fuse_orbbec`'s
+  behaviour and output are unchanged. recon pins sensor 0.5.0, which brings
+  the driver, and core 0.31.0, which brings the profile; the core floor
+  rises with it. CI builds it on every leg, installing librealsense with
+  sensor's action on Ubuntu and checking the Mac's formula.
+
 - **`tsdf::ChangeDetector`** flags, per fixed camera and per pixel, a depth
   change that is real rather than noise: each pixel's history and own noise
   on the device, a two-sided CUSUM with a one-frame test, and a `uint32`

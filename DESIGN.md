@@ -968,13 +968,14 @@ to the grid (a grow, a declined one, blocks left out), into the grid
 `volume::block_grid_params`' layout too.
 `fuse_set`'s caller names the integration mode, the one `fusion.dynamic`
 selects (`integration_mode`): `Classic` unless set, except in
-`fuse_orbbec` and `rig_viewer`, whose default is `Dynamic`;
-`rig_viewer`'s View panel switches it as the rig runs. The four
+`fuse_orbbec`, `fuse_realsense` and `rig_viewer`, whose default is
+`Dynamic`; `rig_viewer`'s View panel switches it as the rig runs. The four
 dataset examples poll their frames through `sensor::IRgbdSensor&` — the
 fuse loop never learns what is behind it — and prepare each on its own.
-The two live ones read Orbbec cameras raw as a `SensorArray` of
-`OrbbecSensor`s, `fuse_orbbec` one camera or a rig and `rig_viewer` a rig,
-and prepare each set in one batch (`SensorArray::process`).
+The three live ones read their cameras raw as a `SensorArray`,
+`fuse_orbbec` one Orbbec camera or a rig, `fuse_realsense` one
+`RealSenseSensor` and `rig_viewer` an Orbbec rig, and prepare each set in
+one batch (`SensorArray::process`).
 The four dataset examples take `ReplicaSensor` as the source: frame cap,
 stride and the depth gate are its options, stamped on each frame it hands
 out, and its disk probe at `open` visits only the frames those options
@@ -1018,9 +1019,13 @@ APIs. Stage rows print through one table,
 `remesh_report.hpp`, the viewers' panels in `viewer_panels.hpp`,
 `rig_viewer`'s panel, progress line, `render.texture_stats` and end-of-run
 rates and atlas-copy times in `rig_report.hpp`,
-and `fuse_orbbec`'s camera lines and counters in `fuse_orbbec_sets.hpp`.
-The per-set table of `fuse_orbbec`, `codec_replica` and `rig_viewer` is
-`set_log.hpp`'s.
+the live array's report (its counters, each camera's line through a
+counters function, a rig's skew) and clock in `live_sets.hpp`, the Orbbec
+camera lines and counters (`lost` among them) in `fuse_orbbec_sets.hpp`, and
+the RealSense camera's line and its scenario's options in
+`realsense_camera.hpp`.
+The per-set table of `fuse_orbbec`, `fuse_realsense`, `codec_replica` and
+`rig_viewer` is `set_log.hpp`'s.
 A `main.cpp` is the example's story: options, setup, the loop, the report.
 
 `fuse_replica` runs the spine on a posed Replica-SLAM RGB-D sequence and
@@ -1078,6 +1083,19 @@ cameras stream, removing the empty stream and releasing the cameras. Once
 they stream, it ends after the set in hand, as `run.frames` would: the
 stream is finished, its viewers closed, the cameras released and the PLY
 written. A second signal of the same kind ends the process.
+That run is `examples/common/live_fusion.hpp`'s `run_live_fusion`, which
+takes the program's camera opener and its counters, so it is the one loop
+of both live programs that fuse to a PLY.
+**`fuse_realsense`** (`VS_WITH_REALSENSE`) is that run on one RealSense
+D400 camera's own depth (core's `FuseRealsense` profile): a
+`RealSenseSensor` with its projector on, at the scenario's modes and depth
+gate (`realsense_options`), read as a `SensorArray` of one, at the origin;
+its YUYV colour is staged and converted on the GPU by the array's prep, and
+its counters are the interface's. The profile takes no Orbbec rig keys,
+codec, outputs beyond the PLY, stream operation or diagnostics. The opener
+(`open_realsense_array`) is where a depth source is chosen, so stereo depth
+from the camera's infrared pair joins as another `IRgbdSensor` there, the
+loop unchanged.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VS_WITH_ORBBEC`, and
 `VS_WITH_FFMPEG` off Apple; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file, opened as
