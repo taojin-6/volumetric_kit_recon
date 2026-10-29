@@ -38,13 +38,41 @@ struct DepthNoise {
   float c = 0.0f;      ///< Quadratic term (m per m^2); at least 0.
 };
 
-/// @brief What @ref ChangeDetector's mask says of a pixel in a frame: one
-///        `uint32` a pixel.
+/// @brief What @ref ChangeDetector's mask says of a pixel in a frame: the low
+///        two bits of the pixel's `uint32` word (@ref change_of).
 enum class PixelChange : std::uint32_t {
   None = 0,     ///< No change: noise, an invalid sample, or still learning.
   Nearer = 1,   ///< The surface came nearer: something arrived in front.
   Farther = 2,  ///< The surface moved away: something left, or receded.
+  /// The surface left and nothing returns behind it. A pixel first valid
+  /// once its camera tests had returned nothing until then, so its history
+  /// lasts only while it returns: its first invalid sample ends it, and
+  /// flags Vanished if it had at least three valid samples in a row. The
+  /// word's high 30 bits hold the depth of the surface that left
+  /// (@ref vanished_depth).
+  Vanished = 3,
 };
+
+/// A Vanished word's depth unit, in metres: 0.1 mm, so its 30 bits reach
+/// 107 km.
+inline constexpr float kVanishedDepthUnit = 1e-4f;
+
+/// @brief The change a mask word says.
+/// @param word  One pixel's word of @ref ChangeDetector::mask.
+/// @return Its low two bits.
+constexpr PixelChange change_of(std::uint32_t word) noexcept {
+  return static_cast<PixelChange>(word & 3u);
+}
+
+/// @brief The depth of the surface a Vanished word says left.
+/// @param word  One pixel's word of @ref ChangeDetector::mask.
+/// @return The depth in metres, to @ref kVanishedDepthUnit; 0 for a word of
+///         another kind.
+constexpr float vanished_depth(std::uint32_t word) noexcept {
+  return change_of(word) == PixelChange::Vanished
+             ? static_cast<float>(word >> 2) * kVanishedDepthUnit
+             : 0.0f;
+}
 
 /// @brief How @ref ChangeDetector tests a pixel. The defaults are the
 ///        operating point measured on the Femto rig's static takes (one false
@@ -76,7 +104,7 @@ struct ChangeDetectorConfig {
   /// background with no return, tests from its second sample.
   std::uint32_t warm_up = 30;
   /// Samples after an alarm the noise estimate does not learn from, so a
-  /// sustained motion cannot train it upward; at most 4095.
+  /// sustained motion cannot train it upward; at most 511.
   std::uint32_t freeze = 30;
 };
 
@@ -99,9 +127,15 @@ struct ChangeDetectorConfig {
 ///
 /// A sample is valid when it is positive and within the camera's
 /// `[min_depth, max_depth]`, as fusion takes it. An invalid sample (a hole, a
-/// dropout, `NaN`) changes nothing and flags nothing, and a camera missing
-/// from a set is simply not detected: on return each pixel compares with its
-/// own history. A camera whose image size changes starts a new history.
+/// dropout, `NaN`) changes nothing and flags nothing -- but over no return:
+/// a pixel first valid once its camera tests had returned nothing, and its
+/// history ends at its first invalid sample, which flags
+/// @ref PixelChange::Vanished after three valid samples in a row. That is
+/// what a mover leaves where nothing behind it returns; a background's
+/// sporadic returns end silently (14-23 Vanished flags a second over the
+/// Femto rig's four cameras on its static takes). A camera missing from a
+/// set is simply not detected: on return each pixel compares with its own
+/// history. A camera whose image size changes starts a new history.
 /// History lives in the camera's pixel grid, so the cameras must be fixed.
 ///
 /// Device memory: 24 bytes a pixel per camera (the history and the mask);
@@ -191,11 +225,14 @@ class VR_TSDF_API ChangeDetector {
                       const DepthNoise& noise = {});
 
   /// @brief Camera @p camera's mask as its last pass left it.
-  /// @return A device-local buffer of `width * height` `uint32`
-  ///         (@ref PixelChange), row-major in the camera's image; null for a
-  ///         slot with no history yet. Valid until the camera's next record
-  ///         of another image size, or this detector's destruction; a reader
-  ///         records after the pass in the same batch, or in a later one.
+  /// @return A device-local buffer of `width * height` `uint32` words,
+  ///         row-major in the camera's image: the low two bits a
+  ///         @ref PixelChange (@ref change_of), a Vanished word's high bits
+  ///         the depth that left (@ref vanished_depth), any other's 0; null
+  ///         for a slot with no history yet. Valid until the camera's next
+  ///         record of another image size, or this detector's destruction; a
+  ///         reader records after the pass in the same batch, or in a later
+  ///         one.
   const core::Buffer* mask(std::uint32_t camera) const noexcept;
 
   /// @return The configuration this was created with.

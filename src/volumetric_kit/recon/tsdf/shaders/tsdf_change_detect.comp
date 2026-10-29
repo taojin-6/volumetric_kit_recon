@@ -17,9 +17,17 @@
 // samples; any other sample updates the history -- a cumulative mean of the
 // first `memory` samples, then an exponential average of weight 1/memory --
 // and, unless frozen, the noise estimate on the same schedule, its sample
-// |d - d_hist| clipped at 3 sigma_r. An invalid sample changes nothing.
+// |d - d_hist| clipped at 3 sigma_r. An invalid sample changes nothing, but
+// over no return: a history that began once the camera was testing began
+// where the pixel had returned nothing (kOverNoReturn), and lasts only while
+// the pixel returns. Its first invalid sample ends it, and flags Vanished,
+// with the depth that left, if it had kVanishAfter valid samples in a row:
+// what a mover leaves where nothing behind it returns. Shorter runs, a
+// background's sporadic returns, end silently.
 
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+#include "tsdf_change_mask.glsl"
 
 layout(local_size_x = 256) in;
 
@@ -32,7 +40,9 @@ struct PixelHistory {
   float near_sum;  // S-, in sigma
   // bits 0-9: the history's samples, capped at memory (0 = no history);
   // bits 10-19: the noise estimate's, capped at memory;
-  // bits 20-31: samples the noise estimate still skips after an alarm.
+  // bits 20-28: samples the noise estimate still skips after an alarm;
+  // bit 29: the history began over no return (kOverNoReturn);
+  // bits 30-31: valid samples in a row since it began, capped at 3.
   uint counts;
 };
 
@@ -62,9 +72,11 @@ layout(push_constant, scalar) uniform Push {
   uint gate_word;  // the gate's word index; 0xFFFFFFFF for no gate
 } pc;
 
-const uint kNone = 0u;
-const uint kNearer = 1u;
-const uint kFarther = 2u;
+const uint kOverNoReturn = 1u << 29;
+// Valid samples in a row an over-no-return history needs before its end
+// flags Vanished: on the rig's static takes, 3 leaves 14-23 such flags a
+// second over four cameras, against 6.6k where a sphere crossed.
+const uint kVanishAfter = 3u;
 const float kAbsToSigma = 1.2533141;  // sqrt(pi / 2): E|x| = sigma sqrt(2/pi)
 const float kClip = 3.0;
 // A floor under sigma_r, so a noise model of zero at a tiny depth never
@@ -80,18 +92,38 @@ void main() {
     float d = depth[i];
     // The negated compare drops NaN; +inf fails d <= max_depth, finite.
     if (!(d > 0.0 && d >= pc.min_depth && d <= pc.max_depth)) {
-      mask[i] = kNone;  // an invalid sample changes nothing
+      // An invalid sample changes nothing, but ends a history over no return
+      // (and flags Vanished after a run). Its depth stays: it is the word's.
+      uint counts = history[i].counts;
+      uint change = kChangeNone;
+      if ((counts & kOverNoReturn) != 0u && (counts & 0x3FFu) != 0u) {
+        if ((counts >> 30) >= kVanishAfter) {
+          change = vanished_word(history[i].depth);
+        }
+        history[i].counts = 0u;
+      }
+      mask[i] = change;
       continue;
     }
     PixelHistory s = history[i];
     uint n = s.counts & 0x3FFu;
     uint learned = (s.counts >> 10) & 0x3FFu;
-    uint frozen = s.counts >> 20;
-    uint change = kNone;
+    uint frozen = (s.counts >> 20) & 0x1FFu;
+    uint over_no_return = s.counts & kOverNoReturn;
+    uint run = s.counts >> 30;
+    uint change = kChangeNone;
     if (n == 0u) {
-      s.depth = d;  // the first sample starts the history
+      // The first sample starts the history, afresh: a history that ended
+      // over no return left its noise estimate and sums behind. Once the
+      // camera tests, a pixel with no history had returned nothing.
+      s = PixelHistory(d, 0.0, 0.0, 0.0, 0u);
       n = 1u;
+      learned = 0u;
+      frozen = 0u;
+      over_no_return = pc.testing != 0u ? kOverNoReturn : 0u;
+      run = 1u;
     } else {
+      run = min(run + 1u, kVanishAfter);
       float floor_sigma = pc.noise_a + d * (pc.noise_b + d * pc.noise_c);
       float sigma = max(max(kAbsToSigma * s.mean_abs, floor_sigma), kMinSigma);
       float e = d - s.depth;
@@ -101,13 +133,13 @@ void main() {
         s.far_sum = max(0.0, s.far_sum + r - pc.k);
         s.near_sum = max(0.0, s.near_sum - r - pc.k);
         if (s.far_sum > pc.h) {
-          change = kFarther;
+          change = kChangeFarther;
         } else if (s.near_sum > pc.h) {
-          change = kNearer;
+          change = kChangeNearer;
         } else if (abs(r) > pc.one_frame) {
-          change = r > 0.0 ? kFarther : kNearer;
+          change = r > 0.0 ? kChangeFarther : kChangeNearer;
         }
-        alarm = change != kNone;
+        alarm = change != kChangeNone;
       }
       if (alarm) {
         s.depth = d;
@@ -127,7 +159,8 @@ void main() {
         s.depth += (d - s.depth) / float(n);
       }
     }
-    s.counts = n | (learned << 10) | (frozen << 20);
+    s.counts = n | (learned << 10) | (frozen << 20) | over_no_return |
+               (run << 30);
     history[i] = s;
     mask[i] = change;
   }

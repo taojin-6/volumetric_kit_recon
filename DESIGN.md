@@ -809,11 +809,17 @@ depth, the pixel's own temporal noise `sigma_r`, floored by the sensor's
 `DepthNoise` (`sigma(z) = a + b z + c z^2`, its only knowledge of the
 sensor), two cumulative sums and three counters, 20 bytes -- and one pass a
 camera a frame (`record_detect`) tests every valid sample and writes the
-camera's mask, a `uint32` a pixel: `PixelChange::None`, `Nearer` or
-`Farther`. Two-sided CUSUM on `r = (d - d_hist) / sigma_r` (k 0.5, h 8) or
-one frame past 6 sigma alarms; an alarm restarts the pixel's history and
-freezes its noise estimate for 30 samples; a camera's pixels test after its
-first 30 recorded frames. An invalid sample changes nothing, a camera missing from a set is
+camera's mask, a `uint32` a pixel: `PixelChange::None`, `Nearer`,
+`Farther` or `Vanished` in its low two bits (`change_of`). Two-sided CUSUM
+on `r = (d - d_hist) / sigma_r` (k 0.5, h 8) or one frame past 6 sigma
+alarms; an alarm restarts the pixel's history and freezes its noise
+estimate for 30 samples; a camera's pixels test after its first 30
+recorded frames. An invalid sample changes nothing, but over no return: a
+pixel first valid once its camera tests had returned nothing until then, so
+its history lasts only while it returns. Its first invalid sample ends the
+history, and flags `Vanished` after three valid samples in a row, the word's
+high 30 bits the depth that left in 0.1 mm (`vanished_depth`): what a mover
+leaves where nothing behind it returns. A camera missing from a set is
 simply not detected, and one whose image size changes starts over. A gate
 word, as `record_integrate` takes one, has a pass test nothing, though a
 camera's first frame at a new size starts its history all the same: that
