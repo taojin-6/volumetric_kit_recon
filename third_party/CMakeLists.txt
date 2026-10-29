@@ -75,7 +75,8 @@ endif()
 # -Werror stay off in this build; recon's examples take its test fixtures
 # (VS_TEST_DATA_DIR, which it sets).
 #
-# The pin is sensor 0.1.0 (436840c, its repository's first main).
+# The pin is sensor 0.1.0 (436840c, its repository's first main), as is its
+# Orbbec SDK action in .github/workflows (the sibling-actions-at-pins hook).
 FetchContent_Declare(
   volumetric_kit_sensor
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
