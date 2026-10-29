@@ -92,4 +92,7 @@ layout(push_constant, scalar) uniform PushConstants {
   uint tick;            // the map's tick, which a changed block is stamped with
   uint coverage_in_alpha;  // 1 = a colour word with a zero high byte is no colour
   uint item_base;  // the first thread this dispatch covers
+  // Dynamic: this set's stamp in the camera's change reach (binding 11), the
+  // pixels within the rim distance's search of a change; 0 under Classic.
+  uint reach_stamp;
 } pc;

@@ -398,6 +398,15 @@ class VR_TSDF_API TsdfIntegrator {
       const volumetric_kit::grid::volume::DeviceCount* gate,
       std::uint32_t max_blocks, core::GpuStageScope* stage,
       core::StageMetrics* metrics);
+  // Dynamic: make and zero the reach of every camera of `live` that has none
+  // at its size; and record the reach of `frame`'s change this set, live
+  // frame `k`'s (tsdf_integrator.cpp).
+  core::Status make_reach(const std::vector<FrameInput>& frames,
+                          const std::vector<std::size_t>& live);
+  core::Status record_reach(
+      core::CommandBatch& batch, const FrameInput& frame, std::size_t k,
+      const volumetric_kit::grid::volume::DeviceCount* gate,
+      core::GpuStageScope* stage);
 
   // Borrowed (must outlive this).
   core::Device* device_ = nullptr;
@@ -416,6 +425,9 @@ class VR_TSDF_API TsdfIntegrator {
   // KernelSetBuilder at create().
   core::ComputeKernel kernel_;
   core::ComputeKernel reset_kernel_;
+  // Dynamic's change reach kernel: the pixels within the rim distance's
+  // search of a camera's change this set.
+  core::ComputeKernel reach_kernel_;
   // recon's count-to-slices kernel, sizing their dispatches from the
   // compaction's device count into args_, a VkDispatchIndirectCommand a
   // dispatch, grown to the most a call has had.
@@ -428,8 +440,19 @@ class VR_TSDF_API TsdfIntegrator {
   // has had; every set a call dispatches is written whole first.
   core::KernelSets frame_sets_;
   core::KernelSets reset_sets_;
+  core::KernelSets reach_sets_;
   // Dynamic's per-camera change histories, a slot a camera.
   std::unique_ptr<ChangeDetector> detector_;
+  // Each camera slot's change reach: a uint32 a pixel, this set's stamp
+  // where a change lies within the rim distance's search; made, zeroed, at
+  // the camera's first set or a new size, and stamped a set at a time from 1.
+  struct Reach {
+    core::Buffer map;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t stamp = 0;
+  };
+  std::vector<Reach> reach_;
   // The device-span collector, created once rather than per call: a query pool
   // of a few timestamps is negligible, and a lazily-created one would need a
   // mutable member and a failure path on a diagnostic. Idle -- no query

@@ -640,16 +640,18 @@ int same_streams(const std::string& a, const std::string& b) {
 // host waits -- the front batch's and the frame's; a wait that finds its
 // batch done blocks nothing and counts none -- and a set fused alone 1 and
 // 1, a free pass's set adding none. A payload past its guess adds its tail's
-// submit, wait and gather. A warm set places no staging buffer but the one a
-// payload buffer's growth takes, for a frame larger than any before: at most
-// two over the run's warm sets, where a readback of every set's would place
-// six. The front batch's dispatches stay below the Apple step near 80 a
-// batch (the 2026-10-24 entry); the back batch's are 4. A set fused again
+// submit, wait and gather. A warm set places no staging buffer but those a
+// frame larger than any before grows its readback slots by (two at most, the
+// payload's and the rest's): at most two over the run's warm sets, where a
+// readback of every set's would place six. The front batch's dispatches stay
+// below the Apple step near 80 a batch (the 2026-10-24 entry); the back
+// batch's are 4. A set fused again
 // adds its blocking allocation, a submit a round while lost races remain,
 // and its fuse, and a coded one its front half again, whose wait it times.
 // The first set's round, into an empty grid, can lose a race, and the set is
 // then fused again. A Dynamic sender's first set zeroes each camera's change
-// history first, a submit and a wait a camera (`first_extra`).
+// history first, a submit and a wait a camera, and the cameras' change
+// reaches, one more (`first_extra`).
 int counts_case(const std::vector<SetCounts>& counts, bool coded,
                 const char* what, std::uint64_t first_extra = 0) {
   std::uint64_t warm_staging = 0;
@@ -669,7 +671,7 @@ int counts_case(const std::vector<SetCounts>& counts, bool coded,
     const std::uint64_t batches =
         (coded ? 2 : 1) + tail + (s == 0 ? first_extra : 0);
     if (s >= 3) {
-      CHECK(c.staging <= 1);
+      CHECK(c.staging <= 2);
       warm_staging += c.staging;
     }
     if (c.redone) {
@@ -983,7 +985,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     std::vector<SetCounts> counts;
     CHECK(code_sets(gpu, fusion, path, &coded, Run{true, 1024, &counts}) == 0);
     CHECK(check_stream(gpu, path, dynamic, coded) == 0);
-    const std::uint64_t zeroing = dynamic ? 2 : 0;  // two cameras
+    const std::uint64_t zeroing = dynamic ? 3 : 0;  // two cameras, + reach
     CHECK(counts_case(counts, true, name.c_str(), zeroing) == 0);
     // The blocking calls code the same frames.
     const std::string blocking =

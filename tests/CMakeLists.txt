@@ -402,6 +402,19 @@ target_link_libraries(
 vr_target_warnings(recon_tsdf_dynamic_change_test)
 add_test(NAME recon_tsdf_dynamic_change COMMAND recon_tsdf_dynamic_change_test)
 
+# tsdf rim distance: one camera's plate outline at its true edge in either mode,
+# the voxels beside it at their Euclidean distance, a thin rod solid; a plate
+# moving past one Dynamic camera with nothing beside its moving outline; and a
+# sphere moving past three Dynamic cameras covered in every set, nothing of it
+# left once gone. Skips (exit 0) where no device is present.
+add_executable(recon_tsdf_rim_distance_test tsdf_rim_distance_test.cpp)
+target_link_libraries(
+  recon_tsdf_rim_distance_test
+  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_tsdf
+          volumetric_kit::grid_mesh)
+vr_target_warnings(recon_tsdf_rim_distance_test)
+add_test(NAME recon_tsdf_rim_distance COMMAND recon_tsdf_rim_distance_test)
+
 # tsdf integrate dynamic set: a frontal camera and a grazing one that sees past
 # its band, fused as a Dynamic set in either order, must give the same grid and
 # mesh and keep the frontal camera's surface whole; the frontal wall receding is

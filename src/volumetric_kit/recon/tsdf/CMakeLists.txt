@@ -69,6 +69,7 @@ vr_embed_shaders(
   SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_reset.comp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_change_detect.comp")
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_change_detect.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_change_reach.comp")
 
 vr_target_warnings(recon_tsdf)

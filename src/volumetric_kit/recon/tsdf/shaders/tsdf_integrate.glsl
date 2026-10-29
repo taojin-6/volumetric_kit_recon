@@ -16,6 +16,16 @@
 // the block's `changed` stamp at binding 8, which every thread of a block
 // shares -- see there.
 //
+// Near an outline the projective distance is wrong or missing: a voxel beside
+// a silhouette sees past it to the background, or into a gap with no return,
+// and marching cubes then steps the outline a cell at a time or leaves it
+// open. There, a voxel whose sample is not a clean interpolation inside the
+// band and whose footprint touches an outline takes the Euclidean distance to
+// the nearest return around it instead (rim_distance), in both modes. Under
+// Dynamic it does so only where its camera saw no change around it this set,
+// so a moving surface is fused from its fresh projective samples alone
+// (DECISIONS.md, 2026-10-29, true distance near outlines).
+//
 // The body of the integrate kernel (tsdf_integrate.comp) and the reset kernel
 // (tsdf_reset.comp), which #include it after their #version, with one
 // descriptor layout. VR_TSDF_RESET builds the reset kernel: dynamic
@@ -65,21 +75,13 @@ layout(set = 0, binding = 4, scalar) readonly buffer Camera {
 // live layout change, but it keeps the scalar-block-layout ABI uniform, as the
 // mesh tier's identical color binding does).
 layout(set = 0, binding = 6, scalar) buffer ColorAttr { uint color_attr[]; };
-#ifdef VR_TSDF_RESET
-#include "tsdf_change_mask.glsl"
-// The reset reads no colour: slot 5 is the camera's change mask, a word a
-// pixel (tsdf_change_mask.glsl; 0 = no change), and slot 7 is unused.
-layout(set = 0, binding = 5, scalar) readonly buffer ChangeMask {
-  uint change_mask[];
-};
-#else
+// The reset reads neither the colour image nor its camera.
 layout(set = 0, binding = 5, scalar) readonly buffer ColorImage {
   uint color_image[];
 };
 layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
   ColorCameraParams color_cam;
 };
-#endif
 // The map's block stamps (volume::BlockStamp): this dispatch stamps `changed`
 // with the map's tick on a block when it actually CHANGES a voxel of it.
 //
@@ -114,6 +116,72 @@ layout(set = 0, binding = 8, scalar) buffer Stamps { BlockStamp stamps[]; };
 layout(set = 0, binding = 9) readonly buffer ActiveCount {
   uint active_count;
 };
+#include "tsdf_change_mask.glsl"
+// Dynamic: the camera's change mask this set, a word a pixel
+// (tsdf_change_mask.glsl; 0 = no change), which the reset resets along; and
+// its reach (tsdf_change_reach.comp), pc.reach_stamp shifted up a bit at
+// every pixel within the rim distance's search of a change this set, the bit
+// set near a departure, which the fuse keeps the rim distance away from and
+// the reset clears beside. 1-word dummies under Classic, which reads
+// neither.
+layout(set = 0, binding = 10, scalar) readonly buffer ChangeMask {
+  uint change_mask[];
+};
+layout(set = 0, binding = 11, scalar) readonly buffer ChangeReach {
+  uint change_reach[];
+};
+
+// A return the kernel fuses: positive and inside the camera's depth range.
+// The negated compares drop NaN and infinity too, matching
+// hash_allocate_depth.comp, so integration accepts exactly what allocation
+// did.
+bool returned(float d) {
+  return d > 0.0 && d >= cam.min_depth && d <= cam.max_depth;
+}
+
+// One voxel's footprint, in pixels at depth zc > 0 (infinite at a tiny one,
+// which the clamps of its users hold).
+float footprint(float zc) { return pc.grid.voxel_size * cam.fx / zc; }
+
+// The rim distance's search, +-ceil(a footprint + 1) pixels, 2 to 6: within
+// tsdf_change_reach.comp's reach, which is its widest.
+int rim_search(float zc) {
+  return int(clamp(ceil(footprint(zc) + 1.0), 2.0, 6.0));
+}
+
+// The return nearest the camera-space point at pixel `px` and depth `zc`
+// among the pixels within `reach` of its nearest pixel, kept only inside the
+// band: false when none is that near; else its squared distance, its depth
+// and its pixel.
+bool nearest_return(vec2 px, float zc, int reach, out float dist2,
+                    out float best_z, out uint best_pixel) {
+  int w = int(cam.width);
+  int h = int(cam.height);
+  uvec2 n = nearest_pixel(px, cam.width, cam.height);
+  int nx = int(n.x);
+  int ny = int(n.y);
+  vec4 k = vec4(cam.fx, cam.fy, cam.cx, cam.cy);
+  vec3 p = vs_unproject_pinhole(px, zc, k);
+  dist2 = pc.grid.trunc_dist * pc.grid.trunc_dist;
+  best_z = 0.0;
+  best_pixel = 0u;
+  for (int y = max(ny - reach, 0); y <= min(ny + reach, h - 1); ++y) {
+    for (int x = max(nx - reach, 0); x <= min(nx + reach, w - 1); ++x) {
+      uint i = uint(y * w + x);
+      float d = depth[i];
+      if (returned(d)) {
+        vec3 e = vs_unproject_pinhole(vec2(float(x), float(y)), d, k) - p;
+        float e2 = dot(e, e);
+        if (e2 < dist2) {
+          dist2 = e2;
+          best_z = d;
+          best_pixel = i;
+        }
+      }
+    }
+  }
+  return best_z > 0.0;
+}
 
 // Stamp a block changed, from a lane that changed one of its voxels. When the
 // block is a whole number of workgroups -- every block size from 8 up -- every
@@ -134,16 +202,20 @@ void stamp_changed(uint block_slot) {
   }
 }
 
+#ifndef VR_TSDF_RESET
 // Bilinear depth sample at pixel (u, v), with a nearest-neighbour fallback.
 // Pixel centres sit at integer coordinates (DECISIONS.md, the depth-sampling
 // decision), so the taps are the 2x2 block from floor(u), floor(v) and the
 // nearest pixel is nearest_pixel's. Falls back to that sample when a bilinear
 // tap is out of bounds, invalid (non-finite or <= 0), or the taps straddle a
 // depth discontinuity (max - min > trunc_dist) that would blend across a
-// surface edge. (u, v) is in [0, width) x [0, height), as project_to_image
-// accepts it. The nearest index is computed here but only read on a fallback
-// return, so the common interpolate path loads just the four taps.
-float sample_depth(float u, float v) {
+// surface edge; `clean` says it interpolated, which is where the projective
+// distance is trusted near an outline. (u, v) is in [0, width) x [0, height),
+// as project_to_image accepts it. The nearest index is computed here but only
+// read on a fallback return, so the common interpolate path loads just the
+// four taps.
+float sample_depth(float u, float v, out bool clean) {
+  clean = false;
   int w = int(cam.width);
   int h = int(cam.height);
   uvec2 n = nearest_pixel(vec2(u, v), cam.width, cam.height);
@@ -170,10 +242,93 @@ float sample_depth(float u, float v) {
   if (lo <= 0.0 || (hi - lo) > pc.grid.trunc_dist) {
     return depth[nearest];  // an invalid tap, or a depth discontinuity across the taps
   }
+  clean = true;
   float fx = u - float(x0);
   float fy = v - float(y0);
   return mix(mix(d00, d10, fx), mix(d01, d11, fx), fy);
 }
+
+// What rim_distance found: not a rim voxel (the projective sample stands);
+// behind its own pixel's surface (sdf < 0); in front of or beside a surface
+// (sdf >= 0); or that over its own pixel's gap, a pixel with no return.
+const int kRimNone = 0;
+const int kRimBehind = 1;
+const int kRimBeside = 2;
+const int kRimGap = 3;
+
+// A rim voxel over its own pixel's gap at a quarter of a sample's weight: the
+// gap says only that this ray returned nothing, which a dark or grazing
+// surface also does (the 2026-10-29 study's weight).
+const float kRimGapWeight = 0.25;
+
+// The true distance near an outline. A voxel is a rim voxel when the window
+// of its footprint -- +-ceil(half a voxel's footprint in pixels) around its
+// nearest pixel, at least 3x3, at most 7x7 -- holds a return and either a
+// pixel with none or a depth range past the band. Its distance is then the
+// Euclidean one to the nearest back-projected return within
+// +-ceil(the footprint + 1) pixels (2 to 6), kept only under trunc_dist: a
+// voxel no return comes that near is not a rim voxel. Its sign comes from its
+// own pixel: negative only behind the surface that pixel sees (within the
+// band; farther is occluded and not a rim voxel, as the projective test
+// would have it), positive in front of that surface, beside it, or over a
+// gap. A voxel more than a voxel behind its nearest return, beside it, is in
+// the shadow behind an outline and not a rim voxel: a distance there would
+// meet the band behind that surface and close a wall along the camera's
+// rays. `behind` is the voxel's depth behind its own pixel's surface
+// (kRimBehind), else 0.
+int rim_distance(vec2 px, float zc, out float sdf, out float behind) {
+  sdf = 0.0;
+  behind = 0.0;
+  int w = int(cam.width);
+  int h = int(cam.height);
+  uvec2 n = nearest_pixel(px, cam.width, cam.height);
+  int nx = int(n.x);
+  int ny = int(n.y);
+  float t = pc.grid.trunc_dist;
+  int rf = int(clamp(ceil(0.5 * footprint(zc)), 1.0, 3.0));
+  bool any_return = false;
+  bool any_gap = false;
+  float lo = 1e30;
+  float hi = -1e30;
+  for (int y = max(ny - rf, 0); y <= min(ny + rf, h - 1); ++y) {
+    for (int x = max(nx - rf, 0); x <= min(nx + rf, w - 1); ++x) {
+      float d = depth[y * w + x];
+      if (returned(d)) {
+        any_return = true;
+        lo = min(lo, d);
+        hi = max(hi, d);
+      } else {
+        any_gap = true;
+      }
+    }
+  }
+  if (!any_return || !(any_gap || hi - lo > t)) {
+    return kRimNone;
+  }
+  float dn = depth[ny * w + nx];
+  bool own = returned(dn);
+  if (own && zc - dn > t) {
+    return kRimNone;  // occluded: well behind its own pixel's surface
+  }
+  float best;
+  float best_z;
+  uint best_pixel;
+  if (!nearest_return(px, zc, rim_search(zc), best, best_z, best_pixel)) {
+    return kRimNone;  // no return inside the band
+  }
+  float dist = sqrt(best);
+  if (own && zc > dn) {
+    behind = zc - dn;
+    sdf = -dist;
+    return kRimBehind;
+  }
+  if (zc > best_z + pc.grid.voxel_size) {
+    return kRimNone;  // in the shadow behind an outline
+  }
+  sdf = dist;
+  return own ? kRimBeside : kRimGap;
+}
+#endif
 
 void main() {
   // item_base is a whole number of workgroups, so a workgroup still lies in
@@ -226,11 +381,33 @@ void main() {
   uint word = change_mask[pixel];
   uint kind = change_kind(word);
   if (kind == kChangeNone) {
-    return;
-  }
-  float surface = kind == kChangeVanished ? vanished_depth(word) : depth[pixel];
-  if (surface - zc < -trunc_dist) {
-    return;  // behind the surface's band: occluded history stays
+    // Beside a departure: a voxel holding a distance in front of a surface,
+    // where its own ray sees free space past its band, or nothing, holds it
+    // from a rim distance (or another camera's band, which fuses it again
+    // this set). Within the reach of a surface that went farther or
+    // vanished, where the nearest return the rim distance searches for is
+    // gone from the band or is a pixel that changed, the surface it measured
+    // left, and the distance goes with it: what a rim distance left beside an
+    // object leaves when the object does, and an outline that stayed keeps
+    // its own. An arrival leaves it: nothing it measured has gone.
+    float own = depth[pixel];
+    if (change_reach[pixel] != ((pc.reach_stamp << 1) | 1u) ||
+        !(tsdf[idx] > 0.0) || (returned(own) && own - zc <= trunc_dist)) {
+      return;
+    }
+    float d2;
+    float near_z;
+    uint near_pixel;
+    if (nearest_return(px, zc, rim_search(zc), d2, near_z, near_pixel) &&
+        change_kind(change_mask[near_pixel]) == kChangeNone) {
+      return;
+    }
+  } else {
+    float surface =
+        kind == kChangeVanished ? vanished_depth(word) : depth[pixel];
+    if (surface - zc < -trunc_dist) {
+      return;  // behind the surface's band: occluded history stays
+    }
   }
   // TODO(tsdf): a surface that leaves to no return flags nothing where its
   // pixel returned anything in its camera's warm-up, or where it returned
@@ -247,24 +424,47 @@ void main() {
 #else
   float u = px.x;
   float v = px.y;
-  float d = sample_depth(u, v);  // bilinear, with nearest-neighbour fallback
-  // Reject zero holes and out-of-range depth; the negated compare also drops
-  // NaN/inf holes (every comparison with NaN is false), matching
-  // hash_allocate_depth.comp so integration accepts exactly what allocation did.
-  if (!(d > 0.0 && d >= cam.min_depth && d <= cam.max_depth)) {
-    return;  // invalid / out-of-range / non-finite depth
-  }
-
+  bool clean;
+  float d = sample_depth(u, v, clean);  // bilinear, with nearest-neighbour fallback
   // Truncated projective SDF.
   float sdf = d - zc;
-  if (sdf < -trunc_dist) {
-    return;  // occluded: well behind the surface
+  // Near an outline, a sample that is not a clean interpolation inside the
+  // band -- a jump or a gap across its taps, past the band, or no return --
+  // gives way to the Euclidean distance to the nearest return, where the
+  // voxel's footprint touches an outline (rim_distance). Not under Dynamic
+  // within the reach of a change its camera saw this set: an outline that
+  // moved has fresh samples on one side and history on the other, so the
+  // moving surface is fused from its own projective samples alone, never
+  // averaged with distances to where it is going or has been.
+  int rim = kRimNone;
+  float rim_behind = 0.0;
+  bool moved = false;
+  if (pc.mode == kModeDynamic) {
+    uvec2 n = nearest_pixel(px, cam.width, cam.height);
+    moved = (change_reach[n.y * cam.width + n.x] >> 1) == pc.reach_stamp;
+  }
+  if (!moved && (!returned(d) || !clean || sdf > trunc_dist)) {
+    float rim_sdf;
+    rim = rim_distance(px, zc, rim_sdf, rim_behind);
+    if (rim != kRimNone) {
+      sdf = rim_sdf;
+    }
+  }
+  if (rim == kRimNone) {
+    // Reject zero holes and out-of-range depth (returned).
+    if (!returned(d)) {
+      return;  // invalid / out-of-range / non-finite depth
+    }
+    if (sdf < -trunc_dist) {
+      return;  // occluded: well behind the surface
+    }
   }
   // Dynamic's free space past the band averages in at a share of the weight,
   // and only into a voxel that holds weight: it wears a surface no change
   // removed away over time but never evicts it, and never turns an unobserved
   // voxel -- one a reset left, or one no surface sample reached -- observed.
-  // The weight is read here and again below; both are the same load.
+  // The weight is read here and again below; both are the same load. A rim
+  // distance lies inside the band, so it is never free space.
   bool free_space = sdf > trunc_dist;
   if (free_space && pc.mode == kModeDynamic && !(weight[idx] > 0.0)) {
     return;
@@ -276,12 +476,18 @@ void main() {
   if (free_space && pc.mode == kModeDynamic) {
     w_obs *= kFreeSpaceWeight;
   }
-  if (zc > d) {
-    // Behind the surface but within the band -- the earlier sdf < -trunc_dist
-    // return already guarantees behind <= trunc_dist. Fade linearly to zero at
-    // the band edge, where the w_obs <= 0.0 guard below drops the sample.
-    float behind = zc - d;
+  // How far behind its own pixel's surface the voxel lies: a rim voxel's from
+  // rim_distance (0 in front or beside), else the projective sample's.
+  float behind = rim == kRimNone ? zc - d : rim_behind;
+  if (behind > 0.0) {
+    // Behind the surface but within the band -- the sdf < -trunc_dist return
+    // above, and rim_distance's occlusion test, guarantee behind <= trunc_dist.
+    // Fade linearly to zero at the band edge, where the w_obs <= 0.0 guard
+    // below drops the sample.
     w_obs *= (trunc_dist - behind) / trunc_dist;
+  }
+  if (rim == kRimGap) {
+    w_obs *= kRimGapWeight;
   }
   if (w_obs <= 0.0) {
     return;
@@ -327,8 +533,11 @@ void main() {
   // cam) avoids them.
   // Dynamic's free space is a sample of what lies behind the voxel, never of
   // the voxel's own surface, so it brings no colour; classic's does, as it
-  // always has.
-  if (pc.has_color != 0u && !(free_space && pc.mode == kModeDynamic)) {
+  // always has. A rim voxel in front of or beside a surface, or over a gap,
+  // holds a distance to a surface it is not on, so it brings none either.
+  bool surface_sample = rim != kRimBeside && rim != kRimGap;
+  if (pc.has_color != 0u && surface_sample &&
+      !(free_space && pc.mode == kModeDynamic)) {
     vec2 cpx;
     float czc;
     uint obs_packed = 0u;
