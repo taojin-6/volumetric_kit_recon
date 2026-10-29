@@ -132,10 +132,14 @@ layout(set = 0, binding = 11, scalar) readonly buffer ChangeReach {
 };
 // The frame's outlines (tsdf_rim_map.comp): a word a pixel, the smallest
 // window around it, +-1 to +-3 pixels, that holds a return and a gap or a
-// depth range past the band; 0 for none. The fuse's rim distance reads it;
-// a 1-word dummy for the reset, which does not.
+// depth range past the band, 0 for none; and the nearest and farthest return
+// within the rim distance's widest search. The fuse's rim distance reads
+// them; 1-word dummies for the reset, which does not.
 layout(set = 0, binding = 12, scalar) readonly buffer RimMap {
   uint rim_map[];
+};
+layout(set = 0, binding = 13, scalar) readonly buffer RimRange {
+  vec2 rim_range[];
 };
 
 // A return the kernel fuses: positive and inside the camera's depth range.
@@ -301,6 +305,12 @@ int rim_distance(vec2 px, float zc, out float sdf, out float behind) {
   bool own = returned(dn);
   if (own && zc - dn > t) {
     return kRimNone;  // occluded: well behind its own pixel's surface
+  }
+  // A band or more in depth from every return around: the search finds none
+  // (each return's distance is at least its depth's).
+  vec2 range = rim_range[pixel];
+  if (range.x - zc >= t || zc - range.y >= t) {
+    return kRimNone;
   }
   float best;
   float best_z;

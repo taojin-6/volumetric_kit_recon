@@ -443,8 +443,9 @@ class VR_TSDF_API TsdfIntegrator {
   // Dynamic's change reach kernel: the pixels within the rim distance's
   // search of a camera's change this set.
   core::ComputeKernel reach_kernel_;
-  // The rim map kernel: where a frame's outlines are, which the fuse's rim
-  // distance reads in place of scanning a voxel's window.
+  // The rim map kernel: where a frame's outlines are and its returns' depth
+  // range around each pixel, which the fuse's rim distance reads in place of
+  // scanning a voxel's window, and to skip a search that finds nothing.
   core::ComputeKernel rim_kernel_;
   // recon's count-to-slices kernel, sizing their dispatches from the
   // compaction's device count into args_, a VkDispatchIndirectCommand a
@@ -460,9 +461,11 @@ class VR_TSDF_API TsdfIntegrator {
   core::KernelSets reset_sets_;
   core::KernelSets reach_sets_;
   core::KernelSets rim_sets_;
-  // Each frame of a call's rim map, a uint32 a pixel, grown to the most
-  // frames and the largest frame a call has had.
+  // Each frame of a call's rim map, a uint32 a pixel, and its return range,
+  // two floats a pixel, grown to the most frames and the largest frame a
+  // call has had.
   std::vector<core::Buffer> rim_maps_;
+  std::vector<core::Buffer> rim_ranges_;
   // Dynamic's per-camera change histories, a slot a camera.
   std::unique_ptr<ChangeDetector> detector_;
   // Each camera slot's change reach: a uint32 a pixel, this set's stamp

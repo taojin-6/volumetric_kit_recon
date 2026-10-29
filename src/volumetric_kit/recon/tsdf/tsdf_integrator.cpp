@@ -46,8 +46,9 @@ constexpr std::uint32_t kLocalSize = 256;
 // its camera's changed rays, which a Dynamic set runs for every frame first.
 enum class Pass { Fuse, Reset };
 
-// The reach of a change, in pixels: the rim distance's widest search
-// (tsdf_integrate.glsl's rim_distance, at most 6 pixels each way).
+// The rim distance's widest search, in pixels each way (tsdf_integrate.glsl's
+// rim_search): the reach of a change, and the window a rim map's return range
+// covers.
 constexpr std::uint32_t kChangeReach = 6;
 // The gate word index that means no gate (tsdf_change_reach.comp).
 constexpr std::uint32_t kNoGate = 0xFFFFFFFFu;
@@ -67,15 +68,17 @@ struct ReachPush {
 static_assert(sizeof(ReachPush) == 20, "ReachPush must be 20 bytes");
 
 // The rim map kernel's push constants (mirrors Push in tsdf_rim_map.comp):
-// the frame's size and depth range, as its camera's, and the grid's band.
+// the frame's size and depth range, as its camera's, the grid's band, and
+// the rim distance's widest search.
 struct RimMapPush {
   std::uint32_t width;
   std::uint32_t height;
   float min_depth;
   float max_depth;
   float trunc_dist;
+  std::uint32_t search;
 };
-static_assert(sizeof(RimMapPush) == 20, "RimMapPush must be 20 bytes");
+static_assert(sizeof(RimMapPush) == 24, "RimMapPush must be 24 bytes");
 
 // The push-constant block (mirrors `PushConstants` in tsdf_common.glsl): the
 // grid, the fusion weight cap, the integration mode, two color flags, the
@@ -247,8 +250,9 @@ core::Result<TsdfIntegrator> TsdfIntegrator::create(
   // 2 active, 3 depth, 4 depth-camera, 5 color image and 7 color camera
   // (both unused by the reset), 6 color attribute, 8 the map's block stamps,
   // 9 the active count, 10 the camera's change mask and 11 its reach
-  // (Dynamic), 12 the frame's rim map (unused by the reset)) + the
-  // PushConstants range; the rim map kernel (0 the depth, 1 the map) and the
+  // (Dynamic), 12 and 13 the frame's rim map and return range (unused by the
+  // reset)) + the PushConstants range; the rim map kernel (0 the depth, 1 the
+  // map, 2 the return range) and the
   // change reach kernel (0 the mask, 1 the reach, 2 the gate), each + its
   // own; and recon's count-to-slices kernel sizing their dispatches
   // (vgrid::detail::add_dispatch_args). These counts are the single source
@@ -264,13 +268,13 @@ core::Result<TsdfIntegrator> TsdfIntegrator::create(
   push_range.size = sizeof(PushConstants);
   core::KernelSetBuilder kb(device);
   VKC_TRY(kb.add(integ.kernel_, "tsdf_integrate", vr_tsdf_integrate_comp_spv,
-                 vr_tsdf_integrate_comp_spv_size, 13, &push_range));
+                 vr_tsdf_integrate_comp_spv_size, 14, &push_range));
   VKC_TRY(kb.add(integ.reset_kernel_, "tsdf_reset", vr_tsdf_reset_comp_spv,
-                 vr_tsdf_reset_comp_spv_size, 13, &push_range));
+                 vr_tsdf_reset_comp_spv_size, 14, &push_range));
   VkPushConstantRange rim_range = push_range;
   rim_range.size = sizeof(RimMapPush);
   VKC_TRY(kb.add(integ.rim_kernel_, "tsdf_rim_map", vr_tsdf_rim_map_comp_spv,
-                 vr_tsdf_rim_map_comp_spv_size, 2, &rim_range));
+                 vr_tsdf_rim_map_comp_spv_size, 3, &rim_range));
   VkPushConstantRange reach_range = push_range;
   reach_range.size = sizeof(ReachPush);
   VKC_TRY(kb.add(integ.reach_kernel_, "tsdf_change_reach",
@@ -595,8 +599,11 @@ core::Status TsdfIntegrator::record_checked(
   VKC_TRY(ensure(cam_buf_, cam_bytes, "tsdf.depth_cam"));
   VKC_TRY(ensure(color_cam_buf_, color_cam_bytes, "tsdf.color_cam"));
   if (rim_maps_.size() < live.size()) rim_maps_.resize(live.size());
+  if (rim_ranges_.size() < live.size()) rim_ranges_.resize(live.size());
   for (std::size_t k = 0; k < live.size(); ++k) {
-    VKC_TRY(ensure(rim_maps_[k], checked.depth_bytes[live[k]], "tsdf.rim_map"));
+    const VkDeviceSize bytes = checked.depth_bytes[live[k]];
+    VKC_TRY(ensure(rim_maps_[k], bytes, "tsdf.rim_map"));
+    VKC_TRY(ensure(rim_ranges_[k], 2 * bytes, "tsdf.rim_range"));
   }
 
   // The call is one tick: every block it changes is stamped with the new one,
@@ -650,10 +657,10 @@ core::Status TsdfIntegrator::record_checked(
 
   // Every frame's rim map, where its outlines are, which the fuse's rim
   // distance reads (tsdf_rim_map.comp): a uint32 a pixel, as many bytes as
-  // its depth. Then, under Dynamic, each camera's change test and its reach,
-  // their own `"  ..detect"` breakdown, ahead of the compaction. Behind a
-  // closed gate they test and mark nothing, so a set fused again later is
-  // tested once.
+  // its depth, and a return range, two floats a pixel. Then, under Dynamic,
+  // each camera's change test and its reach, their own `"  ..detect"`
+  // breakdown, ahead of the compaction. Behind a closed gate they test and mark
+  // nothing, so a set fused again later is tested once.
   core::StageMetrics parts;
   const bool rows =
       metrics != nullptr && stage != nullptr && stage->timer() != nullptr;
@@ -667,8 +674,14 @@ core::Status TsdfIntegrator::record_checked(
     set.write_storage_buffer(0, depth_handles[k], 0, checked.depth_bytes[i]);
     set.write_storage_buffer(1, rim_maps_[k].handle(), 0,
                              checked.depth_bytes[i]);
-    const RimMapPush push{cam.width, cam.height, cam.min_depth, cam.max_depth,
-                          grid_params.trunc_dist};
+    set.write_storage_buffer(2, rim_ranges_[k].handle(), 0,
+                             2 * checked.depth_bytes[i]);
+    const RimMapPush push{cam.width,
+                          cam.height,
+                          cam.min_depth,
+                          cam.max_depth,
+                          grid_params.trunc_dist,
+                          kChangeReach};
     const std::uint32_t groups =
         std::min(core::group_count(cam.width * cam.height, kLocalSize),
                  max_workgroup_count_x_);
@@ -821,9 +834,13 @@ core::Status TsdfIntegrator::record_checked(
     write(frame_sets_[k], color_handle, color_range);
     frame_sets_[k].write_storage_buffer(12, rim_maps_[k].handle(), 0,
                                         checked.depth_bytes[i]);
+    frame_sets_[k].write_storage_buffer(13, rim_ranges_[k].handle(), 0,
+                                        2 * checked.depth_bytes[i]);
     if (dynamic) {
       write(reset_sets_[k], color_dummy_.handle(), VK_WHOLE_SIZE);
       reset_sets_[k].write_storage_buffer(12, color_dummy_.handle(), 0,
+                                          VK_WHOLE_SIZE);
+      reset_sets_[k].write_storage_buffer(13, color_dummy_.handle(), 0,
                                           VK_WHOLE_SIZE);
     }
   }
