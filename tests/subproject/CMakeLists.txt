@@ -5,10 +5,10 @@
 # the recon_subproject_* tests configure it: recon is then not the top-level
 # project, so its tests, examples and -Werror must default off, and the consumer
 # builds the library tiers alone, under its own compiler's warnings. With all of
-# recon, recon_subproject_glsl builds its kernel on recon's exported GLSL
-# (glsl_consumer.cmake), and recon_subproject_headers compiles the public
-# headers that reach the volume tier, none of which may hold the hash table's
-# internals (internal_names.cpp).
+# recon, image I/O links the core's base tier alone, recon_subproject_glsl
+# builds its kernel on recon's exported GLSL (glsl_consumer.cmake), and
+# recon_subproject_headers compiles the public headers that reach the volume
+# tier, none of which may hold the hash table's internals (internal_names.cpp).
 #
 # With -DVR_CORE_FIRST=ON it makes the core available first, as an application
 # that also fetches calib or gfx does, with VKC_WITH_VULKAN as given, so recon's
@@ -61,6 +61,16 @@ target_link_libraries(vr_camera_consumer PRIVATE volumetric_kit::recon)
 if(NOT TARGET volumetric_kit::recon_core)
   return()
 endif()
+
+# Image I/O, which a capture app links to write its images, links the core's
+# base tier alone: no Vulkan and no mesh tier.
+get_target_property(_image_io volumetric_kit::recon_image_io ALIASED_TARGET)
+get_target_property(_image_io_links ${_image_io} LINK_LIBRARIES)
+if(NOT _image_io_links STREQUAL "volumetric_kit::core_base")
+  message(FATAL_ERROR "recon_image_io links ${_image_io_links}, "
+                      "not volumetric_kit::core_base alone")
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/../glsl_consumer.cmake")
 
 # The public headers internal_names.cpp compiles, found in recon's include/ so a

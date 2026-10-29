@@ -105,8 +105,8 @@ endif()
 
 # --- Asset I/O implementation headers (never exported to consumers) --------
 # stb supplies image decoding and PNG writing. tinyply supplies PLY writing.
-# Their implementation TUs live in recon_io; no helper target leaks through its
-# link interface.
+# Their implementation TUs live in recon_image_io and recon_mesh_io; no helper
+# target leaks through either's link interface.
 FetchContent_Declare(
   stb
   GIT_REPOSITORY https://github.com/nothings/stb.git

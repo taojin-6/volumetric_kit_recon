@@ -838,6 +838,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   kernel unprojects through a copy of the pinhole's one line; tsdf's
   `FrameInput` keeps `DepthCameraParams` and `to_depth_pinhole` copies it
   field by field. Allocation is main's, bit for bit.
+- [**2026-10-28**](#2026-10-28--io-is-two-targets-images-on-the-family-cores-base-tier-alone-mesh-files-on-mesh-amends-the-2026-10-03-asset-io-entry) —
+  `io` is two targets: `recon_image_io` (images, stb) links the family
+  core's base tier alone; `recon_mesh_io` (PLY, the triangle containers,
+  normalization, tinyply) links `mesh`, and `recon_mesh_io_assimp` replaces
+  `recon_io_assimp`. Headers and namespace are unchanged; `recon_io` is
+  gone.
 
 ## Decision record
 
@@ -16329,6 +16335,46 @@ Ubuntu, Release: the new and rewritten volume and tsdf tests pass. Replica
 `room0` (400 frames, 2 cm), fused on main and on this change on the M5 Max:
 every frame's allocated block count and block-set hash are the same, and so
 is the final mesh.
+
+### 2026-10-28 — `io` is two targets: images on the family core's base tier alone, mesh files on `mesh` (amends the 2026-10-03 asset I/O entry).
+
+**The rule.** `recon_image_io` holds image decoding and PNG encoding
+(`io/image_io.hpp`, with stb's implementation private) and links
+`volumetric_kit::core_base` alone: no Vulkan and no recon tier.
+`recon_mesh_io` holds the mesh files: PLY export (`io/ply_writer.hpp`), the
+host triangle containers (`io/triangle_mesh.hpp`) and the opt-in
+normalization helpers (`io/mesh_normalization.hpp`), with tinyply's
+implementation private. It links `recon_mesh` PUBLIC, because `write_ply`
+takes a `mesh::Mesh`. `recon_mesh_io_assimp` replaces `recon_io_assimp` on
+top of it (`io/mesh_io.hpp`, `io/textured_mesh.hpp`). The headers stay in
+`io/` and the namespace stays `vr::io`. Each target's export header and
+macro are named after it (`image_io_export.hpp` and `VR_IMAGE_IO_API`, and
+likewise for the other two). No `recon_io` target remains, and no alias.
+
+**Why.** `recon_io` linked `recon_mesh` PUBLIC for `write_ply` alone. So
+every image user pulled in `volume`, `recon_core` and Vulkan: the Replica
+sensor, and a calibration capture that only writes PNGs. The two halves also
+have different users, images on the capture side and mesh files on the mesh
+and codec side. With separate targets, each consumer names the half it uses
+once; the files can move later without a second rename. The 2026-10-03
+entry's "depends on `mesh`" now holds for `recon_mesh_io` alone.
+
+**Tests.** `recon_io_image` links `recon_image_io` alone, and
+`recon_subproject_defaults` fails when `recon_image_io` links anything but
+the core's base tier. `recon_io_ply` and `recon_io_mesh_normalization` link
+`recon_mesh_io`; `recon_io_mesh_file` and `recon_io_textured_mesh` link
+`recon_mesh_io_assimp`, the latter with `recon_image_io` for the PNG it
+writes. The examples link the half they call: `vr_example_common` links
+images; `fuse_replica`, `codec_replica` and `fuse_orbbec` link mesh files
+for their PLY.
+
+**Validation.** Apple M5 Max, macOS 27.2, Release with warnings as errors
+and Assimp 6.0.5: the build is warning-clean, and the 23 affected tests
+(`io`, the examples that read images or write PLY, the subproject consumer)
+pass under the validation layer with a device required.
+`recon_io_image_test` links `librecon_image_io.a` and the core's base tier,
+nothing else. Adding `recon_mesh` to `recon_image_io`'s links fails
+`recon_subproject_defaults`.
 
 ## Measured lessons
 

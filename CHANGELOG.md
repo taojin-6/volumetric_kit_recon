@@ -187,6 +187,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `io`, examples: **`recon_io` splits into `recon_image_io` and
+  `recon_mesh_io`** (the 2026-10-28 decision). `recon_image_io` holds
+  `io/image_io.hpp` and links the family core's base tier alone, with no
+  Vulkan and no mesh tier. `recon_mesh_io` holds `io/ply_writer.hpp`,
+  `io/triangle_mesh.hpp` and `io/mesh_normalization.hpp`, and links
+  `recon_mesh`. `recon_mesh_io_assimp` replaces `recon_io_assimp`. Headers
+  and `vr::io` are unchanged; the export headers and macros follow the
+  targets (`VR_IMAGE_IO_API`, `VR_MESH_IO_API`, `VR_MESH_IO_ASSIMP_API`).
+  The umbrella `volumetric_kit::recon` links all three. Migration: link
+  `recon_image_io` for images, `recon_mesh_io` for PLY and normalization and
+  `recon_mesh_io_assimp` for import; `recon_io` and `recon_io_assimp` are
+  gone. Tests: `recon_io_image` (now `recon_image_io` alone),
+  `recon_io_ply`, `recon_io_mesh_normalization`, `recon_io_mesh_file`,
+  `recon_io_textured_mesh`, `recon_example_set_dump`,
+  `recon_subproject_defaults` (`recon_image_io` links the core's base tier
+  alone).
 - `volume`, `tsdf`: **the voxel layer takes its own depth camera** (the
   2026-10-28 camera-free volume decision): `volume::DepthPinhole`
   (`voxel_hash_map.hpp`), the fields and 96-byte layout of
