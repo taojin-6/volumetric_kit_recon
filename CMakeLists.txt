@@ -5,9 +5,9 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
   volumetric_kit_recon
-  VERSION 0.0.1
+  VERSION 0.1.0
   DESCRIPTION
-    "Production-grade Vulkan TSDF reconstruction + compression backend (MoltenVK on Apple) for the volumetric_kit family"
+    "Production-grade Vulkan TSDF reconstruction backend (MoltenVK on Apple) for the volumetric_kit family, on its grid package"
   HOMEPAGE_URL "https://github.com/taojin-6/volumetric_kit_recon"
   LANGUAGES CXX)
 
@@ -55,8 +55,6 @@ option(
   VR_WITH_CUDA
   "Decode video on NVIDIA's hardware, onto the device (requires the CUDA toolkit)"
   OFF)
-option(VR_WITH_ASSIMP
-       "Build the Assimp-backed mesh loader (requires an installed Assimp)" OFF)
 
 # Semicolon list of sanitizers (e.g. "address;undefined"); empty = off. Applied
 # globally -- see cmake/vr_sanitizers.cmake for why.
@@ -66,7 +64,7 @@ set(VR_SANITIZE
 
 if(VR_CAMERA_ONLY)
   foreach(_vr_option VR_BUILD_EXAMPLES VR_WITH_ORBBEC VR_WITH_FFMPEG
-                     VR_WITH_CUDA VR_WITH_ASSIMP)
+                     VR_WITH_CUDA VGRID_WITH_ASSIMP)
     if(${_vr_option})
       message(FATAL_ERROR "VR_CAMERA_ONLY builds the camera tier alone: "
                           "turn ${_vr_option} OFF")
@@ -105,24 +103,27 @@ endif()
 if(VR_WITH_CUDA)
   include(vr_cuda)
 endif()
-if(VR_WITH_ASSIMP)
-  find_package(assimp CONFIG REQUIRED)
-endif()
 
-# Pinned dependencies: volumetric_kit_core, linked PUBLIC, and implementation
-# dependencies that expose private include paths to the tiers below and never
-# become part of their link interface. The oldest core recon's libraries build
-# with is checked in the core that arrives (third_party/, which also checks the
-# config tier the examples and tests need): 0.29.0, whose vulkan/fwd.hpp the
-# public headers include. recon_core exports its GLSL with 0.27.0's
-# vkc_export_glsl, and the tests run on 0.28.0's test support.
+# Pinned dependencies: volumetric_kit_core and grid (grid/, a package of its own
+# in this repository), linked PUBLIC, and implementation dependencies that
+# expose private include paths to the tiers below and never become part of their
+# link interface. The oldest core recon's libraries build with is checked in the
+# core that arrives (third_party/, which also checks the config tier the
+# examples and tests need): 0.29.0, whose vulkan/fwd.hpp the public headers
+# include. recon_core exports its GLSL with 0.27.0's vkc_export_glsl, and the
+# tests run on 0.28.0's test support. The oldest grid is VR_GRID_MIN_VERSION.
 set(VR_CORE_MIN_VERSION 0.29.0)
+set(VR_GRID_MIN_VERSION 0.1.0)
+# Testing is on before third_party/ adds grid, so ctest runs grid's tests, which
+# this build builds with recon's (third_party/), too.
+if(VR_BUILD_TESTS)
+  enable_testing()
+endif()
 add_subdirectory(third_party)
 
 add_subdirectory(src)
 
 if(VR_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
-  enable_testing()
   add_subdirectory(tests)
 endif()
 

@@ -18,14 +18,14 @@
 #include <imgui.h>
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 
 namespace fuse_viewer {
 
 namespace vkc = volumetric_kit::core;
-namespace rmesh = volumetric_kit::recon::mesh;
-namespace vol = volumetric_kit::recon::volume;
+namespace rmesh = volumetric_kit::grid::mesh;
+namespace vol = volumetric_kit::grid::volume;
 
 /// @return @p bytes in MiB (1024^2), the unit gfx's metrics panel prints.
 inline double to_mebibytes(std::uint64_t bytes) {

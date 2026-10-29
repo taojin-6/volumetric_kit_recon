@@ -28,11 +28,11 @@
 #extension GL_KHR_memory_scope_semantics : require
 #include "tsdf_common.glsl"
 // The voxel grid's contract and its colour attribute's format, from the GLSL
-// recon_volume exports. Colour is fused as a running MEAN, and a mean is a
+// grid_volume exports. Colour is fused as a running MEAN, and a mean is a
 // linear operation, so both operands are decoded out of the canonical 8-bit
 // encoding before blending and the result is re-encoded.
-#include "volumetric_kit/recon/volume/shaders/grid_types.glsl"
-#include "volumetric_kit/recon/volume/shaders/voxel_color.glsl"
+#include "volumetric_kit/grid/volume/shaders/grid_types.glsl"
+#include "volumetric_kit/grid/volume/shaders/voxel_color.glsl"
 
 layout(local_size_x = 256) in;
 
@@ -183,7 +183,7 @@ void main() {
   // Voxel world position: node convention (voxel * voxel_size), matching
   // volume/voxel_coords.hpp::voxel_to_world and the prior engine.
   int bs = pc.grid.block_size;
-  ivec3 voxel = block.coord * bs + vrLocalBase(local, bs);
+  ivec3 voxel = block.coord * bs + vgridLocalBase(local, bs);
   vec3 world = vec3(voxel) * pc.grid.voxel_size;
 
   // Project into the depth camera (rigid world -> camera; see project_to_image).
@@ -318,16 +318,16 @@ void main() {
         // First color observation ASSIGNS the sensor's own bytes: copying the
         // codes keeps the stored color bit-exact with what the camera reported
         // instead of resting on the curve round-tripping all 256 codes.
-        color_attr[idx] = vrVoxelColorFromObserved(obs_packed);
+        color_attr[idx] = vgridVoxelColorFromObserved(obs_packed);
       } else {
         // A running mean, so decode both operands to linear working values,
         // average there, and re-encode. Blending the encoded codes directly is
         // wrong by construction and wrong quietly (0.0 and 1.0 would fuse to
         // 0.214 rather than 0.5) -- the 2026-08-02 color-space decision.
-        vec3 prev = vrUnpackSrgbToLinear(c_old);
-        vec3 obs = vrUnpackSrgbToLinear(obs_packed);
+        vec3 prev = vgridUnpackSrgbToLinear(c_old);
+        vec3 obs = vgridUnpackSrgbToLinear(obs_packed);
         vec3 fused = (prev * w_old + obs * w_obs) / max(w_sum, 1e-6);
-        color_attr[idx] = vrPackLinearToSrgb(fused);
+        color_attr[idx] = vgridPackLinearToSrgb(fused);
       }
       // Colour moves the mesh's vertex colours even where the iso-surface has
       // settled, so it counts as a change in its own right.

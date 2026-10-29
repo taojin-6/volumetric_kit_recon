@@ -15,13 +15,13 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/volume/hash_types.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/volume/hash_types.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 
 namespace vr_example {
 
-namespace vr = volumetric_kit::recon;
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
 
 /// The active blocks stamped changed after a tick, and how many blocks those
@@ -39,37 +39,37 @@ struct ChangedBlocks {
 /// @return The counts, or the stamps' readback error; InvalidArgument for a
 ///         grid with no voxels per block.
 inline vkc::Result<ChangedBlocks> changed_since(
-    const vr::volume::VoxelBlockGrid& grid,
-    const std::vector<vr::volume::BlockIndex>& active, std::uint32_t since) {
+    const vgrid::volume::VoxelBlockGrid& grid,
+    const std::vector<vgrid::volume::BlockIndex>& active, std::uint32_t since) {
   const auto vpb = static_cast<std::uint32_t>(grid.grid().voxels_per_block);
   if (vpb == 0) {
     return vkc::Status::invalid_argument(
         "changed_since: voxels_per_block is 0");
   }
-  VKC_ASSIGN(const std::vector<vr::volume::BlockStamp> stamps,
+  VKC_ASSIGN(const std::vector<vgrid::volume::BlockStamp> stamps,
              grid.map().read_block_stamps());
   // 21 bits an axis, through unsigned casts since coordinates go negative.
-  const auto key = [](const vr::Vec3i& c) {
+  const auto key = [](const vgrid::Vec3i& c) {
     constexpr std::uint64_t kMask = (std::uint64_t{1} << 21) - 1;
     return ((std::uint64_t{static_cast<std::uint32_t>(c.x)} & kMask) << 42) |
            ((std::uint64_t{static_cast<std::uint32_t>(c.y)} & kMask) << 21) |
            (std::uint64_t{static_cast<std::uint32_t>(c.z)} & kMask);
   };
   std::unordered_set<std::uint64_t> changed;
-  for (const vr::volume::BlockIndex& b : active) {
+  for (const vgrid::volume::BlockIndex& b : active) {
     const std::size_t slot = static_cast<std::uint32_t>(b.ptr) / vpb;
     if (slot >= stamps.size() ||
-        vr::volume::tick_after(stamps[slot].changed, since)) {
+        vgrid::volume::tick_after(stamps[slot].changed, since)) {
       changed.insert(key(b.coord));
     }
   }
   ChangedBlocks out;
   out.changed = static_cast<std::uint32_t>(changed.size());
-  for (const vr::volume::BlockIndex& b : active) {
+  for (const vgrid::volume::BlockIndex& b : active) {
     bool hit = false;
     for (int d = 0; d < 8 && !hit; ++d) {
       hit = changed.count(
-                key(b.coord + vr::Vec3i(d & 1, (d >> 1) & 1, d >> 2))) != 0;
+                key(b.coord + vgrid::Vec3i(d & 1, (d >> 1) & 1, d >> 2))) != 0;
     }
     out.remesh += hit ? 1u : 0u;
   }
@@ -87,13 +87,13 @@ inline vkc::Result<ChangedBlocks> changed_since(
 class DirtySurvey {
  public:
   /// Starts the first window at @p grid's tick now.
-  explicit DirtySurvey(const vr::volume::VoxelBlockGrid& grid)
+  explicit DirtySurvey(const vgrid::volume::VoxelBlockGrid& grid)
       : since_(grid.map().tick()) {}
 
   /// @brief Close the window: count what changed since it opened, and open
   ///        the next at the grid's tick now.
-  vkc::Status sample(vr::volume::VoxelBlockGrid& grid) {
-    VKC_ASSIGN(const std::vector<vr::volume::BlockIndex> active,
+  vkc::Status sample(vgrid::volume::VoxelBlockGrid& grid) {
+    VKC_ASSIGN(const std::vector<vgrid::volume::BlockIndex> active,
                grid.map().compact_active_blocks());
     VKC_ASSIGN(const ChangedBlocks blocks, changed_since(grid, active, since_));
     since_ = grid.map().tick();
@@ -153,7 +153,7 @@ class DirtySurvey {
 class ExtractTotals {
  public:
   /// Add one extract's timings.
-  void add(const vr::mesh::ExtractTimings& t) {
+  void add(const vgrid::mesh::ExtractTimings& t) {
     ++extracts_;
     total_ms_ += t.total_ms();
     compact_ms_ += t.compact_ms;
@@ -190,7 +190,7 @@ class ExtractTotals {
   std::uint64_t dispatches_ = 0;
   double total_ms_ = 0.0, compact_ms_ = 0.0, arena_ms_ = 0.0;
   double dispatch_ms_ = 0.0, read_ms_ = 0.0;
-  vr::mesh::ExtractTimings last_{};
+  vgrid::mesh::ExtractTimings last_{};
 };
 
 /// @brief Print one extract's phases, its cells (one workgroup an active
@@ -198,7 +198,7 @@ class ExtractTotals {
 ///        a low emit rate is a kernel gathering cells that produce nothing --
 ///        and the arena's fill.
 /// @param voxels_per_block  The grid's, for the cell count.
-inline void print_extract(const vr::mesh::ExtractTimings& t,
+inline void print_extract(const vgrid::mesh::ExtractTimings& t,
                           std::int32_t voxels_per_block) {
   const double cells = static_cast<double>(t.active_blocks) *
                        static_cast<double>(voxels_per_block);

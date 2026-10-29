@@ -11,10 +11,10 @@
 #include "set_log.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
-#include "volumetric_kit/recon/codec/codec_params.hpp"
+#include "volumetric_kit/grid/codec/codec_params.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
 
-namespace codec = volumetric_kit::recon::codec;
+namespace codec = volumetric_kit::grid::codec;
 namespace sender = volumetric_kit::recon::sender;
 namespace vkc = volumetric_kit::core;
 
@@ -24,10 +24,10 @@ namespace {
 // P-frame, took a tail, stamped so, its frame's row kept under the set's
 // index; a set not coded stamped with no type, and no row.
 int sent_sets() {
-  vkc::Result<vr_example::CodecReport> made =
-      vr_example::CodecReport::create("", "", false, 30);
+  vkc::Result<vgrid_example::CodecReport> made =
+      vgrid_example::CodecReport::create("", "", false, 30);
   CHECK(made.ok());
-  vr_example::CodecReport& report = made.value();
+  vgrid_example::CodecReport& report = made.value();
   vr_example::SetLog log(nullptr);
   sender::SetSender::Sent coded;
   coded.fused.redone = true;

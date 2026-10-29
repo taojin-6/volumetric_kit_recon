@@ -1,21 +1,18 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
 
-# Example programs use the production IO tier for image and mesh assets. Replica
-# sequence parsing remains an example utility.
+# Example programs use the production IO tiers for image and mesh assets.
+# Replica sequence parsing remains an example utility. grid's examples
+# (codec_mesh, serve_stream) and the scaffolding and codec helpers recon's reach
+# are grid's (grid/examples).
 
 add_subdirectory(common)
 add_subdirectory(fuse_replica)
 add_subdirectory(codec_replica)
-if(TARGET recon_mesh_io_assimp)
-  add_subdirectory(codec_mesh)
-endif()
 # The live counterpart, when the Orbbec driver is built.
 if(TARGET volumetric_kit::recon_sensor_orbbec)
   add_subdirectory(fuse_orbbec)
 endif()
-# A recording served live, with no camera or GPU.
-add_subdirectory(serve_stream)
 
 # The gfx-linked reconstruction viewer examples (fuse_render headless PNG +
 # fuse_viewer live window). OFF by default: opting in is the ONLY place the
@@ -32,35 +29,20 @@ if(VR_BUILD_VIEWER)
   add_subdirectory(viewer)
 endif()
 
-# Exercise each real executable's startup contract without creating resources.
+# Exercise each real executable's startup contract without creating resources,
+# with the check grid's examples run (grid/tests/example_config_entry.cmake).
 if(VR_BUILD_TESTS)
-  foreach(
-    _vr_example
-    fuse_replica
-    codec_replica
-    codec_mesh
-    fuse_orbbec
-    fuse_render
-    fuse_viewer
-    rig_viewer)
+  foreach(_vr_example fuse_replica codec_replica fuse_orbbec fuse_render
+                      fuse_viewer rig_viewer)
     if(TARGET ${_vr_example})
       add_test(
         NAME recon_${_vr_example}_config_entry
         COMMAND
           ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:${_vr_example}>
           -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/config-entry/${_vr_example} -P
-          ${PROJECT_SOURCE_DIR}/tests/example_config_entry.cmake)
+          ${volumetric_kit_grid_SOURCE_DIR}/tests/example_config_entry.cmake)
     endif()
   endforeach()
-  # serve_stream's arguments: usage and exit 2 for bad ones, 1 for a missing
-  # file, before it listens; it is never run to serve, which would listen on
-  # every interface.
-  add_test(
-    NAME recon_serve_stream_args
-    COMMAND
-      ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:serve_stream>
-      -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/serve-stream-args -P
-      ${PROJECT_SOURCE_DIR}/tests/example_serve_stream_args.cmake)
   # fuse_replica on a device: two frames of a wall, each meshed on the device,
   # then the PLY.
   add_test(
@@ -87,17 +69,4 @@ if(VR_BUILD_TESTS)
   set_tests_properties(
     recon_codec_replica_run PROPERTIES SKIP_REGULAR_EXPRESSION
                                        "skipping: no Vulkan device")
-  # codec_mesh's order on a device: an existing stream refused before any frame
-  # is converted or written, then a two-frame run.
-  if(TARGET codec_mesh)
-    add_test(
-      NAME recon_codec_mesh_run
-      COMMAND
-        ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:codec_mesh>
-        -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codec-mesh-run -P
-        ${PROJECT_SOURCE_DIR}/tests/example_codec_mesh_run.cmake)
-    set_tests_properties(
-      recon_codec_mesh_run PROPERTIES SKIP_REGULAR_EXPRESSION
-                                      "skipping: no Vulkan device")
-  endif()
 endif()

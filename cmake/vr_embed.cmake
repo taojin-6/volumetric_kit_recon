@@ -9,9 +9,9 @@
 # another is given: hash.comp embeds as hash_comp.spv.hpp, declaring
 # `vr_hash_comp_spv[]` and `vr_hash_comp_spv_size`. The shaders include through
 # recon's src/, so a cross-tier include reads like its C++ header path
-# ("volumetric_kit/recon/volume/shaders/hash_common.glsl"); with
-# INCLUDE_TARGETS, through those targets' exported GLSL alone instead, as a
-# project that fetches recon does.
+# ("volumetric_kit/recon/tsdf/shaders/tsdf_common.glsl"); with INCLUDE_TARGETS,
+# through those targets' exported GLSL alone instead, as a project that fetches
+# recon does.
 function(vr_embed_shaders target)
   cmake_parse_arguments(ARG "" "SYMBOL_PREFIX" "INCLUDE_TARGETS;SHADERS"
                         ${ARGN})

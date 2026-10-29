@@ -4,9 +4,9 @@
 # --- recon_texture: Tier 5 --------------------------------------------------
 # Projective texturing: fills a mesh's per-vertex uv0 with a posed camera's
 # image coordinates for the triangles it sees unoccluded (per-vertex color
-# fallback elsewhere), via a GLSL compute kernel. Depends on recon_mesh (the
-# Mesh it textures) and recon_volume (DepthCameraParams + the projection ABI),
-# per the strict left-to-right tier rule.
+# fallback elsewhere), via a GLSL compute kernel. Depends on grid_mesh (the Mesh
+# it textures) and recon_core (DepthCameraParams + the projection ABI), per the
+# strict left-to-right tier rule.
 include(GenerateExportHeader)
 
 set(_vr_texture_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
@@ -40,10 +40,10 @@ endif()
 
 target_compile_features(recon_texture PUBLIC cxx_std_17)
 
-# PUBLIC: the texture public header exposes mesh types (Mesh/Vertex) + volume
-# types (DepthCameraParams) + core types (Result), so consumers compile against
-# recon_mesh + recon_volume (and, transitively, recon_core) too.
-target_link_libraries(recon_texture PUBLIC recon_mesh recon_volume)
+# PUBLIC: the texture public header exposes grid's mesh types (Mesh/Vertex) +
+# recon_core's (DepthCameraParams) + core types (Result), so consumers compile
+# against grid_mesh and recon_core too.
+target_link_libraries(recon_texture PUBLIC recon_core grid_mesh)
 
 target_include_directories(
   recon_texture PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"

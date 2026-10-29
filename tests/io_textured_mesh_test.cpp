@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// io::load_textured_mesh on a procedural unit cube, OBJ + MTL + PNG written
-// here, its material library and diffuse map in a directory of their own: the
-// coordinates each corner names, one vertex per distinct position and UV, the
-// triangles of load_mesh in its order, and the map resolved beside the library
-// and decoded by load_color_packed. With no texture coordinates it is
+// mesh_io::load_textured_mesh on a procedural unit cube, OBJ + MTL + PNG
+// written here, its material library and diffuse map in a directory of their
+// own: the coordinates each corner names, one vertex per distinct position and
+// UV, the triangles of load_mesh in its order, and the map resolved beside the
+// library and decoded by load_color_packed. With no texture coordinates it is
 // NotFound; an asset load_mesh refuses gets load_mesh's error; each of its
 // own refusals; and map paths that Assimp 5 and 6 report differently.
 
@@ -22,12 +22,13 @@
 
 #include "volumetric_kit/core/testing/scratch_dir.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
+#include "volumetric_kit/grid/mesh_io/mesh_io.hpp"
+#include "volumetric_kit/grid/mesh_io/textured_mesh.hpp"
 #include "volumetric_kit/recon/io/image_io.hpp"
-#include "volumetric_kit/recon/io/mesh_io.hpp"
-#include "volumetric_kit/recon/io/textured_mesh.hpp"
 
 namespace vkc = volumetric_kit::core;
 namespace io = volumetric_kit::recon::io;
+namespace mesh_io = volumetric_kit::grid::mesh_io;
 namespace fs = std::filesystem;
 using Code = vkc::Status::Code;
 
@@ -132,14 +133,15 @@ int main() {
         cube_obj(faces, true, "mtllib materials/cube.mtl\nusemtl cube\n"));
 
   // Positions join across the seams exactly as before.
-  const vkc::Result<io::TriangleMesh> plain = io::load_mesh(cube);
+  const vkc::Result<mesh_io::TriangleMesh> plain = mesh_io::load_mesh(cube);
   CHECK(plain.ok());
   CHECK(plain->positions.size() == 8);
   CHECK(plain->indices.size() == 36);
 
-  const vkc::Result<io::TexturedMesh> textured = io::load_textured_mesh(cube);
+  const vkc::Result<mesh_io::TexturedMesh> textured =
+      mesh_io::load_textured_mesh(cube);
   CHECK(textured.ok());
-  const io::TriangleMesh& geometry = textured->geometry;
+  const mesh_io::TriangleMesh& geometry = textured->geometry;
   std::set<std::pair<int, std::array<float, 2>>> distinct;
   for (const Face& face : faces) {
     for (const Corner& c : face) distinct.insert({c.position, {c.u, c.v}});
@@ -155,7 +157,8 @@ int main() {
   }
   // Each corner's coordinates are those its face names: the face is the one
   // holding all three of the triangle's positions.
-  const auto corner_of = [](const io::TriangleMesh& mesh, std::uint32_t index) {
+  const auto corner_of = [](const mesh_io::TriangleMesh& mesh,
+                            std::uint32_t index) {
     const auto& p = mesh.positions[index];
     return int(p.x) + 2 * int(p.y) + 4 * int(p.z);
   };
@@ -190,7 +193,8 @@ int main() {
         "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
         "vt 0 0\nvt 1 0\nvt 0 1\nvt 1 1\nvt 1 0.5\nvt -0 1\n"
         "f 1/1 2/2 3/3\nf 2/5 4/4 3/6\n");
-  const vkc::Result<io::TexturedMesh> seamed = io::load_textured_mesh(seams);
+  const vkc::Result<mesh_io::TexturedMesh> seamed =
+      mesh_io::load_textured_mesh(seams);
   CHECK(seamed.ok());
   CHECK(seamed->geometry.positions.size() == 5);
 
@@ -205,14 +209,16 @@ int main() {
   // NotFound.
   const std::string bare = (dir / "bare.obj").string();
   write(bare, cube_obj(faces, true, ""));
-  const vkc::Result<io::TexturedMesh> unmapped = io::load_textured_mesh(bare);
+  const vkc::Result<mesh_io::TexturedMesh> unmapped =
+      mesh_io::load_textured_mesh(bare);
   CHECK(unmapped.ok());
   CHECK(unmapped->diffuse_texture.empty());
   CHECK(unmapped->geometry.positions.size() == 18);
   const std::string no_uvs = (dir / "no_uvs.obj").string();
   write(no_uvs, cube_obj(faces, false, ""));
-  CHECK(io::load_mesh(no_uvs).ok());
-  CHECK(io::load_textured_mesh(no_uvs).status().domain() == Code::NotFound);
+  CHECK(mesh_io::load_mesh(no_uvs).ok());
+  CHECK(mesh_io::load_textured_mesh(no_uvs).status().domain() ==
+        Code::NotFound);
 
   // load_mesh's error for an asset it refuses, here none with UVs.
   const std::string missing = (dir / "missing.obj").string();
@@ -230,9 +236,9 @@ int main() {
                  {lines, true, Code::Unsupported},
                  {empty, false, Code::Ok}};
   for (const auto& r : refused) {
-    const vkc::Status status = io::load_mesh(r.path).status();
+    const vkc::Status status = mesh_io::load_mesh(r.path).status();
     CHECK(!r.code_known || status.domain() == r.code);
-    CHECK(same_error(io::load_textured_mesh(r.path).status(), status));
+    CHECK(same_error(mesh_io::load_textured_mesh(r.path).status(), status));
   }
 
   // Its own refusals, each for an asset load_mesh accepts.
@@ -272,8 +278,8 @@ int main() {
               "mtllib two.mtl\nmtllib other/more.mtl\nusemtl a\n", ""),
        Code::Unsupported, "more than one directory"}};
   for (const auto& r : own) {
-    CHECK(io::load_mesh(r.path).ok());
-    const vkc::Status status = io::load_textured_mesh(r.path).status();
+    CHECK(mesh_io::load_mesh(r.path).ok());
+    const vkc::Status status = mesh_io::load_textured_mesh(r.path).status();
     CHECK(status.domain() == r.code);
     CHECK(status.message().find(r.named) != std::string::npos);
   }
@@ -306,7 +312,8 @@ int main() {
   const fs::path before = fs::current_path();
   fs::current_path(dir);
   for (const auto& m : maps) {
-    const vkc::Result<io::TexturedMesh> mesh = io::load_textured_mesh(m.path);
+    const vkc::Result<mesh_io::TexturedMesh> mesh =
+        mesh_io::load_textured_mesh(m.path);
     CHECK(mesh.ok());
     CHECK(fs::path(mesh->diffuse_texture) == m.map);
   }

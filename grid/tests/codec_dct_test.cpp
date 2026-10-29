@@ -1,0 +1,1572 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+// GPU test for the codec's DctTransform, its output read back and its input
+// uploaded through the CPU oracle's ends (codec_oracle_device.hpp): the
+// forward kernel against a double-precision host reference of the same fill
+// and transform, the reconstruction bounds an orthonormal transform
+// guarantees, the observed mask, a partially observed block, a cut set,
+// batching, and every refusal. Runs on the real driver (MoltenVK / NVIDIA);
+// exits 0 (skip) where no device is present.
+//
+// All block content is written in NORMALIZED units s in [-1, 1] (tsdf =
+// s * trunc_dist), the units the transform and the steps are defined in.
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "codec_oracle_device.hpp"
+#include "codec_oracle_encode.hpp"
+#include "dct_tables.hpp"
+#include "dct_transform.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
+#include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/grid/base/dispatch.hpp"
+#include "volumetric_kit/grid/codec/codec_params.hpp"
+#include "volumetric_kit/grid/testing/codec_fixture.hpp"
+#include "volumetric_kit/grid/testing/device_blocks.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
+#include "volumetric_kit/grid/volume/hash_types.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_grid.hpp"
+
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/grid/base/device_requirements.hpp"
+
+namespace vgrid = volumetric_kit::grid;
+namespace vkc = volumetric_kit::core;
+namespace vol = volumetric_kit::grid::volume;
+namespace codec = volumetric_kit::grid::codec;
+namespace oracle = codec_oracle;
+using codec::detail::DctTransform;
+using codec_oracle::DctBlocks;
+
+namespace {
+
+constexpr float kTrunc = 0.04f;
+constexpr std::uint32_t kVpb = codec::kVoxelsPerBlock;
+using codec::detail::kEdge;
+using codec::detail::kStrideY;
+using codec::detail::kStrideZ;
+
+// A voxel's coordinates inside its block, the inverse of voxel_index.
+std::uint32_t vx(std::uint32_t v) { return v % kEdge; }
+std::uint32_t vy(std::uint32_t v) { return (v / kStrideY) % kEdge; }
+std::uint32_t vz(std::uint32_t v) { return v / kStrideZ; }
+using Cube = std::array<double, kVpb>;
+using Observed = std::array<bool, kVpb>;
+
+vol::VoxelGridParams small_grid(std::int32_t block_size = codec::kBlockSize) {
+  vol::VoxelGridParams gp{};
+  gp.voxel_size = 0.005f;
+  gp.block_size = block_size;
+  gp.voxels_per_block = block_size * block_size * block_size;
+  gp.trunc_dist = kTrunc;
+  gp.bucket_size = 8;
+  gp.num_buckets = 256;
+  gp.num_blocks = gp.num_buckets * gp.bucket_size;
+  gp.max_chain = 128;
+  return gp;
+}
+
+vkc::Result<vol::VoxelBlockGrid> make_grid(
+    vkc::Device& device, vkc::Allocator& allocator,
+    std::int32_t block_size = codec::kBlockSize, bool with_weight = true) {
+  const vol::AttributeSpec attrs[] = {{vol::kTsdfAttribute, sizeof(float)},
+                                      {vol::kWeightAttribute, sizeof(float)}};
+  return vol::VoxelBlockGrid::create(device, allocator, small_grid(block_size),
+                                     attrs, with_weight ? 2 : 1);
+}
+
+// Allocate blocks (i, 0, 0) for i in [0, count) and return the compacted set
+// sorted by x, so entry i is block i whatever order the compaction produced.
+vkc::Result<std::vector<vol::BlockIndex>> allocate_row(
+    const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& grid, int count) {
+  std::vector<vol::BlockIndex> coords(static_cast<std::size_t>(count));
+  for (int i = 0; i < count; ++i) {
+    coords[static_cast<std::size_t>(i)].coord = vgrid::Vec3i(i, 0, 0);
+  }
+  VKC_ASSIGN(std::uint32_t failed,
+             vgrid_test::allocate_blocks(ctx, grid.map(), coords));
+  if (failed != 0) {
+    return vkc::Status::invalid_argument("allocate_row: allocation failed");
+  }
+  VKC_ASSIGN(std::vector<vol::BlockIndex> active,
+             grid.map().compact_active_blocks());
+  std::sort(active.begin(), active.end(),
+            [](const vol::BlockIndex& a, const vol::BlockIndex& b) {
+              return a.coord.x < b.coord.x;
+            });
+  return active;
+}
+
+// A copy of an attribute, and back; the arrays are device-local, and both
+// abort on a device error.
+std::vector<float> attr(const vkc::test::Gpu& ctx,
+                        const vol::VoxelBlockGrid& grid,
+                        std::string_view name) {
+  return vgrid_test::read_attribute<float>(ctx.device, ctx.allocator, grid,
+                                           name)
+      .value();
+}
+
+void put(const vkc::test::Gpu& ctx, const vol::VoxelBlockGrid& grid,
+         std::string_view name, const std::vector<float>& data) {
+  if (!vgrid_test::write_attribute(ctx.device, ctx.allocator, grid, name, data)
+           .ok()) {
+    std::abort();
+  }
+}
+
+// Write a block's content: tsdf = s * trunc, weight = w (per voxel).
+void write_block(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& grid,
+                 const vol::BlockIndex& b, const Cube& s,
+                 const std::function<float(std::uint32_t)>& w) {
+  std::vector<float> tsdf = attr(ctx, grid, vol::kTsdfAttribute);
+  std::vector<float> weight = attr(ctx, grid, vol::kWeightAttribute);
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    tsdf[std::uint32_t(b.ptr) + v] = static_cast<float>(s[v]) * kTrunc;
+    weight[std::uint32_t(b.ptr) + v] = w(v);
+  }
+  put(ctx, grid, vol::kTsdfAttribute, tsdf);
+  put(ctx, grid, vol::kWeightAttribute, weight);
+}
+
+float observed(std::uint32_t) { return 2.0f; }
+
+// Read a block back in normalized units.
+Cube read_block(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& grid,
+                const vol::BlockIndex& b) {
+  const std::vector<float> tsdf = attr(ctx, grid, vol::kTsdfAttribute);
+  Cube s{};
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    s[v] = double(tsdf[std::uint32_t(b.ptr) + v]) / double(kTrunc);
+  }
+  return s;
+}
+
+// --- Block content, in normalized units. -----------------------------------
+
+Cube random_cube(std::uint32_t seed) {
+  Cube s{};
+  std::uint32_t state = seed * 2654435761u + 1u;
+  for (double& x : s) {
+    state = state * 1664525u + 1013904223u;
+    x = double(state >> 8) / double(1u << 24) * 2.0 - 1.0;  // [-1, 1)
+  }
+  return s;
+}
+
+// A tilted plane: smooth, most energy in the lowest frequencies, and inside
+// +-0.6, so no reconstruction below rings past the decoder's +-1 clamp.
+Cube plane_cube() {
+  Cube s{};
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    const double x = vx(v), z = vz(v);
+    s[v] = (z - 3.5) * 0.12 + (x - 3.5) * 0.05;
+  }
+  return s;
+}
+
+Cube sphere_cube() {
+  Cube s{};
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    const double c = (kEdge - 1) / 2.0;  // the block's centre
+    const double x = vx(v) - c, y = vy(v) - c, z = vz(v) - c;
+    s[v] =
+        std::clamp((std::sqrt(x * x + y * y + z * z) - 2.5) * 0.3, -1.0, 1.0);
+  }
+  return s;
+}
+
+Cube constant_cube(double c) {
+  Cube s{};
+  s.fill(c);
+  return s;
+}
+
+// --- The double-precision reference: the same separable transform. ---------
+
+Cube reference_dct(const Cube& in, bool inverse) {
+  const std::array<double, codec::detail::kBasisSize> b =
+      codec::detail::dct_basis<double>();
+  Cube a = in;
+  Cube out{};
+  const std::uint32_t strides[3] = {1, kStrideY, kStrideZ};
+  for (std::uint32_t stride : strides) {
+    for (std::uint32_t v = 0; v < kVpb; ++v) {
+      const std::uint32_t pos = (v / stride) % kEdge;  // index on this axis
+      const std::uint32_t base = v - pos * stride;
+      double acc = 0.0;
+      for (std::uint32_t i = 0; i < kEdge; ++i) {
+        acc += (inverse ? b[i * kEdge + pos] : b[pos * kEdge + i]) *
+               a[base + i * stride];
+      }
+      out[v] = acc;
+    }
+    a = out;
+  }
+  return a;
+}
+
+// The forward kernel's fill, in double: each unobserved voxel takes the value
+// of the nearest voxel known when its pass began, along x, then y, then z, the
+// lower index on a tie; a block with nothing observed stays 0. An unobserved
+// voxel's content is never read.
+Cube reference_fill(const Cube& in, const Observed& observed) {
+  Cube s{};
+  Observed known = observed;
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    s[v] = observed[v] ? in[v] : 0.0;
+  }
+  const std::uint32_t strides[3] = {1, kStrideY, kStrideZ};
+  for (std::uint32_t stride : strides) {
+    const Cube before = s;
+    const Observed was = known;
+    for (std::uint32_t v = 0; v < kVpb; ++v) {
+      if (was[v]) continue;
+      const int pos = int((v / stride) % kEdge);
+      const std::uint32_t base = v - std::uint32_t(pos) * stride;
+      for (int d = 1; d < int(kEdge); ++d) {
+        const int lo = pos - d, hi = pos + d;
+        if (lo >= 0 && was[base + std::uint32_t(lo) * stride]) {
+          s[v] = before[base + std::uint32_t(lo) * stride];
+          known[v] = true;
+          break;
+        }
+        if (hi < int(kEdge) && was[base + std::uint32_t(hi) * stride]) {
+          s[v] = before[base + std::uint32_t(hi) * stride];
+          known[v] = true;
+          break;
+        }
+      }
+    }
+  }
+  return s;
+}
+
+// What the kernel pair reconstructs from @p in, in double: transform, keep the
+// first K in zigzag order quantized half-to-even, inverse, clamp to +-1.
+Cube reference_round_trip(const Cube& in, const codec::CodecParams& params) {
+  const Cube coeffs = reference_dct(in, false);
+  const auto zigzag = codec::detail::zigzag_order();
+  Cube kept{};
+  for (std::uint32_t j = 0; j < params.coefficient_count; ++j) {
+    const double step =
+        params.quantization_scale * params.quantization_weights[zigzag[j]];
+    kept[zigzag[j]] = std::nearbyint(coeffs[zigzag[j]] / step) * step;
+  }
+  Cube out = reference_dct(kept, true);
+  for (double& x : out) {
+    x = std::clamp(x, -1.0, 1.0);
+  }
+  return out;
+}
+
+double rms_diff(const Cube& a, const Cube& b) {
+  double sum = 0.0;
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    sum += (a[v] - b[v]) * (a[v] - b[v]);
+  }
+  return std::sqrt(sum / kVpb);
+}
+
+// RMS over the observed voxels only: the ones the decoder writes back.
+double rms_observed(const Cube& a, const Cube& b, const Observed& observed) {
+  double sum = 0.0;
+  int n = 0;
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    if (observed[v]) {
+      sum += (a[v] - b[v]) * (a[v] - b[v]);
+      ++n;
+    }
+  }
+  return std::sqrt(sum / n);
+}
+
+// Check a forward output against the reference: every quantized value is
+// the reference's rounded to nearest-even, except where the reference sits so
+// close to a half-way point that float error may round it the other way --
+// and even there it is one of the two neighbours. Returns non-zero on failure;
+// counts the exact and near-half comparisons.
+int check_against_reference(const DctBlocks& out, const Cube* content,
+                            std::size_t count, int& exact, int& near_half) {
+  const auto zigzag = codec::detail::zigzag_order();
+  const codec::CodecParams& params = out.params;
+  const std::vector<std::int16_t>& coeffs = out.coefficients;
+  const std::size_t k = params.coefficient_count;
+  CHECK(coeffs.size() == count * k);
+  for (std::size_t i = 0; i < count; ++i) {
+    const Cube ref = reference_dct(content[i], false);
+    for (std::uint32_t j = 0; j < k; ++j) {
+      const double step =
+          params.quantization_scale * params.quantization_weights[zigzag[j]];
+      const double r = ref[zigzag[j]] / step;
+      const double q = coeffs[i * k + j];
+      CHECK(std::fabs(q - r) <= 0.5 + 0.05);
+      const double frac = r - std::floor(r);
+      if (std::fabs(frac - 0.5) > 0.05) {
+        CHECK(q == std::nearbyint(r));  // default rounding: half-to-even
+        ++exact;
+      } else {
+        ++near_half;
+      }
+    }
+  }
+  return 0;
+}
+
+// --- Cases. ------------------------------------------------------------------
+
+// The kernel computes the reference's coefficients (see
+// check_against_reference), over content from white noise to a constant.
+int forward_matches_reference_case(vkc::Device& device,
+                                   vkc::Allocator& allocator, DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 4);
+  CHECK(active.ok() && active.value().size() == 4);
+  const std::vector<vol::BlockIndex>& blocks = active.value();
+  const Cube content[4] = {random_cube(1), plane_cube(), sphere_cube(),
+                           constant_cube(0.3)};
+  for (int i = 0; i < 4; ++i) {
+    write_block(ctx, grid, blocks[std::size_t(i)], content[i], observed);
+  }
+
+  codec::CodecParams params;
+  params.coefficient_count = kVpb;
+  params.quantization_scale = 1e-3f;
+  for (std::size_t i = 0; i < params.quantization_weights.size(); ++i) {
+    params.quantization_weights[i] = 1.0f + 0.25f * float((i * 37) % 8);
+  }
+  DctBlocks out;
+  CHECK(oracle::forward(ctx, t, grid, blocks, params, out).ok());
+  CHECK(out.coefficients.size() == 4u * kVpb);
+  CHECK(out.masks.size() == 4u * codec::kMaskWordsPerBlock);
+  // The params and the band travel with the coefficients.
+  CHECK(out.params.coefficient_count == params.coefficient_count);
+  CHECK(out.params.quantization_scale == params.quantization_scale);
+  CHECK(out.params.quantization_weights == params.quantization_weights);
+  CHECK(out.trunc_dist == kTrunc);
+
+  int exact = 0;
+  int near_half = 0;
+  CHECK(check_against_reference(out, content, 4, exact, near_half) == 0);
+  // The exclusion is a sliver, not a loophole.
+  CHECK(exact > 20 * near_half);
+  // Every voxel was observed.
+  for (std::uint32_t m : out.masks) {
+    CHECK(m == 0xFFFFFFFFu);
+  }
+
+  // An odd K pads each entry's last word on the device: the pad is dropped
+  // from every row on the way out and put back on the way in, whatever the
+  // row, so each block still matches the reference both ways.
+  params.coefficient_count = 35;
+  CHECK(oracle::forward(ctx, t, grid, blocks, params, out).ok());
+  CHECK(out.coefficients.size() == 4u * 35u);
+  CHECK(check_against_reference(out, content, 4, exact, near_half) == 0);
+  CHECK(oracle::inverse(ctx, t, grid, blocks, out).ok());
+  for (int i = 0; i < 4; ++i) {
+    const Cube want = reference_round_trip(content[i], params);
+    CHECK(rms_diff(read_block(ctx, grid, blocks[std::size_t(i)]), want) <=
+          1e-3);
+  }
+  return 0;
+}
+
+// Independently placed x/y/z basis coefficients make canonical indexing
+// observable: zigzag begins [0, 64, 8, 1], not [0, 1, 2, 3]. Reuse one live
+// transform with A, B, then A again to catch a stale per-call table upload.
+int per_basis_sequence_case(vkc::Device& device, vkc::Allocator& allocator,
+                            DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 1);
+  CHECK(active.ok());
+  const vol::BlockIndex block = active.value()[0];
+  const std::vector<vol::BlockIndex>& list = active.value();
+  Cube spectral{};
+  spectral[0] = 0.47;
+  spectral[1] = 1.37;
+  spectral[8] = 2.19;
+  spectral[64] = -0.83;
+  const Cube content = reference_dct(spectral, true);
+  codec::CodecParams a;
+  a.coefficient_count = 4;
+  a.quantization_scale = 0.1f;
+  a.quantization_weights[0] = 2.0f;
+  a.quantization_weights[1] = 0.5f;
+  a.quantization_weights[8] = 2.0f;
+  a.quantization_weights[64] = 4.0f;
+  codec::CodecParams b = a;
+  b.quantization_scale = 0.15f;
+  std::swap(b.quantization_weights[1], b.quantization_weights[64]);
+  // A subnormal factor is refused even when its product is a normal step: a
+  // denormals-as-zero host or device would read it as 0.
+  codec::CodecParams tiny_scale = a;
+  tiny_scale.quantization_scale = 1e-40f;
+  tiny_scale.quantization_weights.fill(1e38f);
+  DctBlocks refused;
+  CHECK(!oracle::forward(ctx, t, grid, list, tiny_scale, refused).ok());
+  const std::uint32_t modes[] = {0, 64, 8, 1};
+  std::vector<std::int16_t> first;
+  for (const codec::CodecParams* params : {&a, &b, &a}) {
+    write_block(ctx, grid, block, content, observed);
+    DctBlocks out;
+    CHECK(oracle::forward(ctx, t, grid, list, *params, out).ok());
+    CHECK(out.params.quantization_weights == params->quantization_weights);
+    Cube reconstructed{};
+    for (std::size_t j = 0; j < 4; ++j) {
+      const std::uint32_t v = modes[j];
+      const double step =
+          params->quantization_scale * params->quantization_weights[v];
+      const double q = std::nearbyint(spectral[v] / step);
+      CHECK(out.coefficients[j] == q);
+      reconstructed[v] = q * step;
+    }
+    if (first.empty()) first = out.coefficients;
+    if (params == &a) CHECK(first == out.coefficients);
+    if (params == &b) CHECK(first != out.coefficients);
+    CHECK(oracle::inverse(ctx, t, grid, list, out).ok());
+    CHECK(rms_diff(read_block(ctx, grid, block),
+                   reference_dct(reconstructed, true)) < 1e-6);
+  }
+  return 0;
+}
+
+// Orthonormal, so the reconstruction error's norm IS the quantization error's
+// norm: with all 512 coefficients kept, each off by at most half its step,
+// a block's RMS error is at most sqrt(sum_j (step[j]/2)^2 / 512).
+int round_trip_bound_case(vkc::Device& device, vkc::Allocator& allocator,
+                          DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 4);
+  CHECK(active.ok());
+  const std::vector<vol::BlockIndex>& blocks = active.value();
+  Cube content[4];
+  for (int i = 0; i < 4; ++i) {
+    content[i] = random_cube(100u + std::uint32_t(i));
+    write_block(ctx, grid, blocks[std::size_t(i)], content[i], observed);
+  }
+
+  codec::CodecParams params;
+  params.coefficient_count = kVpb;
+  params.quantization_scale = 0.01f;
+  for (std::size_t i = 0; i < params.quantization_weights.size(); ++i) {
+    params.quantization_weights[i] = 1.0f + 0.125f * float(i % 9);
+  }
+  DctBlocks out;
+  CHECK(oracle::forward(ctx, t, grid, blocks, params, out).ok());
+  CHECK(oracle::inverse(ctx, t, grid, blocks, out).ok());
+
+  double squared_steps = 0.0;
+  for (float weight : params.quantization_weights) {
+    const double step = params.quantization_scale * weight;
+    squared_steps += step * step;
+  }
+  const double bound = std::sqrt(squared_steps / (4.0 * kVpb)) + 1e-5;
+  const std::vector<float> weight = attr(ctx, grid, vol::kWeightAttribute);
+  for (int i = 0; i < 4; ++i) {
+    const double err =
+        rms_diff(read_block(ctx, grid, blocks[std::size_t(i)]), content[i]);
+    CHECK(err <= bound);
+    CHECK(err > 0.0);  // it did quantize
+    for (std::uint32_t v = 0; v < kVpb; ++v) {
+      CHECK(weight[std::uint32_t(blocks[std::size_t(i)].ptr) + v] ==
+            codec::detail::kDecodedWeight);
+    }
+  }
+  return 0;
+}
+
+// Keeping only the first K coefficients loses exactly the energy of the rest,
+// so the kernel pair's RMS error at each K must match what the reference's
+// coefficients predict -- which is what pins both kernels to one zigzag order
+// and one prefix. Steps at the floor keep quantization out of the picture.
+int truncation_matches_reference_case(vkc::Device& device,
+                                      vkc::Allocator& allocator,
+                                      DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 1);
+  CHECK(active.ok());
+  const vol::BlockIndex block = active.value()[0];
+  const Cube content = plane_cube();
+  const Cube ref = reference_dct(content, false);
+  const auto zigzag = codec::detail::zigzag_order();
+
+  // The cumulative sizes of the zigzag's total-frequency bands, and all 512.
+  const std::uint32_t ks[] = {1, 4, 10, 20, 35, 84, kVpb};
+  double last = 1e9;
+  for (std::uint32_t k : ks) {
+    write_block(ctx, grid, block, content, observed);
+    codec::CodecParams params;
+    params.coefficient_count = k;
+    params.quantization_scale = codec::kMinStep;
+    DctBlocks out;
+    const std::vector<vol::BlockIndex>& list = active.value();
+    CHECK(oracle::forward(ctx, t, grid, list, params, out).ok());
+    CHECK(out.coefficients.size() == k);
+    CHECK(oracle::inverse(ctx, t, grid, list, out).ok());
+
+    double dropped = 0.0;
+    for (std::uint32_t j = k; j < kVpb; ++j) {
+      dropped += ref[zigzag[j]] * ref[zigzag[j]];
+    }
+    const double predicted = std::sqrt(dropped / kVpb);
+    const double err = rms_diff(read_block(ctx, grid, block), content);
+    CHECK(std::fabs(err - predicted) <= 1e-3);
+    CHECK(err <= last + 1e-4);  // more coefficients never hurt
+    last = err;
+  }
+  CHECK(last <= 1e-3);  // K = kVpb is near-lossless
+  return 0;
+}
+
+// The mask marks exactly weight >= kObservedWeight, the coefficients are those
+// of the reference fill over it -- nothing at all for a block with no observed
+// voxel -- and the inverse writes an observed voxel as decoded and an
+// unobserved one as a fresh block holds it.
+int mask_case(vkc::Device& device, vkc::Allocator& allocator, DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 2);
+  CHECK(active.ok());
+  const std::vector<vol::BlockIndex>& blocks = active.value();
+  // Block 0 cycles through: none, below the threshold, at it, well above.
+  // Block 1 is entirely unobserved -- a mask of all zeros.
+  const float cycle[4] = {0.0f, 5e-7f, vol::kObservedWeight, 3.0f};
+  write_block(ctx, grid, blocks[0], sphere_cube(),
+              [&](std::uint32_t v) { return cycle[v % 4]; });
+  write_block(ctx, grid, blocks[1], random_cube(7),
+              [](std::uint32_t) { return 0.0f; });
+
+  codec::CodecParams params;
+  DctBlocks out;
+  CHECK(oracle::forward(ctx, t, grid, blocks, params, out).ok());
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    const bool bit =
+        ((out.masks[v / codec::kMaskWordBits] >> (v % codec::kMaskWordBits)) &
+         1u) != 0u;
+    CHECK(bit == (v % 4 >= 2));
+  }
+  for (std::uint32_t w = 0; w < codec::kMaskWordsPerBlock; ++w) {
+    CHECK(out.masks[codec::kMaskWordsPerBlock + w] == 0u);
+  }
+  Observed cycled{};
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    cycled[v] = v % 4 >= 2;
+  }
+  const Cube filled[2] = {reference_fill(sphere_cube(), cycled),
+                          reference_fill(random_cube(7), Observed{})};
+  int exact = 0;
+  int near_half = 0;
+  CHECK(check_against_reference(out, filled, 2, exact, near_half) == 0);
+  for (std::uint32_t j = 0; j < params.coefficient_count; ++j) {
+    CHECK(out.coefficients[params.coefficient_count + j] == 0);
+  }
+
+  // Poison both attributes so the inverse must write every voxel.
+  std::vector<float> tsdf = attr(ctx, grid, vol::kTsdfAttribute);
+  std::vector<float> weight = attr(ctx, grid, vol::kWeightAttribute);
+  for (const vol::BlockIndex& b : blocks) {
+    for (std::uint32_t v = 0; v < kVpb; ++v) {
+      tsdf[std::uint32_t(b.ptr) + v] = 123.0f;
+      weight[std::uint32_t(b.ptr) + v] = 123.0f;
+    }
+  }
+  put(ctx, grid, vol::kTsdfAttribute, tsdf);
+  put(ctx, grid, vol::kWeightAttribute, weight);
+  CHECK(oracle::inverse(ctx, t, grid, blocks, out).ok());
+  tsdf = attr(ctx, grid, vol::kTsdfAttribute);
+  weight = attr(ctx, grid, vol::kWeightAttribute);
+  for (std::size_t i = 0; i < 2; ++i) {
+    const std::uint32_t base = std::uint32_t(blocks[i].ptr);
+    for (std::uint32_t v = 0; v < kVpb; ++v) {
+      const bool obs = i == 0 && v % 4 >= 2;
+      if (obs) {
+        CHECK(weight[base + v] == codec::detail::kDecodedWeight);
+        CHECK(std::fabs(tsdf[base + v]) <= kTrunc);
+      } else {
+        CHECK(weight[base + v] == 0.0f);
+        CHECK(tsdf[base + v] == 0.0f);
+      }
+    }
+  }
+  return 0;
+}
+
+// A constant block is DC-only, and at the floor step a block saturated at +1
+// lands on the clamp's edge without being clamped from further out.
+int constant_case(vkc::Device& device, vkc::Allocator& allocator,
+                  DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 2);
+  CHECK(active.ok());
+  const std::vector<vol::BlockIndex>& blocks = active.value();
+  write_block(ctx, grid, blocks[0], constant_cube(0.3), observed);
+  write_block(ctx, grid, blocks[1], constant_cube(1.0), observed);
+
+  codec::CodecParams full;
+  full.coefficient_count = kVpb;
+  full.quantization_scale = codec::kMinStep;
+  DctBlocks out;
+  CHECK(oracle::forward(ctx, t, grid, blocks, full, out).ok());
+  for (std::size_t i = 0; i < 2; ++i) {
+    for (std::uint32_t j = 1; j < kVpb; ++j) {
+      CHECK(out.coefficients[i * kVpb + j] == 0);
+    }
+  }
+  // sqrt(512) / kMinStep ~= 32767: at the edge, and inside it.
+  CHECK(out.coefficients[kVpb] <= codec::kMaxQuantizedMagnitude);
+  CHECK(out.coefficients[kVpb] >= codec::kMaxQuantizedMagnitude - 1);
+
+  // DC alone reconstructs the constant to within half a DC step, spread over
+  // the block: |error| <= DC step / (2 sqrt(512)).
+  codec::CodecParams dc_only;
+  dc_only.coefficient_count = 1;
+  dc_only.quantization_scale = 0.01f;
+  CHECK(oracle::forward(ctx, t, grid, blocks, dc_only, out).ok());
+  CHECK(out.coefficients.size() == 2);
+  CHECK(oracle::inverse(ctx, t, grid, blocks, out).ok());
+  const Cube back = read_block(ctx, grid, blocks[0]);
+  const double tol = 0.01 / (2.0 * std::sqrt(double(kVpb))) + 1e-6;
+  for (double s : back) {
+    CHECK(std::fabs(s - 0.3) <= tol);
+  }
+  return 0;
+}
+
+// The decoder clamps to +-trunc_dist, the range the integrator keeps: a sharp
+// edge reconstructed from few coefficients rings past it (a +-1 step along z
+// at K = 4 peaks near 1.26), and a decoded grid must not hand a later fuse or
+// a consumer SDF outside the band.
+int clamp_case(vkc::Device& device, vkc::Allocator& allocator,
+               DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 1);
+  CHECK(active.ok());
+  const vol::BlockIndex block = active.value()[0];
+  Cube edge{};
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    edge[v] = vz(v) < kEdge / 2 ? 1.0 : -1.0;
+  }
+  write_block(ctx, grid, block, edge, observed);
+
+  codec::CodecParams params;
+  params.coefficient_count = 4;
+  params.quantization_scale = codec::kMinStep;
+  DctBlocks out;
+  const std::vector<vol::BlockIndex>& list = active.value();
+  CHECK(oracle::forward(ctx, t, grid, list, params, out).ok());
+  // The unclamped reconstruction does overshoot -- the premise of the case.
+  Cube kept{};
+  const Cube ref = reference_dct(edge, false);
+  const auto zigzag = codec::detail::zigzag_order();
+  for (std::uint32_t j = 0; j < 4; ++j) {
+    kept[zigzag[j]] = ref[zigzag[j]];
+  }
+  const Cube unclamped = reference_dct(kept, true);
+  CHECK(*std::max_element(unclamped.begin(), unclamped.end()) > 1.2);
+
+  CHECK(oracle::inverse(ctx, t, grid, list, out).ok());
+  const std::vector<float> tsdf = attr(ctx, grid, vol::kTsdfAttribute);
+  bool saturated = false;
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    const float sdf = tsdf[std::uint32_t(block.ptr) + v];
+    CHECK(std::fabs(sdf) <= kTrunc);
+    saturated = saturated || std::fabs(sdf) == kTrunc;
+  }
+  CHECK(saturated);
+  return 0;
+}
+
+// A fused block observed in front of its surface and half a band behind, and
+// never further back, where the fuse leaves weight 0 and tsdf 0 -- the iso
+// level. The coefficients are the reference fill's, the unobserved voxels'
+// content is never read, and the decoded surface is what the fill buys: at
+// K = 32 the step to 0 at the mask edge leaks into the observed voxels beside
+// it, so zeros would decode with more than twice the error. Pinned to the
+// prior engine's K = 32 with DC 0.25 / AC 0.05, the case the fill was built
+// for, rather than to the defaults, which room0 moved.
+int partial_block_case(vkc::Device& device, vkc::Allocator& allocator,
+                       DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 1);
+  CHECK(active.ok());
+  const vol::BlockIndex block = active.value()[0];
+  // A tilted surface, normalized over a band of 4 voxels.
+  Cube truth{};
+  Observed obs{};
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    const double x = vx(v), y = vy(v), z = vz(v);
+    const double d = (2.0 - (0.6 * z + 0.5 * x + 0.3 * y)) / std::sqrt(0.7);
+    truth[v] = std::clamp(d / 4.0, -1.0, 1.0);
+    obs[v] = d > -2.0;
+  }
+  const auto weight_of = [&](std::uint32_t v) { return obs[v] ? 2.0f : 0.0f; };
+  Cube fused = truth;
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    if (!obs[v]) fused[v] = 0.0;
+  }
+  write_block(ctx, grid, block, fused, weight_of);
+
+  codec::CodecParams params;
+  params.coefficient_count = 32;
+  params.quantization_scale = 0.05f;
+  params.quantization_weights[0] = 5.0f;
+  const std::vector<vol::BlockIndex>& list = active.value();
+  DctBlocks out;
+  CHECK(oracle::forward(ctx, t, grid, list, params, out).ok());
+  const Cube filled = reference_fill(fused, obs);
+  int exact = 0;
+  int near_half = 0;
+  CHECK(check_against_reference(out, &filled, 1, exact, near_half) == 0);
+
+  // Garbage where nothing was observed changes nothing.
+  Cube junk = fused;
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    if (!obs[v]) junk[v] = 0.7;
+  }
+  write_block(ctx, grid, block, junk, weight_of);
+  DctBlocks again;
+  CHECK(oracle::forward(ctx, t, grid, list, params, again).ok());
+  CHECK(again.coefficients == out.coefficients);
+  CHECK(again.masks == out.masks);
+
+  CHECK(oracle::inverse(ctx, t, grid, list, out).ok());
+  const double err = rms_observed(read_block(ctx, grid, block), truth, obs);
+  const double filled_err =
+      rms_observed(reference_round_trip(filled, params), truth, obs);
+  const double zero_err =
+      rms_observed(reference_round_trip(fused, params), truth, obs);
+  CHECK(std::fabs(err - filled_err) <= 5e-3);  // the kernel pair is the ref's
+  CHECK(filled_err * 2.0 < zero_err);          // and the fill is the point
+  return 0;
+}
+
+// A cut set codes its voxels unobserved: the masks and coefficients are
+// exactly those of the same grid with the cut voxels' weights 0, for cuts in
+// two blocks and in every mask word of one. An empty cut set, or none, codes
+// the grid as it is, and a cut set short of the grid's heap is refused.
+int cut_case(vkc::Device& device, vkc::Allocator& allocator, DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 3);
+  CHECK(active.ok());
+  const std::vector<vol::BlockIndex>& blocks = active.value();
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    write_block(ctx, grid, blocks[i], random_cube(900u + std::uint32_t(i)),
+                observed);
+  }
+  // By heap slot: every 7th voxel of block 0, and a run of block 2.
+  const std::size_t words =
+      std::size_t(grid.grid().num_blocks) * codec::kMaskWordsPerBlock;
+  std::vector<std::uint32_t> cuts(words, 0u);
+  std::vector<std::size_t> slots;
+  for (std::uint32_t v = 0; v < kVpb; v += 7) {
+    slots.push_back(std::size_t(blocks[0].ptr) + v);
+  }
+  for (std::uint32_t v = 100; v < 160; ++v) {
+    slots.push_back(std::size_t(blocks[2].ptr) + v);
+  }
+  for (const std::size_t slot : slots) cuts[slot / 32] |= 1u << (slot % 32);
+  const std::vector<std::uint32_t> empty(words, 0u);
+  vkc::Result<vkc::Buffer> cut = vkc::test::upload_device_buffer(
+      device, allocator, cuts.data(), words * sizeof(std::uint32_t));
+  vkc::Result<vkc::Buffer> none = vkc::test::upload_device_buffer(
+      device, allocator, empty.data(), words * sizeof(std::uint32_t));
+  vkc::Result<vkc::Buffer> short_one = vkc::test::upload_device_buffer(
+      device, allocator, empty.data(), (words - 1) * sizeof(std::uint32_t));
+  CHECK(cut.ok() && none.ok() && short_one.ok());
+
+  codec::CodecParams params;
+  params.coefficient_count = 64;
+  DctBlocks plain;
+  DctBlocks uncut;
+  DctBlocks with_cut;
+  CHECK(oracle::forward(ctx, t, grid, blocks, params, plain).ok());
+  CHECK(
+      oracle::forward(ctx, t, grid, blocks, params, uncut, &none.value()).ok());
+  CHECK(oracle::forward(ctx, t, grid, blocks, params, with_cut, &cut.value())
+            .ok());
+  CHECK(uncut.masks == plain.masks && uncut.coefficients == plain.coefficients);
+  CHECK(with_cut.masks != plain.masks);
+
+  std::vector<float> weights = attr(ctx, grid, vol::kWeightAttribute);
+  for (const std::size_t slot : slots) weights[slot] = 0.0f;
+  put(ctx, grid, vol::kWeightAttribute, weights);
+  DctBlocks zeroed;
+  CHECK(oracle::forward(ctx, t, grid, blocks, params, zeroed).ok());
+  CHECK(with_cut.masks == zeroed.masks &&
+        with_cut.coefficients == zeroed.coefficients);
+
+  DctBlocks refused;
+  const vkc::Status s = oracle::forward(ctx, t, grid, blocks, params, refused,
+                                        &short_one.value());
+  CHECK(s.domain() == vkc::Status::Code::InvalidArgument &&
+        s.message().find("cut set") != std::string::npos);
+  return 0;
+}
+
+// Output follows the list, not the ptrs: permuting the list permutes the rows.
+int order_follows_list_case(vkc::Device& device, vkc::Allocator& allocator,
+                            DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 3);
+  CHECK(active.ok());
+  std::vector<vol::BlockIndex> blocks = active.value();
+  for (std::size_t i = 0; i < 3; ++i) {
+    write_block(ctx, grid, blocks[i], random_cube(40u + std::uint32_t(i)),
+                observed);
+  }
+  codec::CodecParams params;
+  DctBlocks a;
+  DctBlocks b;
+  CHECK(oracle::forward(ctx, t, grid, blocks, params, a).ok());
+  const std::vector<vol::BlockIndex> rotated = {blocks[2], blocks[0],
+                                                blocks[1]};
+  CHECK(oracle::forward(ctx, t, grid, rotated, params, b).ok());
+  const std::size_t k = params.coefficient_count;
+  const std::size_t from[3] = {2, 0, 1};
+  for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t j = 0; j < k; ++j) {
+      CHECK(b.coefficients[i * k + j] == a.coefficients[from[i] * k + j]);
+    }
+  }
+  return 0;
+}
+
+// A list longer than one dispatch's batch runs as several, with the same
+// result -- the path a list past maxComputeWorkGroupCount[0] takes, at three
+// blocks a dispatch here.
+int batching_case(vkc::Device& device, vkc::Allocator& allocator,
+                  DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active =
+      allocate_row(ctx, grid, 10);
+  CHECK(active.ok() && active.value().size() == 10);
+  const std::vector<vol::BlockIndex>& blocks = active.value();
+  std::vector<Cube> content;
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    content.push_back(random_cube(200u + std::uint32_t(i)));
+    write_block(ctx, grid, blocks[i], content.back(), observed);
+  }
+  codec::CodecParams params;
+  DctBlocks one;
+  DctBlocks many;
+  // Batched first, and judged against the reference rather than only against
+  // the single run: a freed buffer VMA hands straight back still holds the
+  // previous run's output, so equality alone passes a batch that wrote
+  // nothing past its first entries.
+  vgrid::detail::set_test_groups_per_dispatch(3);
+  CHECK(oracle::forward(ctx, t, grid, blocks, params, many).ok());
+  vgrid::detail::set_test_groups_per_dispatch(0);
+  int exact = 0;
+  int near_half = 0;
+  CHECK(check_against_reference(many, content.data(), content.size(), exact,
+                                near_half) == 0);
+  for (std::uint32_t m : many.masks) {
+    CHECK(m == 0xFFFFFFFFu);
+  }
+  CHECK(oracle::forward(ctx, t, grid, blocks, params, one).ok());
+  CHECK(one.coefficients == many.coefficients);
+  CHECK(one.masks == many.masks);
+
+  // The inverse too: every block of the last, partial batch is written.
+  CHECK(oracle::inverse(ctx, t, grid, blocks, one).ok());
+  std::vector<Cube> single;
+  for (const vol::BlockIndex& b : blocks) {
+    single.push_back(read_block(ctx, grid, b));
+  }
+  std::vector<float> tsdf = attr(ctx, grid, vol::kTsdfAttribute);
+  for (const vol::BlockIndex& b : blocks) {
+    for (std::uint32_t v = 0; v < kVpb; ++v) {
+      tsdf[std::uint32_t(b.ptr) + v] = 9.0f;
+    }
+  }
+  put(ctx, grid, vol::kTsdfAttribute, tsdf);
+  vgrid::detail::set_test_groups_per_dispatch(3);
+  CHECK(oracle::inverse(ctx, t, grid, blocks, many).ok());
+  vgrid::detail::set_test_groups_per_dispatch(0);
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    CHECK(read_block(ctx, grid, blocks[i]) == single[i]);
+  }
+  return 0;
+}
+
+// A ptr of @p grid's heap that no live block holds.
+std::int32_t free_ptr(const vol::VoxelBlockGrid& grid,
+                      const std::vector<vol::BlockIndex>& live) {
+  for (std::int32_t slot = 0; slot < grid.grid().num_blocks; ++slot) {
+    const std::int32_t ptr = slot * std::int32_t(kVpb);
+    if (std::none_of(live.begin(), live.end(),
+                     [&](const vol::BlockIndex& b) { return b.ptr == ptr; })) {
+      return ptr;
+    }
+  }
+  return -1;
+}
+
+// Every input the kernels would index unchecked is refused: the grid, the
+// params and the list's shape on the host, before anything is allocated, and
+// each entry's liveness on the device.
+int refusals_case(vkc::Device& device, vkc::Allocator& allocator,
+                  DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 3);
+  CHECK(active.ok());
+  const std::vector<vol::BlockIndex> blocks = active.value();
+  for (const vol::BlockIndex& b : blocks) {
+    write_block(ctx, grid, b, random_cube(300u), observed);
+  }
+  const codec::CodecParams params;
+  DctBlocks out;
+  out.coefficients = {1, 2, 3};
+  out.masks = {4, 5};
+
+  // An empty list is a no-op success, and it empties the outputs.
+  CHECK(oracle::forward(ctx, t, grid, {}, params, out).ok());
+  CHECK(out.coefficients.empty() && out.masks.empty());
+  CHECK(out.trunc_dist == kTrunc);
+  CHECK(oracle::inverse(ctx, t, grid, {}, out).ok());
+
+  // Invalid params.
+  codec::CodecParams bad = params;
+  bad.coefficient_count = 0;
+  CHECK(!oracle::forward(ctx, t, grid, blocks, bad, out).ok());
+
+  // No list with a count, and a list shorter than its count, or not a
+  // storage buffer.
+  {
+    vkc::Buffer none;
+    vkc::Result<vkc::Buffer> two = vkc::test::upload_device_buffer(
+        device, allocator, blocks.data(), 2 * sizeof(vol::BlockIndex));
+    CHECK(two.ok());
+    vkc::BufferDesc desc;
+    desc.size = 3 * sizeof(vol::BlockIndex);
+    desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    desc.memory = vkc::MemoryUsage::DeviceOnly;
+    vkc::Result<vkc::Buffer> transfer_only = allocator.create_buffer(desc);
+    CHECK(transfer_only.ok());
+    vkc::Result<vkc::Buffer> masks = vkc::device_storage_buffer(
+        allocator, 3 * codec::kMaskWordsPerBlock * sizeof(std::uint32_t));
+    vkc::Result<vkc::Buffer> coefficients = vkc::device_storage_buffer(
+        allocator,
+        3 * codec::detail::coefficient_words(params.coefficient_count) *
+            sizeof(std::uint32_t));
+    const std::uint32_t three_word = 3;
+    vkc::Result<vkc::Buffer> word = vkc::test::upload_device_buffer(
+        device, allocator, &three_word, sizeof(three_word));
+    CHECK(masks.ok() && coefficients.ok() && word.ok());
+    const vol::DeviceCount count{&word.value(), 0, 3};
+    for (const vkc::Buffer* list :
+         {&none, &two.value(), &transfer_only.value()}) {
+      vkc::CommandBatch batch(device, allocator);
+      const vkc::Status s =
+          t.record_forward(batch, grid, *list, count, params, masks.value(),
+                           coefficients.value())
+              .status();
+      CHECK(s.domain() == vkc::Status::Code::InvalidArgument &&
+            s.message().find("the block list") != std::string::npos);
+    }
+    // A list of three, and outputs that hold two: refused before anything
+    // is recorded.
+    vkc::Result<vkc::Buffer> three = vkc::test::upload_device_buffer(
+        device, allocator, blocks.data(), 3 * sizeof(vol::BlockIndex));
+    CHECK(three.ok());
+    for (const bool short_masks : {true, false}) {
+      const vkc::Buffer& short_one = two.value();  // 32 bytes
+      vkc::CommandBatch batch(device, allocator);
+      const vkc::Status s =
+          t.record_forward(batch, grid, three.value(), count, params,
+                           short_masks ? short_one : masks.value(),
+                           short_masks ? coefficients.value() : short_one)
+              .status();
+      CHECK(s.domain() == vkc::Status::Code::InvalidArgument &&
+            s.message().find("the output buffers do not hold 3 blocks") !=
+                std::string::npos);
+    }
+    // A count word past its buffer.
+    {
+      vkc::CommandBatch batch(device, allocator);
+      CHECK(t.record_forward(batch, grid, three.value(),
+                             vol::DeviceCount{&word.value(), 4, 3}, params,
+                             masks.value(), coefficients.value())
+                .status()
+                .domain() == vkc::Status::Code::InvalidArgument);
+    }
+  }
+  // More blocks than the heap.
+  const std::vector<vol::BlockIndex> too_many(
+      std::size_t(grid.grid().num_blocks) + 1, blocks[0]);
+  CHECK(!oracle::forward(ctx, t, grid, too_many, params, out).ok());
+
+  // Every entry is found by its coord and its ptr never read, so a ptr
+  // outside the heap, negative, off a block boundary, a free slot, or another
+  // block's transforms the coord's own block, and none of them can make a
+  // kernel read or write where it should not.
+  DctBlocks honest;
+  CHECK(oracle::forward(ctx, t, grid, blocks, params, honest).ok());
+  const std::int32_t unused = free_ptr(grid, blocks);
+  CHECK(unused >= 0);
+  const std::int32_t vpb = std::int32_t(kVpb);
+  const std::int32_t bad_ptrs[] = {small_grid().num_blocks * vpb, -vpb, 1,
+                                   unused, blocks[2].ptr};
+  for (std::int32_t p : bad_ptrs) {
+    std::vector<vol::BlockIndex> forged = blocks;
+    forged[1].ptr = p;
+    CHECK(oracle::forward(ctx, t, grid, forged, params, out).ok());
+    CHECK(out.coefficients == honest.coefficients);
+    CHECK(out.masks == honest.masks);
+  }
+  // A coord the grid does not hold is refused, and leaves the outputs empty.
+  std::vector<vol::BlockIndex> absent = blocks;
+  absent[1].coord = vgrid::Vec3i(99, 99, 99);
+  out.coefficients = {1};
+  CHECK(!oracle::forward(ctx, t, grid, absent, params, out).ok());
+  CHECK(out.coefficients.empty());
+
+  // The inverse writes nothing for such a coord, and nothing at a forged
+  // ptr -- a free slot must stay the zeros a fresh block reads, or the next
+  // allocate hands out a block that meshes as observed -- and still decodes
+  // every other entry, at its coord's own block.
+  {
+    std::vector<vol::BlockIndex> forged = blocks;
+    forged[1].ptr = unused;
+    forged[2].coord = vgrid::Vec3i(99, 99, 99);
+    std::vector<float> tsdf = attr(ctx, grid, vol::kTsdfAttribute);
+    for (const vol::BlockIndex& b : blocks) {
+      for (std::uint32_t v = 0; v < kVpb; ++v) {
+        tsdf[std::uint32_t(b.ptr) + v] = 9.0f;
+      }
+    }
+    put(ctx, grid, vol::kTsdfAttribute, tsdf);
+    CHECK(!oracle::inverse(ctx, t, grid, forged, honest).ok());
+    tsdf = attr(ctx, grid, vol::kTsdfAttribute);
+    const std::vector<float> weight = attr(ctx, grid, vol::kWeightAttribute);
+    for (std::uint32_t v = 0; v < kVpb; ++v) {
+      CHECK(weight[std::uint32_t(unused) + v] == 0.0f);
+      CHECK(tsdf[std::uint32_t(unused) + v] == 0.0f);
+      CHECK(tsdf[std::uint32_t(blocks[0].ptr) + v] != 9.0f);
+      CHECK(tsdf[std::uint32_t(blocks[1].ptr) + v] != 9.0f);
+      CHECK(tsdf[std::uint32_t(blocks[2].ptr) + v] == 9.0f);
+    }
+  }
+  out = honest;
+
+  // Params the inverse cannot trust.
+  {
+    DctBlocks bad_params = out;
+    bad_params.params.quantization_weights[0] = 0.0f;
+    CHECK(!oracle::inverse(ctx, t, grid, blocks, bad_params).ok());
+  }
+
+  // Resident blocks the inverse cannot bind: missing buffers, or ones too
+  // small for the count; and a P-frame's entries, which are not its blocks.
+  {
+    vkc::Result<vkc::Buffer> small = vkc::device_storage_buffer(allocator, 16);
+    CHECK(small.ok());
+    // Refused before anything is recorded, so no slices are read.
+    const auto inverse = [&](const codec::detail::ResidentBlocks& in) {
+      vkc::CommandBatch batch(device, allocator);
+      return t.record_inverse(batch, grid, in, params,
+                              volumetric_kit::grid::detail::IndirectSlices{});
+    };
+    codec::detail::ResidentBlocks resident;
+    resident.count = std::uint32_t(blocks.size());
+    resident.coefficient_count = params.coefficient_count;
+    CHECK(!inverse(resident).ok());
+    resident.list = &small.value();
+    resident.masks = &small.value();
+    resident.coefficients = &small.value();
+    CHECK(!inverse(resident).ok());
+    resident.reference_count = 1;
+    const vkc::Status entries = inverse(resident);
+    CHECK(entries.domain() == vkc::Status::Code::InvalidArgument &&
+          entries.message().find("a P-frame's stream positions") !=
+              std::string::npos);
+  }
+
+  // A list compacted before a remove() names a block the grid no longer
+  // holds, at a ptr still in range: its coord finds none, so both directions
+  // refuse it.
+  vol::BlockIndex gone{};
+  gone.coord = blocks[0].coord;
+  vkc::Result<std::uint32_t> removed =
+      vgrid_test::remove_blocks(ctx, grid, &gone, 1);
+  CHECK(removed.ok());
+  CHECK(!oracle::forward(ctx, t, grid, blocks, params, out).ok());
+  CHECK(!oracle::inverse(ctx, t, grid, blocks, out).ok());
+
+  // A grid with another block size.
+  vkc::Result<vol::VoxelBlockGrid> g4 = make_grid(device, allocator, 4);
+  CHECK(g4.ok());
+  vol::VoxelBlockGrid grid4 = std::move(g4).value();
+  std::vector<vol::BlockIndex> one(1);
+  one[0].coord = vgrid::Vec3i(0, 0, 0);
+  CHECK(vgrid_test::allocate_blocks(ctx, grid4.map(), one).ok());
+  vkc::Result<std::vector<vol::BlockIndex>> active4 =
+      grid4.map().compact_active_blocks();
+  CHECK(active4.ok());
+  CHECK(!oracle::forward(ctx, t, grid4, active4.value(), params, out).ok());
+
+  // A grid without a weight attribute -- refused for an empty list too, before
+  // anything is allocated, rather than only once there is work to bind.
+  vkc::Result<vol::VoxelBlockGrid> gw =
+      make_grid(device, allocator, codec::kBlockSize, false);
+  CHECK(gw.ok());
+  vol::VoxelBlockGrid no_weight = std::move(gw).value();
+  CHECK(vgrid_test::allocate_blocks(ctx, no_weight.map(), one).ok());
+  vkc::Result<std::vector<vol::BlockIndex>> active_w =
+      no_weight.map().compact_active_blocks();
+  CHECK(active_w.ok());
+  CHECK(
+      !oracle::forward(ctx, t, no_weight, active_w.value(), params, out).ok());
+  CHECK(!oracle::forward(ctx, t, no_weight, {}, params, out).ok());
+  DctBlocks none;
+  none.trunc_dist = kTrunc;
+  CHECK(!oracle::inverse(ctx, t, no_weight, {}, none).ok());
+  return 0;
+}
+
+// The observed pass over @p list, in a batch of its own, its count a device
+// word as the encoder's compaction leaves it: the count it left on the
+// device, read back, or its reject count's refusal.
+vkc::Result<std::uint32_t> observed_count(vkc::Device& device,
+                                          vkc::Allocator& allocator,
+                                          DctTransform& t,
+                                          const vol::VoxelBlockGrid& grid,
+                                          const vol::DeviceBlockList& list,
+                                          bool true_sdf) {
+  VKC_ASSIGN(const vkc::Buffer word,
+             vkc::test::upload_device_buffer(device, allocator, &list.count,
+                                             sizeof(list.count)));
+  vkc::CommandBatch batch(device, allocator);
+  VKC_TRY(t.record_observed(batch, grid,
+                            list.buffer != nullptr ? *list.buffer : word,
+                            vol::DeviceCount{&word, 0, list.count}, true_sdf));
+  VKC_TRY(batch.submit());
+  VKC_ASSIGN(const std::vector<std::uint32_t> counts,
+             vkc::test::read_back<std::uint32_t>(device, allocator,
+                                                 t.observed_counts(), 2));
+  VKC_TRY(DctTransform::check_rejected("observed", counts[0], list.count));
+  if (counts[1] > list.count) {
+    return vkc::Status::invalid_argument("more observed than listed");
+  }
+  return counts[1];
+}
+
+// The observed pass keeps exactly the entries of the map's own list whose
+// block holds a voxel at or above kObservedWeight, with each original ptr,
+// on the device, its count left there. Append order is unspecified.
+int observed_case(vkc::Device& device, vkc::Allocator& allocator,
+                  DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  // The entries it kept, read back from where it left them.
+  const auto observed_of = [&](const vol::VoxelBlockGrid& grid,
+                               const vol::DeviceBlockList& list)
+      -> vkc::Result<std::vector<vol::BlockIndex>> {
+    VKC_ASSIGN(const std::uint32_t n,
+               observed_count(device, allocator, t, grid, list, false));
+    if (n == 0) return std::vector<vol::BlockIndex>{};
+    return vkc::test::read_back<vol::BlockIndex>(device, allocator,
+                                                 t.observed_list(), n);
+  };
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 4);
+  CHECK(active.ok());
+  const std::vector<vol::BlockIndex>& blocks = active.value();
+  // Block 0 all observed; 1 none; 2 one voxel at the threshold; 3 one voxel
+  // just under it.
+  write_block(ctx, grid, blocks[0], random_cube(1), observed);
+  write_block(ctx, grid, blocks[1], random_cube(2),
+              [](std::uint32_t) { return 0.0f; });
+  write_block(ctx, grid, blocks[2], random_cube(3), [](std::uint32_t v) {
+    return v == 300 ? vol::kObservedWeight : 0.0f;
+  });
+  write_block(ctx, grid, blocks[3], random_cube(4),
+              [](std::uint32_t v) { return v == 7 ? 5e-7f : 0.0f; });
+
+  vkc::Result<vol::DeviceBlockList> list =
+      grid.map().compact_active_blocks_on_device();
+  CHECK(list.ok() && list.value().count == 4);
+  vkc::Result<std::vector<vol::BlockIndex>> kept =
+      observed_of(grid, list.value());
+  CHECK(kept.ok());
+  const auto by_x = [](const vol::BlockIndex& a, const vol::BlockIndex& b) {
+    return a.coord.x < b.coord.x;
+  };
+  std::sort(kept.value().begin(), kept.value().end(), by_x);
+  CHECK(kept.value().size() == 2);
+  for (std::size_t i = 0; i < 2; ++i) {
+    CHECK(kept.value()[i].coord == blocks[2 * i].coord);
+    CHECK(kept.value()[i].ptr == blocks[2 * i].ptr);
+  }
+
+  // Grow past the last count, then shrink to none and regrow. No old append
+  // count may survive a call. The all-observed result also checks no
+  // duplicate append and every ptr, across dispatches in the chunked variant
+  // below.
+  for (bool all : {true, false, true}) {
+    std::vector<float> weights = attr(ctx, grid, vol::kWeightAttribute);
+    std::fill(weights.begin(), weights.end(), 0.0f);
+    if (all) {
+      for (const vol::BlockIndex& block : blocks) {
+        weights[std::size_t(block.ptr) + 511] = vol::kObservedWeight;
+      }
+    }
+    put(ctx, grid, vol::kWeightAttribute, weights);
+    kept = observed_of(grid, list.value());
+    CHECK(kept.ok());
+    CHECK(kept.value().size() == (all ? blocks.size() : 0u));
+    std::sort(kept.value().begin(), kept.value().end(), by_x);
+    for (std::size_t i = 0; i < kept.value().size(); ++i) {
+      CHECK(kept.value()[i].coord == blocks[i].coord);
+      CHECK(kept.value()[i].ptr == blocks[i].ptr);
+    }
+  }
+
+  // A count past the grid's heap, or a word past its buffer, is refused,
+  // recording nothing.
+  {
+    const std::uint32_t four = 4;
+    vkc::Result<vkc::Buffer> word =
+        vkc::test::upload_device_buffer(device, allocator, &four, sizeof(four));
+    CHECK(word.ok());
+    vkc::CommandBatch batch(device, allocator);
+    const auto past = static_cast<std::uint32_t>(grid.grid().num_blocks) + 1;
+    CHECK(t.record_observed(batch, grid, *list.value().buffer,
+                            vol::DeviceCount{&word.value(), 0, past}, false)
+              .domain() == vkc::Status::Code::InvalidArgument);
+    CHECK(t.record_observed(batch, grid, *list.value().buffer,
+                            vol::DeviceCount{&word.value(), 4, 4}, false)
+              .domain() == vkc::Status::Code::InvalidArgument);
+    CHECK(batch.submit().ok());
+  }
+
+  // An empty list keeps nothing.
+  vkc::Result<vol::VoxelBlockGrid> e = make_grid(device, allocator);
+  CHECK(e.ok());
+  vkc::Result<vol::DeviceBlockList> none =
+      e.value().map().compact_active_blocks_on_device();
+  CHECK(none.ok());
+  vkc::Result<std::vector<vol::BlockIndex>> nothing =
+      observed_of(e.value(), none.value());
+  CHECK(nothing.ok() && nothing.value().empty());
+
+  // An empty input followed by a smaller grid reuses the former capacity,
+  // and a larger one grows it. Both must ignore the previous list's suffix.
+  for (int size : {1, 17, 3}) {
+    auto resized = make_grid(device, allocator);
+    CHECK(resized.ok());
+    auto row = allocate_row(ctx, resized.value(), size);
+    CHECK(row.ok());
+    std::vector<float> weights =
+        attr(ctx, resized.value(), vol::kWeightAttribute);
+    for (const vol::BlockIndex& block : row.value()) {
+      if (block.coord.x % 2 == 0) {
+        weights[std::size_t(block.ptr) + 300] = vol::kObservedWeight;
+      }
+    }
+    put(ctx, resized.value(), vol::kWeightAttribute, weights);
+    auto device_list = resized.value().map().compact_active_blocks_on_device();
+    CHECK(device_list.ok());
+    auto result = observed_of(resized.value(), device_list.value());
+    CHECK(result.ok());
+    CHECK(result.value().size() == std::size_t((size + 1) / 2));
+    std::sort(result.value().begin(), result.value().end(), by_x);
+    for (std::size_t i = 0; i < result.value().size(); ++i) {
+      CHECK(result.value()[i].coord == row.value()[2 * i].coord);
+      CHECK(result.value()[i].ptr == row.value()[2 * i].ptr);
+    }
+  }
+  return 0;
+}
+
+// The true-SDF passes keep the host rule's blocks and write its cut set
+// whether the active list runs in one dispatch or in chunks of 3 or 7
+// blocks: a curtain cut across block faces, and a speck kept by the near
+// rule alone.
+int surface_chunks_case(vkc::Device& device, vkc::Allocator& allocator) {
+  vkc::test::Gpu ctx{device, allocator};
+  const codec_fixture::Curtain curtain{
+      codec_fixture::Sphere{vgrid::Vec3f(0.013f, -0.007f, 0.004f), 0.09f},
+      true};
+  vkc::Result<vol::VoxelBlockGrid> g =
+      codec_fixture::curtain_grid(ctx, curtain);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<codec_oracle::SurfaceSet> set =
+      codec_oracle::surface_set(ctx, grid);
+  CHECK(set.ok());
+  const codec_oracle::SurfaceSet& host = set.value();
+  CHECK(host.cut_across_faces > 0 && host.near_only_blocks > 0);
+  vkc::Result<vol::DeviceBlockList> list =
+      grid.map().compact_active_blocks_on_device();
+  CHECK(list.ok() && list.value().count > 7);
+  for (const std::uint32_t chunk : {0u, 3u, 7u}) {
+    vkc::Result<std::unique_ptr<DctTransform>> made =
+        DctTransform::create(device, allocator);
+    CHECK(made.ok());
+    DctTransform& chunked = *made.value();
+    vgrid::detail::set_test_groups_per_dispatch(chunk);
+    vkc::Result<std::uint32_t> n =
+        observed_count(device, allocator, chunked, grid, list.value(), true);
+    vgrid::detail::set_test_groups_per_dispatch(0);
+    CHECK(n.ok() && n.value() == host.blocks.size());
+    vkc::Result<std::vector<vol::BlockIndex>> kept =
+        vkc::test::read_back<vol::BlockIndex>(
+            device, allocator, chunked.observed_list(), n.value());
+    CHECK(kept.ok());
+    std::sort(kept.value().begin(), kept.value().end(),
+              [](const vol::BlockIndex& a, const vol::BlockIndex& b) {
+                return vol::coord_less(a.coord, b.coord);
+              });
+    for (std::size_t i = 0; i < host.blocks.size(); ++i) {
+      CHECK(kept.value()[i].coord == host.blocks[i].coord);
+    }
+    vkc::Result<std::vector<std::uint32_t>> cut =
+        vkc::test::read_back<std::uint32_t>(device, allocator,
+                                            chunked.cut_set(), host.cut.size());
+    CHECK(cut.ok() && cut.value() == host.cut);
+  }
+  return 0;
+}
+
+// Reuse scratch through count/K growth, shrink, odd padding and an empty
+// transform. Coefficients and inverse output must still match the independent
+// CPU reference; inverse must not touch a retained list's obsolete suffix.
+int scratch_reuse_case(vkc::Device& device, vkc::Allocator& allocator,
+                       DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  auto made = make_grid(device, allocator);
+  CHECK(made.ok());
+  auto& grid = made.value();
+  auto active = allocate_row(ctx, grid, 17);
+  CHECK(active.ok());
+  const auto& blocks = active.value();
+  std::vector<Cube> content;
+  std::vector<float> original = attr(ctx, grid, vol::kTsdfAttribute);
+  std::vector<float> weights = attr(ctx, grid, vol::kWeightAttribute);
+  for (const vol::BlockIndex& block : blocks) {
+    content.push_back(random_cube(std::uint32_t(block.coord.x) + 713));
+    for (std::size_t v = 0; v < kVpb; ++v) {
+      original[std::size_t(block.ptr) + v] = float(content.back()[v]) * kTrunc;
+      weights[std::size_t(block.ptr) + v] = codec::detail::kDecodedWeight;
+    }
+  }
+  put(ctx, grid, vol::kWeightAttribute, weights);
+  const std::array<std::pair<std::size_t, std::uint32_t>, 7> calls = {
+      {{1, 1}, {17, 512}, {3, 35}, {0, 64}, {17, 64}, {1, 512}, {17, 512}}};
+  for (const auto& [count, k] : calls) {
+    put(ctx, grid, vol::kTsdfAttribute, original);
+    const std::vector<vol::BlockIndex> prefix(
+        blocks.begin(), blocks.begin() + std::ptrdiff_t(count));
+    codec::CodecParams params;
+    params.coefficient_count = k;
+    params.quantization_scale = 0.02f;
+    for (std::size_t i = 0; i < params.quantization_weights.size(); ++i) {
+      params.quantization_weights[i] = 1.0f + 0.25f * float((i + count) % 5);
+    }
+    DctBlocks out;
+    const std::vector<vol::BlockIndex>& list = prefix;
+    CHECK(oracle::forward(ctx, t, grid, list, params, out).ok());
+    CHECK(out.coefficients.size() == count * k);
+    CHECK(out.masks.size() == count * codec::kMaskWordsPerBlock);
+    int exact = 0;
+    int near_half = 0;
+    CHECK(check_against_reference(out, content.data(), count, exact,
+                                  near_half) == 0);
+    CHECK(oracle::inverse(ctx, t, grid, list, out).ok());
+    const auto decoded = attr(ctx, grid, vol::kTsdfAttribute);
+    for (std::size_t i = 0; i < blocks.size(); ++i) {
+      Cube actual;
+      for (std::size_t v = 0; v < kVpb; ++v) {
+        const std::size_t offset = std::size_t(blocks[i].ptr) + v;
+        if (i >= count) CHECK(decoded[offset] == original[offset]);
+        actual[v] = decoded[offset] / kTrunc;
+      }
+      if (i < count) {
+        CHECK(rms_diff(actual, reference_round_trip(content[i], params)) <=
+              1e-3);
+      }
+    }
+  }
+  return 0;
+}
+
+// The inverse stamps changed only on a block it leaves different, as the
+// integrator does, so decoding a block's last frame again leaves it
+// unstamped. It writes only voxels whose bits differ, yet leaves every block
+// bit for bit as decoded: a -0.0 where it decodes 0.0 is rewritten, unstamped.
+int inverse_stamps_case(vkc::Device& device, vkc::Allocator& allocator,
+                        DctTransform& t) {
+  const vkc::test::Gpu ctx{device, allocator};
+  vkc::Result<vol::VoxelBlockGrid> g = make_grid(device, allocator);
+  CHECK(g.ok());
+  vol::VoxelBlockGrid grid = std::move(g).value();
+  vkc::Result<std::vector<vol::BlockIndex>> active = allocate_row(ctx, grid, 3);
+  CHECK(active.ok());
+  const std::vector<vol::BlockIndex>& blocks = active.value();
+  // Block 2 unobserved, so it decodes to zeros alone.
+  for (std::size_t i = 0; i < 3; ++i) {
+    write_block(ctx, grid, blocks[i], random_cube(500u + std::uint32_t(i)),
+                [i](std::uint32_t v) { return i < 2 ? observed(v) : 0.0f; });
+  }
+  DctBlocks out;
+  CHECK(oracle::forward(ctx, t, grid, blocks, codec::CodecParams{}, out).ok());
+  auto changed = [&](std::size_t i) {
+    return grid.map()
+        .read_block_stamps()
+        .value()[std::uint32_t(blocks[i].ptr) / kVpb]
+        .changed;
+  };
+
+  CHECK(oracle::inverse(ctx, t, grid, blocks, out).ok());
+  const std::uint32_t first = grid.map().tick();
+  for (std::size_t i = 0; i < 3; ++i) {
+    CHECK(changed(i) == first);
+  }
+  // The same coefficients again: a tick of its own, and nothing changed.
+  CHECK(oracle::inverse(ctx, t, grid, blocks, out).ok());
+  CHECK(grid.map().tick() != first);
+  for (std::size_t i = 0; i < 3; ++i) {
+    CHECK(changed(i) == first);
+  }
+  // One block's DC moved: that block alone.
+  DctBlocks moved = out;
+  moved.coefficients[out.params.coefficient_count] = static_cast<std::int16_t>(
+      moved.coefficients[out.params.coefficient_count] + 1);
+  CHECK(oracle::inverse(ctx, t, grid, blocks, moved).ok());
+  const std::uint32_t second = grid.map().tick();
+  CHECK(changed(0) == first);
+  CHECK(changed(1) == second);
+  CHECK(changed(2) == first);
+
+  // Every 0.0 of the grid made -0.0: equal as values, so nothing is stamped,
+  // but rewritten, so the arrays end bit for bit as the decode left them.
+  const std::vector<float> tsdf = attr(ctx, grid, vol::kTsdfAttribute);
+  const std::vector<float> weight = attr(ctx, grid, vol::kWeightAttribute);
+  auto negate_zeros = [](std::vector<float> a) {
+    for (float& x : a) {
+      if (x == 0.0f) x = -0.0f;
+    }
+    return a;
+  };
+  put(ctx, grid, vol::kTsdfAttribute, negate_zeros(tsdf));
+  put(ctx, grid, vol::kWeightAttribute, negate_zeros(weight));
+  CHECK(oracle::inverse(ctx, t, grid, blocks, moved).ok());
+  CHECK(changed(0) == first);
+  CHECK(changed(1) == second);
+  CHECK(changed(2) == first);
+  const std::vector<float> tsdf_after = attr(ctx, grid, vol::kTsdfAttribute);
+  const std::vector<float> weight_after =
+      attr(ctx, grid, vol::kWeightAttribute);
+  for (std::uint32_t v = 0; v < kVpb; ++v) {
+    // Block 2 held -0.0 in every voxel.
+    const std::size_t i = std::size_t(blocks[2].ptr) + v;
+    CHECK(!std::signbit(tsdf_after[i]) && !std::signbit(weight_after[i]));
+  }
+  for (const vol::BlockIndex& b : blocks) {
+    const std::size_t at = std::size_t(b.ptr);
+    CHECK(std::memcmp(&tsdf_after[at], &tsdf[at], kVpb * sizeof(float)) == 0);
+    CHECK(std::memcmp(&weight_after[at], &weight[at], kVpb * sizeof(float)) ==
+          0);
+  }
+  return 0;
+}
+
+int gpu_main(vkc::test::GpuContext& gpu) {
+  vkc::Device& dev = gpu.device;
+  vkc::Allocator& alloc = gpu.allocator;
+
+  vkc::Result<std::unique_ptr<DctTransform>> t_r =
+      DctTransform::create(dev, alloc);
+  if (!t_r) {
+    std::fprintf(stderr, "DctTransform::create failed: %s\n",
+                 t_r.status().message().c_str());
+    return 1;
+  }
+  DctTransform& t = *t_r.value();
+
+  if (forward_matches_reference_case(dev, alloc, t) != 0) return 1;
+  if (per_basis_sequence_case(dev, alloc, t) != 0) return 1;
+  if (round_trip_bound_case(dev, alloc, t) != 0) return 1;
+  if (truncation_matches_reference_case(dev, alloc, t) != 0) return 1;
+  if (mask_case(dev, alloc, t) != 0) return 1;
+  if (constant_case(dev, alloc, t) != 0) return 1;
+  if (clamp_case(dev, alloc, t) != 0) return 1;
+  if (partial_block_case(dev, alloc, t) != 0) return 1;
+  if (cut_case(dev, alloc, t) != 0) return 1;
+  if (order_follows_list_case(dev, alloc, t) != 0) return 1;
+  if (batching_case(dev, alloc, t) != 0) return 1;
+  if (refusals_case(dev, alloc, t) != 0) return 1;
+  if (observed_case(dev, alloc, t) != 0) return 1;
+  // Again on fresh scratch, two blocks a dispatch.
+  auto chunked = DctTransform::create(dev, alloc);
+  CHECK(chunked.ok());
+  vgrid::detail::set_test_groups_per_dispatch(2);
+  if (observed_case(dev, alloc, *chunked.value()) != 0) return 1;
+  if (scratch_reuse_case(dev, alloc, *chunked.value()) != 0) return 1;
+  vgrid::detail::set_test_groups_per_dispatch(0);
+  if (surface_chunks_case(dev, alloc) != 0) return 1;
+  if (inverse_stamps_case(dev, alloc, t) != 0) return 1;
+  std::printf("codec DctTransform: OK\n");
+  return 0;
+}
+
+}  // namespace
+
+int main() {
+  return vkc::test::run_on_gpu(vgrid::device_requirements(), gpu_main);
+}

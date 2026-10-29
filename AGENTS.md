@@ -49,31 +49,31 @@ linked documents.
 | Remaining work or an unmeasured claim | [Next work](DESIGN.md#next-work) and [Measured lessons](DECISIONS.md#measured-lessons) |
 
 Incremental mesh extraction was removed on 2026-10-06; before bringing back
-any changed-only meshing, read that decision: it returns only with a
+any changed-only meshing, read that decision (grid's): it returns only with a
 measurement on a large scan.
 
 ## Architecture and conventions
 
-Dependencies flow left to right:
+The voxel grid, meshing, mesh files, eval, the codec and the `.vrst` stream
+and its serving are a package of their own, `grid/` (`volumetric_kit_grid`,
+on the core alone; its own [AGENTS.md](grid/AGENTS.md)), which recon builds
+on. A grid file never includes recon's or sensor's
+(`grid_package_boundary`), and `grid/` builds and tests alone. A change to
+grid follows grid's guide and records its decisions in grid's DECISIONS.md.
+recon's dependencies flow left to right, over grid:
 
 ```text
-core → volume → tsdf → mesh → texture → interop
-  │        ├→ codec     ├→ eval
-  │        └→ voxelize  └→ io (mesh files)
-  └→ sensor ← camera          (later: track)
-stream → networking → codec_stream → sender
-  (stream on the family core's base tier alone)
+core → tsdf → texture → interop      (on grid's volume and mesh)
+  └→ sensor ← camera                  (later: track)
+sender                                (on tsdf, sensor's GPU pass and
+                                       grid's codec_stream)
 ```
 
 - No upward includes. `camera` depends on the family core's base tier and GLM
-  only, `stream` on that base tier alone, `networking` on `stream`, `sensor`
-  on `camera` and `core`, `codec` and `voxelize` on `volume`, `eval` and
-  `io`'s mesh files on `mesh`, `io`'s images on the base tier alone,
-  `codec_stream` on `codec` and `networking`, and `sender` on
-  `codec_stream`, `tsdf` and `sensor`'s GPU pass;
-  driver/decoder/pre-processing targets stay separate.
-  Asset I/O is host-side at file boundaries; Assimp is an optional private
-  backend of `recon_mesh_io_assimp`, never a dependency of GPU kernels.
+  only, `sensor` on `camera` and `core`, `io`'s images on the base tier
+  alone, and `sender` on grid's `codec_stream`, `tsdf` and `sensor`'s GPU
+  pass; driver/decoder/pre-processing targets stay separate. Asset I/O is
+  host-side at file boundaries.
 - C++17, no compiler extensions. Namespace `volumetric_kit::recon` (`vr::` in
   docs), nested per tier except `core`, which stays in `volumetric_kit::recon`:
   recon declares no `core` namespace, so `core::` always means the core's.
@@ -171,7 +171,7 @@ git -C "$recon_root" diff --check
 - For documentation-only changes, check formatting, links, and consistency;
   a build is unnecessary. The hooks can be scoped with `pre-commit run --files`.
 - `VR_BUILD_VIEWER`, `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG`, `VR_WITH_CUDA`, and
-  `VR_WITH_ASSIMP` enable optional paths. Orbbec, FFmpeg and Assimp are
+  grid's `VGRID_WITH_ASSIMP` enable optional paths. Orbbec, FFmpeg and Assimp are
   installed prerequisites, never fetched by this repository. The video
   decoders hand out device pictures only: Apple builds them always, on
   VideoToolbox, and refuses `VR_WITH_FFMPEG`; elsewhere `VR_WITH_FFMPEG`

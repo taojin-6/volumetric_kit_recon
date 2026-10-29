@@ -41,7 +41,7 @@ target_compile_features(recon_sender PUBLIC cxx_std_17)
 # PUBLIC: the headers take the prep's DeviceFrame, the fuser and its report, and
 # the codec stream and its frame.
 target_link_libraries(recon_sender PUBLIC recon_sensor_utils recon_tsdf
-                                          recon_codec_stream)
+                                          grid_codec_stream)
 
 target_include_directories(
   recon_sender PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"

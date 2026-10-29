@@ -17,8 +17,6 @@
 #include <string_view>
 #include <vector>
 
-#include "device_blocks.hpp"
-#include "grid_readback.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/buffer_readback.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
@@ -28,22 +26,26 @@
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/grid/base/dispatch.hpp"
+#include "volumetric_kit/grid/testing/device_blocks.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
+#include "volumetric_kit/grid/volume/hash_types.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
-#include "volumetric_kit/recon/core/dispatch.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/hash_types.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 #include "project_pinhole_comp.spv.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
 namespace {
@@ -117,7 +119,7 @@ int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   vol::BlockIndex far{};
   far.coord = vr::Vec3i(5, 5, 5);  // projects outside the image
   blocks.push_back(far);
-  CHECK(vr_test::allocate_blocks(ctx, a.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(ctx, a.map(), blocks).value() == 0);
 
   vr::DepthCameraParams cam{};
   cam.fx = 525.0f;
@@ -238,7 +240,7 @@ int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   vol::VoxelBlockGrid b = std::move(grid_b).value();
   vol::BlockIndex one{};
   one.coord = vr::Vec3i(0, 0, 13);
-  CHECK(vr_test::allocate_blocks(ctx, b.map(), &one, 1).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(ctx, b.map(), &one, 1).value() == 0);
   const std::uint32_t ta = a.map().tick();
   const std::uint32_t tb = b.map().tick();
   CHECK(fuse(b, depth_band, 5.0f).ok());
@@ -277,7 +279,8 @@ int nonfinite_depth_taps_case(const vkc::test::Gpu& ctx) {
       auto grid = std::move(made).value();
       vol::BlockIndex block{};
       block.coord = vr::Vec3i(0, 0, 1);
-      CHECK(vr_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
+      CHECK(vgrid_test::allocate_blocks(ctx, grid.map(), &block, 1).value() ==
+            0);
       auto active = grid.map().compact_active_blocks();
       CHECK(active.ok() && active->size() == 1);
       vr::DepthCameraParams cam{};
@@ -291,8 +294,8 @@ int nonfinite_depth_taps_case(const vkc::test::Gpu& ctx) {
       std::vector<float> depth(9, 1.0f);
       depth[tap] = invalid;
       CHECK(integrator->integrate(grid, depth.data(), cam, 100.0f).ok());
-      auto weight = vr_test::read_attribute<float>(ctx.device, ctx.allocator,
-                                                   grid, vol::kWeightAttribute);
+      auto weight = vgrid_test::read_attribute<float>(
+          ctx.device, ctx.allocator, grid, vol::kWeightAttribute);
       CHECK(weight.ok());
       CHECK(weight.value()[active->front().ptr] == 1.0f);
     }
@@ -327,7 +330,7 @@ int nonfinite_camera_case(const vkc::test::Gpu& ctx) {
   auto grid = std::move(made).value();
   vol::BlockIndex block{};
   block.coord = vr::Vec3i(0, 0, 1);
-  CHECK(vr_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
 
   vr::DepthCameraParams cam{};
   cam.fx = cam.fy = 1.0f;
@@ -371,8 +374,8 @@ int nonfinite_camera_case(const vkc::test::Gpu& ctx) {
         refused(integrator->integrate(grid, depth.data(), cam, 5.0f,
                                       tsdf::IntegrationMode::Classic, &frame)));
   }
-  auto weight = vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid,
-                                               vol::kWeightAttribute);
+  auto weight = vgrid_test::read_attribute<float>(ctx.device, ctx.allocator,
+                                                  grid, vol::kWeightAttribute);
   CHECK(weight.ok());
   for (const float w : weight.value()) CHECK(w == 0.0f);
 
@@ -507,7 +510,7 @@ int color_pixel_case(const vkc::test::Gpu& ctx) {
     auto grid = std::move(made).value();
     vol::BlockIndex block{};
     block.coord = vr::Vec3i(0, 0, 1);
-    CHECK(vr_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
+    CHECK(vgrid_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
     auto active = grid.map().compact_active_blocks();
     CHECK(active.ok() && active->size() == 1);
     vr::DepthCameraParams cam{};
@@ -525,7 +528,7 @@ int color_pixel_case(const vkc::test::Gpu& ctx) {
               ->integrate(grid, depth.data(), cam, 5.0f,
                           tsdf::IntegrationMode::Classic, &frame)
               .ok());
-    auto color = vr_test::read_attribute<std::uint32_t>(
+    auto color = vgrid_test::read_attribute<std::uint32_t>(
         ctx.device, ctx.allocator, grid, vol::kColorAttribute);
     CHECK(color.ok());
     const std::uint32_t got = color.value()[active->front().ptr];
@@ -570,10 +573,10 @@ int zero_depth_case(const vkc::test::Gpu& ctx) {
   CHECK(none.ok() && none->empty());
 
   const vol::BlockIndex block{};  // the block at the camera
-  CHECK(vr_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(ctx, grid.map(), &block, 1).value() == 0);
   CHECK(integrator->integrate(grid, depth.data(), cam, 100.0f).ok());
-  auto weight = vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid,
-                                               vol::kWeightAttribute);
+  auto weight = vgrid_test::read_attribute<float>(ctx.device, ctx.allocator,
+                                                  grid, vol::kWeightAttribute);
   CHECK(weight.ok());
   for (float w : weight.value()) CHECK(w == 0.0f);
   return 0;
@@ -588,12 +591,12 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
   // Copies of a grid attribute; the arrays are device-local.
   const auto floats = [&](const vol::VoxelBlockGrid& g, std::string_view name) {
-    return vr_test::read_attribute<float>(gpu.device, gpu.allocator, g, name)
+    return vgrid_test::read_attribute<float>(gpu.device, gpu.allocator, g, name)
         .value();
   };
   const auto words = [&](const vol::VoxelBlockGrid& g, std::string_view name) {
-    return vr_test::read_attribute<std::uint32_t>(gpu.device, gpu.allocator, g,
-                                                  name)
+    return vgrid_test::read_attribute<std::uint32_t>(gpu.device, gpu.allocator,
+                                                     g, name)
         .value();
   };
 
@@ -637,7 +640,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     b.coord = vr::Vec3i(0, 0, cz);
     blocks.push_back(b);
   }
-  CHECK(vr_test::allocate_blocks(gpu, vbg.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> active =
       vbg.map().compact_active_blocks();
   CHECK(active.ok() && active.value().size() == blocks.size());
@@ -716,13 +719,13 @@ int gpu_main(vkc::test::GpuContext& gpu) {
         vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
     CHECK(made.ok());
     vol::VoxelBlockGrid split = std::move(made).value();
-    CHECK(vr_test::allocate_blocks(gpu, split.map(), blocks).value() == 0);
+    CHECK(vgrid_test::allocate_blocks(gpu, split.map(), blocks).value() == 0);
     vkc::Result<std::vector<vol::BlockIndex>> list =
         split.map().compact_active_blocks();
     CHECK(list.ok() && list.value().size() == blocks.size());
-    vr::detail::set_test_groups_per_dispatch(1);
+    vgrid::detail::set_test_groups_per_dispatch(1);
     const bool fused = integ.integrate(split, depth.data(), cam, 5.0f).ok();
-    vr::detail::set_test_groups_per_dispatch(0);
+    vgrid::detail::set_test_groups_per_dispatch(0);
     CHECK(fused);
     const std::vector<float> split_tsdf = floats(split, vol::kTsdfAttribute);
     const std::vector<float> split_weight =
@@ -757,7 +760,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(grid2.ok());
   vol::VoxelBlockGrid vbg2 = std::move(grid2).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg2.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg2.map(), blocks).value() == 0);
 
   const float theta = 0.2f;  // ~11 deg about +Y
   const float ct = std::cos(theta);
@@ -812,7 +815,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(dyn.ok());
   vol::VoxelBlockGrid vbg_dyn = std::move(dyn).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_dyn.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_dyn.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> dyn_active =
       vbg_dyn.map().compact_active_blocks();
   CHECK(dyn_active.ok());
@@ -846,7 +849,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(cls.ok());
   vol::VoxelBlockGrid vbg_cls = std::move(cls).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_cls.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_cls.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> cls_active =
       vbg_cls.map().compact_active_blocks();
   CHECK(cls_active.ok());
@@ -879,7 +882,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(bi.ok());
   vol::VoxelBlockGrid vbg_bi = std::move(bi).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_bi.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_bi.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> bi_active =
       vbg_bi.map().compact_active_blocks();
   CHECK(bi_active.ok());
@@ -909,7 +912,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(ed.ok());
   vol::VoxelBlockGrid vbg_ed = std::move(ed).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_ed.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_ed.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> ed_active =
       vbg_ed.map().compact_active_blocks();
   CHECK(ed_active.ok());
@@ -935,7 +938,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(cg.ok());
   vol::VoxelBlockGrid vbg_c = std::move(cg).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_c.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_c.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> c_active =
       vbg_c.map().compact_active_blocks();
   CHECK(c_active.ok());
@@ -987,7 +990,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(og.ok());
   vol::VoxelBlockGrid vbg_o = std::move(og).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_o.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_o.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> o_active =
       vbg_o.map().compact_active_blocks();
   CHECK(o_active.ok());
@@ -1014,7 +1017,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(wg.ok());
   vol::VoxelBlockGrid vbg_wu = std::move(wg).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_wu.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_wu.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> wu_active =
       vbg_wu.map().compact_active_blocks();
   CHECK(wu_active.ok());
@@ -1137,7 +1140,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(zg.ok());
   vol::VoxelBlockGrid vbg_dz = std::move(zg).value();
-  CHECK(vr_test::allocate_blocks(gpu, vbg_dz.map(), blocks).value() == 0);
+  CHECK(vgrid_test::allocate_blocks(gpu, vbg_dz.map(), blocks).value() == 0);
   vkc::Result<std::vector<vol::BlockIndex>> dz_active =
       vbg_dz.map().compact_active_blocks();
   CHECK(dz_active.ok());

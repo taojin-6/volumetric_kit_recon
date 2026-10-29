@@ -6,7 +6,7 @@
 # tsdf/weight attributes via a GLSL compute kernel (classic projective
 # integration first; dynamic follows), the Fuser that takes a set of frames
 # through the grid's growth, allocation and integration, and the grid it starts
-# from. Depends on recon_volume (VoxelBlockGrid, grow_grid, DepthPinhole, the
+# from. Depends on grid_volume (VoxelBlockGrid, grow_grid, DepthPinhole, the
 # BlockIndex/VoxelGridParams ABI), per the strict left-to-right tier rule.
 include(GenerateExportHeader)
 
@@ -41,29 +41,28 @@ endif()
 
 target_compile_features(recon_tsdf PUBLIC cxx_std_17)
 
-# PUBLIC: the tsdf public header exposes volume types (VoxelBlockGrid,
-# DepthPinhole) + core types (Result, DepthCameraParams), so consumers compile
-# against recon_volume (and, transitively, recon_core) too.
-target_link_libraries(recon_tsdf PUBLIC recon_volume)
+# PUBLIC: the tsdf public header exposes grid's volume types (VoxelBlockGrid,
+# DepthPinhole) + recon_core's (DepthCameraParams) + core types (Result), so
+# consumers compile against grid_volume and recon_core too. grid_volume brings
+# grid_base, whose split dispatch (base/dispatch.hpp) the integrator records
+# with.
+target_link_libraries(recon_tsdf PUBLIC recon_core grid_volume)
 
-# PRIVATE src/: recon_core's internal dispatch.hpp, as recon_volume reaches it.
 target_include_directories(
-  recon_tsdf
-  PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-         "$<BUILD_INTERFACE:${_vr_tsdf_generated_inc}>"
-  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  recon_tsdf PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+                    "$<BUILD_INTERFACE:${_vr_tsdf_generated_inc}>")
 
 # Compile the GLSL kernels to SPIR-V and embed them as constexpr byte arrays
 # (each .cpp #includes its generated *.spv.hpp on a PRIVATE path), so recon_tsdf
 # ships the technique with no runtime shader files. They include the GLSL
-# recon_core and recon_volume export, not src/: the grid's contract, never its
-# hash table.
+# recon_core and grid_volume export, not src/: grid's contract, never its hash
+# table.
 include(vr_embed)
 vr_embed_shaders(
   recon_tsdf
   INCLUDE_TARGETS
   volumetric_kit::recon_core
-  volumetric_kit::recon_volume
+  volumetric_kit::grid_volume
   SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_clear.comp")
