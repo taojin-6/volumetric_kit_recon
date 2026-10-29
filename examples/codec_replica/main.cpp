@@ -32,11 +32,11 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/codec_stream/codec_stream.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/eval/mesh_distance.hpp"
 #include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/sender/codec_stream.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
@@ -45,6 +45,7 @@
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace codec = volumetric_kit::recon::codec;
+namespace codec_stream = volumetric_kit::recon::codec_stream;
 namespace eval = volumetric_kit::recon::eval;
 namespace mesh = volumetric_kit::recon::mesh;
 namespace sender = volumetric_kit::recon::sender;
@@ -82,9 +83,10 @@ vkc::Status run(const Options& opt) {
              vr::sensor::GpuFramePrep::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator));
-  const sender::CodecOutputs outputs = vr_example::codec_outputs(opt.output);
-  VKC_ASSIGN(sender::CodecStream stream,
-             sender::CodecStream::create(
+  const codec_stream::CodecOutputs outputs =
+      vr_example::codec_outputs(opt.output);
+  VKC_ASSIGN(codec_stream::CodecStream stream,
+             codec_stream::CodecStream::create(
                  device, allocator, config,
                  vr_example::codec_session("codec_replica",
                                            {vr_example::kNominalFps, 1}),
@@ -144,7 +146,7 @@ vkc::Status run(const Options& opt) {
   }
   std::fputs(log.table("per set").c_str(), stdout);
   if (coded_at != fused) {
-    VKC_ASSIGN(const sender::SentFrame last,
+    VKC_ASSIGN(const codec_stream::SentFrame last,
                stream.code(volume, fused - 1,
                            vr_example::frame_pts_ns(fused - 1,
                                                     vr_example::kNominalFps)));

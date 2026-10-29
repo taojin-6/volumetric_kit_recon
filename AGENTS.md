@@ -61,13 +61,15 @@ core → volume → tsdf → mesh → texture → interop
   │        └→ codec     ├→ eval
   │                    └→ io
   └→ sensor ← camera          (later: track)
-stream → networking → sender  (stream on the family core's base tier alone)
+stream → networking → codec_stream → sender
+  (stream on the family core's base tier alone)
 ```
 
 - No upward includes. `camera` depends on the family core's base tier and GLM
   only, `stream` on that base tier alone, `networking` on `stream`, `sensor`
   on `camera` and `core`, `codec` on `volume`, `eval` and `io` on `mesh`,
-  and `sender` on `networking`, `codec`, `tsdf` and `sensor`'s GPU pass;
+  `codec_stream` on `codec` and `networking`, and `sender` on
+  `codec_stream`, `tsdf` and `sensor`'s GPU pass;
   driver/decoder/pre-processing targets stay separate.
   Asset I/O is host-side at file boundaries; Assimp is an optional private
   backend of `recon_io_assimp`, never a dependency of GPU kernels.

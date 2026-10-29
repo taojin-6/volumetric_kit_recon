@@ -3,27 +3,29 @@
 
 #pragma once
 
-/// @file sender/codec_stream.hpp
-/// @brief A sender's codec stream: each frame encoded, written to a `.vrst`
-///        file, served to live viewers, and decoded back as a viewer would.
+/// @file codec_stream/codec_stream.hpp
+/// @brief A codec stream: each frame encoded, written to a `.vrst` file,
+///        served to live viewers, and decoded back as a viewer would.
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/recon/codec/codec_params.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
+#include "volumetric_kit/recon/codec_stream/export.hpp"
 #include "volumetric_kit/recon/core/fwd.hpp"
 #include "volumetric_kit/recon/networking/stream_server.hpp"
-#include "volumetric_kit/recon/sender/export.hpp"
 #include "volumetric_kit/recon/stream/session.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
-namespace volumetric_kit::recon::sender {
+namespace volumetric_kit::recon::codec_stream {
 
 namespace detail {
 class StreamCoder;
@@ -48,7 +50,7 @@ struct CodecOutputs {
 };
 
 /// @brief A frame as it went out, from @ref CodecStream::code or
-///        @ref SetSender::send.
+///        @ref CodecStream::finish_frame.
 struct SentFrame {
   /// An I-frame, or a P-frame on the frame coded before.
   codec::FrameType type = codec::FrameType::kIntra;
@@ -57,7 +59,7 @@ struct SentFrame {
   /// Its payload outgrew what its batch copied and took a tail
   /// (`"  ..tail"`, @ref codec::Encoder::finish).
   bool tail = false;
-  /// The encode's stage rows; a sender's frame's, both halves'.
+  /// The encode's stage rows; a frame coded in halves, both halves'.
   core::StageMetrics encode;
   /// The decode's stage rows; empty without @ref CodecOutputs::decode.
   core::StageMetrics decode;
@@ -78,18 +80,42 @@ struct SentFrame {
 /// waits for a key: the request stands until a frame is returned, and joins
 /// between two frames make one key.
 ///
+/// A frame is coded whole (@ref code), or in halves around a caller's
+/// batch, as a sender codes a set's frame in the batch that fuses the set:
+/// @ref record_front into the batch, @ref front_ran once it has resolved,
+/// @ref redo if the grid changed after the front half, then
+/// @ref finish_frame, which codes the back half in a batch of its own and
+/// writes, serves and decodes the frame as @ref code does. The halves make
+/// the frames @ref code makes of the same grids. One frame is in flight: a
+/// later front half or @ref code supersedes it, and the encoder then refuses
+/// its pending frame.
+///
 /// @code
-/// VKC_ASSIGN(sender::CodecStream stream,
-///            sender::CodecStream::create(device, allocator, config, session,
-///                                        outputs));
+/// VKC_ASSIGN(codec_stream::CodecStream stream,
+///            codec_stream::CodecStream::create(device, allocator, config,
+///                                              session, outputs));
 /// for (std::uint64_t set = 0; set < sets; ++set) {
 ///   fuse(grid, set);
-///   VKC_ASSIGN(const sender::SentFrame sent,
+///   VKC_ASSIGN(const codec_stream::SentFrame sent,
 ///              stream.code(grid, set, pts_ns(set)));
 /// }
 /// VKC_TRY(stream.finish());
 /// @endcode
-class VR_SENDER_API CodecStream {
+///
+/// In halves, after the caller's own work on the grid in its batch `front`:
+/// @code
+/// VKC_ASSIGN(const codec::PendingEncode pending,
+///            stream.record_front(front, grid));
+/// VKC_ASSIGN(core::PendingBatch done, front.submit_async({}, {}));
+/// VKC_TRY(done.wait());
+/// stream.front_ran(done.device_rows(), &rows);
+/// VKC_ASSIGN(const codec_stream::SentFrame sent,
+///            stream.finish_frame(pending, set, pts_ns(set), &rows));
+/// @endcode
+///
+/// @warning The `Device` and `Allocator` passed to @ref create must outlive
+///          the stream. Not thread-safe: one call at a time.
+class VR_CODEC_STREAM_API CodecStream {
  public:
   /// @brief Make the outputs, then the encoder and, with
   ///        @ref CodecOutputs::decode, the decoder.
@@ -148,6 +174,75 @@ class VR_SENDER_API CodecStream {
   core::Result<SentFrame> code(volume::VoxelBlockGrid& grid, std::uint64_t set,
                                std::uint64_t pts_ns);
 
+  /// @brief Record @p grid's frame's front half into @p front, after what it
+  ///        holds (@ref codec::Encoder::record_front), its rows the frame's
+  ///        own.
+  ///
+  /// The front half decides the frame's type, so a viewer's request for a
+  /// key is read here, as @ref code reads it; it stands until a frame is
+  /// returned, so a front half recorded again (@ref redo) keeps it.
+  /// @param front  Records the half; the caller submits it, and calls
+  ///               @ref front_ran once it has resolved.
+  /// @param grid   The grid to code; nothing but @p front changes it until
+  ///               @ref finish_frame, or @ref redo records the half again.
+  /// @return The pending frame; `Status::Code::InvalidArgument` for a
+  ///         finished or moved-from stream; or the encoder's refusal, with
+  ///         nothing recorded.
+  /// @pre The batches of the stream's last frame have resolved.
+  core::Result<codec::PendingEncode> record_front(core::CommandBatch& front,
+                                                  volume::VoxelBlockGrid& grid);
+
+  /// @brief Once the batch @ref record_front recorded into has resolved:
+  ///        its device rows into the frame's rows where the front half
+  ///        placed that row (@ref codec::Encoder::record_front places its
+  ///        stage's and each breakdown's as it opens), the rest into
+  ///        @p rest. Does nothing on a moved-from stream.
+  /// @param device_rows  The batch's `PendingBatch::device_rows`.
+  /// @param rest         Optional: takes the rows of the batch's other work.
+  void front_ran(const std::vector<core::StageRow>& device_rows,
+                 core::StageMetrics* rest = nullptr);
+
+  /// @brief The front half again, in a batch of its own and waited on: what
+  ///        a caller does when the grid changed after @p pending's front
+  ///        half was recorded, such as a fusion done again once its batch
+  ///        ran, so the front half coded the grid without it (rare).
+  ///
+  /// The frame's rows keep the first front half's, which the device ran too,
+  /// and add this one's.
+  /// @param pending  From @ref record_front, its batch resolved and
+  ///                 @ref front_ran called; dropped.
+  /// @param grid     The grid, as it now is.
+  /// @param rows     Optional: takes the wait (`"wait: redo"`).
+  /// @return The new pending frame; `Status::Code::InvalidArgument` for a
+  ///         finished or moved-from stream; or the encoder's or the batch's
+  ///         failure.
+  core::Result<codec::PendingEncode> redo(const codec::PendingEncode& pending,
+                                          volume::VoxelBlockGrid& grid,
+                                          core::StageMetrics* rows = nullptr);
+
+  /// @brief Once @p pending's front batch has resolved (@ref front_ran):
+  ///        code its back half in a batch of its own and wait on it
+  ///        (`"wait: frame"`), finish the frame, then write, serve and
+  ///        decode it as @ref code does.
+  ///
+  /// The frame's head and payload are written and served as they lie, under
+  /// one CRC (`"crc"`), and decoded from the decoder's input buffer they are
+  /// copied into.
+  /// @param pending  From @ref record_front or @ref redo.
+  /// @param set      As @ref code.
+  /// @param pts_ns   As @ref code.
+  /// @param rows     Optional: the frame's rows, `"crc"`, `"write"`,
+  ///                 `"publish"` and the wait.
+  /// @param sent     Optional: runs once the frame is written and served,
+  ///                 before the decode.
+  /// @return As @ref code; a @p set or @p pts_ns out of order, or a
+  ///         finished or moved-from stream, refused with @p pending
+  ///         dropped.
+  core::Result<SentFrame> finish_frame(const codec::PendingEncode& pending,
+                                       std::uint64_t set, std::uint64_t pts_ns,
+                                       core::StageMetrics* rows = nullptr,
+                                       const std::function<void()>& sent = {});
+
   /// @brief Close the viewers, which see the stream end, and finish the file
   ///        with its footer index (@ref stream::StreamWriter::finish);
   ///        without either, only mark the stream finished. One attempt:
@@ -167,8 +262,8 @@ class VR_SENDER_API CodecStream {
   ///         once finished, and on a moved-from stream.
   const networking::StreamServer* server() const noexcept;
 
-  /// @return The pts of the last frame written, below which @ref code
-  ///         refuses one; 0 before the first.
+  /// @return The pts of the last frame written, below which @ref code and
+  ///         @ref finish_frame refuse one; 0 before the first.
   std::uint64_t last_pts_ns() const noexcept;
 
   /// @return The frames encoded and written so far, one the decoder refused
@@ -176,10 +271,8 @@ class VR_SENDER_API CodecStream {
   ///         only while this is 0.
   std::uint64_t coded() const noexcept;
 
-  /// @return What codes the frames, for @ref SetSender, which records a
-  ///         frame in halves around its set's fusion. A type the library
-  ///         completes only inside itself; null on a moved-from stream.
-  detail::StreamCoder* coder() noexcept;
+  /// @return Whether this owns its coder; false when moved-from.
+  bool valid() const noexcept { return coder_ != nullptr; }
 
  private:
   explicit CodecStream(std::unique_ptr<detail::StreamCoder> coder) noexcept;
@@ -187,4 +280,4 @@ class VR_SENDER_API CodecStream {
   std::unique_ptr<detail::StreamCoder> coder_;
 };
 
-}  // namespace volumetric_kit::recon::sender
+}  // namespace volumetric_kit::recon::codec_stream

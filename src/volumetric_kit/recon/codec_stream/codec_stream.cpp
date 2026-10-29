@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-#include "volumetric_kit/recon/sender/codec_stream.hpp"
+#include "volumetric_kit/recon/codec_stream/codec_stream.hpp"
 
 #include <cstring>
 #include <filesystem>
@@ -14,7 +14,7 @@
 #include "volumetric_kit/recon/codec/decode_grid.hpp"
 #include "volumetric_kit/recon/core/log.hpp"
 
-namespace volumetric_kit::recon::sender {
+namespace volumetric_kit::recon::codec_stream {
 
 namespace detail {
 namespace {
@@ -130,7 +130,7 @@ core::Result<SentFrame> StreamCoder::code(volume::VoxelBlockGrid& grid,
   return played;
 }
 
-core::Result<codec::PendingEncode> StreamCoder::record(
+core::Result<codec::PendingEncode> StreamCoder::record_front(
     core::CommandBatch& front, volume::VoxelBlockGrid& grid) {
   if (finished_) {
     return core::Status::invalid_argument("CodecStream: finished");
@@ -158,7 +158,7 @@ core::Result<codec::PendingEncode> StreamCoder::redo(
   encoder_.abandon(pending);
   const core::StageMetrics first = std::move(front_rows_);
   core::CommandBatch front(*device_, *allocator_);
-  VKC_ASSIGN(const codec::PendingEncode again, record(front, grid));
+  VKC_ASSIGN(const codec::PendingEncode again, record_front(front, grid));
   const core::Status ran = [&]() -> core::Status {
     VKC_ASSIGN(core::PendingBatch done, front.submit_async({}, {}));
     {
@@ -329,6 +329,38 @@ core::Result<SentFrame> CodecStream::code(volume::VoxelBlockGrid& grid,
   return coder_->code(grid, set, pts_ns);
 }
 
+core::Result<codec::PendingEncode> CodecStream::record_front(
+    core::CommandBatch& front, volume::VoxelBlockGrid& grid) {
+  if (!coder_) {
+    return core::Status::invalid_argument("CodecStream: moved from");
+  }
+  return coder_->record_front(front, grid);
+}
+
+void CodecStream::front_ran(const std::vector<core::StageRow>& device_rows,
+                            core::StageMetrics* rest) {
+  if (coder_) coder_->front_ran(device_rows, rest);
+}
+
+core::Result<codec::PendingEncode> CodecStream::redo(
+    const codec::PendingEncode& pending, volume::VoxelBlockGrid& grid,
+    core::StageMetrics* rows) {
+  if (!coder_) {
+    return core::Status::invalid_argument("CodecStream: moved from");
+  }
+  return coder_->redo(pending, grid, rows);
+}
+
+core::Result<SentFrame> CodecStream::finish_frame(
+    const codec::PendingEncode& pending, std::uint64_t set,
+    std::uint64_t pts_ns, core::StageMetrics* rows,
+    const std::function<void()>& sent) {
+  if (!coder_) {
+    return core::Status::invalid_argument("CodecStream: moved from");
+  }
+  return coder_->finish_frame(pending, set, pts_ns, rows, sent);
+}
+
 core::Status CodecStream::finish() {
   if (!coder_) {
     return core::Status::invalid_argument("CodecStream: moved from");
@@ -352,6 +384,4 @@ std::uint64_t CodecStream::coded() const noexcept {
   return coder_ ? coder_->coded() : 0;
 }
 
-detail::StreamCoder* CodecStream::coder() noexcept { return coder_.get(); }
-
-}  // namespace volumetric_kit::recon::sender
+}  // namespace volumetric_kit::recon::codec_stream

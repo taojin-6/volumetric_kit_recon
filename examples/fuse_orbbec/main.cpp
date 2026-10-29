@@ -36,7 +36,7 @@
 // seconds without a frame rather than waiting, still reporting them.
 //
 // output.stream, output.csv or output.serve codes each fused set as one frame
-// of a codec stream (sender::CodecStream) at the set's time,
+// of a codec stream (codec_stream::CodecStream) at the set's time,
 // the host's clock for a rig, and reports the stream, even when the run fails
 // part-way; codec.sweep then prints the codec's rate-distortion table on the
 // last grid. Only output.csv or codec.sweep decodes each frame too, for the
@@ -80,13 +80,13 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
+#include "volumetric_kit/recon/codec_stream/codec_stream.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/eval/mesh_distance.hpp"
 #include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/networking/stream_server.hpp"
-#include "volumetric_kit/recon/sender/codec_stream.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
 #include "volumetric_kit/recon/sensor/array/rig_sets.hpp"
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
@@ -102,6 +102,7 @@ namespace tsdf = volumetric_kit::recon::tsdf;
 namespace mesh = volumetric_kit::recon::mesh;
 namespace sensor = volumetric_kit::recon::sensor;
 namespace eval = volumetric_kit::recon::eval;
+namespace codec_stream = volumetric_kit::recon::codec_stream;
 namespace sender = volumetric_kit::recon::sender;
 
 namespace {
@@ -137,14 +138,15 @@ vkc::Status run(const Options& opt) {
   // cameras, so a port in use, a rerun onto an existing stream, or a PLY that
   // is its file or the CSV's under another name, is refused before any camera
   // opens. A stream that codes no set is removed again when the run ends ---
-  std::optional<sender::CodecStream> stream;
+  std::optional<codec_stream::CodecStream> stream;
   std::optional<vr_example::CodecReport> report;
   if (!opt.output.stream.empty() || !opt.output.csv.empty() ||
       opt.output.serve != 0) {
-    const sender::CodecOutputs outputs = vr_example::set_codec_outputs(opt);
+    const codec_stream::CodecOutputs outputs =
+        vr_example::set_codec_outputs(opt);
     VKC_ASSIGN(
-        sender::CodecStream made,
-        sender::CodecStream::create(
+        codec_stream::CodecStream made,
+        codec_stream::CodecStream::create(
             device, allocator, config,
             vr_example::codec_session("fuse_orbbec", {opt.source.fps, 1}),
             outputs));

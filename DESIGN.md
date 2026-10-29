@@ -62,7 +62,7 @@ conventions and Vulkan setup.
   `volumetric_kit::recon_camera`, `…_core`, `…_volume`, `…_tsdf`, `…_mesh`,
   `…_texture`,
   `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_stream`, `…_networking`,
-  `…_sender`, `…_interop` (+ later `…_track`),
+  `…_codec_stream`, `…_sender`, `…_interop` (+ later `…_track`),
   plus `…_sensor_utils` (GPU pre-processing), `…_sensor_array` (several
   sensors read as one), `…_sensor_apple` (Apple's pixel buffers as images),
   the opt-in `…_sensor_orbbec`
@@ -82,9 +82,10 @@ left. No upward includes.
 branching off **`core`**, `codec` off **`volume`** and `eval`/`io` off **`mesh`**
 (later: `track`). `camera` sits under `sensor` and beside `core`: it
 links the family core's base tier and GLM, and no other recon tier. `stream`
-links that base tier alone, and `networking` links `stream`. `sender` comes
-after `networking`: it links `networking`, `codec`, `tsdf` and `sensor`'s
-GPU pass (`sensor_utils`).
+links that base tier alone, and `networking` links `stream`. `codec_stream`
+comes after `networking`: it links `codec` and `networking`, and no fusion or
+sensor tier. `sender` comes after it: it links `codec_stream`, `tsdf` and
+`sensor`'s GPU pass (`sensor_utils`).
 
 - **`camera`** — the camera vocabulary the drivers and the sensor tier
   share: the double-precision `CameraModel` (image size, intrinsics, OpenCV's
@@ -162,10 +163,12 @@ GPU pass (`sensor_utils`).
   sockets and threads of their own (2026-10-21). Host-side, on `stream`,
   so the format and the sockets are tested apart; it logs through recon's
   log seam (`core/log.hpp`), header-only over the family core's base tier.
-- **`sender`** — a sender's set step and its codec stream: a prepared set
-  fused, freed on schedule and coded in two batches (`SetSender`), each
-  frame written to a `.vrst` file, served and decoded back
-  (`CodecStream`), and the fuser's inputs for prepared frames
+- **`codec_stream`** — grids coded as frames, each written to a `.vrst`
+  file, served and decoded back (`CodecStream`), a frame whole or in halves
+  around a caller's batch (2026-10-26, 2026-10-28). It prints nothing.
+- **`sender`** — a sender's set step: a prepared set fused, freed on
+  schedule and its frame coded in two batches through the codec stream's
+  halves (`SetSender`), and the fuser's inputs for prepared frames
   (`fuse_inputs`) (2026-10-26). It prints nothing.
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
@@ -2140,12 +2143,11 @@ SIGPIPE; every call is retried on `EINTR`. The sender sets `TCP_NODELAY`
 and the listener `SO_REUSEADDR`. The GOP log (`gop_log.cpp`), in either
 mode, has no socket, thread or clock, and is tested alone.
 
-### sender
+### codec_stream
 
-`recon_sender` is what a sender does with a prepared set
-(`sender/set_sender.hpp`, `sender/codec_stream.hpp`, the 2026-10-26
-entry). `fuse_inputs` (`sender/fuse_inputs.hpp`) hands prepared frames to
-the fuser, nothing uploaded.
+`recon_codec_stream` codes grids as frames into a `.vrst` file and to live
+viewers (`codec_stream/codec_stream.hpp`, the 2026-10-26 and 2026-10-28
+entries). It links `codec` and `networking`, and no fusion or sensor tier.
 
 **The stream** (`CodecStream`). `create` takes the encoder's settings, the
 session and `CodecOutputs`: a new `.vrst` file, the server's options, and
@@ -2173,6 +2175,27 @@ returned, so joins between two frames make one key, a refused frame or a
 front half recorded again keeps it, and the period counts from it.
 `finish` closes the viewers and writes the footer, in one attempt.
 
+**A frame in halves.** A caller with work of its own on the grid codes the
+frame around its batch: `record_front` records the front half into that
+batch, after what it holds, reading the server's key requests as `code`
+does; `front_ran`, once the batch has resolved, gives the frame the device
+rows its front half placed and the caller the rest; `redo` records the
+front half again, in a batch of its own and waited on (`"wait: redo"`), for
+a grid changed after the batch ran; and `finish_frame` codes the back half
+in a batch of its own, waits (`"wait: frame"`), and writes, serves and
+decodes the frame as `code` does, running the caller's `sent` once it is
+written and served. The halves make `code`'s frames of the same grids. One
+frame is in flight: a later front half or `code` supersedes it, and the
+encoder refuses its pending frame. A moved-from stream (`valid()` false)
+refuses the halves too.
+
+### sender
+
+`recon_sender` is what a sender does with a prepared set
+(`sender/set_sender.hpp`, the 2026-10-26 entry). `fuse_inputs`
+(`sender/fuse_inputs.hpp`) hands prepared frames to the fuser, nothing
+uploaded.
+
 **The set step** (`SetSender`). `send` records the set's fusion
 (`Fuser::record_fuse`), its free pass every `free_after` sets
 (`record_free_stale`) and, for a set `code_due`, its frame's front half
@@ -2184,10 +2207,9 @@ records the front half again after it, in a batch of its own
 (`"wait: redo"`). `sent` runs once the set is published: a coded set's
 frame written and served, before the decode; a set not coded, after its
 fusion. `Sent` holds the fusion's report, a free pass's refusal, which does
-not stop the set, and the frame. The front half, its device rows and the
-back half are no public call: they are the internal class `CodecStream`
-owns (`stream_coder.hpp`), which it hands out only as an incomplete type
-(`coder()`) for `SetSender`'s source to complete.
+not stop the set, and the frame. The frame goes through the stream's halves;
+a set due a frame of a moved-from stream is refused before anything is
+recorded.
 
 ## Examples
 
@@ -2291,7 +2313,7 @@ at 3840x2160 and 25 fps unless the scenario names another mode, and every
 camera opens at `source.calibration`'s colour controls, or at auto
 exposure.
 With `output.stream`, `output.csv` or `output.serve` it also codes each
-fused set as one frame of a `sender::CodecStream` (the 2026-10-20
+fused set as one frame of a `codec_stream::CodecStream` (the 2026-10-20
 decision), decoding it too only with `output.csv` or `codec.sweep`
 (`set_codec_outputs`), for their decode columns and the sweep's grid. Each
 set's row is stamped published once its frame is written and served, before
@@ -2357,7 +2379,7 @@ surface against the source's, mesh to mesh, with the `eval` tier: accuracy,
 coverage and the F-score at half a voxel, since a fused TSDF is projective
 and sampling it would measure the fusion's bias too. `codec.sweep` prints the
 rate–distortion table the defaults are chosen from. The codec examples
-stream through the sender tier's `CodecStream` ([sender](#sender)); their
+stream through `CodecStream` ([codec_stream](#codec_stream)); their
 report and the sweep are `examples/common/codec_report.hpp` and
 `codec_sweep.hpp`. The report (`CodecReport`) keeps a row per frame that
 went out whole, from its `SentFrame` (source index, frame type, bytes,
