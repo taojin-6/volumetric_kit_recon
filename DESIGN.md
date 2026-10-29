@@ -722,11 +722,24 @@ non-finite, and colour at the nearest pixel (2026-10-08). A NaN hole
 therefore leaves a valid nearest sample usable, and a camera with a
 non-finite intrinsic, depth bound or pose entry is refused. Zero is a
 missing sample even when `min_depth` is zero, in allocation and integration
-alike. `IntegrationMode` selects **classic** (accumulate: free space ahead
-of the surface fuses as +`trunc_dist` at a sample's weight) or **dynamic**
-(change evicts, conflict averages; below). An optional `ColorFrame` fuses
-colour through its own separate
-`ColorCameraParams`; a voxel's first colour observation assigns rather than
+alike. Near an outline the true distance replaces the projective one, in
+both modes (2026-10-29): a voxel whose sample is not a clean interpolation
+inside the band -- a jump or a gap across its taps, past the band, or no
+return -- and whose footprint window (+-ceil(half a voxel's footprint)
+pixels, 3x3 to 7x7) holds a return and a gap or a jump past the band takes
+the Euclidean distance to the nearest back-projected return within
++-ceil(the footprint + 1) pixels (2 to 6), if under `trunc_dist`. Its sign
+is its own pixel's: negative behind that pixel's surface (faded as a band
+sample is), positive in front of it, beside it, or over a gap (a quarter of
+a sample's weight); a voxel more than a voxel behind its nearest return,
+beside it, is in the shadow behind the outline and keeps the projective
+sample. A positive one brings no colour, and under Dynamic may make a voxel
+observed, as a band sample does. Outlines then lie at the true edge instead
+of a cell's step, and thin parts mesh solid. `IntegrationMode` selects
+**classic** (accumulate: free space ahead of the surface fuses as
++`trunc_dist` at a sample's weight) or **dynamic** (change evicts, conflict
+averages; below). An optional `ColorFrame` fuses colour through its own
+separate `ColorCameraParams`; a voxel's first colour observation assigns rather than
 blends, and `coverage_in_alpha` has a pixel with a zero high byte fuse no
 colour, as one outside the image fuses none. Each call is one tick of the
 map's clock, and stamps `changed` on every block whose `tsdf`, `weight` or
@@ -787,6 +800,17 @@ too, so a set fused again is tested once. A camera's first `warm_up` frames
 build its history and reset nothing, and its first Dynamic set zeroes that
 history in a submit of its own. Integrate a grid with one mode and one integrator: the change
 histories are the integrator's, by slot, whatever grid it fuses.
+Each camera's change test also marks its reach (`tsdf_change_reach.comp`,
+in the `"  ..detect"` row): every pixel within 6 -- the rim distance's
+widest search -- of a flagged one takes the set's stamp, with a bit near a
+departure (a surface farther or vanished); a uint32 a pixel a camera, made
+and zeroed with the camera's first set in one submit for the set's new
+cameras. Within the reach of a change, the fuse gives no rim distance, so a
+moving surface is fused from its fresh projective samples alone; and beside
+a departure the reset also clears a positive voxel its camera sees past or
+into a gap whose nearest return is gone from the band or is a pixel that
+changed, so what a rim distance left beside an object leaves with it, while
+an outline that stayed keeps its own (2026-10-29).
 `Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). A set
 records into a caller's batch (`record_fuse`, 2026-10-25): the fuse's checks
 (`check_frames`), a grow ahead past `kGrowThreshold`, blocking, then one

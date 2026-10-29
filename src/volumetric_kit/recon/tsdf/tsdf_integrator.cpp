@@ -626,9 +626,9 @@ core::Status TsdfIntegrator::record_checked(
     }
   }
 
-  // Dynamic: each camera's change test, its own `"  ..detect"` breakdown,
-  // ahead of the compaction. Behind a closed gate it tests nothing, so a set
-  // fused again later is tested once.
+  // Dynamic: each camera's change test and its reach, their own
+  // `"  ..detect"` breakdown, ahead of the compaction. Behind a closed gate
+  // they test and mark nothing, so a set fused again later is tested once.
   core::StageMetrics parts;
   const bool rows =
       metrics != nullptr && stage != nullptr && stage->timer() != nullptr;

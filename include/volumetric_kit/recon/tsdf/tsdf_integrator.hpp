@@ -34,7 +34,8 @@ namespace volumetric_kit::recon::tsdf {
 enum class IntegrationMode : std::uint32_t {
   /// Accumulate: a voxel in free space ahead of the surface (its projective
   /// SDF exceeds `trunc_dist`) is fused as +`trunc_dist` at a surface
-  /// sample's weight, a smooth field ahead of surfaces.
+  /// sample's weight, a smooth field ahead of surfaces; beside an outline,
+  /// as its true distance (@ref TsdfIntegrator).
   Classic = 0,
   /// Change evicts, conflict averages: each fixed camera's
   /// @ref ChangeDetector finds the rays whose depth changed for real, and a
@@ -145,6 +146,19 @@ VR_TSDF_API volumetric_kit::grid::volume::DepthPinhole to_depth_pinhole(
 /// (classic fuses it whole). Depth is sampled bilinearly, falling back to
 /// nearest-neighbour at image edges and across depth discontinuities or taps
 /// that are non-positive or non-finite.
+///
+/// Near an outline, in either mode, a voxel takes the true distance instead
+/// of the projective one: one whose sample is not a clean interpolation
+/// inside the band (a jump or a gap across its taps, past the band, or no
+/// return) and whose footprint touches an outline takes the signed Euclidean
+/// distance to the nearest back-projected return around it, when that is
+/// under `trunc_dist` -- negative behind its own pixel's surface, positive
+/// in front of it, beside it or over a gap. Outlines then lie at the true
+/// edge rather than a cell's step, and thin parts close. Under
+/// @ref IntegrationMode::Dynamic, a camera fuses no such distance within a
+/// few pixels of a change it saw this set, so a moving surface is fused from
+/// its own samples alone, and a departure there resets the distances it left
+/// beside it.
 ///
 /// @warning The `Device` and `Allocator` passed to @ref create must
 ///          outlive this object; it stores references to them.
@@ -348,9 +362,10 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    size fits the device's storage-buffer binding limit.
   /// @param stage       Optional: the caller's scope, whose tile every pass
   ///                    counts to; the compaction is its `"  ..active set"`
-  ///                    breakdown, and under Dynamic the change tests its
-  ///                    `"  ..detect"` and the resets its `"  ..reset"`, the
-  ///                    device half alone, from `PendingBatch::device_rows`.
+  ///                    breakdown, and under Dynamic the change tests and
+  ///                    their reach its `"  ..detect"` and the resets its
+  ///                    `"  ..reset"`, the device half alone, from
+  ///                    `PendingBatch::device_rows`.
   /// @param metrics     Optional: @p stage's own rows, in which the
   ///                    breakdown's rows are placed now, after the stage's
   ///                    rows before them, their host halves 0.
