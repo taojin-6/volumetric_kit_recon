@@ -134,7 +134,7 @@ if(VR_BUILD_TESTS)
     "${PROJECT_SOURCE_DIR}/tests/example_viewer_rig_report_test.cpp")
   target_link_libraries(
     recon_example_viewer_rig_report_test
-    PRIVATE volumetric_kit::core_test_base volumetric_kit::recon_sensor_array
+    PRIVATE volumetric_kit::core_test_base volumetric_kit::sensor_array
             volumetric_kit::recon_texture volumetric_kit::gfx_glfw
             Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_rig_report_test
@@ -184,15 +184,15 @@ vr_target_warnings(fuse_viewer)
 # read as a sensor array, every camera's frame prepared, fused and textured on
 # the GPU. Built only where the Orbbec driver is (VR_WITH_ORBBEC); the viewer CI
 # leg installs the SDK, so it is compiled on every PR with the other two.
-if(TARGET volumetric_kit::recon_sensor_orbbec)
+if(TARGET volumetric_kit::sensor_orbbec)
   add_executable(rig_viewer rig_viewer.cpp)
   # recon_sensor_array ahead of the list, whose recon_sender links
   # recon_sensor_utils: a library named before one that links it is named again,
   # as above.
   target_link_libraries(
     rig_viewer
-    PRIVATE volumetric_kit::recon_sensor_array ${_viewer_recon_libs}
-            volumetric_kit::recon_sensor_orbbec volumetric_kit::gfx_glfw
+    PRIVATE volumetric_kit::sensor_array ${_viewer_recon_libs}
+            volumetric_kit::sensor_orbbec volumetric_kit::gfx_glfw
             volumetric_kit::gfx_pipelines Vulkan::Vulkan)
   target_include_directories(rig_viewer PRIVATE ${_viewer_common_inc})
   vr_target_warnings(rig_viewer)

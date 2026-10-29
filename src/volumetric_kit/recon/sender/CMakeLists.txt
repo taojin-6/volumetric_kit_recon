@@ -5,8 +5,8 @@
 # What a sender does with a set once its prep is recorded: fuse it, free stale
 # blocks on schedule and code its frame in two batches through the codec
 # stream's halves (SetSender), and the fuser's inputs for prepared frames
-# (fuse_inputs). The tier after codec_stream: it links the GPU frame prep's
-# types (recon_sensor_utils), the fuser (recon_tsdf) and the codec stream.
+# (fuse_inputs). The tier after codec_stream: it links the frame contract
+# (sensor_frame's DeviceFrame), the fuser (recon_tsdf) and the codec stream.
 include(GenerateExportHeader)
 
 set(_vr_sender_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
@@ -38,10 +38,10 @@ endif()
 
 target_compile_features(recon_sender PUBLIC cxx_std_17)
 
-# PUBLIC: the headers take the prep's DeviceFrame, the fuser and its report, and
-# the codec stream and its frame.
-target_link_libraries(recon_sender PUBLIC recon_sensor_utils recon_tsdf
-                                          recon_codec_stream)
+# PUBLIC: the headers take the frame contract's DeviceFrame, the fuser and its
+# report, and the codec stream and its frame.
+target_link_libraries(recon_sender PUBLIC volumetric_kit::sensor_frame
+                                          recon_tsdf recon_codec_stream)
 
 target_include_directories(
   recon_sender PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"

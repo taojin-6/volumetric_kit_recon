@@ -3,21 +3,21 @@
 
 # --- recon_core: Tier 1 -----------------------------------------------------
 # Foundation tier: what is recon's own beneath every other tier -- the
-# requirements recon's kernels place on a device, recon's log source, the camera
-# and colour-space vocabulary, and the GLM-backed vector/matrix types -- over
-# volumetric_kit_core's error handling, log sink and contract checks (base tier)
-# and its Vulkan foundation (vulkan tier), which recon's tiers use under the
-# core's names. Every other tier depends on this. Vulkan is reached only through
-# the core's core/vulkan/vulkan.hpp umbrella. Deps: volumetric_kit_core,
-# header-only GLM and the Vulkan loader/headers.
+# requirements recon's kernels place on a device, recon's log source and the
+# GLM-backed vector/matrix types -- over volumetric_kit_core's error handling,
+# log sink and contract checks (base tier) and its Vulkan foundation (vulkan
+# tier), which recon's tiers use under the core's names. Every other tier
+# depends on this. Vulkan is reached only through the core's
+# core/vulkan/vulkan.hpp umbrella. Deps: volumetric_kit_core, header-only GLM
+# and the Vulkan loader/headers.
 include(GenerateExportHeader)
 
-# The core's device serializes submits with std::mutex and recon's sensor tier
-# runs capture threads, so everything above recon_core needs the platform
-# threading runtime. Link it explicitly rather than relying on the compiler's
-# implicit pthread, so the static archive resolves on toolchains that require it
-# -- GCC/libstdc++ on Linux with --as-needed, Android, and static links. (macOS
-# folds pthread into libc, which would otherwise hide the gap.)
+# The core's device serializes submits with std::mutex, so everything above
+# recon_core needs the platform threading runtime. Link it explicitly rather
+# than relying on the compiler's implicit pthread, so the static archive
+# resolves on toolchains that require it -- GCC/libstdc++ on Linux with
+# --as-needed, Android, and static links. (macOS folds pthread into libc, which
+# would otherwise hide the gap.)
 find_package(Threads REQUIRED)
 
 # GLM: header-only vector/matrix math. PUBLIC -- it appears in public headers
@@ -94,10 +94,3 @@ target_include_directories(
                     "$<BUILD_INTERFACE:${_vr_generated_inc}>")
 
 vr_target_warnings(recon_core)
-
-# The GLSL recon exports, for a consumer's kernels to #include as recon's own do
-# ("volumetric_kit/recon/core/shaders/pinhole.glsl"), through the core's
-# INCLUDE_TARGETS volumetric_kit::recon_core, as recon's tsdf and texture do.
-# The other tiers' shaders read src/ (vr_embed_shaders).
-vkc_export_glsl(recon_core PREFIX volumetric_kit/recon/core/shaders FILES
-                shaders/pinhole.glsl)

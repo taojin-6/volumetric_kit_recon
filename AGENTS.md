@@ -170,14 +170,16 @@ git -C "$recon_root" diff --check
   contracts or broad changes warrant it. CI also covers Debug and sanitizers.
 - For documentation-only changes, check formatting, links, and consistency;
   a build is unnecessary. The hooks can be scoped with `pre-commit run --files`.
-- `VR_BUILD_VIEWER`, `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG`, `VR_WITH_CUDA`, and
-  `VR_WITH_ASSIMP` enable optional paths. Orbbec, FFmpeg and Assimp are
-  installed prerequisites, never fetched by this repository. The video
+- `VR_BUILD_VIEWER`, `VR_WITH_ASSIMP` and the in-tree sensor package's
+  (`sensor/`) `VS_WITH_ORBBEC`, `VS_WITH_FFMPEG` and `VS_WITH_CUDA` enable
+  optional paths; `VS_BUILD_TESTS` builds the package's tests in recon's tree,
+  and `cmake -S sensor` builds and tests it alone. Orbbec, FFmpeg and Assimp
+  are installed prerequisites, never fetched by this repository. The video
   decoders hand out device pictures only: Apple builds them always, on
-  VideoToolbox, and refuses `VR_WITH_FFMPEG`; elsewhere `VR_WITH_FFMPEG`
-  needs `VR_WITH_CUDA`, and `VR_WITH_ORBBEC` needs `VR_WITH_FFMPEG`.
-  `VR_CAMERA_ONLY` builds `recon_camera` alone, with no Vulkan, and refuses
-  the examples and the drivers.
+  VideoToolbox, and refuses `VS_WITH_FFMPEG`; elsewhere `VS_WITH_FFMPEG`
+  needs `VS_WITH_CUDA`, and `VS_WITH_ORBBEC` needs `VS_WITH_FFMPEG`.
+  The package's `VS_CAMERA_ONLY` builds `sensor_camera` alone, with no
+  Vulkan, and refuses the drivers.
 - Tests use no real hardware: a camera is checked by hand through its example
   (`fuse_orbbec`). Report such a check as run or not run, never as a test.
 - Tests are `main()`s of their own on the core's test support

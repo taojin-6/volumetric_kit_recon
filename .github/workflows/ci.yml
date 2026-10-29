@@ -49,14 +49,14 @@ jobs:
       # halves the jobs on the Linux GPU boxes, which gfx's CI shares, and
       # sanitizers still builds and tests Debug on Linux (clang + ASan/UBSan).
       #
-      # `orbbec_sdk` puts one Linux leg and the macOS leg on VR_WITH_ORBBEC=ON
+      # `orbbec_sdk` puts one Linux leg and the macOS leg on VS_WITH_ORBBEC=ON
       # (the SDK installed per job; see _build.yml), and leaves the others on
       # the default OFF, so both configurations build on every PR.
       #
       # The video decoders hand out pictures on the device only (the
       # 2026-10-06 device-only decoder decision). The Mac builds them always,
       # on VideoToolbox with no FFmpeg; `ffmpeg` builds them on 24.04 with
-      # `cuda` (VR_WITH_CUDA=ON, the toolkit installed per job: NVDEC and
+      # `cuda` (VS_WITH_CUDA=ON, the toolkit installed per job: NVDEC and
       # nvJPEG; 24.04's FFmpeg 6.1 is the floor). `hevc_backend` names the
       # hardware each must decode on, so their tests fail rather than skip
       # without it. The other Linux legs build without them.

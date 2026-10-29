@@ -42,9 +42,11 @@ endif()
 target_compile_features(recon_tsdf PUBLIC cxx_std_17)
 
 # PUBLIC: the tsdf public header exposes volume types (VoxelBlockGrid,
-# DepthPinhole) + core types (Result, DepthCameraParams), so consumers compile
-# against recon_volume (and, transitively, recon_core) too.
-target_link_libraries(recon_tsdf PUBLIC recon_volume)
+# DepthPinhole), core types (Result) and the sensor package's frame vocabulary
+# (DepthCameraParams, ColorEncoding), so consumers compile against recon_volume
+# (and, transitively, recon_core) and sensor_frame too.
+target_link_libraries(recon_tsdf PUBLIC recon_volume
+                                        volumetric_kit::sensor_frame)
 
 # PRIVATE src/: recon_core's internal dispatch.hpp, as recon_volume reaches it.
 target_include_directories(
@@ -56,13 +58,13 @@ target_include_directories(
 # Compile the GLSL kernels to SPIR-V and embed them as constexpr byte arrays
 # (each .cpp #includes its generated *.spv.hpp on a PRIVATE path), so recon_tsdf
 # ships the technique with no runtime shader files. They include the GLSL
-# recon_core and recon_volume export, not src/: the grid's contract, never its
-# hash table.
+# sensor_frame and recon_volume export, not src/: the camera's pinhole and the
+# grid's contract, never its hash table.
 include(vr_embed)
 vr_embed_shaders(
   recon_tsdf
   INCLUDE_TARGETS
-  volumetric_kit::recon_core
+  volumetric_kit::sensor_frame
   volumetric_kit::recon_volume
   SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"

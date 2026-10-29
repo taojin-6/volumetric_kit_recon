@@ -15,7 +15,7 @@ target_link_libraries(
           volumetric_kit::recon_mesh_io
           volumetric_kit::recon_sender
           volumetric_kit::recon_voxelize
-          volumetric_kit::recon_sensor_orbbec
-          volumetric_kit::recon_sensor_array
+          volumetric_kit::sensor_orbbec
+          volumetric_kit::sensor_array
           Vulkan::Vulkan)
 vr_target_warnings(fuse_orbbec)

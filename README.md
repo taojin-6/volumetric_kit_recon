@@ -58,23 +58,26 @@ Consume it from another CMake project with `FetchContent`, pinned by commit
 (recon has no install rules), then link a tier (e.g.
 `volumetric_kit::recon_core`). Fetched, recon builds its library tiers alone:
 its tests, examples and `-Werror` (`VR_WARNINGS_AS_ERRORS`) default on only
-when it is the top-level project. A consumer with no GPU work, such as calib's
-solver, sets `VR_CAMERA_ONLY` ON to build the camera tier
-(`volumetric_kit::recon_camera`) alone, with no Vulkan SDK; it refuses the
-examples and the optional drivers.
+when it is the top-level project. The camera and sensor tiers are the
+in-tree sensor package (`sensor/`, `volumetric_kit::sensor_*`), which builds
+and tests alone too (`cmake -S "$recon_root/sensor" ...`); recon's configure
+passes it the `VS_` options, and `-DVS_BUILD_TESTS=ON` builds its tests in
+recon's tree. A consumer with no GPU work, such as calib's solver, builds the
+package's camera tier (`volumetric_kit::sensor_camera`) alone with
+`VS_CAMERA_ONLY` ON, with no Vulkan SDK; it refuses the optional drivers.
 
 A consumer's kernels include recon's exported GLSL as recon's own do,
 through the core's `INCLUDE_TARGETS`, each target exporting with
-`vkc_export_glsl` under a root that holds its exported GLSL alone:
-`volumetric_kit::recon_core` the pinhole
-(`volumetric_kit/recon/core/shaders/pinhole.glsl`), and
+`vkc_export_glsl` under a root that holds its exported GLSL alone: the
+sensor package's `volumetric_kit::sensor_frame` the pinhole
+(`volumetric_kit/sensor/frame/shaders/pinhole.glsl`), and
 `volumetric_kit::recon_volume` the voxel grid's contract
 (`volumetric_kit/recon/volume/shaders/grid_types.glsl`) and its colour
 attribute's format (`.../voxel_color.glsl`). The hash table's GLSL is not
 exported.
 
 ```cmake
-vkc_compile_shaders(my_kernels INCLUDE_TARGETS volumetric_kit::recon_core
+vkc_compile_shaders(my_kernels INCLUDE_TARGETS volumetric_kit::sensor_frame
                     volumetric_kit::recon_volume SHADERS my.comp)
 ```
 
@@ -91,11 +94,11 @@ names (`volumetric_kit::core::Status`, `volumetric_kit::core::Device`) and which
 one `VkDevice` shares with gfx.
 An application that also fetches calib, which builds on the core too, declares
 `volumetric_kit_core` first, so both build against one copy, and sets
-`VKC_WITH_VULKAN ON` before the first `FetchContent_MakeAvailable` of it
-unless recon is camera-only; to build against a local core checkout, pass
+`VKC_WITH_VULKAN ON` before the first `FetchContent_MakeAvailable` of it; to
+build against a local core checkout, pass
 `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`. recon needs the core
-at `VR_CORE_MIN_VERSION` (0.29.0) or newer, with its vulkan tier unless
-`VR_CAMERA_ONLY` is ON, and checks both with the core's `vkc_require_core`:
+at `VR_CORE_MIN_VERSION` (0.29.0) or newer, with its vulkan tier, and checks
+both with the core's `vkc_require_core`:
 on a core older than that or missing a required tier, recon's configure
 fails saying why. A core older than 0.1.0 has no `vkc_require_core`, so the
 configure stops at that call as an unknown command: move the first-declared
@@ -151,8 +154,8 @@ build at its root:
 
 ```sh
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
-    -DVR_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
-# on Linux, add -DVR_WITH_FFMPEG=ON -DVR_WITH_CUDA=ON
+    -DVS_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
+# on Linux, add -DVS_WITH_FFMPEG=ON -DVS_WITH_CUDA=ON
 # or once, for every repo that finds it:  export OrbbecSDK_ROOT=<sdk>
 ```
 
@@ -205,24 +208,24 @@ paths.
 
 ### Video decoders
 
-The HEVC and JPEG decoders (`volumetric_kit::recon_sensor_video`,
-`sensor/video/`) decode on the GPU's hardware and hand their pictures out on
+The HEVC and JPEG decoders (`volumetric_kit::sensor_video`,
+`sensor/src/volumetric_kit/sensor/video/`) decode on the GPU's hardware and hand their pictures out on
 the device only. Every Apple build has them, on VideoToolbox with no
 FFmpeg; their pictures reach Vulkan through `PixelBufferImporter`
-(`volumetric_kit::recon_sensor_apple`, `sensor/apple/`). On Linux they are
+(`volumetric_kit::sensor_apple`). On Linux they are
 off by default: NVDEC through FFmpeg ≥ 6.1, found through pkg-config, and
-nvJPEG, with the CUDA 13 toolkit's headers (`cmake/vr_cuda.cmake`).
-`VR_WITH_FFMPEG` on Apple fails the configure. The H.265 syntax the Apple
-decoder reads (`volumetric_kit::recon_sensor_video_syntax`,
-`sensor/video/hevc_syntax.hpp`) is host code, in every build.
+nvJPEG, with the CUDA 13 toolkit's headers (`sensor/cmake/vs_cuda.cmake`).
+`VS_WITH_FFMPEG` on Apple fails the configure. The H.265 syntax the Apple
+decoder reads (`volumetric_kit::sensor_video_syntax`,
+`volumetric_kit/sensor/video/hevc_syntax.hpp`) is host code, in every build.
 
 ```sh
 sudo apt install pkg-config libavcodec-dev libavutil-dev
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
-    -DVR_WITH_FFMPEG=ON -DVR_WITH_CUDA=ON
+    -DVS_WITH_FFMPEG=ON -DVS_WITH_CUDA=ON -DVS_BUILD_TESTS=ON
 # fail, rather than skip, where the decoders find no device path
 # (videotoolbox on a Mac):
-VR_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
+VS_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
 ```
 
 ## Codec evaluation

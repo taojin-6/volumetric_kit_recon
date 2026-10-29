@@ -8,7 +8,7 @@ target_include_directories(vr_example_common
                            PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(
   vr_example_common
-  PUBLIC volumetric_kit::core_config volumetric_kit::recon_sensor
-         volumetric_kit::recon_image_io)
+  PUBLIC volumetric_kit::core_config volumetric_kit::sensor_interface
+         volumetric_kit::sensor_prep volumetric_kit::sensor_image_io)
 target_compile_features(vr_example_common PUBLIC cxx_std_17)
 vr_target_warnings(vr_example_common)
