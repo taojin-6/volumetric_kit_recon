@@ -341,21 +341,16 @@ add_test(NAME recon_example_fuse_keyframe
          COMMAND recon_example_fuse_keyframe_test)
 
 # The core parses and validates scenarios. These tests pin the conversion into
-# the runtime sensor and codec options (the codec's steps checked here, not by
-# core), without opening a camera or GPU.
+# the runtime codec options (the codec's steps checked here, not by core), and
+# recon_example_fuse_config the fusing examples' sender and sensor options,
+# without opening a camera or GPU.
 add_executable(recon_example_config_test example_config_test.cpp)
 target_include_directories(recon_example_config_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
-if(TARGET volumetric_kit::recon_sensor_orbbec)
-  target_link_libraries(recon_example_config_test
-                        PRIVATE volumetric_kit::recon_sensor_orbbec)
-  target_compile_definitions(recon_example_config_test
-                             PRIVATE VR_TEST_ORBBEC_CONFIG=1)
-endif()
 # codec_config.hpp maps the outputs into the sender tier's CodecOutputs and a
 # mesh source into voxelize's MeshSdfParams, and the sweep's report compares
-# with eval's. recon_sender brings the codec and the sensor tiers: naming them
-# too would repeat their archives on the link line.
+# with eval's. recon_sender brings the codec tier: naming it too would repeat
+# its archive on the link line.
 target_link_libraries(
   recon_example_config_test
   PRIVATE volumetric_kit::core_config volumetric_kit::recon_eval
@@ -365,6 +360,28 @@ target_compile_definitions(
   PRIVATE VR_CONFIG_FIXTURES="${PROJECT_SOURCE_DIR}/config/examples")
 vr_target_warnings(recon_example_config_test)
 add_test(NAME recon_example_config COMMAND recon_example_config_test)
+
+add_executable(recon_example_fuse_config_test example_fuse_config_test.cpp)
+target_include_directories(recon_example_fuse_config_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+if(TARGET volumetric_kit::recon_sensor_orbbec)
+  target_link_libraries(recon_example_fuse_config_test
+                        PRIVATE volumetric_kit::recon_sensor_orbbec)
+  target_compile_definitions(recon_example_fuse_config_test
+                             PRIVATE VR_TEST_ORBBEC_CONFIG=1)
+endif()
+# fuse_sender.hpp reports through codec_report.hpp, which compares with eval's.
+# recon_sender brings the codec and the sensor tiers: naming them too would
+# repeat their archives on the link line.
+target_link_libraries(
+  recon_example_fuse_config_test
+  PRIVATE volumetric_kit::core_config volumetric_kit::recon_eval
+          volumetric_kit::recon_sender)
+target_compile_definitions(
+  recon_example_fuse_config_test
+  PRIVATE VR_CONFIG_FIXTURES="${PROJECT_SOURCE_DIR}/config/examples")
+vr_target_warnings(recon_example_fuse_config_test)
+add_test(NAME recon_example_fuse_config COMMAND recon_example_fuse_config_test)
 
 # fuse_orbbec's cameras (examples/common/fuse_orbbec_sets.hpp), where the driver
 # is built: the one camera a calibration file names, and a camera's report. Host
@@ -453,12 +470,11 @@ add_test(NAME recon_example_set_log COMMAND recon_example_set_log_test)
 # The codec examples' report of a stream (examples/common/codec_report.hpp): on
 # the host, a row's type and host and device milliseconds, its CSV line, a frame
 # type's sizes, a GOP's bytes and bitrate, a frame's pts, the comparison options
-# the codec examples share, a path that is the stream's or the CSV's file
-# refused, and a sender's set stamped from what the set step returned; on a
-# device, a CSV refused after the stream is made or because it is the stream's
-# file, a row per frame matching the frame and each type's stage rows its own,
-# the CSV replaced on create and written as rows come, and a CSV that stops
-# taking rows refused. The device part skips with no device.
+# the codec examples share, and a path that is the stream's or the CSV's file
+# refused; on a device, a CSV refused after the stream is made or because it is
+# the stream's file, a row per frame matching the frame and each type's stage
+# rows its own, the CSV replaced on create and written as rows come, and a CSV
+# that stops taking rows refused. The device part skips with no device.
 add_executable(recon_example_codec_report_test example_codec_report_test.cpp)
 target_include_directories(recon_example_codec_report_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
@@ -470,6 +486,18 @@ target_link_libraries(
 vr_target_warnings(recon_example_codec_report_test)
 add_test(NAME recon_example_codec_report
          COMMAND recon_example_codec_report_test)
+
+# A sender's set into the run's figures (examples/common/fuse_sender.hpp): a set
+# stamped from what the set step returned, its frame's row kept. Host only.
+add_executable(recon_example_fuse_sender_test example_fuse_sender_test.cpp)
+target_include_directories(recon_example_fuse_sender_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(
+  recon_example_fuse_sender_test
+  PRIVATE volumetric_kit::core_config volumetric_kit::recon_eval
+          volumetric_kit::recon_sender)
+vr_target_warnings(recon_example_fuse_sender_test)
+add_test(NAME recon_example_fuse_sender COMMAND recon_example_fuse_sender_test)
 
 # codec_mesh's sequence (examples/codec_mesh/mesh_sequence.hpp), where the mesh
 # example is built. On the host: the frame-number pattern, every file checked
