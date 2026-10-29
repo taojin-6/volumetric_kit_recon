@@ -835,6 +835,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   exposure), written at each open where the camera differs, auto white
   balance always on, checked before the first write and read back after the
   last; an array refuses a sensor opened at another.
+- [**2026-10-27**](#2026-10-27--rig_viewer-draws-offscreen-where-there-is-no-display-the-same-frames-in-gfxs-offscreen-frame-loop-chosen-by-the-device-fact-paced-at-60-hz-and-saved-as-bmp-files-of-the-bytes-read-back-amends-the-2026-09-29-rig_viewer-entry) —
+  `rig_viewer` draws offscreen where glfwInit finds no window system: the
+  same frames, in gfx's offscreen frame loop rather than a swapchain, from
+  the home view with no panels, paced at 60 Hz, until fusion ends. No
+  setting chooses it. `output.screenshot` saves the first frame with a mesh,
+  one every 30 s and the last as BMP files: the readback's bytes behind a
+  header, with no host pixel work.
 - [**2026-10-28**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-28--the-voxel-layer-is-camera-free-volume-owns-its-depth-camera-depthpinhole-and-the-one-line-of-unprojection-it-needs-tsdf-copies-its-camera-in-amends-the-2026-10-16-glsl-pinhole-entry) —
   The voxel layer is camera-free: `volume::DepthPinhole`, the fields and
   96 bytes of `DepthCameraParams`, is what depth allocation takes, and its
@@ -5166,6 +5173,80 @@ Assimp and the viewers: the 135 tests pass, and the iOS check links. Debug
 with clang 21 under ASan and UBSan on the RTX 4090, the sender, report,
 config and replica tests pass; the one leak reported, 248 bytes from the
 driver's device enumeration, is every GPU test's.
+
+### 2026-10-27 — `rig_viewer` draws offscreen where there is no display: the same frames in gfx's offscreen frame loop, chosen by the device fact, paced at 60 Hz, and saved as BMP files of the bytes read back (amends the 2026-09-29 `rig_viewer` entry).
+
+A rig's processing machine is reached over ssh, with no desktop session,
+and its driver may offer no headless surface to present to; a desktop
+started without a display renders in software. `rig_viewer` could not run
+there, so neither could its end-of-run figures for the live rig.
+
+- **The mode is the device's fact.** `glfwInit` failing, as it does with no
+  window system to connect to (GLFW's "failed to detect any supported
+  platform" over ssh), draws offscreen and says why. No setting chooses it:
+  no run needs offscreen where a display exists. A display whose window
+  cannot be made stays an error.
+- **One render loop, the window's frames.** gfx's `FrameLoop` drives either a
+  swapchain or a ring of offscreen targets with one protocol (gfx #161), so
+  `rig_viewer` builds its pipeline on `loop.layout()` and its atlas on
+  `loop.timeline()`, and records the same frame either way: the atlas copy
+  under its scope, the render pass, the end. The fuse thread, its texturing
+  and the end-of-run report are unchanged; offscreen has no present. gfx's
+  half of the device is `OffscreenRenderer`: core's `Device::adopt` of the
+  graphics payload of a `SharedDevice` made with no surface, its allocator
+  and the loop, where a window's `WindowedApp` would be.
+- **Paced at 60 Hz** (the loop's `frame_interval`). Unpaced, the loop draws
+  as fast as frames complete, loading the graphics queue beside the
+  fusion's; a display paces a window's FIFO swapchain the same way. Any
+  rate of 50 Hz or more draws every mesh of a 25 Hz rig.
+- **The home view, fixed, with no panels or input**: the overlay needs a
+  window's input, and the figures print at the end. A run ends when fusion
+  does (`run.sets`, or a failure), at `run.frames` or on Ctrl+C; the frame
+  begun after draws the last mesh.
+- **Frames are BMP files of the bytes read back.** The targets are a
+  window's: its `B8G8R8A8_SRGB` and `D32_SFLOAT` at `window.width x height`.
+  A top-down 32-bit BI_RGB BMP stores exactly the readback's bytes behind a
+  54-byte header, so a saved frame is the target's readback, recorded after
+  its pass, and a `core::write_file`, with no host pixel work. PNG would
+  deflate on the host, and PPM drop the fourth byte of every pixel there;
+  the family has no image encoder on the GPU.
+- **Which frames.** `output.screenshot` (core 0.31.0) names them,
+  `<stem>_<frame number>.bmp`: the first frame with a mesh, one every 30 s
+  and the last, a few in a run of minutes. Each is written once its slot's
+  next frame has begun, which waited for its fence, or once the device has
+  idled at the end. A failed write is said once and the run goes on. A run
+  in a window saves none and says so.
+
+**Tests.** `recon_example_viewer_offscreen` draws on the device both
+libraries adopt with no surface: gfx's offscreen loop from
+`offscreen_frames`, a colour buffer recon filled and committed into the live
+atlas under the atlas-copy scope, and a quad textured from it through the
+viewers' render pass. The first frame with a mesh, the frame 30 s later and
+the last are saved, each written at its slot's next frame or at the flush,
+with every header field, the size, the atlas colour at the middle and the
+clear at a corner checked. A saved frame the saver is not told was ended
+is never written. A path that cannot be written fails every save, said
+once, while the frames end OK. The profiler's snapshot has the atlas
+copy, render pass, frame wait and submit rows and no present, and the copy
+is counted. The BMP's bytes and refusals are checked on the host. It is the
+first test that draws the live atlas through the viewers' pipeline.
+
+**Validation.** Release with the viewers and warnings as errors, under the
+validation layer. RTX 4090, Ubuntu, GCC 15.2, with the Orbbec SDK 2.10.6,
+FFmpeg, CUDA and Assimp, and synchronization validation: recon's 48 tests
+pass (sensor's own CI tests sensor); the viewer tests pass on NVIDIA's
+driver alone, whose shared device takes two queues of one family. There
+`glfwInit` fails over ssh ("Failed to detect any supported platform").
+Apple M4 (Mac mini), MoltenVK, with the Orbbec SDK and Assimp: the 48 tests
+pass, the viewer tests under synchronization validation too, on two queue
+families. The offscreen test passed 30 runs in
+a row on each, and on both a saved frame read back exactly: the atlas
+colour (B, G, R 90, 40, 200) at the middle and the clear (75, 63, 63) at the
+corner. Each of ten planted bugs failed it: no interval between saves, the
+last frame not saved, no readback, writes only at the flush, a frame
+written without its end, a bottom-up BMP, every failure said, an unpaced
+loop, a device that presents, and the pixels left out of the file. No
+camera was opened; the live run is the rig's.
 
 ### 2026-10-28 — recon takes the core's GLSL export, sibling floor, test support and forward declarations, and keeps no copy (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-08 test-policy entry).
 

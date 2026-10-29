@@ -2,11 +2,11 @@
 # Copyright (c) 2026 Tao Jin
 
 # The recon -> gfx reconstruction viewer examples: fuse_render (headless colour
-# PNG) and fuse_viewer (live window). This directory is the ONE place recon's
-# examples link the renderer sibling volumetric_kit_gfx -- pulled here (never in
-# the tiers) and only under VR_BUILD_VIEWER, so recon's library and default
-# build stay renderer-independent (the 2026-07-07 decision amendment in
-# DECISIONS.md).
+# PNG), fuse_viewer (live window) and rig_viewer (live rig, in a window or, with
+# no display, offscreen). This directory is the ONE place recon's examples link
+# the renderer sibling volumetric_kit_gfx -- pulled here (never in the tiers)
+# and only under VR_BUILD_VIEWER, so recon's library and default build stay
+# renderer-independent (the 2026-07-07 decision amendment in DECISIONS.md).
 #
 # Because it is that seam, it is also the thing most likely to drift out of
 # build unnoticed -- and did, until a dedicated build-only macOS CI leg
@@ -53,11 +53,17 @@ FetchContent_Declare(
   #
   # And at or past gfx #144, which shows ImGui's colours as authored on the
   # default _SRGB swapchain; before it the panels were encoded twice and drew
-  # washed out. A rendering floor, and the newest, so it covers the older ones;
+  # washed out. A rendering floor, so it covers the older ones;
   # recon_example_viewer_pass checks it.
   #
-  # It refuses a core older than 0.18.0 (gfx's VG_VKC_MIN_VERSION).
-  GIT_TAG f147e00e7fb45382da8874198684656496f09b7c # gfx main, after #152
+  # And at or past gfx #161, whose frame loop also drives offscreen targets:
+  # rig_viewer draws into one where there is no display. A compile floor, and
+  # the newest; recon_example_viewer_offscreen checks it.
+  #
+  # It refuses a core older than 0.20.0 (gfx's VG_VKC_MIN_VERSION).
+  #
+  # TODO: re-pin to the merge commit once gfx#161 merges.
+  GIT_TAG 734bcb2d7258b3418bd50c4183d7aa123c3e32bd # gfx #161's head
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
@@ -165,6 +171,33 @@ if(VR_BUILD_TESTS)
   add_test(NAME recon_example_viewer_pass
            COMMAND recon_example_viewer_pass_test)
   set_tests_properties(recon_example_viewer_pass PROPERTIES SKIP_RETURN_CODE 77)
+
+  # rig_viewer where there is no display (viewer_offscreen.hpp): the device both
+  # libraries adopt with no surface, gfx's offscreen frame loop, the live atlas
+  # and the hybrid mesh drawn into it, and the frames it saves. Skips with no
+  # device under the core policy. grid_example_common for rig_report.hpp's stage
+  # table.
+  add_executable(
+    recon_example_viewer_offscreen_test
+    "${PROJECT_SOURCE_DIR}/tests/example_viewer_offscreen_test.cpp")
+  target_link_libraries(
+    recon_example_viewer_offscreen_test
+    PRIVATE volumetric_kit::core_test_base
+            volumetric_kit::core_test_policy
+            volumetric_kit::sensor_array
+            volumetric_kit::recon_texture
+            volumetric_kit::gfx_glfw
+            volumetric_kit::gfx_pipelines
+            grid_example_common
+            Vulkan::Vulkan)
+  target_include_directories(recon_example_viewer_offscreen_test
+                             PRIVATE ${_viewer_common_inc})
+  vr_target_warnings(recon_example_viewer_offscreen_test)
+  add_test(NAME recon_example_viewer_offscreen
+           COMMAND recon_example_viewer_offscreen_test)
+  # Bound a regression that waits for a frame which was never submitted.
+  set_tests_properties(recon_example_viewer_offscreen
+                       PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 endif()
 
 # fuse_viewer: the live window -- fuses on a background thread, draws the

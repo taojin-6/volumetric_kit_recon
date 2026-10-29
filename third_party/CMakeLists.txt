@@ -26,15 +26,17 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.30.0 (2120e62, core #70's merge), as are the Homebrew key
+# The pin is core 0.31.0 (5ea2ea4, core #64's head), as are the Homebrew key
 # action in .github/workflows/_build.yml and the workflow-trigger check in
 # .github/workflows/lint.yml; the vkc_require_core checks below say which core
 # each part needs. The tests are main()s of their own on the core's test
 # support.
+#
+# TODO: re-pin to the merge commit once core#64 merges.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 2120e6294e3c7ead8bb168d757f940b21d21267c)
+  GIT_TAG 5ea2ea4dfca817b48614fa7e58f6f00beaec64d6)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)

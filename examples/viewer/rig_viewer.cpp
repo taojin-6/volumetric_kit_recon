@@ -53,6 +53,15 @@
 // and texturing knobs below live. Closing the window, or Ctrl+C in the
 // terminal, stops the rig before the process ends.
 //
+// Where there is no display -- glfwInit finds no window system, as over ssh on
+// a machine with no desktop session -- the viewer draws offscreen
+// (viewer_offscreen.hpp): the same frames, from the same fuse thread, atlas
+// copy and draw, into gfx's offscreen frame loop, paced at 60 Hz, rather than
+// a window's swapchain; from the home view, with no panels and no input. It
+// ends when fusion does (run.sets, or a failure), at run.frames or on Ctrl+C,
+// and saves the frames output.screenshot names: the first with a mesh, one
+// every 30 s and the last, as BMP files of the bytes read back.
+//
 // The panels show the newest set. At the end the run prints its rates, the
 // array's and each camera's counters, the atlas copies' device time and a
 // table per set (vr_example::SetLog, as fuse_orbbec's): each set's rows, the
@@ -91,6 +100,7 @@
 #include "set_log.hpp"
 #include "viewer_atlas.hpp"
 #include "viewer_common.hpp"
+#include "viewer_offscreen.hpp"
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
@@ -153,6 +163,10 @@ constexpr auto kSilenceLimit = std::chrono::seconds(10);
 // 10 minutes at 25 Hz, about 15 MB of rows, so a window left open does not
 // grow without bound.
 constexpr std::size_t kLoggedSets = 15000;
+
+// How often an offscreen run saves a frame that draws a mesh: a few frames in
+// a run of minutes, each a readback and a file write.
+constexpr auto kSaveEvery = std::chrono::seconds(30);
 
 // The three ways the hybrid pipeline shades, as the View panel offers them.
 using Shading = vgrid_example::config::Shading;
@@ -254,17 +268,24 @@ std::vector<TextureSource> texture_sources(
   return out;
 }
 
-// Owns the WindowedApp and every device resource, so they are gone before
-// main destroys the window (see fuse_viewer's run()).
+// Owns the renderer and every device resource, so they are gone before main
+// destroys the window (see fuse_viewer's run()). A null `window` draws
+// offscreen.
 int run(GLFWwindow* window, const Options& opt) {
+  const bool windowed = window != nullptr;
   // --- One VkDevice, adopted by both libraries (as fuse_viewer) ------------
   vg::app::WindowedAppConfig config;
   config.app_name = "rig_viewer";
-  config.swapchain.extent = glfw::framebuffer_extent(window);
+  config.swapchain.extent =
+      windowed ? glfw::framebuffer_extent(window)
+               : VkExtent2D{static_cast<std::uint32_t>(opt.window.width),
+                            static_cast<std::uint32_t>(opt.window.height)};
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
-  auto shared_r =
-      fuse_viewer::make_viewer_device(window, config, opt.window.validation);
+  auto shared_r = windowed ? fuse_viewer::make_viewer_device(
+                                 window, config, opt.window.validation)
+                           : fuse_viewer::make_offscreen_viewer_device(
+                                 config, opt.window.validation);
   if (!shared_r) {
     std::fprintf(stderr, "shared device: %s\n",
                  shared_r.status().message().c_str());
@@ -272,13 +293,32 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   const std::unique_ptr<vkc::SharedDevice> shared = std::move(shared_r).value();
 
-  auto app_r = fuse_viewer::adopt_viewer_app(*shared, config);
-  if (!app_r.ok()) {
-    std::fprintf(stderr, "WindowedApp::adopt: %s\n",
-                 app_r.status().message().c_str());
-    return 1;
+  // gfx's half: the window's app, or with no display the device adopted with
+  // an offscreen frame loop in its place. The rest draws through the three
+  // below either way.
+  vg::app::WindowedApp app;
+  std::unique_ptr<fuse_viewer::OffscreenRenderer> offscreen;
+  if (windowed) {
+    auto app_r = fuse_viewer::adopt_viewer_app(*shared, config);
+    if (!app_r.ok()) {
+      std::fprintf(stderr, "WindowedApp::adopt: %s\n",
+                   app_r.status().message().c_str());
+      return 1;
+    }
+    app = std::move(app_r).value();
+  } else {
+    auto offscreen_r = fuse_viewer::OffscreenRenderer::adopt(*shared, config);
+    if (!offscreen_r) {
+      std::fprintf(stderr, "offscreen renderer: %s\n",
+                   offscreen_r.status().message().c_str());
+      return 1;
+    }
+    offscreen = std::move(offscreen_r).value();
   }
-  vg::app::WindowedApp app = std::move(app_r).value();
+  vkc::Device& gdevice = windowed ? app.device() : offscreen->device();
+  vkc::Allocator& gallocator =
+      windowed ? app.allocator() : offscreen->allocator();
+  win::FrameLoop& loop = windowed ? app.frame_loop() : offscreen->frame_loop();
 
   auto recon_device_result = fuse_viewer::adopt_fuse_device(*shared);
   if (!recon_device_result) {
@@ -439,43 +479,46 @@ int run(GLFWwindow* window, const Options& opt) {
   }
 
   // --- gfx: pipeline, atlas, profiler, overlay -----------------------------
-  auto pipeline_result = vgp::HybridMeshPipeline::create(
-      app.device(), app.allocator(), app.swapchain().layout());
+  auto pipeline_result =
+      vgp::HybridMeshPipeline::create(gdevice, gallocator, loop.layout());
   if (!pipeline_result.ok()) {
     std::fprintf(stderr, "pipeline: %s\n",
                  pipeline_result.status().message().c_str());
     return 1;
   }
   vgp::HybridMeshPipeline pipeline = std::move(pipeline_result).value();
-  fuse_viewer::LiveAtlas atlas(
-      pipeline, app.allocator(), app.frame_loop().timeline(),
-      {layout.width, layout.height}, config.frames_in_flight);
+  fuse_viewer::LiveAtlas atlas(pipeline, gallocator, loop.timeline(),
+                               {layout.width, layout.height},
+                               config.frames_in_flight);
 
   vg::ProfilerConfig profiler_config;
   profiler_config.frames_in_flight = config.frames_in_flight;
-  auto profiler_result = vg::Profiler::create(app.device(), profiler_config);
+  auto profiler_result = vg::Profiler::create(gdevice, profiler_config);
   if (!profiler_result.ok()) {
     std::fprintf(stderr, "profiler: %s\n",
                  profiler_result.status().message().c_str());
     return 1;
   }
   vg::Profiler profiler = std::move(profiler_result).value();
-  profiler.set_memory_source(&app.allocator());
-  app.set_profiler(&profiler);
-  const fuse_viewer::ProfilerDetach profiler_guard{app};
+  profiler.set_memory_source(&gallocator);
+  loop.set_profiler(&profiler);
+  const fuse_viewer::ProfilerDetach profiler_guard{loop};
 
   // Before ImGui's GLFW backend, which chains to the callback it finds.
   ScrollInput scroll;
-  glfwSetWindowUserPointer(window, &scroll);
-  glfwSetScrollCallback(window, [](GLFWwindow* w, double, double dy) {
-    static_cast<ScrollInput*>(glfwGetWindowUserPointer(w))->pending += dy;
-  });
+  if (windowed) {
+    glfwSetWindowUserPointer(window, &scroll);
+    glfwSetScrollCallback(window, [](GLFWwindow* w, double, double dy) {
+      static_cast<ScrollInput*>(glfwGetWindowUserPointer(w))->pending += dy;
+    });
+  }
 
   std::optional<vg::ui::ImGuiOverlay> overlay;
   // Declared after the overlay, so it shuts down first, while the context it
   // binds is alive.
   std::unique_ptr<glfw::ImGuiGlfw> imgui_glfw;
-  if (opt.window.overlay) {
+  // The panels need a window's input; offscreen, the figures print at the end.
+  if (windowed && opt.window.overlay) {
     vg::ui::ImGuiOverlayConfig overlay_config;
     overlay_config.layout = app.swapchain().layout();
     overlay_config.min_image_count = app.swapchain().image_count();
@@ -525,7 +568,7 @@ int run(GLFWwindow* window, const Options& opt) {
       desc.usage =
           VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
       desc.memory = vkc::MemoryUsage::DeviceOnly;
-      auto buffer = app.allocator().create_buffer(desc);
+      auto buffer = gallocator.create_buffer(desc);
       if (!buffer.ok()) {
         std::fprintf(stderr, "rig_viewer: colour-by-camera buffer: %s\n",
                      buffer.status().message().c_str());
@@ -934,7 +977,7 @@ int run(GLFWwindow* window, const Options& opt) {
       }
       // A run.sets run has stopped fusing, or the capture failed with the map
       // intact, but the view still moves: re-mesh what it sees whenever it
-      // changes, until the window closes.
+      // changes, until the window closes. Offscreen, the run ends here.
       if (started.ok() && map_usable && !quit.load()) {
         array.stop();
         fusing_done.store(true);
@@ -962,10 +1005,27 @@ int run(GLFWwindow* window, const Options& opt) {
   double last_x = 0.0, last_y = 0.0;
   bool have_last = false;
 
-  std::printf(
-      "rig_viewer: %zu cameras, fusing on a background thread; close "
-      "the window to quit\n",
-      cameras);
+  if (windowed) {
+    std::printf(
+        "rig_viewer: %zu cameras, fusing on a background thread; close "
+        "the window to quit\n",
+        cameras);
+  } else {
+    std::printf(
+        "rig_viewer: %zu cameras, fusing on a background thread, drawing "
+        "offscreen at %ux%u; it ends with fusion, or on Ctrl+C\n",
+        cameras, config.swapchain.extent.width, config.swapchain.extent.height);
+  }
+  // Offscreen, the frames output.screenshot names; a window's images are
+  // presented, not read back.
+  if (windowed && !opt.output.screenshot.empty()) {
+    std::printf(
+        "rig_viewer: drawing in a window, so output.screenshot saves no "
+        "frames\n");
+  }
+  fuse_viewer::FrameSaver saver(
+      windowed ? std::string() : opt.output.screenshot, kSaveEvery,
+      config.frames_in_flight);
   int exit_code = 0;
   int drawn = 0;
   std::uint64_t atlas_copies = 0;
@@ -977,17 +1037,30 @@ int run(GLFWwindow* window, const Options& opt) {
   // atlas copies' device time.
   fuse_viewer::CountRate mesh_updates;
   fuse_viewer::AtlasCopyTimes copy_times(config.frames_in_flight, kLoggedSets);
-  while (glfwWindowShouldClose(window) == GLFW_FALSE &&
+  // Offscreen: whether this frame is the run's last.
+  bool last_frame = false;
+  while (!last_frame &&
+         (!windowed || glfwWindowShouldClose(window) == GLFW_FALSE) &&
          (opt.run.frames == 0 || drawn < opt.run.frames)) {
-    glfwPollEvents();
-    // Ctrl+C closes the window: the loop leaves as on a click, the fuse
-    // thread stops the rig, and the cameras are released.
-    if (vgrid_example::interrupted()) {
-      glfwSetWindowShouldClose(window, GLFW_TRUE);
-      continue;
+    if (windowed) {
+      glfwPollEvents();
+      // Ctrl+C closes the window: the loop leaves as on a click, the fuse
+      // thread stops the rig, and the cameras are released.
+      if (vgrid_example::interrupted()) {
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+        continue;
+      }
+    } else {
+      // Offscreen, the run ends with fusion -- run.sets, or a failure -- at
+      // run.frames or on Ctrl+C. The frame begun after draws the mesh fusion
+      // published last, and is saved.
+      last_frame = fusing_done.load() || vgrid_example::interrupted() ||
+                   (opt.run.frames > 0 && drawn + 1 >= opt.run.frames);
     }
 
-    auto frame = app.begin_frame(glfw::framebuffer_size(window));
+    // An offscreen loop ignores the extent and never skips a frame.
+    auto frame = loop.begin_frame(windowed ? glfw::framebuffer_size(window)
+                                           : config.swapchain.extent);
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
@@ -995,10 +1068,12 @@ int run(GLFWwindow* window, const Options& opt) {
       break;
     }
     if (!frame.value().has_value()) {
-      glfwWaitEventsTimeout(0.02);
+      if (windowed) glfwWaitEventsTimeout(0.02);
       continue;
     }
     const win::Frame& render_frame = *frame.value();
+    // The slot's previous frame has completed: write it if it was saved.
+    saver.collect(render_frame);
     // The frame loop has begun the profiler's frame, which published the
     // frame this slot carried before.
     copy_times.begun(render_frame.slot, profiler.metrics().sections);
@@ -1078,7 +1153,8 @@ int run(GLFWwindow* window, const Options& opt) {
     }
 
     // --- Input: orbit, pan, zoom, unless a panel has the mouse -------------
-    {
+    // A window's only: offscreen draws the home view.
+    if (windowed) {
       const bool ui_mouse = overlay && ImGui::GetIO().WantCaptureMouse;
       double x = 0.0, y = 0.0;
       // Window coordinates, not glfw::cursor_in_framebuffer: framebuffer
@@ -1114,7 +1190,7 @@ int run(GLFWwindow* window, const Options& opt) {
       scroll.pending = 0.0;
     }
 
-    const VkExtent2D extent = app.swapchain().extent();
+    const VkExtent2D extent = render_frame.target->extent();
     const float aspect = static_cast<float>(extent.width) /
                          static_cast<float>(std::max(1u, extent.height));
     const float far_plane =
@@ -1227,16 +1303,20 @@ int run(GLFWwindow* window, const Options& opt) {
           pipeline.submit(cmd, hybrid_frame);
         },
         overlay ? &*overlay : nullptr);
+    // Offscreen, a frame to save is read back after its pass.
+    saver.record(render_frame, live_view.valid() && !live_view.empty(),
+                 last_frame, std::chrono::steady_clock::now());
 
-    const vkc::Status present = app.end_frame(render_frame);
-    if (!present.ok() && !win::swapchain_stale(present)) {
-      std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
+    const vkc::Status ended = loop.end_frame(render_frame);
+    if (!ended.ok() && !win::swapchain_stale(ended)) {
+      std::fprintf(stderr, "end_frame: %s\n", ended.message().c_str());
       exit_code = 1;
       break;
     }
     // Submitted, a stale present's frame too, so the profiler publishes its
-    // figures as the slot recurs.
+    // figures as the slot recurs, and a saved frame is written then.
     if (copied) copy_times.copied(render_frame.slot);
+    saver.ended(render_frame);
     if (drawn % 120 == 0) {
       fuse_viewer::print_rig_progress(drawn, panel, atlas_copies);
     }
@@ -1246,9 +1326,14 @@ int run(GLFWwindow* window, const Options& opt) {
   // Joined here rather than by fuse_guard, so fuse_failed is final when read.
   quit.store(true);
   fuse_thread.join();
-  if (const vkc::Status idle = app.wait_idle(); !idle) {
+  if (const vkc::Status idle = gdevice.wait_idle(); !idle) {
     std::fprintf(stderr, "wait_idle: %s\n", idle.message().c_str());
     exit_code = 1;
+  } else {
+    saver.flush();  // the saved frames still in flight, now complete
+  }
+  for (const std::string& file : saver.saved()) {
+    std::printf("rig_viewer: saved %s\n", file.c_str());
   }
   // The fuse thread said why on stderr; the exit code is for a script.
   if (fuse_failed.load()) exit_code = 1;
@@ -1272,9 +1357,15 @@ int run(GLFWwindow* window, const Options& opt) {
 
 int run_main(const Options& opt) {
   vgrid_example::catch_interrupts();
+  // No window system to connect to -- an ssh session on a machine with no
+  // desktop -- is no display: the run draws offscreen. A display whose window
+  // cannot be made stays an error, below.
   if (glfwInit() != GLFW_TRUE) {
-    std::fprintf(stderr, "glfwInit failed\n");
-    return 1;
+    const char* why = nullptr;
+    glfwGetError(&why);
+    std::printf("rig_viewer: no display (%s), so drawing offscreen\n",
+                why != nullptr ? why : "glfwInit failed");
+    return run(nullptr, opt);
   }
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   GLFWwindow* window = glfwCreateWindow(opt.window.width, opt.window.height,

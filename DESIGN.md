@@ -1016,6 +1016,10 @@ time from gfx's profiler. A set's rows are its poll, its stages and, when it
 meshed, its remesh's, merged before the mesh's hand-over publishes it; a
 set it did not mesh is published at its last stage and tabled apart, and a
 remesh for a view change between sets is no set's.
+Where `glfwInit` finds no window system, `rig_viewer` draws offscreen
+(2026-10-27, `viewer_offscreen.hpp`): the same frames in gfx's offscreen
+frame loop, from the home view with no panels, until fusion ends, saving
+the frames `output.screenshot` names as BMP files of the bytes read back.
 The two viewers hand meshes over through `mesh::MeshExchange`,
 take their window glue (the GLFW surface, the shared device and ImGui's GLFW
 backend) from gfx's `gfx_glfw` (2026-10-12), and share `viewer_common.hpp`: the
