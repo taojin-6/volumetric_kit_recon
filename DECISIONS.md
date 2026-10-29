@@ -5422,10 +5422,11 @@ main's 1.54-1.55 (the change tests 0.07 ms, the resets 0.63 ms in place of
 the former clears), and 4.62-4.63 ms on the M5 Max against 4.58-4.70 (0.11
 and 1.46 ms; testing a voxel's weight before projecting it, as the former
 clear did, took the resets from 2.02). The dropout mark costs nothing
-measurable: the change tests 0.072 against 0.073 ms, integrate 1.686-1.689
-against 1.688-1.692 ms (RTX 4090, interleaved with the build before it).
-Memory: the detector's 35.4 MB for the rig. Classic is unchanged (40 take1 sets: the codec stream
-byte-identical, the set-39 mesh the same triangles).
+measurable: the change tests 0.073 ms against 0.072, integrate 1.688-1.692
+against 1.686-1.689 ms (RTX 4090, interleaved with the build before it).
+Memory: the detector's 35.4 MB for the rig. Classic is unchanged (40 take1
+sets: the codec stream byte-identical, the set-39 mesh the same
+triangles).
 
 **Tests.** `recon_tsdf_dynamic_change` fuses two cameras that disagree by
 8 mm on a wall through the `Fuser`: no voxel's weight falls while the
