@@ -22,6 +22,13 @@
 // - set 70, the box leaves: in that set nothing of it meshes, no voxel of its
 //   band reads as inside a surface, and the wall it hid meshes at once.
 //
+// Then a second scene, a fuser of its own, over no return: the wall only
+// left of x = -0.3 m, nothing returning elsewhere, the same two cameras. The
+// box is there over sets 40-49, where nothing returns behind it, and goes at
+// 50: in that set nothing of it meshes and no voxel of its band reads as
+// inside a surface (no camera ever sees past it, so only its cameras'
+// Vanished rays can clear it); no weight falls in any other set.
+//
 // And the refusals: two frames of a set with one slot, a slot past the
 // detector's, a noise model the detector refuses -- Dynamic only, as
 // Classic reads neither. Skips (exit 0) where no device is present.
@@ -108,8 +115,10 @@ sensor::DepthCameraParams camera_b() {
 
 // The camera-space depth of each pixel: the wall at z = 2, or the thing in
 // front of it where the ray meets it first; plus `offset` along the ray.
+// With `wall_left_only`, the wall returns only left of x = -0.3 m, and 0 (no
+// return) elsewhere.
 std::vector<float> render(const sensor::DepthCameraParams& cam, Thing thing,
-                          float offset) {
+                          float offset, bool wall_left_only = false) {
   std::vector<float> depth(std::size_t(kWidth) * kHeight);
   const vr::Mat4f& m = cam.cam_to_world;
   const vr::Vec3f origin(m[3]);
@@ -120,13 +129,17 @@ std::vector<float> render(const sensor::DepthCameraParams& cam, Thing thing,
                               (float(v) - cam.cy) / cam.fy, 1.0f);
       const vr::Vec3f ray(m * vr::Vec4f(ray_cam, 0.0f));
       float t = (kWall - origin.z) / ray.z;
+      float d = t + offset;
+      if (wall_left_only && (origin + t * ray).x > -0.3f) d = 0.0f;
       if (thing != Thing::None) {
         const float z = thing == Thing::Card ? kCard : kBox;
         const float tt = (z - origin.z) / ray.z;
         const vr::Vec3f p = origin + tt * ray;
-        if (std::fabs(p.x) <= kHalfX && std::fabs(p.y) <= kHalfY) t = tt;
+        if (std::fabs(p.x) <= kHalfX && std::fabs(p.y) <= kHalfY) {
+          d = tt + offset;
+        }
       }
-      depth[std::size_t(v) * kWidth + u] = t + offset;
+      depth[std::size_t(v) * kWidth + u] = d;
     }
   }
   return depth;
@@ -198,6 +211,71 @@ int refusals(vkc::test::GpuContext& gpu, tsdf::Fuser& fuser,
                   tsdf::IntegrationMode::Classic)
             .ok());
   (void)gpu;
+  return 0;
+}
+
+// The second scene: a box over no return, gone at set 50.
+int no_return_case(vkc::test::GpuContext& gpu) {
+  vkc::Device& dev = gpu.device;
+  vkc::Allocator& alloc = gpu.allocator;
+  auto fuser = tsdf::Fuser::create(dev, alloc);
+  CHECK(fuser.ok());
+  auto mc = mesh::MarchingCubes::create(dev, alloc);
+  CHECK(mc.ok());
+  auto made = tsdf::create_fusion_grid(dev, alloc, kVoxel, kTrunc, 1024);
+  CHECK(made.ok());
+  vol::VoxelBlockGrid& grid = made.value();
+  const sensor::DepthCameraParams a = camera_a();
+  const sensor::DepthCameraParams b = camera_b();
+  std::vector<float> weights_before;
+  for (int set = 0; set <= 50; ++set) {
+    const Thing thing = set >= 40 && set < 50 ? Thing::Box : Thing::None;
+    const std::vector<float> da = render(a, thing, 0.0f, true);
+    const std::vector<float> db = render(b, thing, kOffsetB, true);
+    auto fused = fuser->fuse(grid,
+                             {{vkc::StorageInput(da.data()), a, nullptr, 0},
+                              {vkc::StorageInput(db.data()), b, nullptr, 1}},
+                             kMaxWeight, tsdf::IntegrationMode::Dynamic);
+    CHECK(fused.ok());
+    auto w = vgrid_test::read_attribute<float>(dev, alloc, grid,
+                                               vol::kWeightAttribute);
+    CHECK(w.ok());
+    const std::vector<float>& weights = w.value();
+    if (!weights_before.empty() && set != 50) {
+      std::size_t fell = 0;
+      for (std::size_t i = 0; i < weights_before.size(); ++i) {
+        fell += weights[i] < weights_before[i] ? 1 : 0;
+      }
+      if (fell != 0) {
+        std::fprintf(stderr, "over no return, set %d: %zu weights fell\n", set,
+                     fell);
+        return 1;
+      }
+    }
+    if (set == 49 || set == 50) {
+      auto box = triangles_at(mc.value(), grid, kBox);
+      CHECK(box.ok());
+      std::printf("over no return, set %d: %zu triangles on the box\n", set,
+                  box.value());
+      if (set == 49) CHECK(box.value() > 500);
+      if (set == 50) CHECK(box.value() == 0);
+    }
+    if (set == 50) {
+      auto vox = voxels_of(grid);
+      auto t = vgrid_test::read_attribute<float>(dev, alloc, grid,
+                                                 vol::kTsdfAttribute);
+      CHECK(vox.ok() && t.ok());
+      std::size_t inside_surface = 0;
+      for (const Voxel& x : vox.value()) {
+        if (inside(x.world) && std::fabs(x.world.z - kBox) <= kTrunc &&
+            weights[x.index] > 0.0f && t.value()[x.index] < 0.0f) {
+          ++inside_surface;
+        }
+      }
+      CHECK(inside_surface == 0);
+    }
+    weights_before = weights;
+  }
   return 0;
 }
 
@@ -313,6 +391,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   }
 
   if (refusals(gpu, fuser.value(), grid) != 0) return 1;
+  if (no_return_case(gpu) != 0) return 1;
   std::puts("tsdf_dynamic_change: OK");
   return 0;
 }

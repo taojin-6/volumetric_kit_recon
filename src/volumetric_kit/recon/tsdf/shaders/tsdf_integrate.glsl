@@ -25,7 +25,8 @@
 // (tsdf::ChangeDetector's mask, at binding 5) resets every voxel in front of
 // its new sample and in that sample's band -- the newly exposed free space and
 // the new surface -- to the unobserved state, and keeps the history behind the
-// band, which the new surface occludes (DECISIONS.md, 2026-10-29).
+// band, which the new surface occludes; a Vanished ray, with no new sample,
+// resets up to the band of the surface that left (DECISIONS.md, 2026-10-29).
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_basic : require
@@ -65,8 +66,9 @@ layout(set = 0, binding = 4, scalar) readonly buffer Camera {
 // mesh tier's identical color binding does).
 layout(set = 0, binding = 6, scalar) buffer ColorAttr { uint color_attr[]; };
 #ifdef VR_TSDF_RESET
-// The reset reads no colour: slot 5 is the camera's change mask, a uint a pixel
-// (tsdf::PixelChange; 0 = no change), and slot 7 is unused.
+#include "tsdf_change_mask.glsl"
+// The reset reads no colour: slot 5 is the camera's change mask, a word a
+// pixel (tsdf_change_mask.glsl; 0 = no change), and slot 7 is unused.
 layout(set = 0, binding = 5, scalar) readonly buffer ChangeMask {
   uint change_mask[];
 };
@@ -216,19 +218,24 @@ void main() {
 #ifdef VR_TSDF_RESET
   // A changed ray resets what lies in front of its new sample and in that
   // sample's band, read at the voxel's nearest pixel, as the mask is per
-  // pixel: change is never interpolated across a silhouette. A flagged
-  // pixel's sample is valid (the detector flags only valid samples).
+  // pixel: change is never interpolated across a silhouette. A Nearer or
+  // Farther pixel's sample is valid (the detector flags only valid samples);
+  // a Vanished pixel has none, and its word holds the depth that left.
   uvec2 n = nearest_pixel(px, cam.width, cam.height);
   uint pixel = n.y * cam.width + n.x;
-  if (change_mask[pixel] == 0u) {
+  uint word = change_mask[pixel];
+  uint kind = change_kind(word);
+  if (kind == kChangeNone) {
     return;
   }
-  if (depth[pixel] - zc < -trunc_dist) {
-    return;  // behind the new surface's band: occluded history stays
+  float surface = kind == kChangeVanished ? vanished_depth(word) : depth[pixel];
+  if (surface - zc < -trunc_dist) {
+    return;  // behind the surface's band: occluded history stays
   }
-  // TODO(tsdf): a surface that leaves with no return behind it flags no ray,
-  // so nothing resets it; a decay gated by visibility is the rule to try
-  // (DECISIONS.md, 2026-10-29).
+  // TODO(tsdf): a surface over no return that was there from its camera's
+  // first frames, or returned for under three samples in a row, flags
+  // nothing when it goes, so nothing resets it; a decay gated by visibility
+  // is the rule to try (DECISIONS.md, 2026-10-29).
   // The weight > 0.0 test above is the "did anything change" test: a voxel
   // at weight 0 is in the state the reset writes.
   tsdf[idx] = 0.0;
