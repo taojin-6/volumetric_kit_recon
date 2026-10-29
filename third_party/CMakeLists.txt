@@ -103,23 +103,25 @@ if(VR_CAMERA_ONLY)
 endif()
 
 # --- volumetric_kit_grid: voxel hashing, meshing and the codec ----------------
-# grid/ in this repository, a package of its own (project(volumetric_kit_grid),
-# on the core alone; DECISIONS.md, the package rule), declared after the core
-# and before recon's tiers, which link it. An application that also fetches grid
-# declares it first, by URL + SHA + SOURCE_SUBDIR grid, and FetchContent keeps
-# that declaration, as with the core; vkc_require_sibling then refuses a grid
-# older than VR_GRID_MIN_VERSION. Work on both checkouts at once with
-# -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_GRID=<grid checkout>. In this build
-# grid's tests, examples and -Werror follow recon's, and grid's test support and
-# example helpers are built for recon's own. It builds in grid/ under the build
-# tree, not in _deps/, which CI caches for the fetched dependencies alone.
+# A repository of its own, on the core alone, declared after the core and before
+# recon's tiers, which link it. Pinned by commit, never main; an application
+# that also fetches grid declares it first, and FetchContent keeps that
+# declaration, as with the core; vkc_require_sibling then refuses a grid older
+# than VR_GRID_MIN_VERSION. Work on both checkouts at once with
+# -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_GRID=<grid checkout>. grid's own CI
+# tests grid, so its tests and -Werror stay off in this build. recon's tests
+# turn on grid's test support, and recon's examples and tests its example
+# helpers (grid_example_common), which grid builds with its examples.
+#
+# The pin is grid 0.1.0 (cbf7a6e, its repository's first main).
 FetchContent_Declare(
-  volumetric_kit_grid SOURCE_DIR "${PROJECT_SOURCE_DIR}/grid" BINARY_DIR
-                      "${CMAKE_BINARY_DIR}/grid")
-set(VGRID_BUILD_TESTS ${VR_BUILD_TESTS})
+  volumetric_kit_grid
+  GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
+  GIT_TAG cbf7a6ea2b8729645b24503063ff7a076706f698)
 set(VGRID_BUILD_TEST_SUPPORT ${VR_BUILD_TESTS})
-set(VGRID_BUILD_EXAMPLES ${VR_BUILD_EXAMPLES})
-set(VGRID_WARNINGS_AS_ERRORS ${VR_WARNINGS_AS_ERRORS})
+if(VR_BUILD_EXAMPLES OR VR_BUILD_TESTS)
+  set(VGRID_BUILD_EXAMPLES ON)
+endif()
 FetchContent_MakeAvailable(volumetric_kit_grid)
 vkc_require_sibling(volumetric_kit::grid ${VR_GRID_MIN_VERSION})
 if(VR_BUILD_TESTS AND NOT TARGET volumetric_kit::grid_test_support)
@@ -133,7 +135,7 @@ if((VR_BUILD_EXAMPLES OR VR_BUILD_TESTS) AND NOT TARGET grid_example_common)
   message(
     FATAL_ERROR
       "recon's examples and their tests need volumetric_kit_grid's example "
-      "helpers: set VGRID_BUILD_EXAMPLES or VGRID_BUILD_TESTS ON before the "
+      "helpers: set VGRID_BUILD_EXAMPLES ON before the "
       "first FetchContent_MakeAvailable of grid")
 endif()
 

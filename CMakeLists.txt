@@ -104,26 +104,22 @@ if(VR_WITH_CUDA)
   include(vr_cuda)
 endif()
 
-# Pinned dependencies: volumetric_kit_core and grid (grid/, a package of its own
-# in this repository), linked PUBLIC, and implementation dependencies that
-# expose private include paths to the tiers below and never become part of their
-# link interface. The oldest core recon's libraries build with is checked in the
-# core that arrives (third_party/, which also checks the config tier the
-# examples and tests need): 0.29.0, whose vulkan/fwd.hpp the public headers
-# include. recon_core exports its GLSL with 0.27.0's vkc_export_glsl, and the
-# tests run on 0.28.0's test support. The oldest grid is VR_GRID_MIN_VERSION.
+# Pinned dependencies: volumetric_kit_core and volumetric_kit_grid, linked
+# PUBLIC, and implementation dependencies that expose private include paths to
+# the tiers below and never become part of their link interface. The oldest core
+# recon's libraries build with is checked in the core that arrives
+# (third_party/, which also checks the config tier the examples and tests need):
+# 0.29.0, whose vulkan/fwd.hpp the public headers include. recon_core exports
+# its GLSL with 0.27.0's vkc_export_glsl, and the tests run on 0.28.0's test
+# support. The oldest grid is VR_GRID_MIN_VERSION.
 set(VR_CORE_MIN_VERSION 0.29.0)
 set(VR_GRID_MIN_VERSION 0.1.0)
-# Testing is on before third_party/ adds grid, so ctest runs grid's tests, which
-# this build builds with recon's (third_party/), too.
-if(VR_BUILD_TESTS)
-  enable_testing()
-endif()
 add_subdirectory(third_party)
 
 add_subdirectory(src)
 
 if(VR_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
+  enable_testing()
   add_subdirectory(tests)
 endif()
 

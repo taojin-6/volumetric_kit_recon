@@ -986,13 +986,11 @@ target_link_libraries(
 vr_target_warnings(recon_sender_set_sender_test)
 add_test(NAME recon_sender_set_sender COMMAND recon_sender_set_sender_test)
 
-# The tests whose code runs threads -- grid's (grid_tsan_tests: a reader shared
-# by two, the mesh handoff's producer and consumer, the sockets', the senders'
-# log) and the Orbbec decode workers -- which CI builds and runs again under
-# ThreadSanitizer (.github/workflows/_build.yml): one target to build them.
+# The tests whose code runs threads, the Orbbec decode workers', which CI builds
+# and runs again under ThreadSanitizer (.github/workflows/_build.yml): one
+# target to build them. grid's own CI runs grid's threaded tests so.
 add_custom_target(recon_tsan_tests)
-add_dependencies(recon_tsan_tests grid_tsan_tests
-                 recon_sensor_orbbec_decode_worker_test)
+add_dependencies(recon_tsan_tests recon_sensor_orbbec_decode_worker_test)
 if(VR_WITH_ORBBEC)
   add_dependencies(
     recon_tsan_tests recon_sensor_orbbec_jpeg_test
@@ -1082,7 +1080,7 @@ endif()
 # runs tests in the order they were added, and a fresh CI runner has no timing
 # history, so a slow test added late finished last. Seconds under the sanitizers
 # job, the longest in CI, in run 39717939263 (before the 2026-10-22 test trims);
-# only the order matters. grid's tests set theirs (grid/tests).
+# only the order matters.
 set_tests_properties(recon_sender_set_sender PROPERTIES COST 29)
 # Waits out RigSets' 10-s silence limit, under any build.
 set_tests_properties(recon_sensor_array_rig_sets PROPERTIES COST 11)

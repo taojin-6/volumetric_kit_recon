@@ -55,12 +55,12 @@ measurement on a large scan.
 ## Architecture and conventions
 
 The voxel grid, meshing, mesh files, eval, the codec and the `.vrst` stream
-and its serving are a package of their own, `grid/` (`volumetric_kit_grid`,
-on the core alone; its own [AGENTS.md](grid/AGENTS.md)), which recon builds
-on. A grid file never includes recon's or sensor's
-(`grid_package_boundary`), and `grid/` builds and tests alone. A change to
-grid follows grid's guide and records its decisions in grid's DECISIONS.md.
-recon's dependencies flow left to right, over grid:
+and its serving are
+[`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid), a
+repository of its own on the core alone, which recon fetches pinned by
+commit (`third_party/CMakeLists.txt`). A change to grid is a task in that
+repository, under its own AGENTS.md and DECISIONS.md; recon then moves its
+pin. recon's dependencies flow left to right, over grid:
 
 ```text
 core → tsdf → texture → interop      (on grid's volume and mesh)

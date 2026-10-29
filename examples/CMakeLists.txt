@@ -4,7 +4,7 @@
 # Example programs use the production IO tiers for image and mesh assets.
 # Replica sequence parsing remains an example utility. grid's examples
 # (codec_mesh, serve_stream) and the scaffolding and codec helpers recon's reach
-# are grid's (grid/examples).
+# are grid's (its examples/).
 
 add_subdirectory(common)
 add_subdirectory(fuse_replica)
@@ -30,7 +30,7 @@ if(VR_BUILD_VIEWER)
 endif()
 
 # Exercise each real executable's startup contract without creating resources,
-# with the check grid's examples run (grid/tests/example_config_entry.cmake).
+# with the check grid's examples run (its tests/example_config_entry.cmake).
 if(VR_BUILD_TESTS)
   foreach(_vr_example fuse_replica codec_replica fuse_orbbec fuse_render
                       fuse_viewer rig_viewer)

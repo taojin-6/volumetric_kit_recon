@@ -8,8 +8,8 @@ measurements, review findings, and verification. Newest context wins.
 When a decision changes, update its index entry and dated rationale here in
 the same commit, plus the affected contract in DESIGN.md and any essential
 shared rule in AGENTS.md. An entry that governs grid's code is grid's
-([grid/DECISIONS.md](grid/DECISIONS.md#decision-index)); this index keeps a
-line for each, linking there.
+([its DECISIONS.md](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#decision-index));
+this index keeps a line for each, linking there.
 
 ## Decision index
 
@@ -24,7 +24,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   Independent siblings; gfx untouched.
 - [**2026-06-21**](#2026-06-21--vertical-slice-first) —
   Vertical slice first.
-- [**2026-06-21**](grid/DECISIONS.md#2026-06-21--codec-ships-dct-only) —
+- [**2026-06-21**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-06-21--codec-ships-dct-only) —
   Codec ships DCT-only.
 - [**2026-07-04**](#2026-07-04--native-cuda-accelerator-under-the-vulkan-baseline) —
   Native CUDA accelerator, under the Vulkan baseline.
@@ -33,11 +33,11 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-07-04**](#2026-07-04--zero-copy-interop--one-shared-vkdevice--a-createadopt-seam-refines-trivial-interop-above) —
   Zero-copy interop = one shared `VkDevice` + a create/adopt seam (refines
   "Trivial interop" above).
-- [**2026-07-05**](grid/DECISIONS.md#2026-07-05--shader-buffer-abi-is-scalar-block-layout-not-std430) —
+- [**2026-07-05**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-07-05--shader-buffer-abi-is-scalar-block-layout-not-std430) —
   Shader buffer ABI is scalar block layout, not `std430`.
 - [**2026-07-05**](#2026-07-05--compute-core-is-explicit-not-reflected-dispatch-via-submit_single_time) —
   Compute core is explicit, not reflected; dispatch via `submit_single_time`.
-- [**2026-07-05**](grid/DECISIONS.md#2026-07-05--per-voxel-storage-is-a-structure-of-arrays-attribute-store-voxelblockgrid-not-the-prior-engines-aos-voxel-in-the-hashmap) —
+- [**2026-07-05**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-07-05--per-voxel-storage-is-a-structure-of-arrays-attribute-store-voxelblockgrid-not-the-prior-engines-aos-voxel-in-the-hashmap) —
   Per-voxel storage is a structure-of-arrays attribute store
   (`VoxelBlockGrid`), not the prior engine's AoS `Voxel`-in-the-hashmap.
 - [**2026-07-06**](#2026-07-06--per-kernel-resources-are-bundled-corecompute_kernelhpp-still-not-reflected) —
@@ -59,7 +59,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   package.
 - [**2026-08-01**](#2026-08-01--ios-is-a-downstream-concern-recon-cross-compiles-to-it-unchanged) —
   iOS is a downstream concern; recon cross-compiles to it unchanged.
-- [**2026-08-02**](grid/DECISIONS.md#2026-08-02--meshvertex-is-the-renderers-vertex-layout) —
+- [**2026-08-02**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-02--meshvertex-is-the-renderers-vertex-layout) —
   `mesh::Vertex` *is* the renderer's vertex layout.
 - [**2026-08-02**](#2026-08-02--the-neutral-shared-vkdevice-bootstrap-lands-in-the-viewer-example-and-prefers-two-families-over-a-shared-queue) —
   The neutral shared-`VkDevice` bootstrap lands in the viewer example, and
@@ -68,7 +68,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-02**](#2026-08-02--the-sensor-tier-is-a-contract-not-a-driver-collection-a-capture-driver-lives-here-only-if-this-repo-can-build) —
   The `sensor` tier is a *contract*, not a driver collection: a capture driver
   lives here only if this repo can build (`ICameraCapture` went 2026-10-07)
-- [**2026-08-02**](grid/DECISIONS.md#2026-08-02--the-mesh-arenas-extra-buffer-usage-is-declared-by-the-consumer-not-named-by-this-tier--and-usage-alone-does-not-reach-seam-b) —
+- [**2026-08-02**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-02--the-mesh-arenas-extra-buffer-usage-is-declared-by-the-consumer-not-named-by-this-tier--and-usage-alone-does-not-reach-seam-b) —
   The mesh arena's extra buffer usage is declared by the *consumer*, not named
   by this tier — and usage alone does not reach seam B.
 - [**2026-08-02**](#2026-08-02--one-color-space-rule-and-a-named-working-space-8-bit-color-is-encoded-float-color-is-linear-converted-once-at-the-sensor-boundary-and-encoded-once-at-presentation) —
@@ -79,26 +79,26 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-03**](#2026-08-03--a-buffer-names-the-families-that-will-read-it-and-the-dispatch-barrier-widens-only-as-far-as-its-queue-family-may) —
   A buffer names the *families* that will read it, and the dispatch barrier
   widens only as far as its queue family may.
-- [**2026-08-03**](grid/DECISIONS.md#2026-08-03--the-mesh-arena-is-a-ring-of-slots-released-by-the-host-not-a-timeline-semaphore) —
+- [**2026-08-03**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-03--the-mesh-arena-is-a-ring-of-slots-released-by-the-host-not-a-timeline-semaphore) —
   The mesh arena is a ring of slots released by the *host*, not a timeline
   semaphore.
-- [**2026-08-03**](grid/DECISIONS.md#2026-08-03--the-draw-command-is-written-by-the-kernel-that-counts-it-and-the-counters-unit-changes-from-triangles-to-indices) —
+- [**2026-08-03**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-03--the-draw-command-is-written-by-the-kernel-that-counts-it-and-the-counters-unit-changes-from-triangles-to-indices) —
   The draw command is written by the kernel that counts it, and the counter's
   unit changes from triangles to indices.
-- [**2026-08-03**](grid/DECISIONS.md#2026-08-03--nothing-in-the-mesh-extractor-reads-the-current-slot-except-the-code-that-writes-it-the-capacity-plan-is-slot-independent-and-a-slot-is-marked-outstanding-only-where-a-devicemesh-is-handed-out) —
+- [**2026-08-03**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-03--nothing-in-the-mesh-extractor-reads-the-current-slot-except-the-code-that-writes-it-the-capacity-plan-is-slot-independent-and-a-slot-is-marked-outstanding-only-where-a-devicemesh-is-handed-out) —
   Nothing in the mesh extractor reads "the current slot" except the code that
   writes it: the capacity plan is slot-independent, and a slot is marked
   outstanding only where a `DeviceMesh` is handed out.
 - [**2026-08-04**](#2026-08-04--a-limit-a-lifetime-or-a-staleness-the-caller-cannot-see-is-the-librarys-to-check-not-to-document) —
   A limit, a lifetime, or a staleness the caller cannot see is the library's to
   check, not to document.
-- [**2026-08-08**](grid/DECISIONS.md#2026-08-08--the-sparse-mesh-kernel-resolves-its-own-222-neighbourhood-by-probing-the-hash-table-on-device-and-mesh-therefore-reads-a-volume-buffer--a-coupling-paid-for-not-stumbled-into) —
+- [**2026-08-08**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-08--the-sparse-mesh-kernel-resolves-its-own-222-neighbourhood-by-probing-the-hash-table-on-device-and-mesh-therefore-reads-a-volume-buffer--a-coupling-paid-for-not-stumbled-into) —
   The sparse mesh kernel resolves its own 2×2×2 neighbourhood by probing the
   hash table on-device, and `mesh` therefore reads a `volume` buffer — a
   coupling paid for, not stumbled into. *Amended 2026-10-13:* the device
   shows the chained fixture spills; `HashDiagnostics` is gone. *Amended
   2026-10-22:* the extract splits its dispatch at the device's group limit.
-- [**2026-08-08**](grid/DECISIONS.md#2026-08-08--the-overflow-scan-stays-exhaustive-what-gets-bounded-is-its-cost-per-slot-not-its-length) —
+- [**2026-08-08**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-08--the-overflow-scan-stays-exhaustive-what-gets-bounded-is-its-cost-per-slot-not-its-length) —
   The overflow scan stays exhaustive; what gets bounded is its cost per slot,
   not its length. *Amended 2026-10-13:* `diagnostics()` is gone; the device
   confirms the chain fixtures. *Amended 2026-10-22:* the heap path refuses an
@@ -107,13 +107,13 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-08**](#2026-08-08--fuse_viewer-draws-recons-buffers-interop-seam-b-end-to-end-and-the-release-mark-must-be-published-before-the-mesh-is-taken) —
   `fuse_viewer` draws recon's buffers: interop seam B, end to end, and the
   release mark must be published *before* the mesh is taken.
-- [**2026-08-08**](grid/DECISIONS.md#2026-08-08--in-block-vertex-sharing-is-a-second-compiled-kernel-not-a-branch-and-the-two-emitters-must-interpolate-an-edge-in-the-same-direction) —
+- [**2026-08-08**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-08--in-block-vertex-sharing-is-a-second-compiled-kernel-not-a-branch-and-the-two-emitters-must-interpolate-an-edge-in-the-same-direction) —
   In-block vertex sharing is a *second compiled kernel*, not a branch, and the
   two emitters must interpolate an edge in the same direction.
-- [**2026-08-09**](grid/DECISIONS.md#2026-08-09--a-dirty-block-is-one-the-fuse-changed-the-flags-are-anchored-to-a-grid-the-library-checks-and-tracking-them-is-opt-in) —
+- [**2026-08-09**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-09--a-dirty-block-is-one-the-fuse-changed-the-flags-are-anchored-to-a-grid-the-library-checks-and-tracking-them-is-opt-in) —
   A dirty block is one the fuse *changed*, the flags are anchored to a grid the
   library checks, and tracking them is opt-in.
-- [**2026-08-09**](grid/DECISIONS.md#2026-08-09--incremental-mesh-extraction-is-worth-building-at-a-4x-ceiling-not-the-18x-one-window-suggested-and-the-worst-frame-rather-than-the-median-sizes-its-design-amends-the-dirty-block-decision-above) —
+- [**2026-08-09**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-09--incremental-mesh-extraction-is-worth-building-at-a-4x-ceiling-not-the-18x-one-window-suggested-and-the-worst-frame-rather-than-the-median-sizes-its-design-amends-the-dirty-block-decision-above) —
   Incremental mesh extraction is worth building at a ~4x ceiling, not the ~18x
   one window suggested, and the worst frame rather than the median sizes its
   design (amends the dirty-block decision above). It was removed on 2026-10-06.
@@ -125,7 +125,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   skips it and the device total must not; and a ceiling the library knows is the
   library's to name. *Reversed 2026-10-23:* device time tiles, so a stage holds
   its breakdowns' and both totals skip them.
-- [**2026-08-11**](grid/DECISIONS.md#2026-08-11--the-per-block-span-table-is-opt-in-is-retired-by-generation-rather-than-described-in-prose-is-anchored-per-block-slot-to-a-globally-unique-topology-token-and-is-one-table-for-the-whole-ring-rather-than-one-per-slot) —
+- [**2026-08-11**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-11--the-per-block-span-table-is-opt-in-is-retired-by-generation-rather-than-described-in-prose-is-anchored-per-block-slot-to-a-globally-unique-topology-token-and-is-one-table-for-the-whole-ring-rather-than-one-per-slot) —
   The per-block span table is opt-in, is retired by generation rather than
   described in prose, is anchored per block slot to a globally unique topology
   token, and is one table for the whole ring rather than one per slot. The table
@@ -137,16 +137,16 @@ entries relevant to your task; later amendments supersede earlier rules.
   2026-08-04 entry records). *Amended 2026-10-16:* the projection is no
   longer a per-tier copy; texture's goes through `core/shaders/pinhole.glsl`
   and keeps its own acceptance.
-- [**2026-08-11**](grid/DECISIONS.md#2026-08-11--an-incremental-extract-trusts-one-struct-cleared-on-every-path-and-re-established-only-where-a-mesh-is-handed-out-every-refusal-is-a-silent-fallback-and-the-fallback-is-reported) —
+- [**2026-08-11**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-11--an-incremental-extract-trusts-one-struct-cleared-on-every-path-and-re-established-only-where-a-mesh-is-handed-out-every-refusal-is-a-silent-fallback-and-the-fallback-is-reported) —
   An incremental extract trusts one struct, cleared on every path and
   re-established only where a mesh is handed out; every refusal is a silent
   fallback, and the fallback is *reported*. Removed on 2026-10-06.
-- [**2026-08-11**](grid/DECISIONS.md#2026-08-11--incremental-extraction-runs-under-share_vertices-because-that-kernel-owns-its-index-run-and-so-retires-more-cheaply-not-less-reverses-the-share_vertices-clause-of-the-incremental-dispatch-decision-above) —
+- [**2026-08-11**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-11--incremental-extraction-runs-under-share_vertices-because-that-kernel-owns-its-index-run-and-so-retires-more-cheaply-not-less-reverses-the-share_vertices-clause-of-the-incremental-dispatch-decision-above) —
   Incremental extraction runs under `share_vertices`, because that kernel owns
   its index run and so retires *more* cheaply, not less (reverses the
   `share_vertices` clause of the incremental-dispatch decision above). Removed
   on 2026-10-06.
-- [**2026-08-12**](grid/DECISIONS.md#2026-08-12--meshing-a-cameras-view-is-a-caller-supplied-block-list-not-a-camera-the-mesh-tier-holds-and-it-stays-apart-from-incremental-extraction-rather-than-stacking-with-it) —
+- [**2026-08-12**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-12--meshing-a-cameras-view-is-a-caller-supplied-block-list-not-a-camera-the-mesh-tier-holds-and-it-stays-apart-from-incremental-extraction-rather-than-stacking-with-it) —
   Meshing a camera's view is a caller-supplied block list, not a camera the mesh
   tier holds; and it stays apart from incremental extraction rather than
   stacking with it. Incremental extraction went on 2026-10-06. *Amended
@@ -155,10 +155,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   A profiler label belongs to the kernel, not to the timed span;
   `VK_EXT_debug_utils` is requested independently of validation, and the
   *instance* extension is declared across the adopt seam.
-- [**2026-08-31**](grid/DECISIONS.md#2026-08-31--the-dense-extract-goes-extract-becomes-extract_host-so-the-two-workflows-are-named-rather-than-inferred) —
+- [**2026-08-31**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-31--the-dense-extract-goes-extract-becomes-extract_host-so-the-two-workflows-are-named-rather-than-inferred) —
   The dense extract goes; `extract` becomes `extract_host`, so the two
   workflows are named rather than inferred.
-- [**2026-08-31**](grid/DECISIONS.md#2026-08-31--a-triangles-work-unit-is-the-candidate-block-not-the-triangle-and-the-band-it-allocates-is-measured-from-the-surface-not-dilated-from-a-point) —
+- [**2026-08-31**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-08-31--a-triangles-work-unit-is-the-candidate-block-not-the-triangle-and-the-band-it-allocates-is-measured-from-the-surface-not-dilated-from-a-point) —
   A triangle's work unit is the candidate *block*, not the triangle; and the
   band it allocates is measured from the surface, not dilated from a point.
 - [**2026-09-14**](#2026-09-14--the-examples-poll-their-frames-through-the-sensor-contract-the-replica-reader-is-an-icameracapture-a-source-says-when-it-is-exhausted-and-a-frame-kept-past-the-next-poll-is-copied--the-last-one-included) —
@@ -175,12 +175,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   undistorts colour and then registers depth to it on the host, and it reads
   the rig's sync roles without writing them. The host path went on
   2026-10-06: every frame is handed out as captured.
-- [**2026-09-26**](grid/DECISIONS.md#2026-09-26--the-tsdf-codec-is-one-codec-tier-over-volume-with-separate-encoder-and-decoder-classes-a-geometry-only-intra-frame-of-per-block-dct-coefficients-an-observed-voxel-mask-and-sorted-block-coordinates-entropy-coded-by-chunked-static-table-rans) —
+- [**2026-09-26**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-09-26--the-tsdf-codec-is-one-codec-tier-over-volume-with-separate-encoder-and-decoder-classes-a-geometry-only-intra-frame-of-per-block-dct-coefficients-an-observed-voxel-mask-and-sorted-block-coordinates-entropy-coded-by-chunked-static-table-rans) —
   The TSDF codec is one `codec` tier over `volume`, with separate `Encoder` and
   `Decoder` classes: a geometry-only intra frame of per-block DCT coefficients,
   an observed-voxel mask and sorted block coordinates, entropy-coded by chunked
   static-table rANS. *Amended 2026-10-13:* `check_block_list` is gone.
-- [**2026-09-27**](grid/DECISIONS.md#2026-09-27--the-v1-frame-is-independent-rans-segments-of-sorted-blocks-every-integer-a-class-plus-raw-bits-behind-fixed-per-frame-tables-and-a-section-table-the-decoders-end-check-is-for-consistency-not-integrity-amends-the-2026-09-26-entrys-interleaved-lanes) —
+- [**2026-09-27**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-09-27--the-v1-frame-is-independent-rans-segments-of-sorted-blocks-every-integer-a-class-plus-raw-bits-behind-fixed-per-frame-tables-and-a-section-table-the-decoders-end-check-is-for-consistency-not-integrity-amends-the-2026-09-26-entrys-interleaved-lanes) —
   The v1 frame is independent rANS segments of sorted blocks, every integer a
   class plus raw bits, behind fixed per-frame tables and a section table; the
   decoder's end check is for consistency, not integrity (amends the 2026-09-26
@@ -194,7 +194,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   moved to the `camera` tier on 2026-10-06, and the rig's sets became raw
   only the same day. `OrbbecRig` went on 2026-10-07: a rig is a
   `SensorArray` of `OrbbecSensor`s, on the SDK's global timestamps.
-- [**2026-09-27**](grid/DECISIONS.md#2026-09-27--encoder-and-decoder-are-the-codecs-public-api-encoding-drops-never-observed-blocks-and-sorts-the-rest-decoding-makes-a-callers-grid-hold-exactly-the-frame-by-diffing-its-block-set-everything-checkable-is-checked-before-the-grid-is-touched-and-a-grid-too-small-for-the-frame-is-refused-rather-than-grown) —
+- [**2026-09-27**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-09-27--encoder-and-decoder-are-the-codecs-public-api-encoding-drops-never-observed-blocks-and-sorts-the-rest-decoding-makes-a-callers-grid-hold-exactly-the-frame-by-diffing-its-block-set-everything-checkable-is-checked-before-the-grid-is-touched-and-a-grid-too-small-for-the-frame-is-refused-rather-than-grown) —
   `Encoder` and `Decoder` are the codec's public API: encoding drops
   never-observed blocks and sorts the rest, decoding makes a caller's grid hold
   exactly the frame by diffing its block set, everything checkable is checked
@@ -213,16 +213,16 @@ entries relevant to your task; later amendments supersede earlier rules.
   that decodes a built-in clip, NVIDIA ahead of an integrated GPU; each CI leg
   requires the hardware it has. The decoders hand out device pictures only
   since 2026-10-06.
-- [**2026-09-27**](grid/DECISIONS.md#2026-09-27--room0-sets-the-codecs-provisional-defaults-k--64-with-one-step-of-02-for-dc-and-ac-alike-the-coefficient-count-sets-the-quality-and-a-coarse-uniform-step-costs-almost-nothing-at-it-and-the-host-rans-coder-fits-a-frame-interval-at-1-cm-so-the-gpu-coder-waits) —
+- [**2026-09-27**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-09-27--room0-sets-the-codecs-provisional-defaults-k--64-with-one-step-of-02-for-dc-and-ac-alike-the-coefficient-count-sets-the-quality-and-a-coarse-uniform-step-costs-almost-nothing-at-it-and-the-host-rans-coder-fits-a-frame-interval-at-1-cm-so-the-gpu-coder-waits) —
   Room0 sets the codec's provisional defaults, K = 64 with one step of 0.2 for
   DC and AC alike: the coefficient count sets the quality and a coarse uniform
   step costs almost nothing at it, and the host rANS coder fits a frame
   interval at 1 cm, so the GPU coder waits.
-- [**2026-09-27**](grid/DECISIONS.md#2026-09-27--quality-measurement-is-a-tier-of-its-own-eval-branching-off-mesh-mesh-to-mesh-accuracy-coverage-and-f-score-host-side-and-deterministic-and-production-infrastructure-rather-than-an-excluded-research-harness) —
+- [**2026-09-27**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-09-27--quality-measurement-is-a-tier-of-its-own-eval-branching-off-mesh-mesh-to-mesh-accuracy-coverage-and-f-score-host-side-and-deterministic-and-production-infrastructure-rather-than-an-excluded-research-harness) —
   Quality measurement is a tier of its own, `eval`, branching off `mesh`:
   mesh-to-mesh accuracy, coverage and F-score, host-side and deterministic,
   and production infrastructure rather than an excluded research harness.
-- [**2026-09-27**](grid/DECISIONS.md#2026-09-27--a-mesh-becomes-a-tsdf-two-ways-in-the-tsdf-tier-signed-by-the-closest-triangles-normal-for-a-closed-mesh-or-as-an-unsigned-shell-for-any-mesh--binned-per-block-over-the-allocations-own-candidates-with-no-topology) —
+- [**2026-09-27**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-09-27--a-mesh-becomes-a-tsdf-two-ways-in-the-tsdf-tier-signed-by-the-closest-triangles-normal-for-a-closed-mesh-or-as-an-unsigned-shell-for-any-mesh--binned-per-block-over-the-allocations-own-candidates-with-no-topology) —
   A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest
   triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh
   — binned per block over the allocation's own candidates, with no topology.
@@ -278,26 +278,26 @@ entries relevant to your task; later amendments supersede earlier rules.
   A rig's cameras fuse in one batch: each dispatch binds a descriptor set of
   its own over the same kernel, and the set is compacted once. A Dynamic set
   clears with every camera before it fuses with any since 2026-10-08.
-- [**2026-09-30**](grid/DECISIONS.md#2026-09-30--depth-allocation-works-a-16-x-16-pixel-tile-a-workgroup-and-dilates-each-distinct-block-of-the-tile-once-its-band-shared-out-over-the-lanes) —
+- [**2026-09-30**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-09-30--depth-allocation-works-a-16-x-16-pixel-tile-a-workgroup-and-dilates-each-distinct-block-of-the-tile-once-its-band-shared-out-over-the-lanes) —
   Depth allocation works a 16 x 16 pixel tile a workgroup and dilates each
   distinct block of the tile once, its band shared out over the lanes.
-- [**2026-09-30**](grid/DECISIONS.md#2026-09-30--with-the-spans-off-an-extracts-active-list-stays-on-the-device-and-the-map-hands-back-its-last-compaction-while-nothing-has-changed-since) —
+- [**2026-09-30**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-09-30--with-the-spans-off-an-extracts-active-list-stays-on-the-device-and-the-map-hands-back-its-last-compaction-while-nothing-has-changed-since) —
   With the spans off, an extract's active list stays on the device, and the
   map hands back its last compaction while nothing has changed since. The spans
   went on 2026-10-06. *Amended 2026-10-24:* an extract records its own
   compaction into its batch when the last list does not hold, so only an
   extract after the encoder reuses one.
-- [**2026-10-01**](grid/DECISIONS.md#2026-10-01--every-block-slot-carries-stamps-ticks-of-one-clock-on-the-map-each-written-by-the-pass-that-knows-its-fact-the-grid-frees-the-blocks-no-allocation-has-asked-for-and-no-voxel-has-weighted-in-max_age-ticks) —
+- [**2026-10-01**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-01--every-block-slot-carries-stamps-ticks-of-one-clock-on-the-map-each-written-by-the-pass-that-knows-its-fact-the-grid-frees-the-blocks-no-allocation-has-asked-for-and-no-voxel-has-weighted-in-max_age-ticks) —
   Every block slot carries stamps, ticks of one clock on the map, each
   written by the pass that knows its fact; the grid frees the blocks no
   allocation has asked for and no voxel has weighted in `max_age` ticks.
-- [**2026-10-01**](grid/DECISIONS.md#2026-10-01--the-dirty-flags-become-the-changed-stamp-every-pass-that-writes-voxels-advances-the-maps-clock-and-stamps-what-it-changed-always-and-an-incremental-extract-keeps-the-tick-it-last-meshed-at-amends-the-2026-08-09-dirty-block-decision-and-the-stamps-entry-above) —
+- [**2026-10-01**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-01--the-dirty-flags-become-the-changed-stamp-every-pass-that-writes-voxels-advances-the-maps-clock-and-stamps-what-it-changed-always-and-an-incremental-extract-keeps-the-tick-it-last-meshed-at-amends-the-2026-08-09-dirty-block-decision-and-the-stamps-entry-above) —
   The dirty flags become the `changed` stamp: every pass that writes voxels
   advances the map's clock and stamps what it changed, always, and an
   incremental extract keeps the tick it last meshed at (amends the
   2026-08-09 dirty-block decision and the stamps entry above). The incremental
   extract went on 2026-10-06; the stamp stays.
-- [**2026-10-01**](grid/DECISIONS.md#2026-10-01--the-codec-review-frame-v2-codes-a-partial-mask-a-plane-and-a-line-at-a-time-against-its-neighbours-and-a-sign-inside-its-mantissas-field-the-transform-finds-every-block-by-its-coordinate-one-commandbatch-a-call-over-device-memory-the-encoder-takes-the-maps-own-list-and-drops-never-observed-blocks-before-the-transform-and-the-decoder-stamps-only-what-it-changes-amends-the-changed-stamp-entry-above) —
+- [**2026-10-01**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-01--the-codec-review-frame-v2-codes-a-partial-mask-a-plane-and-a-line-at-a-time-against-its-neighbours-and-a-sign-inside-its-mantissas-field-the-transform-finds-every-block-by-its-coordinate-one-commandbatch-a-call-over-device-memory-the-encoder-takes-the-maps-own-list-and-drops-never-observed-blocks-before-the-transform-and-the-decoder-stamps-only-what-it-changes-amends-the-changed-stamp-entry-above) —
   The codec review: frame v2 codes a partial mask a plane and a line at a
   time against its neighbours and a sign inside its mantissa's field; the
   transform finds every block by its coordinate, one `CommandBatch` a call
@@ -318,17 +318,17 @@ entries relevant to your task; later amendments supersede earlier rules.
   Device-local allocation is required and buffer residency is explicit;
   borrowed device inputs refuse unknown or non-local backing memory.
 
-- [**2026-10-03**](grid/DECISIONS.md#2026-10-03--garbage-collection-deletes-from-the-device-stale-list) —
+- [**2026-10-03**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-03--garbage-collection-deletes-from-the-device-stale-list) —
   Garbage collection passes its device coordinate list directly to deletion,
   retaining host readback only for control counts. *Amended 2026-10-13:* it
   frees through the body `VoxelBlockGrid::remove` uses, which takes a device
   list alone.
 
-- [**2026-10-02**](grid/DECISIONS.md#2026-10-02--mesh-input-binning-keeps-counts-cursors-and-occupied-bins-on-the-device-retains-scratch-and-reads-only-validation-and-bounded-dispatch-control) —
+- [**2026-10-02**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-02--mesh-input-binning-keeps-counts-cursors-and-occupied-bins-on-the-device-retains-scratch-and-reads-only-validation-and-bounded-dispatch-control) —
   Mesh input binning keeps counts, cursors and occupied bins on the device,
   retains scratch, and reads only validation and bounded dispatch control.
 
-- [**2026-10-03**](grid/DECISIONS.md#2026-10-03--asset-loading-and-export-belong-to-io-with-assimp-as-an-optional-private-backend) —
+- [**2026-10-03**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-03--asset-loading-and-export-belong-to-io-with-assimp-as-an-optional-private-backend) —
   Asset loading and export move into the installed `io` tier; Assimp adds
   optional static mesh import, while dataset and normalization policy stay
   with consumers.
@@ -338,27 +338,27 @@ entries relevant to your task; later amendments supersede earlier rules.
   topology epoch; an adopted buffer states its memory. Mesh binning's capacity
   scan and the planar RGB route stay, with measured costs.
 
-- [**2026-10-02**](grid/DECISIONS.md#2026-10-02--per-basis-quantization-and-a-normalized-mesh-codec-fixture) —
+- [**2026-10-02**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-02--per-basis-quantization-and-a-normalized-mesh-codec-fixture) —
   Per-basis quantization replaces the DC/AC split; frame v3 carries the kept
   bases' weights, and a normalized Rafa2 mesh joins room0 in the codec study.
   *Amended 2026-10-14:* the normalization's arithmetic is `io`'s opt-in
   helpers, and Rafa2's frames 1–150 are coded as a sequence.
-- [**2026-10-03**](grid/DECISIONS.md#2026-10-03--compact-the-codecs-observed-list-on-the-device-and-retain-transform-scratch) —
+- [**2026-10-03**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-03--compact-the-codecs-observed-list-on-the-device-and-retain-transform-scratch) —
   Compact the codec's observed list on the device, predict its readback prefix
   to avoid an unconditional extra fence, and retain transform scratch.
   *Amended 2026-10-13:* the list stays on the device; only its count comes
   back.
-- [**2026-10-03**](grid/DECISIONS.md#2026-10-03--codec-mesh-evaluation-consumes-the-shared-io-loader) —
+- [**2026-10-03**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-03--codec-mesh-evaluation-consumes-the-shared-io-loader) —
   The codec example uses Assimp-backed asset loading and shared PLY export;
   height normalization and topology checks remain example policy. *Amended
   2026-10-14:* they are opt-in `io` helpers; the example chooses the up
   vector and height, and codes a numbered range under one transform.
-- [**2026-10-03**](grid/DECISIONS.md#2026-10-03--rans-encoding-runs-on-the-device-byte-for-byte-the-hosts-frame-chosen-per-frame-by-segment-count) —
+- [**2026-10-03**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-03--rans-encoding-runs-on-the-device-byte-for-byte-the-hosts-frame-chosen-per-frame-by-segment-count) —
   rANS encoding runs on the device, byte for byte the host's frame, and the
   encoder picks the device per frame from 48 segments. *Amended 2026-10-13:*
   encoding runs on the device alone too, its sort and step layout included;
   the CPU coder is the tests' oracle.
-- [**2026-10-03**](grid/DECISIONS.md#2026-10-03--rans-decoding-runs-on-the-device-block-for-block-the-hosts-chosen-from-80-segments) —
+- [**2026-10-03**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-03--rans-decoding-runs-on-the-device-block-for-block-the-hosts-chosen-from-80-segments) —
   rANS decoding runs on the device, block for block the host's, in segments
   of at most 1,024 blocks, and the decoder picks the device per frame from 80
   segments. *Amended 2026-10-13:* decoding runs on the device alone, with no
@@ -435,14 +435,14 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--public-api-serves-a-caller-entry-points-only-tests-used-go-or-move-into-their-tests-amends-the-2026-07-04-glm-entry) —
   Public API serves a caller: entry points only tests used go, or move into
   their tests. *Amended 2026-10-13:* `VoxelHashMap::diagnostics()` goes too.
-- [**2026-10-06**](grid/DECISIONS.md#2026-10-06--incremental-mesh-extraction-is-removed-the-changed-stamp-stays-and-the-mesher-no-longer-reads-it-amends-the-2026-08-09-2026-08-11-2026-08-12-2026-09-30-2026-10-01-and-2026-10-02-mesh-entries) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-06--incremental-mesh-extraction-is-removed-the-changed-stamp-stays-and-the-mesher-no-longer-reads-it-amends-the-2026-08-09-2026-08-11-2026-08-12-2026-09-30-2026-10-01-and-2026-10-02-mesh-entries) —
   Incremental mesh extraction is removed; the `changed` stamp stays, and the
   mesher no longer reads it.
 - [**2026-10-06**](#2026-10-06--fusion-runs-over-the-blocks-the-scanning-cameras-reach-one-frustum-a-frame-no-near-cut-far-at-max_depth--trunc_dist-their-union-compacted-in-one-scan-amends-the-2026-08-12-view-meshing-and-the-2026-09-30-one-batch-and-device-list-entries) —
   Fusion runs over the blocks the scanning cameras reach: one frustum a
   frame, no near cut, far at `max_depth + trunc_dist`, their union compacted
   in one scan. *Amended 2026-10-22:* in the fuse's own submit.
-- [**2026-10-06**](grid/DECISIONS.md#2026-10-06--marching-cubes-meshes-what-the-viewing-camera-sees-an-extract-over-the-device-frusta-list-the-viewers-re-meshing-on-a-fuse-or-a-view-change-and-a-culled-pass-records-its-density-amends-the-2026-08-12-view-meshing-entry-and-the-2026-10-06-incremental-removal-and-fusion-culling-entries) —
+- [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-06--marching-cubes-meshes-what-the-viewing-camera-sees-an-extract-over-the-device-frusta-list-the-viewers-re-meshing-on-a-fuse-or-a-view-change-and-a-culled-pass-records-its-density-amends-the-2026-08-12-view-meshing-entry-and-the-2026-10-06-incremental-removal-and-fusion-culling-entries) —
   Marching cubes meshes what the viewing camera sees: an extract over the
   device frusta list, the viewers re-meshing on a fuse or a view change, and
   a culled pass records its density. *Amended 2026-10-13:* the host
@@ -468,7 +468,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   `OrbbecRig`, its start order and the public `TriggerGrouper` go.
   *Amended 2026-10-08:* `open_orbbec_sensors` opens a rig's cameras from its
   sync file, for every caller.
-- [**2026-10-08**](grid/DECISIONS.md#2026-10-08--the-frames-models-and-block-grammar-are-one-glsl-text-that-the-host-compiles-as-c-and-golden-frames-pin-v3-amends-the-2026-10-03-encoding-entry) —
+- [**2026-10-08**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-08--the-frames-models-and-block-grammar-are-one-glsl-text-that-the-host-compiles-as-c-and-golden-frames-pin-v3-amends-the-2026-10-03-encoding-entry) —
   The frame's models and block grammar are one GLSL text that the kernels
   include and the host compiles as C++, the device's walk runs in emit order,
   and golden frames pin v3's bytes on every machine.
@@ -485,7 +485,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-10**](#2026-10-10--only-the-owner-triggers-ci-and-the-runner-tooling-is-the-cores) —
   Only the owner triggers CI, by the repository's Actions policy; no job
   carries a fork guard. The runner tooling is the core's.
-- [**2026-10-08**](grid/DECISIONS.md#2026-10-08--the-fuse-to-render-handoff-is-meshmeshexchange-one-gfx-free-library-type-owns-the-rings-release-a-parked-take-caps-the-mark-and-an-empty-mesh-draws-nothing-amends-the-2026-08-08-seam-b-and-2026-09-29-rig_viewer-entries) —
+- [**2026-10-08**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-08--the-fuse-to-render-handoff-is-meshmeshexchange-one-gfx-free-library-type-owns-the-rings-release-a-parked-take-caps-the-mark-and-an-empty-mesh-draws-nothing-amends-the-2026-08-08-seam-b-and-2026-09-29-rig_viewer-entries) —
   The fuse-to-render handoff is `mesh::MeshExchange`: one gfx-free library
   type owns the ring's release, a parked take caps the mark, and an empty
   mesh draws nothing. *Amended 2026-10-19:* an empty mesh goes through
@@ -526,7 +526,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   *And 2026-10-25 (the plane-image entry):* its planes gain `SAMPLED` usage
   and a view.
 
-- [**2026-10-10**](grid/DECISIONS.md#2026-10-10--grid-validation-bounds-the-truncation-band-by-the-depth-kernels-integer-representation) —
+- [**2026-10-10**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-10--grid-validation-bounds-the-truncation-band-by-the-depth-kernels-integer-representation) —
   Grid validation rejects non-finite metrics and bounds the truncation band by
   the depth kernel's integer representation.
 - [**2026-10-11**](#2026-10-11--decoded-pictures-name-the-queue-families-that-read-them-videotoolboxs-images-are-concurrent-across-two-or-more) —
@@ -549,13 +549,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   world may be a printed AprilTag. *Amended 2026-10-27:* version 3, a
   sensor's depth offset or the colour cameras' exposure, written only for a
   corrected calibration.
-- [**2026-10-12**](grid/DECISIONS.md#2026-10-12--recordings-are-vrst-files-of-our-own-verbatim-records-in-crc-framed-chunks-readable-from-a-killed-writer-in-recon_stream-on-the-cores-base-tier-alone-amends-the-2026-09-27-v1-frame-entry) —
+- [**2026-10-12**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-12--recordings-are-vrst-files-of-our-own-verbatim-records-in-crc-framed-chunks-readable-from-a-killed-writer-in-recon_stream-on-the-cores-base-tier-alone-amends-the-2026-09-27-v1-frame-entry) —
   Recordings are `.vrst` files of our own: verbatim records in CRC-framed,
   8-byte-aligned chunks, readable from a killed writer, in `recon_stream` on
   the core's base tier alone. *Amended 2026-10-14:* a Geometry track's
   params may hold a mesh source's transform. *Amended 2026-10-21:* its
   chunks are made and read in memory too, publicly.
-- [**2026-10-12**](grid/DECISIONS.md#2026-10-12--p-frames-are-frame-type-1-of-v3-each-reference-block-gets-a-mode-in-update-segments-new-blocks-follow-in-intra-segments-and-a-reference-section-names-the-reference-by-xxh64-of-its-bytes-experimental-until-golden-p-frames-freeze-it) —
+- [**2026-10-12**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-12--p-frames-are-frame-type-1-of-v3-each-reference-block-gets-a-mode-in-update-segments-new-blocks-follow-in-intra-segments-and-a-reference-section-names-the-reference-by-xxh64-of-its-bytes-experimental-until-golden-p-frames-freeze-it) —
   P-frames are frame type 1 of v3: a mode per reference block in update
   segments, new blocks in intra segments, the reference named by XXH64 of its
   bytes; a missing reference is `NotFound`. Experimental until golden
@@ -566,7 +566,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   interleaved rANS lanes. *Amended 2026-10-17:* no lanes: U defaults to R,
   and the freeze waits on the encode's count and a re-measure. *Amended
   2026-10-17:* frozen, so type 1's bytes change only on purpose.
-- [**2026-10-13**](grid/DECISIONS.md#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-and-it-decodes-on-the-device-alone-amends-the-2026-09-27-encoderdecoder-and-2026-10-03-decoding-entries) —
+- [**2026-10-13**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-and-it-decodes-on-the-device-alone-amends-the-2026-09-27-encoderdecoder-and-2026-10-03-decoding-entries) —
   The `Decoder` decodes P-frames against the frame it decoded last, kept on
   the device as decoded and replaced only when a decode succeeds; one integer
   apply makes every decoded frame; and it decodes on the device alone.
@@ -576,7 +576,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   and writes P-frames. *Amended 2026-10-21:* the deblock, on request, joins
   the decode's last submit, and `rebuild` remakes a frame from the
   reference.
-- [**2026-10-13**](grid/DECISIONS.md#2026-10-13--the-codecs-coordinate-work-runs-on-the-device-the-encoder-sorts-its-blocks-with-a-stable-rank-merge-sort-on-coord_less-and-the-decoder-judges-merges-and-diffs-them-by-count-and-binary-search-never-sorting-only-counts-and-verdicts-cross-the-bus-amends-the-2026-10-13-decoder-2026-10-12-p-frame-2026-10-03-observed-list-and-garbage-collection-and-2026-10-01-codec-review-entries) —
+- [**2026-10-13**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-13--the-codecs-coordinate-work-runs-on-the-device-the-encoder-sorts-its-blocks-with-a-stable-rank-merge-sort-on-coord_less-and-the-decoder-judges-merges-and-diffs-them-by-count-and-binary-search-never-sorting-only-counts-and-verdicts-cross-the-bus-amends-the-2026-10-13-decoder-2026-10-12-p-frame-2026-10-03-observed-list-and-garbage-collection-and-2026-10-01-codec-review-entries) —
   The codec's coordinate work runs on the device: the encoder sorts with a
   stable rank-merge sort, and the decoder judges, merges and diffs by binary
   search, never sorting; only counts and verdicts cross the bus. *Amended
@@ -588,14 +588,14 @@ entries relevant to your task; later amendments supersede earlier rules.
   map's remove's first round, a fence fewer. *Amended 2026-10-24:* the
   verdicts no longer cross before the grid changes; a gate on the device
   judges them, and the counts are read once the frame's batch has run.
-- [**2026-10-13**](grid/DECISIONS.md#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-08-sparse-mesh-and-overflow-scan-2026-08-12-view-meshing-2026-09-26-codec-2026-09-28-device-memory-2026-10-03-garbage-collection-2026-10-06-public-api-and-view-culling-and-2026-10-13-coordinate-entries) —
+- [**2026-10-13**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-08-sparse-mesh-and-overflow-scan-2026-08-12-view-meshing-2026-09-26-codec-2026-09-28-device-memory-2026-10-03-garbage-collection-2026-10-06-public-api-and-view-culling-and-2026-10-13-coordinate-entries) —
   Block lists reach the volume tier on the device alone; a host-list entry
   point that only tests called goes: the host `BlockList`, the host-array
   `allocate` and `remove`, and the table readbacks. *Amended 2026-10-17:*
   `HashEntry` and the fail slots are internal, the host sentinels go, and
   `hash_bucket` moves into the tests. *Amended 2026-10-28:* the entries
   accessor is internal too.
-- [**2026-10-14**](grid/DECISIONS.md#2026-10-14--the-encoder-writes-zero-motion-p-frames-against-the-frame-it-returned-last-kept-in-the-referencestore-as-its-forward-made-it-five-rules-make-an-i-frame-and-the-split-the-diff-and-a-static-price-for-zero-run-on-the-device-amends-the-2026-10-13-decoder-and-coordinate-and-2026-10-12-p-frame-entries) —
+- [**2026-10-14**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-14--the-encoder-writes-zero-motion-p-frames-against-the-frame-it-returned-last-kept-in-the-referencestore-as-its-forward-made-it-five-rules-make-an-i-frame-and-the-split-the-diff-and-a-static-price-for-zero-run-on-the-device-amends-the-2026-10-13-decoder-and-coordinate-and-2026-10-12-p-frame-entries) —
   The `Encoder` writes zero-motion P-frames at `intra_period` above 1,
   against the frame it returned last, kept in the `ReferenceStore` as its
   forward made it and moved only when `encode` returns one; five rules make
@@ -603,12 +603,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   device. *Amended 2026-10-16:* a sixth rule, an empty grid; U is
   `EncoderConfig::update_size`. *Amended 2026-10-17:* a P-frame is counted
   in the forward's submit.
-- [**2026-10-14**](grid/DECISIONS.md#2026-10-14--mesh-normalization-and-the-topology-audit-are-opt-in-generic-io-helpers-for-a-mesh-sequence-bounds-measured-along-one-up-and-joined-over-frames-and-one-transform-for-every-frame-amends-the-2026-10-02-normalized-mesh-and-2026-10-03-codec-mesh-entries) —
+- [**2026-10-14**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-14--mesh-normalization-and-the-topology-audit-are-opt-in-generic-io-helpers-for-a-mesh-sequence-bounds-measured-along-one-up-and-joined-over-frames-and-one-transform-for-every-frame-amends-the-2026-10-02-normalized-mesh-and-2026-10-03-codec-mesh-entries) —
   Mesh normalization and the topology audit are opt-in, generic `io`
   helpers for a mesh sequence: bounds measured along one up and joined over
   frames, and one transform applied to every frame. `codec_mesh` uses them,
   and its single frame keeps its bytes.
-- [**2026-10-14**](grid/DECISIONS.md#2026-10-14--codec_mesh-codes-a-numbered-mesh-sequence-under-one-transform-a-frame-number-in-sourcepath-an-exact-range-one-transform-fitted-to-every-frame-and-stored-in-the-stream-a-cleared-grid-and-one-record-per-frame-and-sourceallow_holes-amends-the-2026-10-02-normalized-mesh-2026-10-03-codec-mesh-2026-10-11-examples-and-2026-10-12-container-entries) —
+- [**2026-10-14**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-14--codec_mesh-codes-a-numbered-mesh-sequence-under-one-transform-a-frame-number-in-sourcepath-an-exact-range-one-transform-fitted-to-every-frame-and-stored-in-the-stream-a-cleared-grid-and-one-record-per-frame-and-sourceallow_holes-amends-the-2026-10-02-normalized-mesh-2026-10-03-codec-mesh-2026-10-11-examples-and-2026-10-12-container-entries) —
   `codec_mesh` codes a numbered mesh sequence: a printf-style frame number in
   `source.path`, `run.first` and an exact `run.frames`, one transform fitted
   to every frame and stored in the Geometry track's params, a cleared grid
@@ -619,7 +619,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   *Amended 2026-10-16:* the examples code P-frames, on core 0.9.0.
   *Amended 2026-10-21:* it codes a true SDF and refuses a band too narrow
   for one; the templates convert in 16 voxels.
-- [**2026-10-16**](grid/DECISIONS.md#2026-10-16--the-codec-examples-code-p-frames-codecintra_period-and-codecupdate_size-reach-the-encoder-and-a-streams-rows-report-and-keys-go-by-frame-type-an-empty-grid-is-an-i-frame-golden-p-frames-pin-type-1s-bytes-and-its-freeze-waits-since-at-r--16-its-p-frames-code-slower-than-intra-amends-the-2026-10-12-p-frame-2026-10-14-encoder-and-codec-mesh-entries) —
+- [**2026-10-16**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-16--the-codec-examples-code-p-frames-codecintra_period-and-codecupdate_size-reach-the-encoder-and-a-streams-rows-report-and-keys-go-by-frame-type-an-empty-grid-is-an-i-frame-golden-p-frames-pin-type-1s-bytes-and-its-freeze-waits-since-at-r--16-its-p-frames-code-slower-than-intra-amends-the-2026-10-12-p-frame-2026-10-14-encoder-and-codec-mesh-entries) —
   The codec examples code P-frames: `codec.intra_period` and
   `codec.update_size` reach the `Encoder`, a stream's rows, report and keys
   go by frame type, and a failure after the encode forces an I-frame. An
@@ -650,19 +650,19 @@ entries relevant to your task; later amendments supersede earlier rules.
   measurements. The same-K depth crop and nearest resampling are accepted on
   a stand-in lens, pending a fold check of each rig camera's own (by hand,
   not yet run).
-- [**2026-10-17**](grid/DECISIONS.md#2026-10-17--a-p-frames-update-segments-default-to-its-segment-size-encoderconfigupdate_size-0-the-default-takes-segment_size-resolved-once-in-encodercreate-the-format-and-the-goldens-are-unchanged-amends-the-2026-10-16-codec-examples-2026-10-14-encoder-and-2026-10-12-p-frame-entries) —
+- [**2026-10-17**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-17--a-p-frames-update-segments-default-to-its-segment-size-encoderconfigupdate_size-0-the-default-takes-segment_size-resolved-once-in-encodercreate-the-format-and-the-goldens-are-unchanged-amends-the-2026-10-16-codec-examples-2026-10-14-encoder-and-2026-10-12-p-frame-entries) —
   A P-frame's update segments default to its segment size:
   `EncoderConfig::update_size` 0, the default, takes `segment_size`
   (`resolved_update_size()`, resolved once in `Encoder::create`); the format
   and the goldens are unchanged. No lanes: the freeze waits on the encode's
   count moving into the forward's submit, and a re-measure. *Amended
   2026-10-17:* the re-measure ran, and type 1 is frozen (the freeze entry).
-- [**2026-10-17**](grid/DECISIONS.md#2026-10-17--a-p-frame-is-counted-in-the-forwards-submit-its-count-and-step-layout-run-over-m-plus-the-frames-blocks-the-device-takes-off-the-diffs-survivors-and-an-encode-waits-on-one-fence-fewer-amends-the-2026-10-14-encoder-entry) —
+- [**2026-10-17**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-17--a-p-frame-is-counted-in-the-forwards-submit-its-count-and-step-layout-run-over-m-plus-the-frames-blocks-the-device-takes-off-the-diffs-survivors-and-an-encode-waits-on-one-fence-fewer-amends-the-2026-10-14-encoder-entry) —
   A P-frame is counted in the forward's submit: its count and step layout
   run over M plus the frame's blocks, the device takes off the diff's
   survivors, and an encode waits on one fence fewer (amends the 2026-10-14
   encoder entry).
-- [**2026-10-17**](grid/DECISIONS.md#2026-10-17--frame-type-1-is-frozen-so-its-bytes-change-only-on-purpose-and-the-codec-templates-code-at-period-30-p-frames-code-no-slower-than-intra-on-room0-at-1-cm-and-on-rafa2-at-r--64-and-at-r--16-decode-no-slower-but-encode-up-to-4-slower-on-the-host-alone-amends-the-2026-10-12-p-frame-2026-10-16-codec-examples-and-2026-10-17-update-size-and-count-entries) —
+- [**2026-10-17**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-17--frame-type-1-is-frozen-so-its-bytes-change-only-on-purpose-and-the-codec-templates-code-at-period-30-p-frames-code-no-slower-than-intra-on-room0-at-1-cm-and-on-rafa2-at-r--64-and-at-r--16-decode-no-slower-but-encode-up-to-4-slower-on-the-host-alone-amends-the-2026-10-12-p-frame-2026-10-16-codec-examples-and-2026-10-17-update-size-and-count-entries) —
   Frame type 1 is frozen, so its bytes change only on purpose, and
   `codec_replica.json` and `codec_mesh_sequence.json` code at period 30.
   The re-measure missed one comparison, Rafa2's encode at R = 16, where
@@ -681,14 +681,14 @@ entries relevant to your task; later amendments supersede earlier rules.
   the calibration defines: no upright transform, crop, raw recording or
   colour yet. *Amended 2026-10-20:* `fuse_orbbec` fuses Dynamic by default
   too (core #45).
-- [**2026-10-21**](grid/DECISIONS.md#2026-10-21--the-vrst-chunks-in-memory-are-public-chunkencoder-frames-what-streamwriter-writes-by-the-record-rules-it-now-holds-and-chunkparser-reads-bytes-as-they-arrive-through-streamreaders-checks-amends-the-2026-10-12-container-entry) —
+- [**2026-10-21**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-21--the-vrst-chunks-in-memory-are-public-chunkencoder-frames-what-streamwriter-writes-by-the-record-rules-it-now-holds-and-chunkparser-reads-bytes-as-they-arrive-through-streamreaders-checks-amends-the-2026-10-12-container-entry) —
   The `.vrst` chunks in memory are public (`stream/chunks.hpp`), so a second
   tier, networking next, writes and reads the format without stream's
   detail: `ChunkEncoder` frames what `StreamWriter` writes and holds the
   record rules; `ChunkParser` copies bytes as they arrive and checks each
   chunk with the functions `StreamReader` uses, its header before waiting
   for its body; a failure is final.
-- [**2026-10-21**](grid/DECISIONS.md#2026-10-21--a-session-is-served-live-over-tcp-by-a-tier-of-its-own-recon_networking-the-wire-is-the-file-newest-key-wins-and-a-viewer-joins-at-the-cached-gop) —
+- [**2026-10-21**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-21--a-session-is-served-live-over-tcp-by-a-tier-of-its-own-recon_networking-the-wire-is-the-file-newest-key-wins-and-a-viewer-joins-at-the-cached-gop) —
   A session is served live over TCP by a tier of its own,
   `recon_networking` (the owner's: sockets apart from the format, testable
   alone). The wire is the `.vrst` file's bytes; a viewer behind skips to a
@@ -697,13 +697,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   viewer types the sender's address. *Amended 2026-10-25:* a live sender
   serves keys on demand instead (`replay_gop` false), and the cached GOP
   stays the default.
-- [**2026-10-21**](grid/DECISIONS.md#2026-10-21--meshintegrator-finds-each-voxels-nearest-triangle-with-an-exact-early-exit-a-triangle-is-ruled-out-only-by-a-lower-bound-less-a-rounding-margin-of-its-own-strictly-above-the-voxels-limit) —
+- [**2026-10-21**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-21--meshintegrator-finds-each-voxels-nearest-triangle-with-an-exact-early-exit-a-triangle-is-ruled-out-only-by-a-lower-bound-less-a-rounding-margin-of-its-own-strictly-above-the-voxels-limit) —
   `MeshIntegrator` finds each voxel's nearest triangle with an exact early
   exit: a workgroup per block sorts its bin by a lower bound, and a triangle
   is ruled out only by a bound, less a rounding margin of its own, strictly
   above the voxel's limit, so every voxel writes what its whole bin writes.
   Blocks past 16^3 voxels are refused.
-- [**2026-10-21**](grid/DECISIONS.md#2026-10-21--a-true-signed-distance-codes-without-the-observed-mask-encoderconfigtrue_sdf-cuts-each-corner-farther-than-3-voxels-from-zero-of-a-cell-whose-sign-changes-and-codes-only-the-blocks-that-hold-surface-whole-codec_mesh-alone-sets-it-in-a-band-of-at-least-15-voxels-so-fused-depth-keeps-its-mask-and-the-mesh-templates-convert-in-16-voxels-and-code-at-k-56-amends-the-2026-09-27-encoder-2026-10-01-codec-review-and-2026-10-14-codec-mesh-entries) —
+- [**2026-10-21**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-21--a-true-signed-distance-codes-without-the-observed-mask-encoderconfigtrue_sdf-cuts-each-corner-farther-than-3-voxels-from-zero-of-a-cell-whose-sign-changes-and-codes-only-the-blocks-that-hold-surface-whole-codec_mesh-alone-sets-it-in-a-band-of-at-least-15-voxels-so-fused-depth-keeps-its-mask-and-the-mesh-templates-convert-in-16-voxels-and-code-at-k-56-amends-the-2026-09-27-encoder-2026-10-01-codec-review-and-2026-10-14-codec-mesh-entries) —
   A true signed distance codes without the observed mask:
   `EncoderConfig::true_sdf` cuts each corner farther than √3 voxels from
   zero of a cell whose sign changes, and codes only the blocks that hold
@@ -711,7 +711,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   keeps its mask, byte for byte. The mesh templates convert in 16 voxels
   and code at K 56, about 2 Mbit/s on Rafa2; the format, the decoder and
   the goldens are unchanged.
-- [**2026-10-21**](grid/DECISIONS.md#2026-10-21--the-decoder-deblocks-on-request-a-runtime-switch-off-by-default-runs-the-studys-step-keyed-line-fit-and-gaussian-on-the-device-in-the-decodes-last-submit-keeping-each-block-with-an-unobserved-voxel-as-decoded-and-a-paused-player-rebuilds-its-frame-from-the-reference-amends-the-2026-10-13-decoder-entry) —
+- [**2026-10-21**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-21--the-decoder-deblocks-on-request-a-runtime-switch-off-by-default-runs-the-studys-step-keyed-line-fit-and-gaussian-on-the-device-in-the-decodes-last-submit-keeping-each-block-with-an-unobserved-voxel-as-decoded-and-a-paused-player-rebuilds-its-frame-from-the-reference-amends-the-2026-10-13-decoder-entry) —
   The decoder deblocks on request: `Decoder::set_deblock`, off by default
   and read at each decode, runs the study's step-keyed line fit and
   Gaussian on the device in the decode's last submit, its filter picked
@@ -730,7 +730,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   family): no install rules, package config or package tests. The
   add_subdirectory checks stay, the public headers' one among them, and the
   camera-only check runs in the camera-only build alone.
-- [**2026-10-22**](grid/DECISIONS.md#2026-10-22--streamclient-reports-progress-before-a-whole-record-is-ready) —
+- [**2026-10-22**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-22--streamclient-reports-progress-before-a-whole-record-is-ready) —
   `StreamClient::next` can report partial input and connection progress,
   allowing a consumer to drain it before waiting on its own controls.
 - [**2026-10-23**](#2026-10-23--a-stages-device-time-holds-every-command-recorded-inside-it-so-both-totals-skip-breakdowns-the-extract-and-the-decodes-grid-edits-are-timed-and-a-grid-builds-its-block-kernels-at-create-amends-the-2026-08-10-breakdown-entry) —
@@ -739,7 +739,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   is `"integrate"`'s `"  ..allocate"`; the extract and the decode's grid
   edits are timed inside today's submits; a grid builds its block kernels at
   create, and an extractor or a grid its timer at the first timed call.
-- [**2026-10-24**](grid/DECISIONS.md#2026-10-24--a-frame-decodes-and-meshes-in-the-callers-batch-every-count-stays-on-the-device-the-maps-rounds-k--3-the-extract-and-the-decoder-gather-their-results-into-ring-slots-and-the-blocking-calls-are-one-submit-amends-the-2026-09-28-device-memory-2026-10-13-coordinate-and-2026-10-23-breakdown-entries) —
+- [**2026-10-24**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-24--a-frame-decodes-and-meshes-in-the-callers-batch-every-count-stays-on-the-device-the-maps-rounds-k--3-the-extract-and-the-decoder-gather-their-results-into-ring-slots-and-the-blocking-calls-are-one-submit-amends-the-2026-09-28-device-memory-2026-10-13-coordinate-and-2026-10-23-breakdown-entries) —
   A frame decodes and meshes in the caller's batch: the map's removal and
   allocation run K = 3 device rounds, the extract sizes itself on the
   device, and the decoder judges rows 11 to 13 there; each gathers its
@@ -782,7 +782,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   `volume::block_grid_params`, which `codec::make_decode_grid` builds with
   too. Opening a rig stays the three public calls, and a set's prep and all
   printing stay the caller's.
-- [**2026-10-25**](grid/DECISIONS.md#2026-10-25--a-live-sender-makes-keys-on-demand-a-joiner-waits-for-the-next-key-the-server-keeps-what-its-viewers-still-need-and-a-viewer-that-falls-max_gop_bytes-behind-waits-for-a-key-alone-amends-the-2026-10-21-networking-entry) —
+- [**2026-10-25**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-25--a-live-sender-makes-keys-on-demand-a-joiner-waits-for-the-next-key-the-server-keeps-what-its-viewers-still-need-and-a-viewer-that-falls-max_gop_bytes-behind-waits-for-a-key-alone-amends-the-2026-10-21-networking-entry) —
   Keys on demand: without `ServerOptions::replay_gop`, a joiner waits for
   the next key, the server keeps only what its viewers still need, and a
   viewer that falls `max_gop_bytes` behind waits for a key, alone; newest
@@ -799,7 +799,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   `friend` is needed. The examples keep their reports, built from what the
   calls return. *Amended 2026-10-28:* the stream is a tier of its own,
   `codec_stream`, and the halves are its public calls; `coder()` is gone.
-- [**2026-10-26**](grid/DECISIONS.md#2026-10-26--meshexchanges-consumer-may-drop-a-mesh-it-took-a-third-outcome-rather-than-a-deadline-in-the-exchange-and-a-ring-slot-more-for-each-mesh-dropped-before-the-next-commit-amends-the-2026-10-08-meshexchange-entry) —
+- [**2026-10-26**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-26--meshexchanges-consumer-may-drop-a-mesh-it-took-a-third-outcome-rather-than-a-deadline-in-the-exchange-and-a-ring-slot-more-for-each-mesh-dropped-before-the-next-commit-amends-the-2026-10-08-meshexchange-entry) —
   `MeshExchange`'s commit may drop a mesh it took (`CommitDecision::kDrop`):
   it never becomes live, the next frame takes the newest mesh, and its slot
   goes with the generations below the next commit, so a ring needs a slot
@@ -812,7 +812,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   `GENERAL`; a reader takes each picture over from outside Vulkan in the
   layout it is in, and nothing hands it back. The images take the
   decoder's queue families; nvJPEG keeps its I420 buffer.
-- [**2026-10-26**](grid/DECISIONS.md#2026-10-26--a-compaction-records-from-a-const-map-and-the-encoder-takes-a-const-grid-the-maps-compaction-output-is-scratch-any-compaction-rewrites-amends-the-2026-09-27-encoder-and-decoder-entry) —
+- [**2026-10-26**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-26--a-compaction-records-from-a-const-map-and-the-encoder-takes-a-const-grid-the-maps-compaction-output-is-scratch-any-compaction-rewrites-amends-the-2026-09-27-encoder-and-decoder-entry) —
   `VoxelHashMap::record_compaction` is `const`, so a caller holding a grid
   read-only records the active set's compaction, or a frustum's, into its
   own batch. It moves no block, stamp, heap count, epoch or tick; the list,
@@ -838,7 +838,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   exposure), written at each open where the camera differs, auto white
   balance always on, checked before the first write and read back after the
   last; an array refuses a sensor opened at another.
-- [**2026-10-28**](grid/DECISIONS.md#2026-10-28--the-voxel-layer-is-camera-free-volume-owns-its-depth-camera-depthpinhole-and-the-one-line-of-unprojection-it-needs-tsdf-copies-its-camera-in-amends-the-2026-10-16-glsl-pinhole-entry) —
+- [**2026-10-28**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-28--the-voxel-layer-is-camera-free-volume-owns-its-depth-camera-depthpinhole-and-the-one-line-of-unprojection-it-needs-tsdf-copies-its-camera-in-amends-the-2026-10-16-glsl-pinhole-entry) —
   The voxel layer is camera-free: `volume::DepthPinhole`, the fields and
   96 bytes of `DepthCameraParams`, is what depth allocation takes, and its
   kernel unprojects through a copy of the pinhole's one line; tsdf's
@@ -850,7 +850,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   normalization, tinyply) links `mesh`, and `recon_mesh_io_assimp` replaces
   `recon_io_assimp`. Headers and namespace are unchanged; `recon_io` is
   gone.
-- [**2026-10-28**](grid/DECISIONS.md#2026-10-28--a-triangle-meshs-distance-field-is-a-tier-of-its-own-voxelize-on-volume-alone-amends-the-2026-09-27-mesh-to-tsdf-entry) —
+- [**2026-10-28**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-28--a-triangle-meshs-distance-field-is-a-tier-of-its-own-voxelize-on-volume-alone-amends-the-2026-09-27-mesh-to-tsdf-entry) —
   A triangle mesh's distance field is a tier of its own, `voxelize`
   (`recon_voxelize`), on `volume` alone: `MeshIntegrator` and its kernels
   leave `tsdf`, and the closest-point GLSL moves to `volume`.
@@ -861,24 +861,24 @@ entries relevant to your task; later amendments supersede earlier rules.
   `VKC_PACKAGE_VERSION` for a consumer's `vkc_require_sibling`, the headers
   include the core's `vulkan/fwd.hpp`, and the tests run on the core's test
   support. The core floor is 0.29.0.
-- [**2026-10-28**](grid/DECISIONS.md#2026-10-28--the-codec-stream-is-a-tier-of-its-own-codec_stream-on-codec-and-networking-and-its-frame-in-halves-is-public-amends-the-2026-10-26-sender-entry) —
+- [**2026-10-28**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-28--the-codec-stream-is-a-tier-of-its-own-codec_stream-on-codec-and-networking-and-its-frame-in-halves-is-public-amends-the-2026-10-26-sender-entry) —
   The codec stream is a tier of its own, `codec_stream`
   (`recon_codec_stream`), on `codec` and `networking`: `CodecStream`,
   `CodecOutputs` and `SentFrame` leave `recon_sender`, which keeps
   `SetSender` and `fuse_inputs`. The frame in halves is the stream's public
   calls (`record_front`, `front_ran`, `redo`, `finish_frame`), `SetSender`
   codes through them, and `coder()` is gone.
-- [**2026-10-28**](grid/DECISIONS.md#2026-10-28--the-voxel-grids-gpu-contract-has-one-home-volume-exports-grid_typesglsl-and-voxel_colorglsl-names-its-shared-attributes-and-keeps-the-hash-entries-internal-amends-the-2026-08-02-color-space-and-2026-10-13-block-list-entries) —
+- [**2026-10-28**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-28--the-voxel-grids-gpu-contract-has-one-home-volume-exports-grid_typesglsl-and-voxel_colorglsl-names-its-shared-attributes-and-keeps-the-hash-entries-internal-amends-the-2026-08-02-color-space-and-2026-10-13-block-list-entries) —
   The voxel grid's GPU contract has one home: `recon_volume` exports
   `grid_types.glsl` (the grid's structs, the in-block index, `vrTickAfter`)
   and `voxel_color.glsl` (the colour attribute's format), tsdf includes
   only those, `kTsdfAttribute` / `kWeightAttribute` / `kColorAttribute`
   name the shared attributes, and the hash entries' accessor is internal.
   Bit-identical to main.
-- [**2026-10-28**](grid/DECISIONS.md#2026-10-28--grid-is-a-package-of-its-own-the-voxel-grid-and-what-reads-it-under-grids-names-on-the-core-alone) —
-  grid is a package of its own (`grid/`, `volumetric_kit_grid`): the voxel
-  grid and what reads it moved there under grid's names, and recon builds
-  on it (recon 0.1.0).
+- [**2026-10-28**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-28--grid-is-a-package-of-its-own-the-voxel-grid-and-what-reads-it-under-grids-names-on-the-core-alone) —
+  grid is a package of its own (`volumetric_kit_grid`, now its own
+  repository, which recon fetches by commit): the voxel grid and what reads
+  it moved there under grid's names, and recon builds on it (recon 0.1.0).
 
 ## Decision record
 
