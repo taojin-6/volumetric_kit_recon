@@ -274,7 +274,7 @@ jobs:
       # sensor pin in third_party/CMakeLists.txt, which holds the SDK pin.
       - name: Install the Orbbec SDK
         if: steps.detect.outputs.present == 'true' && inputs.orbbec_sdk
-        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@436840cb269553cdcb6cbd6232c5ee1a643efc02
+        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@1fc39c0cab3f77fb3613a5277287d2e25052ca8c
 
       # Report the Vulkan device the runner sees (the real GPU in a self-hosted
       # container, lavapipe on a hosted Linux runner, MoltenVK on macOS). On a
