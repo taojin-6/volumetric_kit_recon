@@ -5223,13 +5223,14 @@ first test that draws the live atlas through the viewers' pipeline.
 
 **Validation.** Release with the viewers and warnings as errors, under the
 validation layer. RTX 4090, Ubuntu, GCC 15.2, with the Orbbec SDK 2.10.6,
-FFmpeg, CUDA and Assimp, and synchronization validation: 137 of the 139
-tests pass and the two JPEG tests skip, with no JPEG engine; the viewer
-tests pass on NVIDIA's driver alone, whose shared device takes two queues of
-one family. There `glfwInit` fails over ssh ("Failed to detect any
-supported platform"). Apple M4 (Mac mini), MoltenVK, with the Orbbec SDK
-and Assimp: the 139 tests pass, the viewer tests under synchronization
-validation too, on two queue families. The offscreen test passed 30 runs in
+FFmpeg, CUDA and Assimp, and synchronization validation: 89 of the 91
+tests, recon's and the in-tree sensor package's, pass and the two JPEG
+tests skip, with no JPEG engine; the viewer tests pass on NVIDIA's driver
+alone, whose shared device takes two queues of one family. There
+`glfwInit` fails over ssh ("Failed to detect any supported platform").
+Apple M4 (Mac mini), MoltenVK, with the Orbbec SDK and Assimp: the 91 tests
+pass, the viewer tests under synchronization validation too, on two queue
+families. The offscreen test passed 30 runs in
 a row on each, and on both a saved frame read back exactly: the atlas
 colour (B, G, R 90, 40, 200) at the middle and the clear (75, 63, 63) at the
 corner. Each of ten planted bugs failed it: no interval between saves, the
