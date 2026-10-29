@@ -187,6 +187,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **the codec helpers include no fusion**: `sender_config` and
+  `report_sent` move from `examples/common/codec_config.hpp` and
+  `codec_report.hpp` to the new `examples/common/fuse_sender.hpp`, so the
+  codec helpers include neither `fuse_frame.hpp` nor `sender::SetSender`,
+  and `codec_mesh` includes no fuser or sensor header (it still links
+  `recon_sender` for `CodecStream`). The functions, and every report, log
+  and parse, are unchanged. Migration: a caller of either includes
+  `fuse_sender.hpp`. Tests: `recon_example_config` and
+  `recon_example_codec_report` keep the codec halves;
+  `recon_example_fuse_config` and `recon_example_fuse_sender` (new) take the
+  fusing halves.
 - `sensor`: **the Orbbec driver defaults to H.265 at 3840x2160 and 25 fps**
   (the 2026-10-27 colour-controls decision), depth 640x576 as before: the
   streams core 0.25.0's Orbbec scenarios default to, which recon now needs
