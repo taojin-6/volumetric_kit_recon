@@ -33,8 +33,10 @@ clean, independently consumable tiers.
   tiers below them. A tier may depend only on tiers to its left, and grid on
   nothing of recon's.
 - **Cameras in a package of their own:** capture, decoding and frame
-  preparation are the in-tree sensor package ([sensor/](sensor/README.md)),
-  whose frame contract (`sensor_frame`) is all recon's libraries link.
+  preparation are
+  [`volumetric_kit_sensor`](https://github.com/taojin-6/volumetric_kit_sensor),
+  a repository of its own, whose frame contract (`sensor_frame`) is all
+  recon's libraries link.
 - **One Vulkan path everywhere:** compute runs as Vulkan compute shaders
   (GLSL → SPIR-V), with MoltenVK on Apple — Linux / Android / macOS / iOS
   from one source, mirroring `volumetric_kit_gfx`. No Metal/CUDA split. GCC or
@@ -66,11 +68,7 @@ Consume it from another CMake project with `FetchContent`, pinned by commit
 (recon has no install rules), then link a tier (e.g.
 `volumetric_kit::recon_core`). Fetched, recon builds its library tiers alone:
 its tests, examples and `-Werror` (`VR_WARNINGS_AS_ERRORS`) default on only
-when it is the top-level project. The camera and sensor tiers are the
-in-tree sensor package (`sensor/`, `volumetric_kit::sensor_*`; its
-[README](sensor/README.md) covers its options, drivers and decoders), which
-recon declares after the core: recon's configure passes it the `VS_`
-options, and its tests and `-Werror` follow recon's.
+when it is the top-level project.
 
 recon exports no GLSL. A consumer's kernels include the GLSL recon's kernels
 read as they do, through the core's `INCLUDE_TARGETS`: the sensor package's
@@ -88,6 +86,16 @@ A consumer that needs a recon at least as new as a given version calls the
 core's `vkc_require_sibling(volumetric_kit::recon <min-version>)` after
 `FetchContent_MakeAvailable(volumetric_kit_recon)`: the umbrella carries
 recon's `project(VERSION)` as `VKC_PACKAGE_VERSION`.
+
+recon builds on sensor (`volumetric_kit::sensor_*`, the camera and sensor
+tiers; [its README](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/README.md#building)
+covers its options, drivers and decoders), fetched pinned by commit after
+the core and checked with `vkc_require_sibling(volumetric_kit::sensor ...)`
+at `VR_SENSOR_MIN_VERSION` (0.1.0); recon's configure passes it the `VS_`
+options. sensor's own CI tests sensor, so its tests and `-Werror` stay off
+here. An application that fetches sensor itself declares it first; to build
+against a local sensor checkout, pass
+`-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_SENSOR=<path>`.
 
 recon builds on grid, fetched pinned by commit after the core and checked
 with `vkc_require_sibling(volumetric_kit::grid ...)` at
@@ -122,7 +130,7 @@ core version they and the viewers' pinned gfx (`VR_BUILD_VIEWER`) need.
 
 recon reads and writes no asset files of its own: image files are the
 sensor package's (`volumetric_kit::sensor_image_io`,
-[its README](sensor/README.md#image-files)), and mesh files -- PLY export
+[its README](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/README.md#image-files)), and mesh files -- PLY export
 and the optional Assimp import (`VGRID_WITH_ASSIMP`) -- are grid's
 ([its README](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#mesh-files)).
 
@@ -130,7 +138,7 @@ and the optional Assimp import (`VGRID_WITH_ASSIMP`) -- are grid's
 
 The live example, `fuse_orbbec`, needs the sensor package's Orbbec driver:
 the installed Orbbec SDK and, on Linux, the video decoders
-([the package's README](sensor/README.md#orbbec-driver)).
+([the package's README](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/README.md#orbbec-driver)).
 
 ```sh
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \

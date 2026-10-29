@@ -20,6 +20,9 @@ name: sanitizers
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
   asan-ubsan-lsan:
     runs-on: vk-linux-gpu
@@ -41,6 +44,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: sanitizers
+          persist-credentials: false
 
       # Skip cleanly until a build system exists (the infra PR lands before the
       # CMake build), mirroring _build.yml's detect guard. Without this the job
@@ -140,13 +144,12 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: sanitizers/build/_deps
-          key: ${{ steps.deps.outputs.key }}-${{ hashFiles('sanitizers/third_party/CMakeLists.txt', 'sanitizers/sensor/third_party/CMakeLists.txt', 'sanitizers/CMakeLists.txt', 'sanitizers/cmake/vr_sanitizers.cmake', 'sanitizers/.github/workflows/sanitizers.yml') }}
+          key: ${{ steps.deps.outputs.key }}-${{ hashFiles('sanitizers/third_party/CMakeLists.txt', 'sanitizers/CMakeLists.txt', 'sanitizers/cmake/vr_sanitizers.cmake', 'sanitizers/.github/workflows/sanitizers.yml') }}
 
       # Debug + clang gives the most reliable sanitizer + mesa interop. The
       # examples are built for their tests: lavapipe's maxStorageBufferRange is
       # the 128 MiB Vulkan guarantees, which no other leg's device reports, so
-      # recon_fuse_replica_run here is an example's run at that floor. The
-      # in-tree sensor package's tests run here too, as recon's do.
+      # recon_fuse_replica_run here is an example's run at that floor.
       - name: Configure
         if: steps.detect.outputs.present == 'true'
         run: |

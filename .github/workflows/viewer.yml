@@ -20,6 +20,9 @@ name: viewer (reusable)
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
   viewer:
     name: viewer build
@@ -36,6 +39,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # A job on the self-hosted Mac installs nothing (DECISIONS.md,
       # 2026-10-16): a missing formula fails it. This job caches nothing, so
@@ -59,9 +64,10 @@ jobs:
             exit 1
           fi
 
-      # rig_viewer is built only with the Orbbec driver (VS_WITH_ORBBEC).
+      # rig_viewer is built only with the Orbbec driver (VS_WITH_ORBBEC). The
+      # action is sensor's, at the sensor pin, as in _build.yml.
       - name: Install the Orbbec SDK
-        uses: ./.github/actions/install-orbbec-sdk
+        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@436840cb269553cdcb6cbd6232c5ee1a643efc02
 
       # No actions/cache step here, unlike every other leg -- deliberately, and
       # measured. build/_deps with gfx in it is a 131 MiB tarball: saving it took
