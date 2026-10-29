@@ -850,6 +850,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   A triangle mesh's distance field is a tier of its own, `voxelize`
   (`recon_voxelize`), on `volume` alone: `MeshIntegrator` and its kernels
   leave `tsdf`, and the closest-point GLSL moves to `volume`.
+- [**2026-10-28**](#2026-10-28--recon-takes-the-cores-glsl-export-sibling-floor-test-support-and-forward-declarations-and-keeps-no-copy-amends-the-2026-10-16-glsl-pinhole-entry-and-the-2026-10-08-test-policy-entry) —
+  recon keeps no copy of what the core holds for every sibling:
+  `recon_core` exports its GLSL with `vkc_export_glsl`
+  (`VR_SHADER_INCLUDE_DIR` is gone), the umbrella carries
+  `VKC_PACKAGE_VERSION` for a consumer's `vkc_require_sibling`, the headers
+  include the core's `vulkan/fwd.hpp`, and the tests run on the core's test
+  support. The core floor is 0.29.0.
 - [**2026-10-28**](#2026-10-28--the-codec-stream-is-a-tier-of-its-own-codec_stream-on-codec-and-networking-and-its-frame-in-halves-is-public-amends-the-2026-10-26-sender-entry) —
   The codec stream is a tier of its own, `codec_stream`
   (`recon_codec_stream`), on `codec` and `networking`: `CodecStream`,
@@ -16420,6 +16427,46 @@ the voxel layer leave recon without depth fusion.
 debug names change, `tsdf_mesh_*` and `tsdf.mesh_*` to `voxelize_mesh_*`
 and `voxelize.mesh_*`. The tests move with it: `recon_voxelize_mesh_integrate`
 and `recon_voxelize_mesh_integrate_exact`, unchanged but for their names.
+
+### 2026-10-28 — recon takes the core's GLSL export, sibling floor, test support and forward declarations, and keeps no copy (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-08 test-policy entry).
+
+**The rule.** recon keeps no copy of what core 0.27.0 to 0.29.0 hold for
+every sibling (the core's 2026-10-28 entries):
+- `recon_core` exports `pinhole.glsl` with
+  `vkc_export_glsl(recon_core PREFIX volumetric_kit/recon/core/shaders ...)`,
+  at the include path it had, and a consumer's kernels reach it with
+  `INCLUDE_TARGETS volumetric_kit::recon_core`. `VR_SHADER_INCLUDE_DIR` is
+  gone; the rest of the 2026-10-16 rule holds.
+- The umbrella `volumetric_kit::recon` carries its `project(VERSION)` as
+  `VKC_PACKAGE_VERSION`, so a consumer checks its floor on recon with
+  `vkc_require_sibling`, as recon checks its own on the core.
+- A header that names the core's Vulkan classes only by pointer or reference
+  includes the core's `vulkan/fwd.hpp`; recon's `core/fwd.hpp` is gone.
+- The tests are `main()`s on the core's test support: every test links
+  `core_test_base` (`CHECK`, `VKC_TEST_SANITIZED`, `test::Scratch`), a GPU
+  test `core_test_policy` (`run_on_gpu(vr::device_requirements(), ...)`,
+  `test::Gpu`, the buffer readbacks), and one that fails or measures
+  allocations `core_test_allocation_failure`. recon keeps only what is its
+  own, in `vr_test`: the decoder skips and `bare_device`
+  (`tests/decoder_test.hpp`) and its fixtures. A camera-only build's tests
+  take the core's Vulkan-free part.
+- `VR_CORE_MIN_VERSION` is 0.29.0, the oldest core with all of them.
+
+**Why.** One home for each: the core took them so that the packages recon
+is splitting into share them, and a copy left here would drift from it. No
+header forwards and no alias keeps an old name.
+
+**What stays.** The library code, the kernels and every test's checks; the
+tests change only their includes, names and links. The harness's own test,
+its LeakSanitizer case included, is the core's
+`vkc_testing_gpu_test_harness_test`; recon keeps the decoder skips' test,
+`recon_decoder_test_harness`.
+
+**Tests.** `recon_subproject_defaults` configures a consumer whose
+`vkc_require_sibling(volumetric_kit::recon <recon's version>)` accepts
+recon, and `recon_subproject_old_recon` one whose floor, a minor above,
+is refused naming recon's version. `recon_subproject_glsl` builds the
+consumer's kernel through `INCLUDE_TARGETS`.
 
 ### 2026-10-28 — The codec stream is a tier of its own, `codec_stream`, on `codec` and `networking`, and its frame in halves is public (amends the 2026-10-26 sender entry).
 

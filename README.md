@@ -64,14 +64,19 @@ solver, sets `VR_CAMERA_ONLY` ON to build the camera tier
 examples and the optional drivers.
 
 A consumer's kernels include recon's GLSL pinhole as recon's own do,
-`#include "volumetric_kit/recon/core/shaders/pinhole.glsl"`, under the root
-that `volumetric_kit::recon_core`'s `VR_SHADER_INCLUDE_DIR` property names,
-which holds the exported GLSL alone.
+`#include "volumetric_kit/recon/core/shaders/pinhole.glsl"`, through the
+core's `INCLUDE_TARGETS`: `volumetric_kit::recon_core` exports it with
+`vkc_export_glsl`, under a root that holds the exported GLSL alone.
 
 ```cmake
-get_target_property(vr_glsl volumetric_kit::recon_core VR_SHADER_INCLUDE_DIR)
-vkc_compile_shaders(my_kernels INCLUDE_DIRS "${vr_glsl}" SHADERS my.comp)
+vkc_compile_shaders(my_kernels INCLUDE_TARGETS volumetric_kit::recon_core
+                    SHADERS my.comp)
 ```
+
+A consumer that needs a recon at least as new as a given version calls the
+core's `vkc_require_sibling(volumetric_kit::recon <min-version>)` after
+`FetchContent_MakeAvailable(volumetric_kit_recon)`: the umbrella carries
+recon's `project(VERSION)` as `VKC_PACKAGE_VERSION`.
 
 recon builds on [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core),
 the family's shared foundation, fetched pinned by commit on the first configure:
@@ -84,12 +89,12 @@ An application that also fetches calib, which builds on the core too, declares
 `VKC_WITH_VULKAN ON` before the first `FetchContent_MakeAvailable` of it
 unless recon is camera-only; to build against a local core checkout, pass
 `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`. recon needs the core
-at `VR_CORE_MIN_VERSION` (0.25.0) or newer, with its vulkan tier unless
+at `VR_CORE_MIN_VERSION` (0.29.0) or newer, with its vulkan tier unless
 `VR_CAMERA_ONLY` is ON, and checks both with the core's `vkc_require_core`:
 on a core older than that or missing a required tier, recon's configure
 fails saying why. A core older than 0.1.0 has no `vkc_require_core`, so the
 configure stops at that call as an unknown command: move the first-declared
-pin to 0.25.0 or newer.
+pin to 0.29.0 or newer.
 
 Examples and tests also need the core's config tier. That floor covers every
 core version they and the viewers' pinned gfx (`VR_BUILD_VIEWER`) need.

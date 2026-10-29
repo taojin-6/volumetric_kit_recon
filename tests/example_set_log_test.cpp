@@ -19,7 +19,7 @@
 
 #include "set_log.hpp"
 #include "stage_table.hpp"
-#include "test_check.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 
 namespace vkc = volumetric_kit::core;
 namespace codec = volumetric_kit::recon::codec;

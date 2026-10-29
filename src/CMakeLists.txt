@@ -80,9 +80,11 @@ if(NOT VR_CAMERA_ONLY)
 endif()
 
 # --- recon: umbrella alias --------------------------------------------------
-# Consumers link `volumetric_kit::recon` and get whatever tiers are built.
+# Consumers link `volumetric_kit::recon` and get whatever tiers are built. It
+# carries recon's version, which a consumer's vkc_require_sibling reads.
 add_library(recon INTERFACE)
 add_library(volumetric_kit::recon ALIAS recon)
+set_target_properties(recon PROPERTIES VKC_PACKAGE_VERSION "${PROJECT_VERSION}")
 target_link_libraries(recon INTERFACE ${_vr_tiers})
 if(TARGET recon_mesh_io_assimp)
   target_link_libraries(recon INTERFACE recon_mesh_io_assimp)

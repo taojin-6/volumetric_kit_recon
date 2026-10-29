@@ -56,18 +56,19 @@
 #include <vector>
 
 #include "codec_fixture.hpp"
-#include "gpu_test.hpp"
 #include "grid_readback.hpp"
 #include "networking_loopback.hpp"
-#include "scratch_dir.hpp"
 #include "stage_rows.hpp"
-#include "test_check.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/core/testing/scratch_dir.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/recon/camera/array_calibration.hpp"
 #include "volumetric_kit/recon/codec/decode_grid.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
 #include "volumetric_kit/recon/codec_stream/codec_stream.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/sender/fuse_inputs.hpp"
@@ -249,7 +250,7 @@ class Camera final : public sensor::IRgbdSensor {
 // `count` cameras, A and B 3 m apart, a rig's third and fourth at A's and
 // B's poses, each seeing only a patch before set `patch_until`, read as a
 // started sensor array on `gpu`'s device; `cameras` takes them, to push to.
-vkc::Result<sensor::SensorArray> open_cameras(vr_test::GpuContext& gpu,
+vkc::Result<sensor::SensorArray> open_cameras(vkc::test::GpuContext& gpu,
                                               std::size_t count,
                                               std::size_t patch_until,
                                               std::vector<Camera*>* cameras) {
@@ -401,7 +402,7 @@ struct Run {
 // after kUnobservedFreedSet, then some (check_stream says which) until,
 // under Dynamic, the pass after kClearedFreedSet frees the rest; with no
 // pass, all kept. Each sent set as sent_as_logged says.
-int code_sets(vr_test::GpuContext& gpu, const Fusion& fusion,
+int code_sets(vkc::test::GpuContext& gpu, const Fusion& fusion,
               const std::string& path, std::vector<Walls>* grids,
               const Run& run = {}) {
   std::vector<Camera*> cameras;
@@ -538,7 +539,7 @@ int code_sets(vr_test::GpuContext& gpu, const Fusion& fusion,
 // falls, and from the pass after kUnobservedFreedSet the grid holds exactly
 // the frame's near blocks: the pass frees those that never held an observed
 // voxel and keeps the rest.
-int check_stream(vr_test::GpuContext& gpu, const std::string& path,
+int check_stream(vkc::test::GpuContext& gpu, const std::string& path,
                  bool dynamic, const std::vector<Walls>& grids) {
   auto opened = stream::StreamReader::open(path);
   CHECK(opened.ok());
@@ -690,7 +691,7 @@ struct Keyed {
 // set is sent. Each viewer gets the frame of the set it joined before, a key,
 // then every frame after it. `keys` takes whether each set's record is a key,
 // from the file, and `redone` whether each set's fusion was done again.
-int keyed_sets(vr_test::GpuContext& gpu, const Keyed& run,
+int keyed_sets(vkc::test::GpuContext& gpu, const Keyed& run,
                const std::string& path, std::vector<bool>* keys,
                std::vector<bool>* redone) {
   std::vector<Camera*> cameras;
@@ -802,7 +803,7 @@ int keyed_sets(vr_test::GpuContext& gpu, const Keyed& run,
 // buckets, the cameras seeing only a patch until set 3, set 3's fusion is
 // done again, and its frame's front half after it: a viewer joining before
 // it makes that frame a key still, where with none it is a P-frame.
-int keys_case(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
+int keys_case(vkc::test::GpuContext& gpu, const vkc::test::Scratch& scratch) {
   const auto keys_at = [](std::initializer_list<std::size_t> sets) {
     std::vector<bool> keys(kSets, false);
     for (const std::size_t s : sets) keys[s] = true;
@@ -841,7 +842,7 @@ int keys_case(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
 
 // A sender over a stream since moved from refuses a set it would code, before
 // recording anything of it; one over the stream it moved into codes it.
-int moved_from(vr_test::GpuContext& gpu) {
+int moved_from(vkc::test::GpuContext& gpu) {
   std::vector<Camera*> cameras;
   auto opened = open_cameras(gpu, 2, 0, &cameras);
   CHECK(opened.ok());
@@ -887,8 +888,9 @@ int moved_from(vr_test::GpuContext& gpu) {
 // once, before its decode, its rows its frame's encode with "crc", "write",
 // "publish" and the waits, and each frame as code() returns it. A frame out
 // of order is refused, its front dropped, and the stream goes on.
-int halves(vr_test::GpuContext& gpu, vr::volume::VoxelBlockGrid& source,
-           vr::volume::VoxelBlockGrid& other, const vr_test::Scratch& scratch) {
+int halves(vkc::test::GpuContext& gpu, vr::volume::VoxelBlockGrid& source,
+           vr::volume::VoxelBlockGrid& other,
+           const vkc::test::Scratch& scratch) {
   codec::EncoderConfig config;
   config.intra_period = 3;
   codec_stream::CodecOutputs by_code;
@@ -948,13 +950,13 @@ int halves(vr_test::GpuContext& gpu, vr::volume::VoxelBlockGrid& source,
   CHECK(send(source, 5, &rows, &published).ok() && published == 1);
   CHECK(a->finish().ok() && b->finish().ok());
   CHECK(a->coded() == 6 && b->coded() == 6);
-  CHECK(vr_test::read_bytes(by_code.stream) ==
-        vr_test::read_bytes(by_halves.stream));
+  CHECK(vkc::test::read_bytes(by_code.stream) ==
+        vkc::test::read_bytes(by_halves.stream));
   return 0;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
-  vr_test::Scratch scratch("recon_sender_set_sender_");
+int gpu_main(vkc::test::GpuContext& gpu) {
+  vkc::test::Scratch scratch("recon_sender_set_sender_");
   for (const bool dynamic : {true, false}) {
     Fusion fusion;  // 2 cm voxels, an 8 cm band
     fusion.dynamic = dynamic;
@@ -1040,4 +1042,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

@@ -10,10 +10,10 @@
 #include <string>
 
 #include "replica_sensor.hpp"
-#include "scratch_dir.hpp"
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/file_io.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/scratch_dir.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 
 namespace vkc = volumetric_kit::core;
 
@@ -23,7 +23,7 @@ using Code = vkc::Status::Code;
 using vr_example::ReplicaSensor;
 
 int test_open() {
-  const vr_test::Scratch scratch("recon_replica_sensor_");
+  const vkc::test::Scratch scratch("recon_replica_sensor_");
   const std::string scene = scratch.path.string();
   const std::string params = scene + "/cam_params.json";
   const ReplicaSensor::Options options;

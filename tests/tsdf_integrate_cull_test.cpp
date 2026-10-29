@@ -20,8 +20,8 @@
 #include <map>
 #include <vector>
 
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
@@ -31,8 +31,9 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
-#include "gpu_test.hpp"
 #include "grid_readback.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -129,7 +130,7 @@ struct Block {
   vol::BlockStamp stamp;
 };
 
-vkc::Result<std::map<Coord, Block>> blocks_of(const vr_test::Gpu& ctx,
+vkc::Result<std::map<Coord, Block>> blocks_of(const vkc::test::Gpu& ctx,
                                               vol::VoxelBlockGrid& g) {
   VKC_ASSIGN(const std::vector<vol::BlockIndex> active,
              g.map().compact_active_blocks());
@@ -179,7 +180,7 @@ constexpr int kZ = 2;
 // Fuse `steps` -- each a set of frames, allocated and then integrated as one
 // call -- into A and B, and compare. `fused` is a layer that must end up with
 // weighted voxels, which pins that the scenario reaches the edge it is about.
-int run(const vr_test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
+int run(const vkc::test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
         const char* name, tsdf::IntegrationMode mode,
         const std::vector<std::vector<Frame>>& steps, Layer fused) {
   auto a = make_grid(ctx.device, ctx.allocator);
@@ -247,7 +248,7 @@ int run(const vr_test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
   return 0;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   auto integrator = tsdf::TsdfIntegrator::create(gpu.device, gpu.allocator);
   CHECK(integrator.ok());
   tsdf::TsdfIntegrator& integ = integrator.value();
@@ -347,4 +348,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
 
+# Every test is a main() of its own on the core's test support: CHECK,
+# VKC_TEST_SANITIZED and the scratch directory (core_test_base), in camera-only
+# builds too. A GPU test also links core_test_policy, and one that fails or
+# measures allocations core_test_allocation_failure.
+link_libraries(volumetric_kit::core_test_base)
+
 # camera tier: the camera model (its checks, the lens template against OpenCV's
 # numbers), its geometry (rigid checks, Rodrigues both ways), and the sensor
 # array's calibration file (versions 2 and 1 read, the refusals, written and
@@ -87,17 +93,16 @@ target_link_libraries(recon_core_smoke_test PRIVATE volumetric_kit::recon_core)
 vr_target_warnings(recon_core_smoke_test)
 add_test(NAME recon_core_smoke COMMAND recon_core_smoke_test)
 
-# The GPU tests' harness (gpu_test.hpp): a test fails on an error the validation
-# layer reports, a leaked object's included, and skips as the core's test policy
-# and VR_TEST_HEVC_BACKEND say. Under LeakSanitizer, tools/lsan.supp leaves a
-# block leaked where the layer reports an error reported. Skips without the
-# layer or a device.
-add_executable(recon_gpu_test_harness_test gpu_test_harness_test.cpp)
+# The decoder tests' skips (decoder_test.hpp), as VR_TEST_HEVC_BACKEND says. The
+# GPU tests run on the core's harness (core/testing/gpu_test.hpp), which the
+# core tests.
+add_executable(recon_decoder_test_harness_test decoder_test_harness_test.cpp)
 target_link_libraries(
-  recon_gpu_test_harness_test PRIVATE volumetric_kit::recon_core
-                                      volumetric_kit::core_test_policy)
-vr_target_warnings(recon_gpu_test_harness_test)
-add_test(NAME recon_gpu_test_harness COMMAND recon_gpu_test_harness_test)
+  recon_decoder_test_harness_test PRIVATE volumetric_kit::recon_core
+                                          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_decoder_test_harness_test)
+add_test(NAME recon_decoder_test_harness
+         COMMAND recon_decoder_test_harness_test)
 
 # Every tier reports, and reports the DEVICE half. The load-bearing assertion is
 # per row: gpu_ms < cpu_ms, since the host span wraps the submit the device span
@@ -119,10 +124,10 @@ add_test(NAME recon_tier_stage_metrics COMMAND recon_tier_stage_metrics_test)
 # and the block layout (block_grid_params); and the tests' host oracle of the
 # spatial hash (volume_hash_oracle.hpp). CPU-only (no device), so these always
 # run -- not gated on a Vulkan driver.
-add_executable(recon_volume_coords_test volume_coords_test.cpp
-                                        test_allocation_failure.cpp)
-target_link_libraries(recon_volume_coords_test
-                      PRIVATE volumetric_kit::recon_volume)
+add_executable(recon_volume_coords_test volume_coords_test.cpp)
+target_link_libraries(
+  recon_volume_coords_test PRIVATE volumetric_kit::recon_volume
+                                   volumetric_kit::core_test_allocation_failure)
 vr_target_warnings(recon_volume_coords_test)
 add_test(NAME recon_volume_coords COMMAND recon_volume_coords_test)
 
@@ -273,10 +278,11 @@ add_test(NAME recon_sensor_gpu_frame_prep
 # Allocation failure while staging is an OutOfMemory result, and a retained
 # frame survives it. Separate executable for its replacement operator new.
 add_executable(recon_sensor_gpu_frame_prep_oom_test
-               sensor_gpu_frame_prep_oom_test.cpp test_allocation_failure.cpp)
+               sensor_gpu_frame_prep_oom_test.cpp)
 target_link_libraries(
   recon_sensor_gpu_frame_prep_oom_test
-  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_sensor_utils)
+  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_sensor_utils
+          volumetric_kit::core_test_allocation_failure)
 vr_target_warnings(recon_sensor_gpu_frame_prep_oom_test)
 add_test(NAME recon_sensor_gpu_frame_prep_oom
          COMMAND recon_sensor_gpu_frame_prep_oom_test)
@@ -310,10 +316,11 @@ add_test(NAME recon_sensor_picture_readback
 # Allocation failure during creation (including the timer) or a read is an
 # OutOfMemory result, and retry succeeds. Separate allocation overrides.
 add_executable(recon_sensor_picture_readback_oom_test
-               sensor_picture_readback_oom_test.cpp test_allocation_failure.cpp)
+               sensor_picture_readback_oom_test.cpp)
 target_link_libraries(
   recon_sensor_picture_readback_oom_test
-  PRIVATE volumetric_kit::recon_sensor_utils volumetric_kit::core_test_policy)
+  PRIVATE volumetric_kit::recon_sensor_utils volumetric_kit::core_test_policy
+          volumetric_kit::core_test_allocation_failure)
 vr_target_warnings(recon_sensor_picture_readback_oom_test)
 add_test(NAME recon_sensor_picture_readback_oom
          COMMAND recon_sensor_picture_readback_oom_test)
@@ -508,11 +515,11 @@ vr_target_warnings(recon_tsdf_fuser_test)
 add_test(NAME recon_tsdf_fuser COMMAND recon_tsdf_fuser_test)
 
 # Host OOM stays in Status, resize rolls back, and private live backoff expires.
-add_executable(recon_tsdf_fuser_oom_test tsdf_fuser_oom_test.cpp
-                                         test_allocation_failure.cpp)
+add_executable(recon_tsdf_fuser_oom_test tsdf_fuser_oom_test.cpp)
 target_link_libraries(
-  recon_tsdf_fuser_oom_test PRIVATE volumetric_kit::core_test_policy
-                                    volumetric_kit::recon_tsdf Vulkan::Vulkan)
+  recon_tsdf_fuser_oom_test
+  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_tsdf
+          Vulkan::Vulkan volumetric_kit::core_test_allocation_failure)
 vr_target_warnings(recon_tsdf_fuser_oom_test)
 add_test(NAME recon_tsdf_fuser_oom COMMAND recon_tsdf_fuser_oom_test)
 
@@ -1048,12 +1055,12 @@ vr_target_warnings(recon_codec_encoder_test)
 add_test(NAME recon_codec_encoder COMMAND recon_codec_encoder_test)
 
 # Allocation refusal preserves the predictor, GOP and retryable front results.
-add_executable(recon_codec_encoder_oom_test codec_encoder_oom_test.cpp
-                                            test_allocation_failure.cpp)
+add_executable(recon_codec_encoder_oom_test codec_encoder_oom_test.cpp)
 target_link_libraries(
   recon_codec_encoder_oom_test
   PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
-          volumetric_kit::core_test_policy)
+          volumetric_kit::core_test_policy
+          volumetric_kit::core_test_allocation_failure)
 vr_target_warnings(recon_codec_encoder_oom_test)
 add_test(NAME recon_codec_encoder_oom COMMAND recon_codec_encoder_oom_test)
 
@@ -1098,24 +1105,24 @@ add_test(NAME recon_codec_recorded COMMAND recon_codec_recorded_test)
 
 # Allocation injection stays in its own executable: factory diagnostics and a
 # metrics merge after a committed P-frame, followed by the next P-frame.
-add_executable(recon_codec_decode_grid_oom_test codec_decode_grid_oom_test.cpp
-                                                test_allocation_failure.cpp)
+add_executable(recon_codec_decode_grid_oom_test codec_decode_grid_oom_test.cpp)
 target_link_libraries(
   recon_codec_decode_grid_oom_test
   PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
-          volumetric_kit::core_test_policy)
+          volumetric_kit::core_test_policy
+          volumetric_kit::core_test_allocation_failure)
 vr_target_warnings(recon_codec_decode_grid_oom_test)
 add_test(NAME recon_codec_decode_grid_oom
          COMMAND recon_codec_decode_grid_oom_test)
 
 # A pending-frame allocation failure stays inside record and both blocking
 # decode APIs, preserves the grid/reference, and permits the same P-frame retry.
-add_executable(recon_codec_decoder_oom_test codec_decoder_oom_test.cpp
-                                            test_allocation_failure.cpp)
+add_executable(recon_codec_decoder_oom_test codec_decoder_oom_test.cpp)
 target_link_libraries(
   recon_codec_decoder_oom_test
   PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
-          volumetric_kit::core_test_policy)
+          volumetric_kit::core_test_policy
+          volumetric_kit::core_test_allocation_failure)
 vr_target_warnings(recon_codec_decoder_oom_test)
 add_test(NAME recon_codec_decoder_oom COMMAND recon_codec_decoder_oom_test)
 
@@ -1161,9 +1168,11 @@ add_test(NAME recon_sensor_video_frame_color
          COMMAND recon_sensor_video_frame_color_test)
 
 add_executable(recon_sensor_video_hevc_syntax_test
-               sensor_video_hevc_syntax_test.cpp test_allocation_failure.cpp)
-target_link_libraries(recon_sensor_video_hevc_syntax_test
-                      PRIVATE volumetric_kit::recon_sensor_video_syntax)
+               sensor_video_hevc_syntax_test.cpp)
+target_link_libraries(
+  recon_sensor_video_hevc_syntax_test
+  PRIVATE volumetric_kit::recon_sensor_video_syntax
+          volumetric_kit::core_test_allocation_failure)
 target_compile_definitions(
   recon_sensor_video_hevc_syntax_test
   PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")
@@ -1469,10 +1478,10 @@ endif()
 # Host asset I/O remains testable without creating a Vulkan device. Each test
 # links its own target alone: image I/O, on the family core's base tier, with no
 # mesh tier and no Vulkan (subproject/ checks its links).
-add_executable(recon_io_image_test io_image_test.cpp
-                                   test_allocation_failure.cpp)
-target_link_libraries(recon_io_image_test
-                      PRIVATE volumetric_kit::recon_image_io)
+add_executable(recon_io_image_test io_image_test.cpp)
+target_link_libraries(
+  recon_io_image_test PRIVATE volumetric_kit::recon_image_io
+                              volumetric_kit::core_test_allocation_failure)
 vr_target_warnings(recon_io_image_test)
 add_test(NAME recon_io_image COMMAND recon_io_image_test)
 
@@ -1482,10 +1491,11 @@ vr_target_warnings(recon_io_ply_test)
 add_test(NAME recon_io_ply COMMAND recon_io_ply_test)
 
 # The opt-in mesh normalization and topology helpers, on synthetic meshes.
-add_executable(recon_io_mesh_normalization_test io_mesh_normalization_test.cpp
-                                                test_allocation_failure.cpp)
-target_link_libraries(recon_io_mesh_normalization_test
-                      PRIVATE volumetric_kit::recon_mesh_io)
+add_executable(recon_io_mesh_normalization_test io_mesh_normalization_test.cpp)
+target_link_libraries(
+  recon_io_mesh_normalization_test
+  PRIVATE volumetric_kit::recon_mesh_io
+          volumetric_kit::core_test_allocation_failure)
 vr_target_warnings(recon_io_mesh_normalization_test)
 add_test(NAME recon_io_mesh_normalization
          COMMAND recon_io_mesh_normalization_test)
@@ -1537,10 +1547,10 @@ target_link_libraries(recon_stream_recovery_test
 vr_target_warnings(recon_stream_recovery_test)
 add_test(NAME recon_stream_recovery COMMAND recon_stream_recovery_test)
 
-add_executable(recon_stream_footer_test stream_footer_test.cpp
-                                        test_allocation_failure.cpp)
-target_link_libraries(recon_stream_footer_test
-                      PRIVATE volumetric_kit::recon_stream)
+add_executable(recon_stream_footer_test stream_footer_test.cpp)
+target_link_libraries(
+  recon_stream_footer_test PRIVATE volumetric_kit::recon_stream
+                                   volumetric_kit::core_test_allocation_failure)
 # A 64-bit off_t, as the library's, for pwrite and truncate past 4 GiB.
 target_compile_definitions(recon_stream_footer_test
                            PRIVATE _FILE_OFFSET_BITS=64)
@@ -1549,10 +1559,10 @@ add_test(NAME recon_stream_footer COMMAND recon_stream_footer_test)
 
 # Public stream calls contain allocation failures in validation, diagnostics,
 # saved errors, and index/footer growth. Host-only, including retry behavior.
-add_executable(recon_stream_oom_test stream_oom_test.cpp
-                                     test_allocation_failure.cpp)
-target_link_libraries(recon_stream_oom_test
-                      PRIVATE volumetric_kit::recon_stream)
+add_executable(recon_stream_oom_test stream_oom_test.cpp)
+target_link_libraries(
+  recon_stream_oom_test PRIVATE volumetric_kit::recon_stream
+                                volumetric_kit::core_test_allocation_failure)
 vr_target_warnings(recon_stream_oom_test)
 add_test(NAME recon_stream_oom COMMAND recon_stream_oom_test)
 
@@ -1597,16 +1607,18 @@ endforeach()
 
 # The client also checks its progress output across an allocation failure while
 # copying a saved error.
-target_sources(recon_networking_client_test PRIVATE test_allocation_failure.cpp)
+target_link_libraries(recon_networking_client_test
+                      PRIVATE volumetric_kit::core_test_allocation_failure)
 
 # The server, keys on demand, when a record's copy fails: the viewers it sends
 # back counted before publish returns. Apart from the server's other tests,
 # which link no replaced operator new, so they build under ThreadSanitizer on
 # Linux too.
-add_executable(recon_networking_server_oom_test networking_server_oom_test.cpp
-                                                test_allocation_failure.cpp)
-target_link_libraries(recon_networking_server_oom_test
-                      PRIVATE volumetric_kit::recon_networking Threads::Threads)
+add_executable(recon_networking_server_oom_test networking_server_oom_test.cpp)
+target_link_libraries(
+  recon_networking_server_oom_test
+  PRIVATE volumetric_kit::recon_networking Threads::Threads
+          volumetric_kit::core_test_allocation_failure)
 vr_target_warnings(recon_networking_server_oom_test)
 add_test(NAME recon_networking_server_oom
          COMMAND recon_networking_server_oom_test)
@@ -1655,12 +1667,13 @@ add_test(NAME recon_sender_set_sender COMMAND recon_sender_set_sender_test)
 # the first key, seq and key pts across passes by the writer's rules, the dues,
 # damage left out and an allocation failure past it refused, and a damaged
 # payload skipped to the next key. Host only.
-add_executable(recon_example_stream_replay_test example_stream_replay_test.cpp
-                                                test_allocation_failure.cpp)
+add_executable(recon_example_stream_replay_test example_stream_replay_test.cpp)
 target_include_directories(recon_example_stream_replay_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
-target_link_libraries(recon_example_stream_replay_test
-                      PRIVATE volumetric_kit::recon_stream)
+target_link_libraries(
+  recon_example_stream_replay_test
+  PRIVATE volumetric_kit::recon_stream
+          volumetric_kit::core_test_allocation_failure)
 vr_target_warnings(recon_example_stream_replay_test)
 add_test(NAME recon_example_stream_replay
          COMMAND recon_example_stream_replay_test)
@@ -1691,10 +1704,11 @@ endif()
 # What a sibling that fetches recon gets (subproject/): its configure, from a
 # clean tree, with each dependency this build fetched as a local source, so it
 # needs no network. The defaults hold, image I/O links the core's base tier
-# alone, and recon refuses a core the sibling made available first that is older
-# than VR_CORE_MIN_VERSION or lacks the vulkan tier. The old core is this one
-# stamped 0.0.1, standing in for one below a later floor: a real core older than
-# 0.1.0 has no vkc_require_core at all.
+# alone, the sibling's vkc_require_sibling accepts this recon and refuses it
+# under a floor above its version, and recon refuses a core the sibling made
+# available first that is older than VR_CORE_MIN_VERSION or lacks the vulkan
+# tier. The old core is this one stamped 0.0.1, standing in for one below a
+# later floor: a real core older than 0.1.0 has no vkc_require_core at all.
 #
 # TODO: move this core-requirement harness -- the message helper and
 # subproject/'s version stamp, which gfx and calib repeat -- into the core's
@@ -1723,9 +1737,18 @@ function(_vr_expect_message test message)
   set_tests_properties(${test} PROPERTIES PASS_REGULAR_EXPRESSION "${message}")
 endfunction()
 
-_vr_add_subproject_test(recon_subproject_defaults defaults)
+_vr_add_subproject_test(recon_subproject_defaults defaults
+                        "-DVR_REQUIRE_RECON=${PROJECT_VERSION}")
 set_tests_properties(recon_subproject_defaults
                      PROPERTIES FIXTURES_SETUP vr_subproject_defaults)
+math(EXPR _vr_next_minor "${PROJECT_VERSION_MINOR} + 1")
+set(_vr_newer "${PROJECT_VERSION_MAJOR}.${_vr_next_minor}.0")
+_vr_add_subproject_test(recon_subproject_old_recon old_recon
+                        "-DVR_REQUIRE_RECON=${_vr_newer}")
+_vr_expect_message(
+  recon_subproject_old_recon
+  "vr_subproject_consumer needs volumetric_kit_recon ${_vr_newer} or newer, but the recon at .+ is ${PROJECT_VERSION}: pin v${_vr_newer} or newer"
+)
 # The sibling compiles a kernel that includes recon's exported GLSL through the
 # root recon_core names (glsl_consumer.cmake).
 add_test(NAME recon_subproject_glsl

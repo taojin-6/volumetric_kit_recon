@@ -24,8 +24,8 @@
 #include <cstring>
 #include <vector>
 
-#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
@@ -36,9 +36,10 @@
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 #include "depth_inputs.hpp"
-#include "gpu_test.hpp"
 #include "grid_readback.hpp"
 #include "sphere_scene.hpp"
+#include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -98,7 +99,7 @@ float bits_float(std::uint32_t bits) {
 // every voxel; or, not `exact`, the same voxels observed and coloured, and
 // weight and tsdf within rounding. A slot can differ: allocation order is the
 // GPU's.
-int check_same(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& a,
+int check_same(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& a,
                vol::VoxelBlockGrid& b, bool exact) {
   std::size_t observed = 0;
   std::size_t blocks = 0;
@@ -134,7 +135,7 @@ int settle(Allocate&& allocate) {
   return 1;
 }
 
-int gpu_main(vr_test::GpuContext& gpu) {
+int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::Device& dev = gpu.device;
   vkc::Allocator& alloc = gpu.allocator;
 
@@ -152,13 +153,13 @@ int gpu_main(vr_test::GpuContext& gpu) {
   std::vector<vkc::Buffer> depth_bufs;
   for (int c = 0; c < kCameras; ++c) {
     auto buf =
-        vr_test::upload_device_buffer(dev, alloc, views[c].depth.data(),
-                                      views[c].depth.size() * sizeof(float));
+        vkc::test::upload_device_buffer(dev, alloc, views[c].depth.data(),
+                                        views[c].depth.size() * sizeof(float));
     CHECK(buf.ok());
     CHECK(buf.value().is_device_local() && buf.value().mapped() == nullptr);
     depth_bufs.push_back(std::move(buf).value());
   }
-  auto color0 = vr_test::upload_device_buffer(
+  auto color0 = vkc::test::upload_device_buffer(
       dev, alloc, views[0].color.data(),
       views[0].color.size() * sizeof(std::uint32_t));
   CHECK(color0.ok());
@@ -269,7 +270,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   {
     auto grid = make_grid(dev, alloc);
     CHECK(grid.ok());
-    auto small = vr_test::upload_device_buffer(
+    auto small = vkc::test::upload_device_buffer(
         dev, alloc, views[2].depth.data(), sizeof(float) * kWidth);
     CHECK(small.ok());
     std::vector<vol::DepthInput> bad_depths = vr_test::depth_inputs(frames);
@@ -303,4 +304,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  return vkc::test::run_on_gpu(vr::device_requirements(), gpu_main);
+}

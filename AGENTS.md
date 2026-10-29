@@ -180,9 +180,10 @@ git -C "$recon_root" diff --check
   the examples and the drivers.
 - Tests use no real hardware: a camera is checked by hand through its example
   (`fuse_orbbec`). Report such a check as run or not run, never as a test.
-- GPU tests run on the core's test policy (`tests/gpu_test.hpp`): CI sets
-  `VKC_TEST_VALIDATION=1`, and any error the validation layer reports fails
-  the test. For batching/barrier changes, run them with
+- Tests are `main()`s of their own on the core's test support
+  (`volumetric_kit/core/testing/`); GPU tests run on its harness and policy
+  (`gpu_test.hpp`): CI sets `VKC_TEST_VALIDATION=1`, and any error the
+  validation layer reports fails the test. For batching/barrier changes, run them with
   `VKC_TEST_SYNC_VALIDATION=1` too. Measure phases before choosing
   an optimization; follow PERF.md for live rig work and discrete-GPU evidence.
 

@@ -15,8 +15,8 @@
 
 #include <imgui.h>
 
-#include "test_check.hpp"
 #include "viewer_common.hpp"
+#include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/testing/vulkan_policy.hpp"
 
 #include "volumetric_kit/core/base/stage_metrics.hpp"
