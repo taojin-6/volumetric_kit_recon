@@ -45,14 +45,14 @@
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/sensor/io/image_io.hpp"
 #include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
 #include "volumetric_kit/sensor/rgbd_frame.hpp"
@@ -70,9 +70,9 @@
 namespace vr = volumetric_kit::recon;
 namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace rtsdf = volumetric_kit::recon::tsdf;
-namespace rmesh = volumetric_kit::recon::mesh;
+namespace rmesh = volumetric_kit::grid::mesh;
 namespace rtex = volumetric_kit::recon::texture;
 namespace rsensor = volumetric_kit::sensor;
 namespace vg = volumetric_kit::gfx;
@@ -80,7 +80,7 @@ namespace vgp = volumetric_kit::gfx::pipelines;
 
 namespace {
 
-using Options = vr_example::config::Config;
+using Options = vgrid_example::config::Config;
 
 // --- Fuse a Replica sequence into a coloured host mesh (recon side). ---------
 
@@ -370,7 +370,7 @@ int run_main(const Options& opt) {
   frame.extent = td.extent;
   frame.view_proj = view_proj;
   frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
-  frame.flags = (opt.render.shading == vr_example::config::Shading::Lit)
+  frame.flags = (opt.render.shading == vgrid_example::config::Shading::Lit)
                     ? vgp::kHybridMeshLit
                     : 0u;
   frame.draws = &draw;
@@ -448,7 +448,7 @@ int run_main(const Options& opt) {
 }
 
 int main(int argc, char** argv) {
-  return vr_example::configured_main(
-      argc, argv, vr_example::config::Application::FuseRender, "fuse_render",
+  return vgrid_example::configured_main(
+      argc, argv, vgrid_example::config::Application::FuseRender, "fuse_render",
       run_main);
 }

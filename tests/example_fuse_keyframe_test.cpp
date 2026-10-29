@@ -16,16 +16,19 @@
 #include <vector>
 
 #include "fuse_frame.hpp"
-#include "grid_readback.hpp"
 #include "volumetric_kit/core/testing/buffer_readback.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
+#include "volumetric_kit/grid/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
+#include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_grid.hpp"
 
 namespace vr = volumetric_kit::recon;
+
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
 namespace sensor = volumetric_kit::sensor;
 constexpr vr::tsdf::IntegrationMode kClassic =
@@ -71,7 +74,7 @@ int check_retained(const vkc::test::Gpu& gpu,
 
   // The final/remeshed surface can still use this frame's atlas, including
   // coverage and occlusion, after the source or fusion rejected a later one.
-  vr::mesh::Mesh mesh;
+  vgrid::mesh::Mesh mesh;
   mesh.vertices.resize(3);
   mesh.indices = {0, 1, 2};
   mesh.vertices[0].position = {-0.05f, -0.05f, 1.0f};
@@ -106,9 +109,9 @@ int check_mode(vkc::test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
   // The weight in blocks wholly nearer than 1.6 m: a block is 8 voxels of
   // 5 cm, so its z coordinate is at most 3.
   const auto near_weight = [&]() -> double {
-    auto blocks = vr_test::blocks_of(*volume);
-    auto weight = vr_test::read_attribute<float>(
-        gpu.device, gpu.allocator, *volume, vr::volume::kWeightAttribute);
+    auto blocks = vgrid_test::blocks_of(*volume);
+    auto weight = vgrid_test::read_attribute<float>(
+        gpu.device, gpu.allocator, *volume, vgrid::volume::kWeightAttribute);
     if (!blocks.ok() || !weight.ok()) return -1.0;
     double sum = 0.0;
     for (const auto& [coord, ptr] : *blocks) {
@@ -175,12 +178,12 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // Preparation and allocation succeed, but fusion refuses a volume without
   // a colour attribute. Different pixels and pose expose an early replacement
   // or reuse of the retained buffers even if the optional stays engaged.
-  const vr::volume::AttributeSpec attrs[] = {
-      {vr::volume::kTsdfAttribute, sizeof(float)},
-      {vr::volume::kWeightAttribute, sizeof(float)}};
-  auto depth_only = vr::volume::VoxelBlockGrid::create(
+  const vgrid::volume::AttributeSpec attrs[] = {
+      {vgrid::volume::kTsdfAttribute, sizeof(float)},
+      {vgrid::volume::kWeightAttribute, sizeof(float)}};
+  auto depth_only = vgrid::volume::VoxelBlockGrid::create(
       gpu.device, gpu.allocator,
-      vr::volume::block_grid_params(0.05f, 0.15f, 256), attrs, 2);
+      vgrid::volume::block_grid_params(0.05f, 0.15f, 256), attrs, 2);
   CHECK(depth_only.ok());
   std::fill(raw_depth.begin(), raw_depth.end(), 2000);
   std::fill(raw_color.begin(), raw_color.end(), 0x001122CCu);

@@ -30,29 +30,30 @@
 #include <utility>
 #include <vector>
 
-#include "device_blocks.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
+#include "volumetric_kit/grid/testing/device_blocks.hpp"
+#include "volumetric_kit/grid/volume/hash_types.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
-#include "volumetric_kit/recon/volume/hash_types.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
-#include "grid_readback.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
-namespace mesh = volumetric_kit::recon::mesh;
+namespace vol = volumetric_kit::grid::volume;
+namespace mesh = volumetric_kit::grid::mesh;
 namespace rtex = volumetric_kit::recon::texture;
 
 namespace {
@@ -131,16 +132,16 @@ bool fill_grid(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& grid,
     }
   }
   vkc::Result<std::uint32_t> failed =
-      vr_test::allocate_blocks(ctx, grid.map(), blocks);
+      vgrid_test::allocate_blocks(ctx, grid.map(), blocks);
   if (!failed || failed.value() != 0) return false;
   vkc::Result<std::vector<vol::BlockIndex>> active =
       grid.map().compact_active_blocks();
   if (!active) return false;
 
-  auto tsdf = vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid,
-                                             vol::kTsdfAttribute);
-  auto weight = vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid,
-                                               vol::kWeightAttribute);
+  auto tsdf = vgrid_test::read_attribute<float>(ctx.device, ctx.allocator, grid,
+                                                vol::kTsdfAttribute);
+  auto weight = vgrid_test::read_attribute<float>(ctx.device, ctx.allocator,
+                                                  grid, vol::kWeightAttribute);
   if (!tsdf || !weight) return false;
   float* tsdf_data = tsdf.value().data();
   float* weight_data = weight.value().data();
@@ -167,11 +168,11 @@ bool fill_grid(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& grid,
       }
     }
   }
-  return vr_test::write_attribute(ctx.device, ctx.allocator, grid,
-                                  vol::kTsdfAttribute, tsdf.value())
+  return vgrid_test::write_attribute(ctx.device, ctx.allocator, grid,
+                                     vol::kTsdfAttribute, tsdf.value())
              .ok() &&
-         vr_test::write_attribute(ctx.device, ctx.allocator, grid,
-                                  vol::kWeightAttribute, weight.value())
+         vgrid_test::write_attribute(ctx.device, ctx.allocator, grid,
+                                     vol::kWeightAttribute, weight.value())
              .ok();
 }
 

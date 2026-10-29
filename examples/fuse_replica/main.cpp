@@ -38,27 +38,29 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
-#include "volumetric_kit/recon/io/ply_writer.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
+#include "volumetric_kit/grid/mesh_io/ply_writer.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
 #include "volumetric_kit/sensor/rgbd_frame.hpp"
 #include "volumetric_kit/sensor/rgbd_sensor.hpp"
 
 namespace vr = volumetric_kit::recon;
+
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
-namespace mesh = volumetric_kit::recon::mesh;
+namespace mesh = volumetric_kit::grid::mesh;
 namespace sensor = volumetric_kit::sensor;
 
 namespace {
 
 // Validated scenario with reconstruction-friendly defaults for Replica.
-using Options = vr_example::config::Config;
+using Options = vgrid_example::config::Config;
 
 vkc::Status run(const Options& opt) {
   // --- Device bring-up (headless: no surface needed) ---
@@ -167,7 +169,7 @@ vkc::Status run(const Options& opt) {
   // costs ~0.13 ms more than an untimed one on MoltenVK (the first
   // vkCmdWriteTimestamp in a command buffer, measured -- see DECISIONS.md),
   // which moves the host column of a sub-millisecond stage.
-  vr_example::print_stage_rows(
+  vgrid_example::print_stage_rows(
       "stages per fused frame, mean over " + std::to_string(fused) + " frames",
       stage_totals, fused);
   dirty.print(opt.fusion.dirty_every);
@@ -179,7 +181,7 @@ vkc::Status run(const Options& opt) {
   mesh::ExtractTimings t{};
   VKC_ASSIGN(mesh::Mesh final_mesh, extractor.extract_host(volume, 0.0f, &t));
   vr_example::print_extract(t, voxels_per_block);
-  VKC_TRY(vr::io::write_ply(opt.output.path, final_mesh));
+  VKC_TRY(vgrid::mesh_io::write_ply(opt.output.path, final_mesh));
   const auto t_end = std::chrono::steady_clock::now();
   const double secs = std::chrono::duration<double>(t_end - t_start).count();
   std::printf(
@@ -203,7 +205,7 @@ int run_main(const Options& opt) {
 }
 
 int main(int argc, char** argv) {
-  return vr_example::configured_main(
-      argc, argv, vr_example::config::Application::FuseReplica, "fuse_replica",
-      run_main);
+  return vgrid_example::configured_main(
+      argc, argv, vgrid_example::config::Application::FuseReplica,
+      "fuse_replica", run_main);
 }

@@ -11,16 +11,13 @@ and create the output directories before a real run. Paths are relative to the
 configuration file, not the shell's current directory; environment variables
 and home-directory shortcuts are not expanded.
 The examples need the core recon needs, with its config tier (README,
-Building). In a mesh's `source.path`, write a
-literal `%` as `%%`; literal `%` characters in the configuration file's
-directory are escaped automatically when resolving a relative mesh path.
+Building). grid's `codec_mesh` reads the same format; its templates and the
+mesh-source notes are grid's ([its config/README.md](https://github.com/taojin-6/volumetric_kit_grid/blob/main/config/README.md)).
 
 | Executable | Starting configuration | Work |
 | --- | --- | --- |
 | `fuse_replica` | [fuse_replica.json](examples/fuse_replica.json) | Dataset to PLY |
 | `codec_replica` | [codec_replica.json](examples/codec_replica.json) | Dataset fusion coded frame by frame, and codec study |
-| `codec_mesh` | [codec_mesh.json](examples/codec_mesh.json) | One mesh, placed in metres, and codec study |
-| `codec_mesh` | [codec_mesh_sequence.json](examples/codec_mesh_sequence.json) | Numbered mesh sequence under one placement, coded frame by frame |
 | `fuse_orbbec` | [fuse_orbbec.json](examples/fuse_orbbec.json) | Live camera/rig to PLY |
 | `fuse_orbbec` | [codec_orbbec.json](examples/codec_orbbec.json) | Live rig coded set by set |
 | `fuse_orbbec` | [serve_orbbec.json](examples/serve_orbbec.json) | Live rig coded set by set, recorded and served live |
@@ -62,14 +59,12 @@ requests four voxels. Depth limits use the source's defaults
 (Replica 0.1–8 m; live camera 0.25–5 m). Dataset frame limits retain their old
 per-example defaults; `rig_viewer` uses zero for no frame/set limit. Counts
 remain distinct: `fuse_orbbec` counts camera frames, while `rig_viewer` can
-limit both acquired sets and drawn frames. `codec_mesh` counts exactly:
-`run.frames` meshes, numbered from `run.first`, one by default.
+limit both acquired sets and drawn frames.
 
 `codec.intra_period` N codes an I-frame and then up to N − 1 P-frames,
 counted in coded frames. A frame with no block to code, and the frame after
 it, are I-frames whatever the period, and the count restarts at every
-I-frame. `codec_replica.json` and `codec_mesh_sequence.json` use 30;
-`codec_mesh.json`, one frame, keeps 1. `codec.update_size` sets the
+I-frame. `codec_replica.json` uses 30. `codec.update_size` sets the
 P-frames' update segments, so core refuses it, even as 0, at a
 `codec.intra_period` of 1 or with `codec.inspect_only`.
 
@@ -113,13 +108,6 @@ settings. Opening the cameras writes their sync settings only when
 `source.apply_sync` asks, and sets each camera's exposure every time: the
 `color_controls` of `source.calibration`, or auto exposure, with auto white
 balance on.
-
-For mesh inspection, set only `codec.inspect_only: true` in the `codec` section
-and omit `fusion`, `source.sdf_mode`, `source.shell_voxels` and
-`source.allow_holes`; these settings are unused until mesh conversion runs.
-`run` and either scale are accepted, so a range is inspected frame by frame.
-An optional `output.prefix` still exports the last frame's normalized input
-mesh.
 
 The sync document remains SDK-compatible, and the calibration document remains
 recon's domain format. A scenario references these resources rather than

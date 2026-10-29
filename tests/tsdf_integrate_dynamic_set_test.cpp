@@ -32,23 +32,23 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/volume/hash_types.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/hash_types.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
-#include "grid_readback.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
-namespace mesh = volumetric_kit::recon::mesh;
+namespace mesh = volumetric_kit::grid::mesh;
 
 namespace {
 
@@ -171,7 +171,7 @@ int fuse(tsdf::TsdfIntegrator& integrator, vol::VoxelBlockGrid& grid,
 int check_same(vkc::Device& device, vkc::Allocator& allocator,
                vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
   std::size_t blocks = 0;
-  CHECK(vr_test::same_grids({device, allocator}, a, b, nullptr, &blocks));
+  CHECK(vgrid_test::same_grids({device, allocator}, a, b, nullptr, &blocks));
   CHECK(blocks != 0);
   return 0;
 }
@@ -279,12 +279,12 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // Where G looks -- x = 0, y = 0, a metre down its axis -- F's near band
   // holds weight and F's colour.
   {
-    auto blocks = vr_test::blocks_of(fg.value());
+    auto blocks = vgrid_test::blocks_of(fg.value());
     CHECK(blocks.ok());
-    auto weight = vr_test::read_attribute<float>(dev, alloc, fg.value(),
-                                                 vol::kWeightAttribute);
-    auto colors = vr_test::read_attribute<std::uint32_t>(dev, alloc, fg.value(),
-                                                         vol::kColorAttribute);
+    auto weight = vgrid_test::read_attribute<float>(dev, alloc, fg.value(),
+                                                    vol::kWeightAttribute);
+    auto colors = vgrid_test::read_attribute<std::uint32_t>(
+        dev, alloc, fg.value(), vol::kColorAttribute);
     CHECK(weight.ok() && colors.ok());
     for (const float z : {0.97f, 0.98f, 0.99f, 1.00f}) {
       const std::int64_t i = voxel_at(blocks.value(), 0.0f, 0.0f, z);

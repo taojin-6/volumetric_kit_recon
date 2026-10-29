@@ -16,6 +16,8 @@
 
 namespace vr_example {
 
+namespace config = volumetric_kit::core::config;
+
 /// @return Sensor options copied from a validated dataset configuration.
 inline ReplicaSensor::Options replica_options(const config::Config& settings) {
   ReplicaSensor::Options options;

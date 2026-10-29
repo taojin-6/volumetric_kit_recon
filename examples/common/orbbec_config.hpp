@@ -13,6 +13,8 @@
 
 namespace vr_example {
 
+namespace config = volumetric_kit::core::config;
+
 /// @return Runtime stream settings copied from core's validated configuration.
 inline volumetric_kit::sensor::OrbbecStreamOptions orbbec_stream_options(
     const config::Config& settings) {

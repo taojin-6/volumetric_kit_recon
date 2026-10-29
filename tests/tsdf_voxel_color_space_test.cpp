@@ -21,13 +21,13 @@
 #include <vector>
 
 #include "volumetric_kit/core/testing/test_check.hpp"
+#include "volumetric_kit/grid/volume/voxel_color.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/volume/voxel_color.hpp"
 #include "volumetric_kit/sensor/frame/color_space.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace sensor = volumetric_kit::sensor;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 
 namespace {
 

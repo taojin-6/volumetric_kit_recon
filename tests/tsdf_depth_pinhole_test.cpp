@@ -15,12 +15,12 @@
 #include <limits>
 
 #include "volumetric_kit/core/testing/test_check.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/sensor/frame/camera_params.hpp"
 
 namespace sensor = volumetric_kit::sensor;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
 static_assert(sizeof(vol::DepthPinhole) == sizeof(sensor::DepthCameraParams));

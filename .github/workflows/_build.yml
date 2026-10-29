@@ -54,8 +54,8 @@ on:
         default: false
       assimp:
         description: >-
-          Install Assimp and build the optional mesh loader with
-          VR_WITH_ASSIMP=ON.
+          Install Assimp and build grid's optional mesh loader with
+          VGRID_WITH_ASSIMP=ON.
         required: false
         type: boolean
         default: false
@@ -388,7 +388,7 @@ jobs:
                 -DVS_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
                 -DVS_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }} \
                 -DVS_BUILD_TESTS=ON -DVS_WARNINGS_AS_ERRORS=ON \
-                -DVR_WITH_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}; then
+                -DVGRID_WITH_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}; then
               ok=1
               break
             fi
@@ -454,15 +454,13 @@ jobs:
           ctest --test-dir build-sensor --output-on-failure --no-tests=error
 
       # The tests whose code runs threads again under ThreadSanitizer: the
-      # stream reader two threads share, the mesh handoff's producer and
-      # consumer, the server's and the client's threads, the senders' log
-      # handler (examples/common/info_log.hpp),
-      # and the Orbbec decode workers, which the sanitizer job, on
-      # address and undefined only and with no Orbbec SDK, never runs. In a
-      # tree of their own that reuses the sources FetchContent fetched for
-      # build/, built for those tests alone (recon_tsan_tests,
-      # tests/CMakeLists.txt), with the Orbbec SDK as this leg has it. Debug
-      # only: the races do not depend on the build type.
+      # Orbbec decode workers, which the sanitizer job, on address and
+      # undefined only and with no Orbbec SDK, never runs. grid's own CI runs
+      # grid's threaded tests so. In a tree of their own that reuses the
+      # sources FetchContent fetched for build/, built for those tests alone
+      # (sensor_tsan_tests, sensor/tests/CMakeLists.txt), with the Orbbec SDK
+      # as this leg has it. Debug only: the races do not depend on the build
+      # type.
       - name: Threaded tests under ThreadSanitizer (macOS)
         if: >-
           steps.detect.outputs.present == 'true' && runner.os == 'macOS'
@@ -484,12 +482,12 @@ jobs:
           cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=Debug \
             -DVR_SANITIZE=thread -DVR_BUILD_EXAMPLES=OFF -DVS_BUILD_TESTS=ON \
             -DVS_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
-            -DVR_WITH_ASSIMP=OFF "${flags[@]}"
+            -DVGRID_WITH_ASSIMP=OFF "${flags[@]}"
           cmake --build build-tsan \
             --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
-            --target recon_tsan_tests sensor_tsan_tests
+            --target sensor_tsan_tests
           ctest --test-dir build-tsan --output-on-failure --no-tests=error \
-            -R '^(recon_(networking_|stream_container$|mesh_exchange$|example_info_log$)|sensor_orbbec_(decode_worker|jpeg|hevc|open_sensors)$)'
+            -R '^sensor_orbbec_(decode_worker|jpeg|hevc|open_sensors)$'
 
       # The sensor package's sensor_apple and sensor_video, with the H.265
       # syntax it reads (sensor_video_syntax), promise an iOS build

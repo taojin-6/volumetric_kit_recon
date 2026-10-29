@@ -8,7 +8,7 @@ to the task, and update them with the code when a contract changes.
 
 - [Tiered architecture](#tiered-architecture) and [package names](#naming-conventions-use-these-consistently)
 - [Interop and device ownership](#the-interop-seam), [Vulkan gotchas](#key-gotchas-verified), and [color](#color-space)
-- Implementation: [core](#core), [volume](#volume), [tsdf](#tsdf), [mesh](#mesh), [texture](#texture), [sensor](#sensor), [codec](#codec), [eval](#eval)
+- Implementation: [core](#core), [tsdf](#tsdf), [texture](#texture), [camera](#camera), [sensor](#sensor), [io](#io), [sender](#sender); the voxel grid, meshing, the codec and streaming are grid's ([its DESIGN.md](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md))
 - [Examples](#examples) and [next work](#next-work)
 
 The tier descriptions and next-work notes below retain the implementation
@@ -23,6 +23,12 @@ volumetric geometry. Its pipeline is: **posed depth/RGB-D frames → sparse TSDF
 volume (voxel-hashed) → extracted geometry (mesh) → optional compressed
 bitstream → handoff to a renderer.**
 
+The voxel grid and what reads it -- voxel hashing, a mesh's distance field,
+marching cubes and the mesh containers, mesh files, quality measurement, the
+codec, the `.vrst` container, live serving and the codec stream -- are
+`volumetric_kit_grid`'s, a repository of its own that recon builds on;
+recon fuses depth into its grid, textures its meshes and sends what it codes.
+
 It is deliberately *not* a renderer. Rendering is owned by the sibling library
 `volumetric_kit_gfx` (Vulkan/MoltenVK). Keeping them separate means each is
 independently useful: a headless capture/compression service links only the
@@ -35,6 +41,9 @@ renderer. They meet only at the interop seam.
   compression as **Vulkan compute** (GLSL → SPIR-V; MoltenVK on Apple), one code
   path across Linux / Android / macOS / iOS. Produces meshes / volumes
   / compressed TSDF bitstreams.
+- **[`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid)** — the voxel grid,
+  meshing, mesh files, quality measurement, the codec and the `.vrst`
+  stream and its live serving, on volumetric_kit_core alone.
 - **`volumetric_kit_gfx`** — the Vulkan/MoltenVK renderer. Consumes meshes /
   point clouds / glTF.
 
@@ -59,36 +68,32 @@ conventions and Vulkan setup.
   Deliberately *not* the `VK_` prefix — that belongs to Vulkan. (The prior
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: fetched by commit (`FetchContent`); component targets
-  `volumetric_kit::recon_camera`, `…_core`, `…_volume`, `…_voxelize`,
-  `…_tsdf`, `…_mesh`,
-  `…_texture`,
-  `…_sensor`, `…_codec`, `…_eval`, `…_image_io`, `…_mesh_io`, `…_stream`,
-  `…_networking`, `…_codec_stream`,
-  `…_sender`, `…_interop` (+ later `…_track`),
+  `volumetric_kit::recon_camera`, `…_core`, `…_tsdf`, `…_texture`,
+  `…_sensor`, `…_image_io`, `…_sender`, `…_interop` (+ later `…_track`),
   plus `…_sensor_utils` (GPU pre-processing), `…_sensor_array` (several
   sensors read as one), `…_sensor_apple` (Apple's pixel buffers as images),
   the opt-in `…_sensor_orbbec`
   driver (`VR_WITH_ORBBEC`), `…_sensor_video` decoders (every Apple build,
-  elsewhere `VR_WITH_FFMPEG`), `…_sensor_video_syntax` (H.265 syntax read
-  on the host, every build), and
-  `…_mesh_io_assimp` mesh importer (`VR_WITH_ASSIMP`);
-  umbrella alias
-  `volumetric_kit::recon`.
+  elsewhere `VR_WITH_FFMPEG`) and `…_sensor_video_syntax` (H.265 syntax
+  read on the host, every build); umbrella alias `volumetric_kit::recon`.
+- grid's names are its own: `volumetric_kit::grid`, `vgrid::` in docs,
+  `include/volumetric_kit/grid/<tier>/…`, `VGRID_` macros and
+  `volumetric_kit::grid_<tier>` targets ([grid's
+  conventions](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#naming-conventions)).
 
 ## Tiered architecture
 
 Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
-`core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
-branching off **`core`**, `voxelize` and `codec` off **`volume`** and
-`eval`/`io` off **`mesh`** (later: `track`); `io`'s image target links the
-family core's base tier alone. `camera` sits under `sensor` and beside
-`core`: it links the family core's base tier and GLM, and no other recon
-tier. `stream` links that base tier alone, and `networking` links `stream`.
-`codec_stream` comes after `networking`: it links `codec` and `networking`,
-and no fusion or sensor tier. `sender` comes after it: it links
-`codec_stream`, `tsdf` and `sensor`'s GPU pass (`sensor_utils`).
+`core` → `tsdf` → `texture` → `interop`, with `sensor` branching off
+**`core`** (later: `track`), every tier free to link grid's tiers below it:
+`tsdf` fuses into grid's `volume`, `texture` textures grid's `mesh`. `io`
+(images) links the family core's base tier alone. `camera` sits under
+`sensor` and beside `core`: it links the family core's base tier and GLM,
+and no other recon tier. `sender` comes last: it links grid's
+`codec_stream`, `tsdf` and `sensor`'s GPU pass (`sensor_utils`). grid
+includes nothing of recon's ([grid's tiers](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#tiered-architecture)).
 
 - **`camera`** — the camera vocabulary the drivers and the sensor tier
   share: the double-precision `CameraModel` (image size, intrinsics, OpenCV's
@@ -105,26 +110,13 @@ and no fusion or sensor tier. `sender` comes after it: it links
   volumetric_kit_core's, used under its names. Vulkan is reached through the
   core's one umbrella header (`core/vulkan/vulkan.hpp`) — no other code
   includes `<vulkan/...>` directly.
-- **`volume`** — the sparse voxel hash map in Vulkan buffers; allocate / compact
-  / rehash as compute shaders, a stateless `grow_grid` helper, a default
-  hash layout (`kDefaultBucketSize`, `kDefaultMaxChain`) and a default block
-  layout (`block_grid_params`). Camera-free: depth allocation takes its own
-  `DepthPinhole`, and nothing in it includes the camera vocabulary
-  (2026-10-28).
-- **`voxelize`** — a triangle mesh's distance field written into a grid
-  (signed, or as a shell), `MeshIntegrator`. Links **`volume` alone**: it
-  fuses no depth (2026-10-28).
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic), the
   `Fuser` that fuses a set of frames (grow, allocate, integrate), and the grid
   it starts from (`create_fusion_grid`).
-- **`mesh`** — marching-cubes compute shaders and host mesh containers.
-- **`io`** — host asset loading and export, in two targets: encoded images,
-  depth PNGs and PNG export in `recon_image_io`, on the family core's base
-  tier alone; PLY export, the host triangle containers and opt-in mesh
-  normalization helpers in `recon_mesh_io`, off `mesh`; static mesh import
-  in the optional Assimp-backed `recon_mesh_io_assimp`. GPU tiers never link
-  back to file I/O. Dataset playback and camera conventions remain with
-  their capture adapters.
+- **`io`** — host image loading and export: encoded images, depth PNGs and
+  PNG export in `recon_image_io`, on the family core's base tier alone; mesh
+  files are grid's `mesh_io`. GPU tiers never link back to file I/O. Dataset
+  playback and camera conventions remain with their capture adapters.
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), or with several cameras' coordinates into an atlas of
@@ -150,31 +142,6 @@ and no fusion or sensor tier. `sender` comes after it: it links
   The GPU pre-processing and the pictures' readback are a fourth
   (`sensor/utils/`, Vulkan and shaders), so `recon_sensor` itself stays free
   of all of them.
-- **`codec`** — the per-frame TSDF geometry codec: separate `Encoder` and
-  `Decoder` classes over a private 8³ DCT transform, a geometry-only intra
-  frame (block coordinates, an observed-voxel mask, the first K coefficients),
-  static-table rANS in independent segments of blocks (2026-09-27). Links
-  **`volume` alone**. Color is not coded: the
-  player textures the decoded mesh from RGB that travels beside it (the
-  2026-09-26 decision).
-- **`eval`** — quality measurement for the tests and examples that judge a
-  reconstruction or a codec: mesh-to-mesh distance, accuracy / coverage and
-  the F-score (`eval/mesh_distance.hpp`). Host-side, deterministic, and linked
-  by nothing in the pipeline. It is infrastructure, not one of the excluded
-  eval harnesses (2026-09-27).
-- **`stream`** — the `.vrst` session container: a session header (tracks,
-  each naming its clock, and the calibration document as bytes) and the
-  records appended after it, each payload stored byte for byte, readable
-  from a killed writer (`stream/session.hpp`, 2026-10-12). Host-side, with
-  no Vulkan and no other recon tier.
-- **`networking`** — a session served and read live over TCP, its wire the
-  `.vrst` file's own bytes: `StreamServer` and `StreamClient`, over BSD
-  sockets and threads of their own (2026-10-21). Host-side, on `stream`,
-  so the format and the sockets are tested apart; it logs through recon's
-  log seam (`core/log.hpp`), header-only over the family core's base tier.
-- **`codec_stream`** — grids coded as frames, each written to a `.vrst`
-  file, served and decoded back (`CodecStream`), a frame whole or in halves
-  around a caller's batch (2026-10-26, 2026-10-28). It prints nothing.
 - **`sender`** — a sender's set step: a prepared set fused, freed on
   schedule and its frame coded in two batches through the codec stream's
   halves (`SetSender`), and the fuser's inputs for prepared frames
@@ -604,14 +571,15 @@ The color-space contract is implemented across these boundaries:
 
 The curve's host implementation for the sensor boundary is
 `core/color_space.hpp`. The voxel colour attribute's format, the curve
-included, is `volume`'s (2026-10-28): `volume/shaders/voxel_color.glsl`,
-which fusion writes and the mesher reads through, exported to consumers'
-kernels, and its host half `volume/voxel_color.hpp`. The PLY writer encodes
-with a copy of its own. `recon_volume_voxel_color` holds the GLSL to
-`voxel_color.hpp` and that to the published curve; `recon_io_ply` holds the
-PLY copy to `voxel_color.hpp`; and `recon_tsdf_voxel_color_space`, in tsdf,
-which links both, holds `voxel_color.hpp` to `color_space.hpp`, so the grid
-tiers take no colour vocabulary from `core`.
+included, is grid's `volume`'s (2026-10-28):
+`volume/shaders/voxel_color.glsl`, which fusion writes and the mesher reads
+through, exported to consumers' kernels, and its host half
+`volume/voxel_color.hpp`. grid's PLY writer encodes with a copy of its own.
+`grid_volume_voxel_color` holds the GLSL to `voxel_color.hpp` and that to the
+published curve; `grid_io_ply` holds the PLY copy to `voxel_color.hpp`; and
+`recon_tsdf_voxel_color_space`, in tsdf, which links both, holds
+`voxel_color.hpp` to `color_space.hpp`, so grid takes no colour vocabulary
+from recon's `core`.
 
 The **type and the `is_canonical` predicate go to `core` with the curve**, not
 to `sensor` — implementing this moved them. `TsdfIntegrator::integrate` refuses
@@ -691,9 +659,10 @@ start, not retrofitted.
 
 ## Implementation reference
 
-Landed and proven on MoltenVK, left to right: `core` → `volume` → `tsdf` →
-`mesh` → `texture`, plus `sensor` (the contract and the Orbbec driver) and
-**interop seam B** — gfx drawing recon's own buffers with no host round trip.
+Landed and proven on MoltenVK, left to right: `core` → `tsdf` → `texture`,
+on grid's `volume` and `mesh` ([grid's reference](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#implementation-reference)),
+plus `sensor` (the contract and the Orbbec driver) and **interop seam B** —
+gfx drawing grid's mesh buffers with no host round trip.
 [DECISIONS.md](DECISIONS.md) carries the *why* behind anything here that looks
 arbitrary; it usually isn't.
 
@@ -830,222 +799,9 @@ exports to its consumers' kernels (README, "Building"). Its functions take
 values, so a scalar-layout camera and a std430 one both pass theirs. The
 acceptance stays two callers' own: texture extrapolates past the image, and
 the colour test bounds the rounded pixel. volume's depth allocation
-unprojects through its own copy of the one line it needs
-(`volume/shaders/depth_pinhole.glsl`), which `recon_volume_depth_unproject`
+unprojects through its own copy of the one line it needs (grid's
+`volume/shaders/depth_pinhole.glsl`), which `recon_volume_depth_unproject`
 holds to this one bit for bit.
-
-### volume
-
-`VoxelGridParams::validate` rejects non-finite metric fields and block extents,
-and bounds `ceil(trunc_dist / (block_size * voxel_size))` to 127. This is the
-representation limit of the depth allocator's `uint32` work-item count:
-256 distinct tile centres times `(2 * 127 + 1)^3` is 4,244,832,000, whereas
-radius 128 overflows. It also keeps the shared host/GLSL radius conversion
-within its integer range. Validation happens before creating a map; the
-coordinate helpers retain that precondition. `block_grid_params` is the
-default block layout: 8³-voxel blocks in the default hash layout, as many
-blocks as bucket entries, at the caller's resolution, band and table; the
-fusion grid, the decode grid and codec_mesh build with it (2026-10-25).
-
-`VoxelHashMap` drives init / allocate-from-coords, -depth,
--triangles / remove / compact / compact-in-frusta / resize as GLSL
-kernels
-(`volume/shaders/hash_*.comp`) over the scalar-block-layout ABI. Depth
-allocation unprojects a posed frame and dilates each surface block into the
-`(2·tb+1)³` truncation band — a solid cube, not a ray march — a 16 × 16
-pixel tile a workgroup, each distinct block of the tile dilated once and its
-band shared out over the lanes (2026-09-30);
-`allocate_from_triangles` deliberately does **not** dilate that cube
-(2026-08-31): a triangle wider than the band — which is one block, 40 mm, at
-the defaults — would hole through the middle, so a block is allocated when its
-centre is within `trunc_dist` + the block's half-diagonal of some triangle,
-and the work is split per *candidate block* rather than per triangle so one
-lane cannot own a 250 000-block quad; as a depth tile does, a workgroup asks
-for each distinct block its lanes name once. The host pass that counts those
-blocks is also where an index is bounds-checked and a zero-area or non-finite
-triangle is dropped — the former being the one input that divides by zero in
-the closest-point solve, which lives in `volume/shaders/triangle_common.glsl`
-so mesh-to-SDF evaluates the field with the same function. That pass is the
-public `triangle_candidate_offsets`, and the decode and band test are
-`volume/shaders/triangle_candidates.glsl`: `voxelize`'s mesh integrator bins
-over both, so the blocks allocated and the blocks binned cannot drift apart.
-Frustum-culled compaction gives the per-frame working set, from frusta built
-by `make_frustum_planes` off a depth camera's pinhole
-intrinsics or — since 2026-08-12 — off a *render* camera's `view_proj`, whose
-planes are read off the matrix itself and so hold for any handedness, provided
-depth maps to `[0, 1]` (gfx's convention; a GL matrix puts the near plane at
-the harmonic mean `2nf/(n+f)`, over-culling a shell about one near-distance
-thick — pinned by a block that lies inside it). That
-overload's `margin_m` widens every plane **except the near one** by a distance
-in metres, applied after normalizing, for a consumer whose cull runs a few
-frames behind its draw; widening near too would move it behind the eye at
-`margin_m > z_near` and admit a cone of geometry behind the camera. A
-degenerate or non-finite matrix leaves its planes unnormalized and unwidened,
-so the cull degrades to keeping blocks rather than dropping them.
-`compact_active_blocks_in_frusta_on_device` keeps the blocks inside any of
-several frusta in one scan, on the device in a list of its own, which
-`check_device_block_list` refuses as not the active set and
-`check_device_block_subset` accepts until the next frustum compaction
-rewrites it or the map allocates, resizes, removes, clears or moves; fusion
-culls to the scanning cameras with it and marching cubes to the viewing one
-(2026-10-06). A block list is a `DeviceBlockList`, on the device
-(2026-10-13). A sorted block list is in `coord_less` order (z, then y,
-then x); `volume/shaders/coord_order.glsl` mirrors it for kernels
-(`vrCoordLess`), with the binary searches they run over one. `resize`
-preserves block indices, so per-voxel data survives a grow.
-`VoxelBlockGrid` composes the map with independently-allocated SoA
-attribute arrays (`tsdf`, `weight`, `color`, …), each
-`num_blocks·voxels_per_block`, so a consumer materialises only what it
-needs; the three the tiers share are named by `kTsdfAttribute`,
-`kWeightAttribute` and `kColorAttribute`. Every buffer of both is
-device-local, reached through a `CommandBatch`: `create`, `clear` and
-`remove` zero on the device (`clear` and `remove` before any index is freed,
-`remove` by a kernel that finds each coord's block itself, so its cost is
-the count's, not the grid's), `resize` copies there, and a call's inputs
-are uploaded in its batch.
-`VoxelHashMap::allocate` and `remove`, and `VoxelBlockGrid::remove`, take
-a device buffer of `BlockIndex`, bound where its producer wrote it; a test
-uploads its own coordinates first (`tests/device_blocks.hpp`). Their work
-is recorded into a caller's batch by `record_allocate` and `record_remove`
-(the 2026-10-24 one-batch entry): K = 3 rounds, each sized on the device
-from the last one's tally, the count a `DeviceCount` a kernel wrote and an
-optional gate word, the outcome gathered into a result slot that `settle`
-reads once the batch has run. The blocking calls are record, one submit and
-settle, repeated while lost races alone remain, 10 rounds at most. Each also takes
-a caller's `GpuStageScope`, whose tile every round counts to, as the
-decoder's `"  ..apply"` does. A grid's `create` builds the kernels its removal
-and block pass run, so the first remove compiles nothing. The grid's
-zeroes the listed blocks and frees them through the map's, the zeroing
-recorded into the map's first round (`remove`'s `first_round`) ahead of
-the delete, so it takes no submit of its own.
-One body serves it and garbage collection, so the stale-block list stays on
-the GPU through deletion, its count sizing the removal there; only the
-removal's outcome reaches the host.
-A compaction still reads its list back, in the count's own submit while the
-set stays within a quarter past its last count (the 2026-09-28 residency
-decision), except `compact_active_blocks_on_device`'s: its
-`DeviceBlockList` stays on the device, stamped with the epoch, a
-compaction serial and the heap's free count, and `check_device_block_list`
-refuses one that a full compaction, allocation, resize, remove, clear or
-move has made stale. While the last one still holds, the call returns it
-again, dispatching and reporting nothing, so an extract after the encoder
-reuses the encoder's compaction (2026-09-30); an extract records its own
-into its batch when none holds (2026-10-24). A fuse culls instead and leaves
-none: `record_compaction` records its compaction into the fuse's own batch,
-the list and its count left on the device for the dispatches after it.
-It is `const` (2026-10-26), so a caller holding the grid read-only, such as
-the encoder or a caller handed a const grid, records one into its own batch:
-it moves no block, stamp, heap count, epoch or tick, and writes only the
-map's compaction output (the list, its count, its kind's serial and the
-frusta, `mutable`), which any compaction rewrites. Its batch binds the
-map's kernel sets, so the map is neither resized nor its frusta grown until
-that batch resolves: a resize waits for the queue and the core then refuses
-the batch, while a frusta grow under a running batch is undefined.
-`topology_epoch()` lives on the *map* — the object that frees a block
-index — and is a globally unique token re-drawn at `create`, at every
-`clear` and at every `remove` that accepts its input, never at `resize`: a
-`DeviceBlockList` anchors on it, so no path may free an index without
-moving it and no two grids may ever share a value. `load_factor()` is the
-occupancy read a per-frame caller can afford (a host copy of the heap
-counter, which every call that moves it refreshes, `settle` for a recorded
-one), and `kGrowThreshold` is
-the occupancy it says to grow at — named here so a UI or an embedder cannot
-draw a ceiling that disagrees with it. No host call reads the table back;
-a kernel of the grid's own tiers (codec, mesh, voxelize) binds the entries,
-`VoxelHashMap::Internal::entries_buffer` in
-`src/volumetric_kit/recon/volume/hash_map_internal.hpp` (2026-10-28), and
-reads them through `hash_common.glsl` or `hash_lookup.glsl` (2026-10-13),
-whose layout is internal: the host `HashEntry` and fail slots are in
-`src/volumetric_kit/recon/volume/hash.hpp`, and the slot sentinels and hash
-are the GLSL's alone in the library (2026-10-17). What any kernel may
-include is what `recon_volume` exports (`vkc_export_glsl`, 2026-10-28):
-`grid_types.glsl` (`VoxelGridParams`, `BlockIndex`, `BlockStamp`, the
-in-block index `vrLocalIndex` / `vrLocalBase` and `vrTickAfter`) and
-`voxel_color.glsl`; tsdf's kernels include them through `INCLUDE_TARGETS`,
-not `src/`.
-`grow_grid` centralizes the growth arithmetic: double, or reach a larger
-requested minimum, within `VoxelBlockGrid::max_num_buckets` (block pointers
-within int32, each attribute array within one binding). It retains no policy
-or retry state and reports resize failures through `Status`. `bytes_at`
-reports the attributes and grid-sized table's storage footprint. It excludes
-transient rehash/staging buffers, host scratch and allocator/driver overhead,
-so it is not a peak-memory budget for resize (2026-10-10).
-`allocate_from_depth` takes a frame's camera as volume's `DepthPinhole`, the
-fields and 96-byte layout of `DepthCameraParams`, which tsdf fills by
-`to_depth_pinhole`. It also takes a list of frames (`DepthInput`), every
-frame dispatched in each round's one submit, on a set of its own; a round
-that retries dispatches them all again, and the rounds are the call's, not
-each frame's. `record_allocate_from_depth` records one such round into a
-caller's batch, its outcome in a result slot and an optional gate closed on
-any failure; the blocking call is that round, one submit and `settle`,
-repeated while lost races alone remain. `settle` moves the heap's host copy
-only to a recording newer than every one settled and every blocking call
-since, so recordings settle in any order. Opt-in
-`StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every
-retry round) and on both compaction entry points (an `"active set"` row,
-breakdown-prefixed when the caller already has a stage open).
-Every block slot carries a `BlockStamp` (`hash_types.hpp`): ticks of the
-map's clock (`tick()`), in a device buffer beside the heap
-(`stamps_buffer()`), each written by the pass that knows its fact
-(2026-10-01). Every allocation kernel stamps `requested` on each block it
-asks for, inserted or found, and the grid's block pass (in `free_stale_blocks`)
-stamps `weighted` on each holding an observed voxel. Every pass that
-writes voxels -- `TsdfIntegrator`, `MeshIntegrator`, the codec's
-inverse -- advances the clock first and stamps `changed` on what it
-changed, so the clock counts writes (one a set, for the rig) and a
-reader's recorded tick is older than every later change, however the calls
-interleave. A fuse its gate closed on wrote nothing, so `Fuser::finish`
-takes its tick back (`rewind_tick`) before fusing the set again. The init kernel zeroes the records, the delete kernel zeroes a
-freed slot's, and `resize` copies them forward, the rehash stamping
-nothing. A consumer compares ticks and resets nothing:
-`free_stale_blocks(max_age)` frees the blocks whose newer stamp is older
-than that, through the grid's remove body over the pass's list, so the band the
-allocator still asks for stays. `record_free_stale` records it into a
-caller's batch, at the tick then: the compaction, the stamp pass sized from
-its count, and `record_remove` of the list it writes, one recording of
-K rounds, so a block a lost race keeps waits for the next pass;
-`free_stale_blocks` is that, one submit and `settle`, its result the heap's
-gain (2026-10-25). The live examples run it every
-`fusion.free_after` sets (`free_stale_blocks_every`, `fuse_frame.hpp`); the
-iOS scanner reads `changed` through `read_block_stamps`.
-
-### voxelize
-
-`MeshIntegrator` writes a triangle mesh's distance field into a grid
-(2026-09-27), **overwriting** every voxel of every block the band reaches:
-weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
-elsewhere, so a mesh-derived grid reads like a decoded frame. `Signed` signs
-by the closest triangle's face normal, the research codec's rule, and builds
-no topology and checks nothing: the field is the codec's input, not a
-reconstruction of the mesh, so it gives up the sign past edges sharper than
-90° and grows a skirt past an open mesh's rim. `Shell` is `d − σ` and takes
-any mesh. The blocks must be
-allocated by `allocate_from_triangles` — a missing one is refused before
-anything is written — and triangles are binned per block over that
-allocation's own candidates, so no voxel measures the whole mesh. The fill
-replays the slots the count pass recorded, so no bin comes up short; a bin
-past `kMaxBinTriangles` is refused, and the write splits into dispatches of
-at most `kMaxDispatchBinEntries` bin entries, each submitted on its own.
-Counts, fill cursors and occupied bins stay on the device: a hierarchical
-256-way prefix scan carries entry totals, occupied counts, largest bin and
-overflow, then compacts bins in slot order. The host reads 20 bytes of
-validation/size control plus 8 bytes per bounded dispatch range, at most
-34,960 bytes of ranges even for the uint32 candidate limit. Prefix windows
-of `kMaxDispatchBinEntries - kMaxBinTriangles + 1` bound every range; the host
-only splits them further for the device thread limit. Bulk scratch grows
-with demand and stays allocated. If the compact list outgrows its retained
-capacity, only compaction/range planning retries after growth; normal calls
-need one planning submission plus one per write. No grid write precedes
-missing-block, overflow, bin-size and binding-range validation
-(2026-10-02). Ties break on the triangle index, so the same mesh writes the same
-bytes. One workgroup writes each block, and a voxel measures only the
-triangles no lower bound rules out; a bound, less a rounding margin of the
-triangle's own, rules a triangle out only when it is strictly farther than
-the voxel's best so far, or than `trunc_dist` where that is nearer, so every
-voxel writes what measuring its whole bin writes (2026-10-21;
-`mesh_integrate.comp` has the bounds and the rounding count). Blocks past
-`kMaxVoxelsPerBlock` (16^3 voxels) are refused. Each call is a tick, and
-every block it writes is stamped `changed`.
 
 ### tsdf
 
@@ -1137,87 +893,6 @@ requests can refer to the same block repeatedly. Host allocation exceptions
 become `OutOfMemory`, and a host failure during rehash rolls the map back.
 Scanner-specific memory callbacks and allocation-stop thresholds are deferred
 to the iOS port, alongside the actual caller and peak-memory measurements.
-
-### mesh
-
-`MarchingCubes` over a sparse `VoxelBlockGrid`, and only that
-(the dense analytic entry point was removed 2026-08-31; the prior engine
-never had one). Two workflows, named by their entry points: `extract_host`
-returns an owned host `Mesh` for export — the complete transaction, giving
-its ring slot back so a PLY writer never learns the ring exists — and
-`extract_device` returns a borrowed `DeviceMesh` a renderer draws directly,
-released by generation. One workgroup per active block, with the cross-block 2×2×2
-neighbourhood resolved by probing the hash table on-device. A block counts
-its output, reserves one range for all of it with a single atomic, and
-only then writes, so **a block's output is contiguous in the arena** (both
-sparse kernels; `share_vertices` reserves two ranges, since a shared vertex
-breaks `v = 3t`). Each cursor is bounded by its block's own reservation, so a
-count that disagreed with the emit would drop geometry rather than write over
-the next block's range. Every extract meshes the whole active set or a
-caller's list and rewrites its slot from zero; incremental extraction was
-removed on 2026-10-06. The vertex arena
-is fitted to the surface, grow-only, and held as a **ring of slots** the
-consumer releases by generation; the kernel writes a real
-`VkDrawIndexedIndirectCommand`. `extract_device` returns a borrowed
-`DeviceMesh` (valid until the next extract, enforced by a generation stamp),
-`download` takes the single host copy and bridges the two workflows. The
-arena, index run and draw command are device-only. An extract is recorded
-into a caller's batch (`record_extract`, the 2026-10-24 one-batch entry): a
-one-thread kernel sizes the marching cubes from the compaction's count,
-gated, and a finalize gathers the results into a result slot that `finish`
-reads, refitting in a blocking batch of its own when the surface outgrew
-the slot; `DeviceMesh::ready` names the timeline value the batch set.
-`extract_device` records the same over the map's device list (its last
-compaction while that holds) and submits it once. Given `StageMetrics`, it
-reports a
-`"marching cubes"` row over the compaction's `"  ..compact"`, the submit's
-`"  ..dispatch"` and a refit's `"  ..refit"`; its timer is made by the
-first such call. A whole-map extract never
-brings the active list to the host: it compacts onto the device, or takes
-the map's last list back from it, and binds it in place (2026-09-30). An
-`extract_device` overload meshes a `volume::DeviceBlockList` the caller
-compacted instead — the viewers' frustum-culled set of what their camera
-sees (2026-10-06), bound in place like the map's own. The arena is rebuilt
-from that dispatch alone, so a block outside the list costs no triangles and
-no *live* bytes — the arena is grow-only, so one full extract sizes it for
-the whole set and it never shrinks back; the surface does not hole at the
-cull edge, since the on-device probe still resolves neighbours that were
-never dispatched; a list from another map, or one a later compaction,
-allocation, resize, remove or clear has made stale, is refused by
-`VoxelHashMap::check_device_block_subset` above the slot claim, so a refusal
-is a **rollback** and an outstanding `DeviceMesh` survives it; and
-`compact_ms` reads 0 while every row that scales with the active set shrinks
-with it (`readback_ms` and `descriptor_ms` are per-call constants and do
-**not**). A culled pass records its density like a full one: a viewer only
-ever culls, and a plan left on the seed refits on every call.
-`share_vertices` selects a second
-compiled kernel that indexes in-block vertices — 3.4x fewer on room0, and
-textured like any other mesh since the `texture` tier moved to a per-vertex
-verdict (2026-08-11). `DeviceMesh::shares_vertices` still publishes it,
-because `v = 3t` no longer holds and a consumer sizing an arena cannot derive
-that from the buffers, and because the `texture` tier's several-view atlas
-chooses per triangle and so refuses a shared mesh (2026-09-28).
-A vertex on a corner whose distance is the iso-value is that corner,
-`fl(k · voxel_size)` on each axis: it is selected, not interpolated, so it
-is the same bits on every device and from both kernels. Every corner is that
-rounded product before anything interpolates from it (`precise`, with the
-voxel size splatted for MoltenVK; NVIDIA's compiler otherwise fuses it into
-the interpolation). The edge ratio and `mix()` are still the device's, so an
-interpolated vertex may differ across devices: on NVIDIA and Apple by an ulp
-of the ratio times the voxel along its edge (an ulp of a coordinate, unless
-the coordinate is small against the voxel), and in every coordinate on a
-device whose `mix()` rounds all three, as lavapipe's does.
-`MeshExchange<Payload>` (`mesh/mesh_exchange.hpp`) hands `extract_device`'s
-meshes from the extracting thread to a renderer drawing them in place, each
-with a payload that stays with it (its atlas), and owns the ring's release
-(2026-10-08): the renderer's `begin_frame` retires a frame slot, computes the
-mark below every generation a frame in flight, the live mesh or a parked
-take holds, and takes the newest mesh, under one lock; the producer applies
-the mark on its own thread before each extract. The consumer's commit
-commits, parks or drops each mesh taken (2026-10-26). Header-only and
-gfx-free; it takes any ring with `release_through`, so a host model of the
-ring tests it. The `DeviceMesh` →
-`LiveMesh` adapter is the viewers' `recon_gfx_bridge.hpp`.
 
 ### texture
 
@@ -1630,322 +1305,6 @@ H.265's, decodes on a `DecodeWorker` of its own (`decode_worker.hpp`), which
 owns its queue, what a full one drops, its thread, and the failure that ends
 decoding.
 
-### codec
-
-The codec is implemented, intra frames and P-frames (frame type 1), and it
-codes and decodes on the device alone (2026-10-13): the host does the I/O
-around it (a frame's bytes, and their hash) and the control (a frame's
-header, sections and tables, and small counts and status words, a decode's
-and an encode's read from results slots once their batches have run).
-The CPU rANS coder is the tests' oracle, under `tests/`
-(`codec_oracle*.hpp`), which pins the format's bytes.
-Quantization is one scalar quantizer with a step per DCT basis (2026-10-02):
-`step[u,v,w] = quantization_scale * quantization_weights[u + 8*v + 64*w]`.
-DC is the table's first entry. All blocks share the same 512-entry table, but
-only the K kept bases use their weights: the global scale and those K weights
-travel once in the self-contained v3 frame.
-The defaults retain room0's K = 64 and uniform effective step 0.2, expressed
-as scale 0.2 and weights of one. Frequency-dependent tables are measured
-candidates, not a claim that high frequencies always deserve fewer bits.
-The public API
-is `CodecParams`, **`Encoder`** (`encoder.hpp`), **`Decoder`** with
-`read_frame_info` (`decoder.hpp`), and a player's `make_decode_grid` and
-`decode_growing` (`decode_grid.hpp`). A frame is two batches, the caller's
-(the 2026-10-25 entry): `Encoder::record_front` records, after what the
-batch holds (a sender's fusion), every step whose count only the device
-knows, and `record_back` the rANS coding, sized on the host from the
-front's results; `finish` lays the frame out, its payload left in an
-encoder slot (`EncodedFrame`), and `encode(grid)` is those, a submit and a
-wait each, the head and payload joined: 2 submits. The front takes a
-const grid and the map's own active list -- the one it holds
-(`held_device_list`), or one compacted into the batch
-(`record_compaction`), which leaves the map none, so an extract after
-compacts its own -- keeps the blocks with an observed voxel, or with
-`EncoderConfig::true_sdf` those holding surface (`DctTransform::record_observed`,
-their count left on the device; the true-SDF passes below share it), sorts
-them by (z, y, x) on the device with a stable rank-merge sort on
-`coord_less` itself, over all of int32 (`detail::BlockLists`, whose header
-has the mechanism), its last level writing the reference store's spare list,
-and transforms them into the spare's masks and coefficients (below). Every
-step is sized for the grid's block slots and runs for the device's count:
-the observed pass and the forward from indirect slices, the sort's levels
-recorded for the bound, a level the count does not need copying its entries
-through. Keys are unique, so the same content gives the same bytes whatever
-the hash table's order. A frame whose front finds no block to code is an
-I-frame of none (below), with no back batch.
-At `EncoderConfig::intra_period` N above 1 (default 1, 0 refused) the
-`Encoder` writes P-frames (the 2026-10-14 entry): an I-frame first, then
-every N coded frames, after `force_intra()`, when the grid's `voxel_size` or
-`trunc_dist` is not the reference's (`coding_difference`, the writers' and
-reader's rule), when the reference holds no block, and when the grid holds
-none (the 2026-10-16 entry, decided by the device's count, so a P-frame
-planned at record finishes as an I-frame of none); a P-frame otherwise,
-against the frame returned last. Its reference is what the decoder
-will hold of that frame: the forward's q and masks and the sorted list, left
-in `detail::ReferenceStore`'s spare and swapped in when `finish` returns the
-frame, so a refusal or `abandon` keeps the reference and the period's count.
-In the front's batch, `inter_diff.comp` splits the frame against the reference
-and codes it, an invocation an entry: each reference entry finds its block
-by binary search (remove, skip when every word is equal, else keep or zero),
-`survivor_ranks.comp` counts the survivors, and each block the reference
-lacks takes its place among the new blocks from those ranks. A residual of
-−32768 codes zero, and so does a block whose target payload a static price
-(`emit_payload` walked at `bit_length + 1` bits a symbol, 8 a byte symbol,
-plus raw bits) puts strictly below its residual's. Only the device knows the
-frame's blocks and its new blocks' count, so the front counts a P-frame, at
-`EncoderConfig::update_size` entries an update segment
-(`EncoderConfig::resolved_update_size()`: the segment size unless the caller
-sets one), over M plus the bound's blocks, and the device takes the blocks
-the frame lacks and the survivors off (`counted_entries`, from two frame
-words). `EncoderConfig::validate` holds the config's checks, which `create`
-makes first.
-The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
-built by `Encoder::create`, which fails if its kernels do not build): the
-forward output stays in VRAM, the front also counts every model's symbols
-and each block's coder steps and lays the steps out (`detail::StepLayout`,
-whose header has the formulas: one workgroup scans the steps into each
-entry's place, and the segments' slot sizes into their offsets), and its
-last command (`encode_results.comp`) gathers what the host needs -- the
-symbol counts, the layout's two totals, the frame words and the reject and
-refusal words -- into a results slot (`core::HostRing`), from which the
-host builds the tables (`frame_tables`) and sizes the coding's buffers. The
-back half uploads the tables inline first, writes every block's steps in
-parallel, codes one segment per invocation into its slot, scans the lengths
-into the payload's offsets and a second results slot, and packs the streams
-into a payload slot: in place on unified memory and lavapipe, the slot
-itself; copied on a discrete GPU, the payload's likely size (the last
-frame of its type's bytes per entry plus 25%), any rest gathered again into
-its own output range by `finish` (a tail, `"  ..tail"`). The frame's
-reference hash runs over the head and the payload unjoined (`frame_hash`'s
-two-run form). Bulk buffers are device-local and retained. A segment is one
-serial chain, so smaller segments give the device parallelism at a few
-percent of size. A frame the device cannot hold is refused, never coded on
-the host.
-Both device coders work on entries, a P-frame's stream positions
-(`ResidentBlocks`): its reference entries, each with a u32 mode, then its new
-blocks, which alone the block list holds; an intra frame is all new blocks.
-The count pass also flags what every writer refuses of the entries (a mode
-past the alphabet, a written −32768), which `record_back` refuses in their
-words (`check_entries`).
-The `Decoder` decodes on the device (`detail::DeviceFrameReader`): the host
-parses the frame (`parse_frame`) and uploads only its tables and payload.
-One batch expands each table into a 4096-slot lookup, decodes one segment per
-workgroup into the inverse transform's layout, judges the segments
-(`rans_verdict.comp`: the smallest failing segment, by its fault or its first
-coordinate against the block segment before's last) and scans the survivor
-ranks (`survivor_ranks.comp`, on `scan.glsl`), and reads back 8 bytes, the
-verdict and the survivor count, which `check_segment` and `check_survivors`
-word exactly as the oracle's reader does. Every decoded entry stays in VRAM
-for the merge, the apply and the inverse (`DctTransform::record_inverse` over
-`ResidentBlocks`). One invocation
-decodes a whole segment, so the format holds a segment to at most
-`kMaxDeviceDecodeSegmentSize` (1,024) entries, keeping an invocation near
-50 ms: every reader refuses a frame whose segment size or update size is
-larger, before any device work, and every writer, `Encoder::create`
-included, refuses such a size (`check_segment_size`), so every valid frame
-decodes on the device. A frame past `maxStorageBufferRange` or free memory
-is refused with its code (`InvalidArgument` or `OutOfMemory`); nothing
-decodes on the host.
-`Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
-frame. It is `Decoder::record` into a batch, one submit and `finish` (the
-2026-10-24 one-batch entry): the record is parsed in place in an input
-slot, whose payload the reader binds at its byte offset, and the whole
-decode is recorded with every count on the device. `detail::BlockLists`
-merges a P-frame's surviving reference blocks with its new ones into the
-frame's list and each block's sources, finds row 13, a new block on a
-reference block, and diffs the hash table against the frame's list into the
-blocks the grid lacks (missing) and those the frame lacks (gone), by count
-and binary search (the header has the mechanism). Nothing sorts. A gate
-kernel (`detail::FrameGate`) judges rows 11 to 13 and opens the grid's
-removal of the gone blocks and allocation of the missing ones from those
-device lists (`VoxelBlockGrid::record_remove`,
-`VoxelHashMap::record_allocate`), whose rounds close it on failure; behind
-it, sized by N on the device, the frame keeps shared blocks in their slots,
-rewrites every voxel's `tsdf` and `weight`, and stamps `changed` only on a
-block it leaves different. A frame the gate refuses moves the map's epoch
-and tick and leaves the grid untouched. The counts are gathered into a
-results slot, which `finish` reads. Attributes, geometry (exact
-`voxel_size` / `trunc_dist`, off the header), parsing and the heap are all
-checked before the grid is touched. The attributes must be `tsdf` and `weight` and
-nothing else (`VoxelBlockGrid::attribute_count`), since a kept block would
-carry any other one stale. A grid too small for the frame is `OutOfMemory`,
-whether its heap has too few slots or its hash table cannot place the
-blocks. Both are recovered by growing the grid and decoding again; the
-decoder never grows one. Beside it, as `tsdf::Fuser` grows for fusion,
-`decode_grid.hpp` holds a player's growth: `make_decode_grid` builds a
-grid from a frame's header in `volume::block_grid_params`' layout, its heap
-twice the frame's blocks, and `decode_growing` decodes into it, growing it
-once on `OutOfMemory` and
-decoding again twice at most on `IoError`; `record_growing` grows a heap
-the frame outgrows before it records, and `finish_growing` decodes a frame
-the device refused again from its own input slot. Both take the caller's ceiling,
-`max_blocks`: a frame past it is refused before it is decoded, and a grow
-past `make_decode_grid`'s grid for it before it is made, each as
-`InvalidArgument`; the factory checks the header's block count against the
-segment table as the decoder does. The examples pass the source grid's
-slots. The factory contains host allocation
-failures from header parsing through grid creation. The growing decode merges
-only its successful attempt's metrics; if that merge runs out of host memory,
-the caller's prior metrics stay unchanged and the decode still succeeds, since
-its reference has committed. Lock contention that
-outlasts the device rounds is `IoError`, never `OutOfMemory`, and a free heap
-that refuses a removed block is `InvalidArgument`. A failure after the
-grid has changed leaves it holding neither frame until a decode
-succeeds. A P-frame decodes against the frame the `Decoder` decoded last,
-which `detail::ReferenceStore` keeps as decoded: its quantized coefficients,
-masks and block list on the device, in the inverse's layout, and its
-`FrameReference` on the host, never rebuilt from a grid. The merge writes
-each frame block's sources (the 2026-10-12 entry) into the store's spare,
-`inter_apply.comp` makes the blocks there with integers alone, counting any
-source past what is bound, and the inverse reads the spare in the same
-batch; the spare becomes the reference only when the whole decode
-succeeds. An intra frame takes the same apply from its payload alone (the
-2026-10-13 entry). With `Decoder::set_deblock` on (off by default; the
-2026-10-21 deblock entry), the same batch then smooths the frame across its
-block faces (`detail::Deblock`, whose header has the filters): a line fit across
-each face, and at coarser steps a Gaussian after it. The host picks the
-filter per frame from the header alone: K and T, the step of DC and the
-zigzag's next three coefficients at their basis peaks, in millimetres,
-select a row of `kDeblockRule`, the study's rule; a fine step runs none. A
-masked block, holding an unobserved voxel, keeps its exact decode (that
-entry's 2026-10-23 amendment): a first dispatch, an invocation a block,
-flags each fully observed block by slot in a word a slot zeroed earlier in
-the batch and counts the masked blocks; every later kernel returns,
-uniformly and before any probe or barrier, for a block whose own mask words
-are not all ones; a line is fitted across a face only when the neighbour's
-flag is set too, so neither side of a face with a masked block is
-line-fitted; the Gaussian holds a masked neighbour's voxels at their
-decoded values through all three passes, its unobserved ones dropping out;
-and the count joins the results slot, beside the inverse's reject count.
-The line passes run in place on `tsdf`, a dispatch an axis, a
-64-lane workgroup a block and a lane a face line, probing the block and its
-+axis neighbour through `vrResolveOctants` (`block_neighbourhood.glsl`).
-The Gaussian is one dispatch a block over the block and the 1-voxel halo of
-its 26 neighbours, in shared memory; it writes the interior in place and
-the shell, the voxels a neighbour's halo reads, into a snapshot by list
-position, which a store dispatch copies back. A neighbour's observed voxels
-come from its weights, and each block is found by coordinate. Only fully
-observed blocks' `tsdf` change, and a block the deblock writes is stamped
-`changed`. P-frames decode from the reference's coefficients, so the switch
-may change between any two frames.
-`Decoder::rebuild` reconstructs the last decoded frame from the held
-reference with the switch as it is now, into the grid that decode left
-(the grid diff checks its blocks first, on the device, gating the rest), in
-one batch and one submit, so a paused player shows a toggle;
-`Decoder::last_deblock` reports the filter, T, the frame's blocks and those
-the fallback kept at their exact decode. Both classes report `StageMetrics`
-(`"codec encode"` / `"codec decode"`). Their breakdown rows share no name;
-the encoder's compaction is `"  ..encode set"`, apart from a fuse's
-`"  ..active set"`. The private pieces under
-`src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS tables,
-the frame's layout and checks, its device coders, the block lists and the
-reference store. The transform's forward takes a device block list to
-`ResidentBlocks` — K
-quantized 16-bit coefficients per block in 3-D zigzag order and a 16-word
-observed mask, left on the device for the writer — and its inverse takes
-them back, each recorded into the caller's `CommandBatch` over device-local
-buffers. The forward writes into its caller's buffers, the
-encoder's reference store; the compacted observed list and the sort's two
-halves are retained and grow only when a call needs more capacity, releasing
-the old buffer first and taking 1.5x headroom (`ensure_device_scratch`);
-descriptor ranges and transfers use the current logical sizes.
-They remain allocated until their owner is destroyed. The per-call staging
-inside `CommandBatch` remains transient. The SDF is normalized by
-`trunc_dist` before the transform and the steps are fractions of it, so the
-decoder checks a frame's `trunc_dist` against its grid's before the inverse.
-`CodecParams::validate` checks the scale,
-each kept basis's weight and its effective step; weights beyond K are unused.
-The scale and kept weights must be normal, so a flush-to-zero host or device
-agrees on validity. It refuses a step
-small enough for the ±32767 clamp to engage (√512 / 32767), and one past
-`kMaxStep` (64), where every coefficient is 0 and a decoded one could
-overflow to infinity. The forward
-never reads an unobserved voxel's `tsdf`: it fills each one from the nearest
-observed voxel along x, then y, then z, since a fused block's zeros there
-are a step K = 32 cannot hold, and they decoded a partially observed block
-with 2.8x the error. The transform refuses any block size but 8; more
-entries than the grid's heap, or a list buffer too small for them; and, on
-the device with one hash probe per block, any entry whose
-coord the grid does not hold, which the inverse then writes nothing into.
-Each block is found by that probe and its ptr never read, so the decoder
-lists blocks it has just allocated by coordinate alone. "Observed" is
-`volume::kObservedWeight`, the threshold the mesher reads too. The inverse
-writes weight 1.0 on observed voxels and a fresh block's zeros elsewhere.
-With `EncoderConfig::true_sdf` (the 2026-10-21 entry), `dct_surface.comp`
-runs twice over the active list before the observed filter, a workgroup a
-block, each lane taking the 8 cells anchored on its x-line, their corners
-reached across the block's +x/+y/+z faces through
-`volume/shaders/block_neighbourhood.glsl`, the mesher's neighbourhood probe
-and corner addressing. A cell counts when its 8 voxels are observed. The
-first pass sets, in each counted cell whose sign changes, the cut bit of
-every corner with |tsdf| > √3 h + 1e-6 m; the second flags each block
-holding a corner of a counted cell with no corner cut, whose sign changes or
-that has a corner with |tsdf| < h; the filter appends the flagged blocks.
-Metres on the raw `tsdf`, strict comparisons, below 0 inside, and every
-write an `atomicOr`, so the order the workgroups run in changes nothing. The
-forward reads the cut set: a cut voxel is unobserved, its mask bit 0 and its
-value filled. The cut set (a bit a voxel slot) and the keep flags (a word a
-block slot) are retained scratch too, sized to the grid's heap, zeroed in
-each batch and bound on every call, since a regrown one is a new buffer.
-The v3 frame (`bitstream.hpp`, the 2026-10-02 entry) carries the K kept
-weights in its parameter header, `44 + 4K` bytes (300 at K = 64); older
-versions are refused. `read_frame_info` reads them without entropy decoding.
-Header byte 6 is the frame type (`FrameType`, which `read_frame_info`
-reports): intra (0), or a P-frame (1), coded against the frame before it
-as `bitstream.hpp` lays out and the 2026-10-12 entry explains. The device
-writer and reader, and the oracle's, code both, and the `Decoder` decodes
-both; every reader refuses a later type as `Unsupported`.
-The payload is segments of R sorted
-blocks (default 64). Each segment is one independent rANS stream
-(`rans.hpp`: a 32-bit state, 16-bit words and 12-bit probabilities, integer
-only, which the kernels code and the oracle pins byte for byte). Every integer
-is coded as a class from a fixed per-frame table plus one raw field, its
-sign the low bit. A partial mask is coded a z plane at a time and a line
-at a time, each against the one before it (v2, 2026-10-01: the mask had
-been half of room0's bits). The models and a block's grammar, its writer
-and its reader, are one GLSL text that the kernels include and the oracle
-compiles as C++ (`shaders/frame_models.glsl`, which `bitstream.cpp` compiles
-too, and `shaders/frame_grammar.glsl`, 2026-10-08), and golden frames in the
-tests pin v3's bytes for the device writer and the oracle's on every
-machine. The format
-requires strictly increasing coordinates, so a decoded list is duplicate-free:
-the delta code cannot step backwards within a segment, and the reader checks
-each segment's raw first coordinate against the one before. A flag bit other
-than `kSectionRequired` is reserved, so a known section that sets one is
-refused. `parse_frame` never reads outside its buffer, and it takes the
-caller's `max_blocks`, because a frame's size cannot bound its block count
-(probability-one blocks cost no bits). It checks that limit only once the
-count agrees with the segment table, so a sound frame past it is
-`OutOfMemory` and a corrupt count stays `InvalidArgument`. Every size is
-checked in 64 bits so a 32-bit build refuses rather than wraps. A segment's
-end check (every word consumed, the state back at its start) is a
-**consistency** check, not an integrity one. It cannot see a flipped raw
-bit, nor a symbol swapped for one of equal frequency, so integrity is the
-transport's: the CRC-32 of the `.vrst` record that carries the frame
-(`stream`).
-
-### eval
-
-`MeshDistance` (point-to-surface distance up to a reach,
-through a hash of cells half the reach on a side, searched nearest first
-and pruned by distance, over a **copy** of the triangles),
-and `ReferenceMesh`, which indexes a reference once so a sweep can judge
-many meshes against it, giving accuracy, coverage and an optional F-score. They refuse, with `Status`, what would read out of
-bounds, overflow or mean nothing:
-- a bad reach, or indices out of range;
-- a corner that is not finite or past the cell keys' range;
-- a reach so small that the triangles would average more than
-  `kMaxCellsPerTriangle` cells each;
-- a threshold past the reach.
-
-The surface is every triangle but one collapsed to a point. The points
-measured are the vertices those triangles use. The closest point is the face projection
-when it lands inside, else the nearest edge, so a degenerate triangle
-counts as the segment it collapses to and a thin one is measured to float
-rounding, where Ericson's region test lost it now and then. A `stride` picks
-vertices by a hash of their position, so the figures reproduce whatever
-order marching cubes' atomics emitted the mesh in.
-
 ### io
 
 `io::load_color_packed` decodes JPEG/PNG to top-left row-major encoded RGB
@@ -1959,266 +1318,13 @@ intrinsics. `io::write_png_rgba8` takes already-encoded RGBA8.
 `io::encode_png_u16` encodes 16-bit gray samples as stored, and
 `io::write_png_u16` writes them; stb writes 8-bit only, so it encodes the
 samples' big-endian bytes as two 8-bit channels and IHDR is rewritten to
-16-bit gray. The writers open their output only after encoding succeeds; PLY
-export converts linear mesh colors to canonical sRGB bytes (clamped, NaN as 0)
-and preserves triangle indices.
+16-bit gray. The writers open their output only after encoding succeeds.
 Errors name the file and backend reason. Public functions validate their input
-and translate backend exceptions that reach them into `Status`/`Result`
-(tinyply's writer is `noexcept`); private third-party types never appear in
-public headers.
-
-`recon_mesh_io_assimp` adds `io::load_mesh`, which returns the owned
-`io::TriangleMesh` position / index container of `io/triangle_mesh.hpp`.
-Assimp handles format decoding and triangulation. Recon walks every node
-instance with composed transforms and corrects triangle winding when the
-determinant is negative. Exactly coincident positions join across UV/material
-seams, with no tolerance-based merging. This is geometry import, not topology
-repair: degenerate and duplicate triangles are retained, and manifold/sign
-checks are the consumer's, through `io::audit_mesh_topology` if it opts in.
-`io::check_mesh_file` holds the path checks `load_mesh` makes before it
-reads, for a caller that checks a sequence's files before loading any.
-Non-triangle primitives, animation, skinning, morph targets and invalid
-transforms on mesh instances are refused; nodes without meshes are not
-checked.
-
-`io::load_textured_mesh` (`io/textured_mesh.hpp`) runs the same traversal
-with each vertex keyed on its position and first UV channel; `load_mesh`
-keys on the position alone, so its output is unchanged. An OBJ's diffuse map
-path is relative to its material library, which the loader finds through an
-`Assimp::IOSystem` that notes each `.mtl` Assimp opens. Assimp 6 already
-prefixes the path with the library's directory relative to the OBJ, even an
-absolute path; the loader removes that prefix and resolves the rest against
-the library, as it does on earlier releases, which add none.
-
-Mesh coordinates retain the imported scene's scale; neither a metre unit nor
-a target height is guessed. No Assimp normalization or handedness flags are
-enabled, and importer unit/up-axis conversions are switched off where the
-installed Assimp allows: before 5.3 it still applies Collada's `<unit>`, and
-5.4.x converts FBX regardless. This is a host boundary for file input and output, separate from
-GPU-resident reconstruction. The default build has no Assimp dependency;
-`VR_WITH_ASSIMP=ON` finds an installed Assimp and builds a separate target.
-The image and PLY backends use the existing pinned stb and tinyply sources,
-now private implementation dependencies of `recon_image_io` and
-`recon_mesh_io`.
-
-`io/mesh_normalization.hpp`, in `recon_mesh_io`, holds opt-in helpers for a
-caller that knows its mesh's unit or up direction; nothing in recon calls
-them. They serve one mesh or a temporal sequence alike:
-
-- `up_axes` turns a head-up direction into the proper rotation that takes it
-  to +Y. `mesh_bounds` measures positions along those axes, and
-  `extend_bounds` joins another frame's, exactly and in any order, so a
-  sequence is measured one frame at a time.
-- `fit_transform` (to a height in metres) or `scale_transform` (a given
-  `metres_per_unit`) makes one `MeshTransform` from the bounds, centring X/Z
-  and putting the lowest Y at zero. `apply_transform` maps every frame
-  through it in double precision, rounded to float, so a still point stays
-  still. The fits and `apply_transform` refuse axes that are not a proper
-  rotation, and a refusal leaves the mesh unchanged; the fits also refuse
-  bounds they would place past float range. The source compiles
-  with `-ffp-contract=off`, so a transform's doubles do not depend on the
-  compiler.
-- `encode_transform` and `decode_transform` are a transform's one byte
-  form, bit for bit (the layout is in the header): what a `.vrst` Geometry
-  track's params hold, so a player can place decoded geometry back in the
-  source's coordinates.
-- `audit_mesh_topology` counts the edges, triangles and components the
-  signed conversion depends on, capping each hole before it takes a
-  component's volume; `supports_signed(allow_holes)` gives the verdict.
-
-### stream
-
-`recon_stream` writes and reads `.vrst` files, version 0: a `VRST` session
-header, the records appended after it in `RECD` chunks, and on `finish` a
-footer index (`INDX`, `TAIL`). The byte layout, the CRC and the rules a
-record follows are written down once, in `stream/session.hpp`. Payloads are
-stored and returned byte for byte. `TrackKind::Geometry`, a codec frame per
-record with key meaning intra, its params empty or a mesh source's
-transform, is the only kind defined; the writer takes any nonzero kind and
-the reader passes an unknown one through.
-
-**Writing** (`StreamWriter`, one thread). `create` makes the file with
-`O_CREAT | O_EXCL`, so nothing at the path is touched, a symbolic link
-included, then writes the session header and flushes the file and its
-directory. Each `append` checks the record rules, then is one `writev` with
-no buffering, so a killed process loses nothing it appended. `sync` flushes
-to storage (`F_FULLFSYNC` on Apple); a power loss can lose what came after
-the last one. A failed write or flush sticks: every later call returns it,
-and the file reads as a killed writer's. `finish` writes the footer, flushes
-and closes.
-
-All fallible stream calls contain host allocation failures, including
-validation diagnostics and copies of a saved failure, as `OutOfMemory`.
-Validation or preparation allocation failures leave the writer retryable;
-a failed write or flush remains sticky even if its diagnostic cannot be
-allocated.
-
-**Reading** (`StreamReader`). `open` checks the session header, then takes
-each track's counts (`stats`) and key records (`key`, and `key_at` for the
-last key at or before a pts) from a finished file's footer index, reading no
-record. The checks a footer must pass are `Recovery::finished`'s: the
-offset chain, the `TAIL` naming an `INDX` that ends where the `TAIL` starts,
-is what makes the two a footer, and the key count is bounded before anything
-is sized by it. Any other file `open` scans, one chunk header per chunk and
-never a payload. `next` returns record headers in file order from a
-`Position` the caller holds, skipping other chunks, and `read` checks the
-header again and the payload's CRC, into caller memory such as a decoder's
-input slot (allocating nothing) or a vector it sizes. Every method is `const` over `pread`, so
-threads share one reader. A payload above `ReaderOptions::max_payload_bytes`
-is `OutOfMemory` before any allocation.
-
-**Recovery.** A whole header whose body runs past the end starts the torn
-tail. A header that fails its CRC or holds what no chunk can starts a
-search, in 8-byte steps, for the next `RECD`, `INDX` or `TAIL` with a valid
-header; the bytes skipped are a damaged span, or with no chunk after them
-the torn tail. `Recovery` reports them, and whether the file was opened from
-its footer (`finished`) or the scan found a `TAIL` where the footer's starts
-(`footer_damaged`). `next` passes damage the same way as the scan,
-returning `InvalidArgument` once; a geometry consumer resumes at the next
-key record.
-A session header that is cut, out of range or fails a CRC is
-`InvalidArgument`, and one of another version or with a flag set
-`Unsupported`.
-
-**In memory** (`stream/chunks.hpp`, the 2026-10-21 entry). `ChunkEncoder`
-makes the session chunk and frames each record by the record rules, whose
-state it holds; `StreamWriter` writes through one. `ChunkParser` takes bytes
-as they arrive (`feed` copies them) and returns the session, then each
-record, through the checks the reader's chunks pass. Each check runs once
-the bytes it needs are in, a header's before its body is needed: B is at
-most `kMaxSessionBytes` for the session (`InvalidArgument`) and
-`ChunkParser::kMaxBodyBytes` (64 MiB) for any other chunk (`OutOfMemory`).
-Both CRCs are checked on every chunk, a skipped one's too. Other tags, the
-footer included, and a record setting an unknown flag are skipped. Nothing
-resyncs: every call after a failure returns it. Drained between pieces, it
-holds about one chunk. A `next` with no payload holds the record, its CRC
-checked, for `read` into caller memory, as `StreamClient`'s does live.
-
-Measured on an Apple M5 Max (Release, APFS, warm page cache): CRC-32 at
-2.5 GB/s, 26 times the roughly 95 MB/s of a four-camera recording; appends of
-737,280-byte (depth-sized) payloads at 1.95 GB/s; reads, CRC checked, at
-2.1 GB/s. Opening 864,000 records of 1 KiB on 8 tracks (an hour at 240 a
-second, 934 MB) takes 0.33 to 0.36 s by the scan, and from the footer 0.5 ms
-with a key in 30 records or 14 ms with every record a key (a 27.6 MB index).
-
-### networking
-
-`recon_networking` serves one session live over TCP and reads it
-(`networking/stream_server.hpp`, `networking/stream_client.hpp`, the
-2026-10-21 entry). The wire is the file: the `VRST` chunk, then `RECD`
-chunks as `StreamWriter` writes them, made by `ChunkEncoder` and read by
-`ChunkParser`, with no footer and no framing of its own. A viewer sends
-nothing; the server reads and drops what one does send, and closes on its
-end. The port is 47801 (`kDefaultPort`).
-
-**Serving** (`StreamServer`). `start` listens on a numeric IPv4 address, or
-every interface, and starts an accept thread; one thread per viewer sends,
-at most `max_viewers` (4) at once, first come, and a connection past them is
-closed at accept. `publish` frames the record by the writer's rules, copies
-its chunk once, takes one lock to append it to the GOP log and wakes the
-viewers: it never waits on a socket. A viewer takes its next chunk only once
-its socket polls writable, under 128 KiB unsent (`TCP_NOTSENT_LOWAT`), and
-a P-frame never goes out without the records it is predicted from. At a
-chunk boundary a viewer goes on from a newer key if one has come: newest key
-wins, in either mode, so a lagging viewer's seq jumps to a key. By
-default (`replay_gop`) the log holds one GOP, the newest key and every
-record after it, as chunks shared by the viewers still to send them. A
-viewer's first record, after its `VRST` chunk, is the GOP's key, and the
-log keeps every record since. A record that would take the GOP past
-`max_gop_bytes` (64 MiB) drops it and every record until the next key, as
-a copy that fails does (`OutOfMemory`). Without `replay_gop` (the
-2026-10-25 keys-on-demand entry), a viewer joins waiting for the next key, then
-gets every record, in order, but by newest key wins; one that a record would
-leave more than `max_gop_bytes` behind finishes its chunk under way and
-waits for the next key again, alone, as every viewer does after a lost copy.
-The log keeps only the records a viewer still has to send, none before the
-newest key. Each join and each fall-back counts in `key_wanted()`, an
-atomic any thread reads, which a live sender answers with a key at its next
-frame; a lost key counts its waiting viewers again, a key within
-`max_gop_bytes` counts none, and with `replay_gop` it stays 0. A fall-back
-is logged at Info, and a record past `max_gop_bytes` on its own, which no
-viewer can take, at Warning. A viewer whose end acknowledges no
-byte for `stall_limit` (10 s) with bytes waiting is closed: a slow reader
-stays while its end acknowledges a byte within the limit (one behind a large
-receive buffer may not), as does one with nothing waiting. Viewers that
-join, leave or fail are logged at Info; a refusal at Warning, the first and
-then one in 10 s at most, the rest at Debug. The destructor stops every
-thread within a poll slice (20 ms) and the write under way. One track is
-served (`Unsupported` otherwise), and `publish` is called from one thread.
-
-**Reading** (`StreamClient`). `connect` never blocks: a numeric IPv4 address
-is parsed at once, and a name is looked up on a detached thread, which the
-client abandons if it is destroyed first. `next(wait, …)` finishes the
-lookup and the connect, trying each address in turn, then returns each
-record, both CRCs checked, its `offset` that of the bytes received, waiting
-at most `wait`. The receive buffer is 2 MiB, set before the connect. No
-byte for `idle_limit` (10 s), counted from `connect`, ends the connection
-with `IoError`, as do a refusal at every address, a reset and the sender's
-end, which comes after every whole record; a failed check ends it with the
-parser's error, which every later call returns again. Every error reads
-`StreamClient: <host>:<port>: <reason>`, the address once, and the idle
-limit's reason names the stage it ended in (the header lists the reasons).
-The four-argument `next` overload also writes whether this call made
-progress: a record returned, a successful lookup/connect step, or bytes
-received. It resets that output on every call and keeps it true across a
-later idle step. `next(0, ...)` reads at most one receive, so a false result
-alone does not mean the input is drained; callers waiting on their own
-controls drain while progress is true. On an error the output covers only
-earlier successful steps, and the error remains terminal. The original
-three-argument overload forwards without requesting progress.
-
-**Sockets** (private `socket.hpp`, which gives the reasons). IPv4 only:
-the server listens on it, and a name is looked up for it. Every socket is
-non-blocking and close-on-exec, accepted ones included, and never raises
-SIGPIPE; every call is retried on `EINTR`. The sender sets `TCP_NODELAY`
-and the listener `SO_REUSEADDR`. The GOP log (`gop_log.cpp`), in either
-mode, has no socket, thread or clock, and is tested alone.
-
-### codec_stream
-
-`recon_codec_stream` codes grids as frames into a `.vrst` file and to live
-viewers (`codec_stream/codec_stream.hpp`, the 2026-10-26 and 2026-10-28
-entries). It links `codec` and `networking`, and no fusion or sensor tier.
-
-**The stream** (`CodecStream`). `create` takes the encoder's settings, the
-session and `CodecOutputs`: a new `.vrst` file, the server's options, and
-whether to decode. It refuses a session that is not one Geometry track,
-then makes the server, so a port in use leaves no file, then the
-file, which must be new, then the encoder and, with `decode`, the decoder,
-so a refused output costs no kernel. A codec error removes the new file
-again, as does destroying the stream unfinished before its first frame. The
-file and the viewers get that session. `code(grid, set, pts_ns)`
-encodes the grid, appends a record (a key exactly when an I-frame), serves
-it once it is in the file, so no viewer gets a frame the file lacks, then
-decodes it with `decode_growing` from the decoder's input buffer into a
-player grid `make_decode_grid` built from the first frame, and returns a
-`SentFrame`: its type, bytes, blocks, whether its payload took a tail, and
-the encode's and the decode's rows. A set or pts out of order is refused
-before it is encoded, so the writer never refuses one the encoder has
-taken. Any other failure after the encode, of the append or the decode,
-calls `force_intra()`, so the next frame never references one the file or
-the player lacks; a frame the decoder refuses stays in the file and counts
-in `coded()`. A record the server refuses is logged at Warning and fails no
-frame, as failing would stop the recording. Before each frame's front half,
-where the encoder picks I or P, the stream reads the server's
-`key_wanted()`: a rise calls `force_intra()`, which stands until a frame is
-returned, so joins between two frames make one key, a refused frame or a
-front half recorded again keeps it, and the period counts from it.
-`finish` closes the viewers and writes the footer, in one attempt.
-
-**A frame in halves.** A caller with work of its own on the grid codes the
-frame around its batch: `record_front` records the front half into that
-batch, after what it holds, reading the server's key requests as `code`
-does; `front_ran`, once the batch has resolved, gives the frame the device
-rows its front half placed and the caller the rest; `redo` records the
-front half again, in a batch of its own and waited on (`"wait: redo"`), for
-a grid changed after the batch ran; and `finish_frame` codes the back half
-in a batch of its own, waits (`"wait: frame"`), and writes, serves and
-decodes the frame as `code` does, running the caller's `sent` once it is
-written and served. The halves make `code`'s frames of the same grids. One
-frame is in flight: a later front half or `code` supersedes it, and the
-encoder refuses its pending frame. A moved-from stream (`valid()` false)
-refuses the halves too.
+and translate backend exceptions that reach them into `Status`/`Result`;
+private third-party types never appear in public headers. The backend is the
+pinned stb source, a private implementation dependency of `recon_image_io`.
+Mesh files (PLY export, Assimp import, the normalization helpers) are grid's
+[`mesh_io`](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#mesh_io).
 
 ### sender
 
@@ -2409,88 +1515,9 @@ both calls' stage rows. It then judges the last decoded
 surface against the source's, mesh to mesh, with the `eval` tier: accuracy,
 coverage and the F-score at half a voxel, since a fused TSDF is projective
 and sampling it would measure the fusion's bias too. `codec.sweep` prints the
-rate–distortion table the defaults are chosen from. The codec examples
-stream through `CodecStream` ([codec_stream](#codec_stream)); their
-report and the sweep are `examples/common/codec_report.hpp` and
-`codec_sweep.hpp`. These and `codec_config.hpp` include no fusion, so
-`codec_mesh` includes no fuser or sensor header; a fusing sender's config
-and the figures of each set it sends (`sender_config`, `report_sent`) are
-`fuse_sender.hpp`'s. The report (`CodecReport`) keeps a
-row per frame that went out whole, from its `SentFrame` (source index, frame
-type, bytes, blocks, and encode and decode host and device ms), sums each
-type's stage rows, and writes `output.csv` as each row comes; the core cannot
-append, so the file is the report's own. A stream that does not decode
-(`CodecOutputs::decode` off) has rows with empty decode columns.
-`codec_outputs` maps `output.stream` and `output.serve` to `CodecOutputs`,
-and `codec_session` gives the `.vrst` one Geometry track at the source's
-nominal rate (the rig's `source.fps`, else 30 a second), with no session id
-or start time, so a rerun writes the same bytes; a record's set is the
-source index and its pts that index at 30 fps, as Replica frames carry no
-time. `codec_outputs` serves without `replay_gop`, so fuse_orbbec's viewers
-that join or fall behind get a key at the next set; `serve_stream`, which
-cannot make a key, keeps it.
-
-The report opens the CSV once the stream's file is made, and refuses one
-that is that file under another name, through symlinks or case-insensitive
-names (`InvalidArgument`); the stream, dropped unfinished before its first
-frame, then removes its file for a retry.
-
-**`codec_mesh`** codes one mesh or a numbered sequence of them (README,
-Codec evaluation, has the keys). The core
-escapes literal `%` characters in the scenario's directory before joining a
-relative `source.path` (0.8.0), so only the user's path carries a
-frame-number pattern.
-Before any GPU work it refuses a malformed
-frame-number pattern, a range on a plain path and any frame file that is
-missing or not a regular file, checks a shell against the truncation
-(`MeshSdfParams::validate`), and refuses a band too narrow for a true SDF
-(`check_true_sdf_band`). It codes with `EncoderConfig::true_sdf` (the
-2026-10-21 entry), the one caller that sets it. Its first pass loads each
-frame, joins its bounds along `source.up_vector` (`io::extend_bounds`),
-audits it and drops it, so memory does not grow with the range. In exact
-arithmetic a proper similarity changes none of the audit's counts, so a
-frame signed mode cannot
-take is refused there; rounding can still change the degenerate count or a
-volume's sign, which the second pass's audit decides. One transform for the range follows (`fit_transform` or
-`scale_transform`) and places every frame unchanged, so a still point stays
-still; it is printed once and stored as the Geometry track's params
-(`io::encode_transform`). The stream is created after the GPU setup and
-before any frame is converted, so a rerun onto it is refused before any
-conversion or output. Each frame (`code_frame`) is loaded, placed, audited again on the
-placed coordinates (the audit that decides, as rounding can make a triangle
-degenerate), converted into the one source grid after a `clear`, so no block
-of an earlier frame stays, and coded as one record: set the frame's
-number, pts that number at 30 fps, seq from 0. The last frame alone is
-extracted from the source and player grids with `mesh::MarchingCubes` and
-compared, conversion error against the placed input apart from codec error
-against the uncompressed surface. `codec.inspect_only` runs both passes on
-the host. File parsing, placement and PLY export belong to `io`; the example
-keeps its sequence (`mesh_sequence.*`) and the evaluator's host mesh
-(`geometry_mesh.*`).
-
-Both examples take `codec.quantization_table` (`uniform`, `band`, `radial`) and `codec.quantization_scale` for a
-single configuration. Their common `codec.sweep` compares all three table
-families at K = 64, 84, 120 and 512. The middle two retain complete frequency
-shells; K = 64 cuts a shell and is kept as the existing baseline. Each
-configuration has a warm-up and three timed codec rounds of one grid, all
-intra whatever `codec.intra_period` (`sweep_encoder_config`); mesh
-extraction and quality evaluation are outside those timings. Full frame
-bytes include the quantization table. These are deterministic candidate
-tables, not fitted JPEG image tables: the criterion is decoded geometry at
-a given total size.
-
-**`serve_stream <in.vrst> [--port N]`** serves a recording live: a sender
-with no camera or GPU, so it builds wherever the examples do. It replays one
-track's records from its first key read whole, each due at its pts from its
-pass's start, in a loop until Ctrl+C (`ReplayLoop`, `stream_replay.hpp`).
-Each pass is restamped, seq past the passes before and pts a pass's span (the
-records' pts span and one mean step) later, so seq keeps rising and key pts
-never go back, as `publish` requires. A record whose payload fails its CRC
-is skipped with the P-frames after it, up to the pass's next key, and
-printed in the first pass. It listens on every interface, on 47801 or N (0
-takes a free one, which it prints). Bad arguments exit 2 with the usage; a
-failure, a missing file or no key whose payload reads whole included,
-exits 1.
+rate–distortion table the defaults are chosen from. Its codec stream, report,
+sweep and quantization tables are grid's ([grid's
+examples](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#examples)), as are `codec_mesh` and `serve_stream`.
 
 ## Next work
 
@@ -2525,10 +1552,6 @@ landed; the stack continues:
    nearest-frame members, registration of a tracked sensor's world, a network
    sensor with an ios sender, and clock offsets.
 
-**Incremental mesh extraction was removed** (2026-10-06): nothing live
-used it and its win was never measured. It comes back only with a
-measurement on a large scan (room0 replicated several times over can stand
-in for one), against a full extract with view culling.
 **View-culled meshing has landed** (2026-10-06): `fuse_viewer` and
 `rig_viewer` publish their render camera's `view_proj` to the fuse thread,
 which meshes the blocks inside it (a 0.25 m margin) and re-meshes when the
@@ -2537,27 +1560,13 @@ the visible fraction on the `ExtractTimings` rows that scale with the active
 set (the dispatch, the arena; `readback_ms` and `descriptor_ms` are per-call
 constants and will read flat, and the frustum compaction still scans every
 hash slot), and quote nothing until a run on a large scan says so. Beside that:
-first-class glTF/GLB export in `io` and the gfx-vertex converter. PLY export
-has moved from the example into the validated I/O module. On `mesh`, the greppable
-`TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, measuring a
-return of the default kernel to the per-triangle append (the per-block
-reservation cost ~10% of the dispatch and was taken for incremental
-extraction). On `texture`,
+the gfx-vertex converter; grid's next work holds meshing's and mesh files'
+([its next work](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#next-work)). On `texture`,
 the `TODO(texture)`s: keeping a static keyframe set's
 depth and coverage in the pass between calls, blending views at their seams,
 and a per-triangle tile
 index in gfx so a shared mesh can be textured from several views; and the
 multi-keyframe post-scan atlas, which the multi-view path can carry.
-
-**On `codec`**, trimming a P-frame's host overhead at small R, where its
-encode stays slower than intra's on the host alone (the 2026-10-17 freeze
-entry). For true-SDF streams (the 2026-10-21 entry): the step-keyed deblock
-in the player; one 0.2 m comparison reach in `codec_compare_options`, which
-reaches max(truncation, 2 cm) today; and a sweep ladder in metres, since
-fractions of a 16-voxel band are coarse steps. For the deblock (the deblock
-entry's 2026-10-23 amendment): a guard finer than the block, at mask edges,
-before the masked blocks of live RGB-D frames, nearly all of theirs, are
-filtered.
 
 **On `fuse_orbbec`'s stream** (the 2026-10-20 entry): a capture-volume
 crop (`fusion.max_depth_m` is the limit there is), raw RGBD recording and
@@ -2570,17 +1579,7 @@ sets) a P-frame's decode took 2.70 ms host and 2.14 ms device, 37% and 38%
 of the set's fusion and coding, and 6.49 / 4.38 ms at 5 mm. A loop slower
 than the rig gets the newest set, so sets drop; that cost is unmeasured.
 
-**On `voxelize`**, mesh → TSDF has its two modes (2026-09-27), a second way into
-the grid the codec encodes: a mesh sequence converts frame by frame. A
-winding-number sign would fix at the root the sign errors a true-SDF stream
-cuts (the 2026-10-21 true-SDF entry), and the folds within √3 voxels that it
-cannot. Both modes cost the same. On Rafa2 the band's allocation costs what
-PERF.md's MESH3 row gives, and the write what the 2026-10-21 `MeshIntegrator`
-entry gives. Smaller costs around them remain: writing only the blocks the
-codec will code, chaining the write's submissions, and computing
-`triangle_candidate_offsets` and uploading the mesh once a frame rather than
-once to allocate and again to write.
-Dynamic's clear is still a hard reset from one ray: clearing on evidence (a
+**On `tsdf`**, Dynamic's clear is still a hard reset from one ray: clearing on evidence (a
 weight decrement, an incidence term) and behind a pixel with no return are
 the next steps, each judged on the lab rig (`TODO(tsdf)` in
 `tsdf_integrate.glsl`, 2026-10-08).

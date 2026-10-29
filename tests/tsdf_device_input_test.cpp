@@ -23,19 +23,20 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/grid/volume/hash_types.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
+#include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/hash_types.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
-#include "grid_readback.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
 namespace {
@@ -70,9 +71,9 @@ vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
 int check_same(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& a,
                vol::VoxelBlockGrid& b) {
   std::size_t observed = 0;
-  CHECK(vr_test::compare_grids(
+  CHECK(vgrid_test::compare_grids(
       ctx, a, b,
-      [](vr_test::VoxelWords x, vr_test::VoxelWords y) {
+      [](vgrid_test::VoxelWords x, vgrid_test::VoxelWords y) {
         return x.weight == y.weight &&
                (x.weight == 0 || (x.tsdf == y.tsdf && x.color == y.color));
       },
@@ -108,11 +109,11 @@ vkc::Result<ColorCounts> color_counts(const vkc::test::Gpu& ctx,
   VKC_ASSIGN(const std::vector<vol::BlockIndex> active,
              g.map().compact_active_blocks());
   VKC_ASSIGN(const std::vector<float> weight,
-             vr_test::read_attribute<float>(ctx.device, ctx.allocator, g,
-                                            vol::kWeightAttribute));
+             vgrid_test::read_attribute<float>(ctx.device, ctx.allocator, g,
+                                               vol::kWeightAttribute));
   VKC_ASSIGN(const std::vector<std::uint32_t> color,
-             vr_test::read_attribute<std::uint32_t>(ctx.device, ctx.allocator,
-                                                    g, vol::kColorAttribute));
+             vgrid_test::read_attribute<std::uint32_t>(
+                 ctx.device, ctx.allocator, g, vol::kColorAttribute));
   ColorCounts out;
   for (const vol::BlockIndex& b : active) {
     for (std::int32_t k = 0; k < grid_params().voxels_per_block; ++k) {

@@ -5,9 +5,9 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
   volumetric_kit_recon
-  VERSION 0.0.1
+  VERSION 0.1.0
   DESCRIPTION
-    "Production-grade Vulkan TSDF reconstruction + compression backend (MoltenVK on Apple) for the volumetric_kit family"
+    "Production-grade Vulkan TSDF reconstruction backend (MoltenVK on Apple) for the volumetric_kit family, on its grid package"
   HOMEPAGE_URL "https://github.com/taojin-6/volumetric_kit_recon"
   LANGUAGES CXX)
 
@@ -38,8 +38,6 @@ option(VR_BUILD_EXAMPLES "Build example programs" ${_vr_examples_default})
 option(VR_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 option(VR_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
        ${PROJECT_IS_TOP_LEVEL})
-option(VR_WITH_ASSIMP
-       "Build the Assimp-backed mesh loader (requires an installed Assimp)" OFF)
 
 # Semicolon list of sanitizers (e.g. "address;undefined"); empty = off. Applied
 # globally, the sensor package included -- see cmake/vr_sanitizers.cmake for
@@ -69,20 +67,16 @@ include(vr_sanitizers)
 # Mirrors volumetric_kit_gfx.
 find_package(Vulkan REQUIRED)
 
-if(VR_WITH_ASSIMP)
-  find_package(assimp CONFIG REQUIRED)
-endif()
-
-# Pinned dependencies: volumetric_kit_core, linked PUBLIC, the in-tree sensor
-# package, and implementation dependencies that expose private include paths to
-# the tiers below and never become part of their link interface. The oldest core
-# recon's libraries build with is checked in the core that arrives
-# (third_party/, which also checks the config tier the examples and tests need):
-# 0.29.0, whose vulkan/fwd.hpp the public headers include, and whose 0.28.0 test
-# support the tests run on. The oldest sensor package is 0.1.0, its first, whose
-# sensor_frame recon's libraries link.
+# Pinned dependencies: volumetric_kit_core and volumetric_kit_grid, linked
+# PUBLIC, and the in-tree sensor package. The oldest core recon's libraries
+# build with is checked in the core that arrives (third_party/, which also
+# checks the config tier the examples and tests need): 0.29.0, whose
+# vulkan/fwd.hpp the public headers include, and whose 0.28.0 test support the
+# tests run on. The oldest sensor package is 0.1.0, its first, whose
+# sensor_frame recon's libraries link; the oldest grid is VR_GRID_MIN_VERSION.
 set(VR_CORE_MIN_VERSION 0.29.0)
 set(VR_SENSOR_MIN_VERSION 0.1.0)
+set(VR_GRID_MIN_VERSION 0.1.0)
 # Testing is on before third_party/ adds the sensor package, so its tests
 # (VS_BUILD_TESTS) join this build's CTest tree.
 if(VR_BUILD_TESTS OR VS_BUILD_TESTS)

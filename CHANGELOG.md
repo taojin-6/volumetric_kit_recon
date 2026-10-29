@@ -6,6 +6,56 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **grid is fetched from its own repository**
+  ([`volumetric_kit_grid`](https://github.com/taojin-6/volumetric_kit_grid),
+  pinned at 0.1.0, `cbf7a6e`), and `grid/` is gone from this one, with the
+  CI job that tested it alone: grid's own CI tests it, so recon builds
+  neither grid's tests nor its `-Werror`, and its ThreadSanitizer pass runs
+  recon's threaded tests alone. Targets, headers and bytes are unchanged. A
+  consumer that declared grid from this repository (`SOURCE_SUBDIR grid`)
+  declares it from grid's at its re-pin, by URL and SHA.
+
+## [0.1.0] - 2026-10-28
+
+### Changed
+
+- **grid is a package of its own** (`grid/`, `volumetric_kit_grid` 0.1.0;
+  grid's DECISIONS.md, the 2026-10-28 package entry): `volume`, `voxelize`,
+  `mesh`, `io`'s mesh files (now `mesh_io`), `eval`, `codec`,
+  `codec_stream`, `stream` and `networking`, with their tests, examples
+  (`codec_mesh`, `serve_stream`), templates and docs, and recon_core's split
+  dispatch, now `grid_base`'s public `base/dispatch.hpp`. grid has its own
+  `device_requirements()` (scalar block layout), log source (`"vgrid"`), GLM
+  aliases and version; recon_core keeps its own. recon declares grid after
+  the core (`SOURCE_DIR grid`) and requires 0.1.0 with
+  `vkc_require_sibling`; its tsdf, texture, sender, examples and tests link
+  grid's targets. recon is 0.1.0. CI adds a job that builds and tests `grid/`
+  alone. Migration, at a consumer's re-pin (no forwarding header, alias or
+  shim is left):
+
+  | before | after |
+  | --- | --- |
+  | `volumetric_kit/recon/<tier>/…` for the tiers above | `volumetric_kit/grid/<tier>/…` |
+  | `volumetric_kit/recon/io/{ply_writer,triangle_mesh,textured_mesh,mesh_normalization,mesh_io}.hpp` | `volumetric_kit/grid/mesh_io/…` |
+  | `volumetric_kit::recon::<tier>` (`vr::volume`, …) | `volumetric_kit::grid::<tier>` (`vgrid::volume`, …) |
+  | `volumetric_kit::recon::io` (mesh files) | `volumetric_kit::grid::mesh_io` |
+  | `volumetric_kit::recon::detail::dispatch_items` and the split dispatch | `volumetric_kit::grid::detail::…`, `volumetric_kit/grid/base/dispatch.hpp` |
+  | `volumetric_kit::recon::Vec3f` (and the other aliases) in grid's headers | `volumetric_kit::grid::Vec3f` |
+  | `volumetric_kit::recon_<tier>` targets | `volumetric_kit::grid_<tier>`; umbrella `volumetric_kit::grid` |
+  | `recon_mesh_io`, `recon_mesh_io_assimp` | `grid_mesh_io`, `grid_mesh_io_assimp` |
+  | `VR_WITH_ASSIMP` | `VGRID_WITH_ASSIMP` |
+  | `VR_<TIER>_API`, `VR_<TIER>_STATIC_DEFINE` | `VGRID_<TIER>_API`, `VGRID_<TIER>_STATIC_DEFINE` |
+  | GLSL `volumetric_kit/recon/volume/shaders/{grid_types,voxel_color}.glsl` through `INCLUDE_TARGETS volumetric_kit::recon_volume` | `volumetric_kit/grid/volume/shaders/…` through `volumetric_kit::grid_volume` |
+  | GLSL `vrTickAfter`, `vrLocalIndex`, `vrVoxelColorToLinear`, … | `vgridTickAfter`, `vgridLocalIndex`, `vgridVoxelColorToLinear`, … |
+  | `examples/common/{config,info_log,interrupt,stage_table,codec_config,codec_quantization,codec_report,codec_sweep,stream_replay}.hpp`, namespace `vr_example` | `grid/examples/common/…` (`grid_example_common`), namespace `vgrid_example` |
+  | `config/examples/codec_mesh*.json` | `grid/config/examples/codec_mesh*.json` |
+  | log source `"vr"` from the server, the client and the codec stream | `"vgrid"` |
+
+  Bytes are unchanged: codec frames, `.vrst` files and PLY (its comment
+  stays `volumetric_kit_recon`).
+
 ### Added
 
 - `camera`, `sensor`, examples: **every colour camera opens at the

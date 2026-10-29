@@ -21,16 +21,17 @@
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/sender/fuse_inputs.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
 
 namespace vr_example {
 
 namespace vr = volumetric_kit::recon;
 namespace sensor = volumetric_kit::sensor;
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
 
 /// @brief Print what a set did to the grid, when it did anything worth a line:
@@ -46,7 +47,7 @@ inline void print_fuse_report(const vr::tsdf::FuseReport& report) {
                 report.growth_error.message().c_str());
   }
   if (report.dropped > 0) {
-    const vr::volume::AllocFailures& f = report.failures;
+    const vgrid::volume::AllocFailures& f = report.failures;
     std::printf(
         "  %u allocation requests left out (%u lock, %u chain, %u heap, %u "
         "table) after "
@@ -76,7 +77,7 @@ inline vr::tsdf::IntegrationMode integration_mode(bool dynamic) {
 /// @param metrics     Optional stage rows; null measures nothing.
 /// @return OK, or `Fuser::fuse`'s error.
 inline vkc::Status fuse_set(
-    vr::tsdf::Fuser& fuser, vr::volume::VoxelBlockGrid& grid,
+    vr::tsdf::Fuser& fuser, vgrid::volume::VoxelBlockGrid& grid,
     const std::vector<std::optional<sensor::DeviceFrame>>& frames,
     float max_weight, vr::tsdf::IntegrationMode mode,
     vkc::StageMetrics* metrics) {
@@ -107,7 +108,7 @@ inline bool free_due(std::uint64_t sets, int free_after) {
 /// @param free_after  `fusion.free_after`, nonnegative.
 /// @param program     The name the failure is printed under.
 /// @param metrics     Optional stage rows: the pass's `"block stamps"`.
-inline void free_stale_blocks_every(vr::volume::VoxelBlockGrid& grid,
+inline void free_stale_blocks_every(vgrid::volume::VoxelBlockGrid& grid,
                                     std::uint64_t sets, int free_after,
                                     const char* program,
                                     vkc::StageMetrics* metrics) {
@@ -137,7 +138,7 @@ inline void free_stale_blocks_every(vr::volume::VoxelBlockGrid& grid,
 /// @param metrics     Optional stage rows; null measures nothing.
 /// @return OK with @p keyframe replaced, or the preparation or fusion error.
 inline vkc::Status fuse_keyframe(
-    vr::tsdf::Fuser& fuser, vr::volume::VoxelBlockGrid& grid,
+    vr::tsdf::Fuser& fuser, vgrid::volume::VoxelBlockGrid& grid,
     sensor::GpuFramePrep& prep, const sensor::RgbdFrame& frame,
     std::optional<sensor::DeviceFrame>& keyframe, float max_weight,
     vr::tsdf::IntegrationMode mode, vkc::StageMetrics* metrics) {

@@ -81,34 +81,36 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
-#include "volumetric_kit/recon/codec/encoder.hpp"
-#include "volumetric_kit/recon/codec_stream/codec_stream.hpp"
-#include "volumetric_kit/recon/eval/mesh_distance.hpp"
-#include "volumetric_kit/recon/io/ply_writer.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
-#include "volumetric_kit/recon/networking/stream_server.hpp"
+#include "volumetric_kit/grid/codec/encoder.hpp"
+#include "volumetric_kit/grid/codec_stream/codec_stream.hpp"
+#include "volumetric_kit/grid/eval/mesh_distance.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
+#include "volumetric_kit/grid/mesh_io/ply_writer.hpp"
+#include "volumetric_kit/grid/networking/stream_server.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/sensor/array/rig_sets.hpp"
 #include "volumetric_kit/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/sensor/prep/picture_readback.hpp"
 
 namespace vr = volumetric_kit::recon;
+
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
-namespace mesh = volumetric_kit::recon::mesh;
+namespace mesh = volumetric_kit::grid::mesh;
 namespace sensor = volumetric_kit::sensor;
-namespace eval = volumetric_kit::recon::eval;
-namespace codec_stream = volumetric_kit::recon::codec_stream;
+namespace eval = volumetric_kit::grid::eval;
+namespace codec_stream = volumetric_kit::grid::codec_stream;
 namespace sender = volumetric_kit::recon::sender;
 
 namespace {
 
-using Options = vr_example::config::Config;
+using Options = vgrid_example::config::Config;
 
 double seconds_since(std::chrono::steady_clock::time_point start) {
   return std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
@@ -117,14 +119,14 @@ double seconds_since(std::chrono::steady_clock::time_point start) {
 
 vkc::Status run(const Options& opt) {
   // First, so a Ctrl+C while the run sets up still unwinds what it opened.
-  vr_example::catch_interrupts();
+  vgrid_example::catch_interrupts();
   // Checked before anything opens: the dump's directory, which the run makes
   // with the first set it writes, and any codec step the codec refuses.
   vr_example::SetDump dump(opt.diagnostics.dump_directory,
                            static_cast<std::size_t>(opt.diagnostics.dump_sets));
   VKC_TRY(dump.check());
-  VKC_ASSIGN(const vr::codec::EncoderConfig config,
-             vr_example::encoder_config(opt.codec));
+  VKC_ASSIGN(const vgrid::codec::EncoderConfig config,
+             vgrid_example::encoder_config(opt.codec));
 
   // --- GPU, first: the cameras' pictures are decoded onto it ---
   VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
@@ -141,29 +143,29 @@ vkc::Status run(const Options& opt) {
   // is its file or the CSV's under another name, is refused before any camera
   // opens. A stream that codes no set is removed again when the run ends ---
   std::optional<codec_stream::CodecStream> stream;
-  std::optional<vr_example::CodecReport> report;
+  std::optional<vgrid_example::CodecReport> report;
   if (!opt.output.stream.empty() || !opt.output.csv.empty() ||
       opt.output.serve != 0) {
     const codec_stream::CodecOutputs outputs =
-        vr_example::set_codec_outputs(opt);
+        vgrid_example::set_codec_outputs(opt);
     VKC_ASSIGN(
         codec_stream::CodecStream made,
         codec_stream::CodecStream::create(
             device, allocator, config,
-            vr_example::codec_session("fuse_orbbec", {opt.source.fps, 1}),
+            vgrid_example::codec_session("fuse_orbbec", {opt.source.fps, 1}),
             outputs));
     stream.emplace(std::move(made));
-    VKC_ASSIGN(
-        vr_example::CodecReport rows,
-        vr_example::CodecReport::create(opt.output.csv, outputs.stream,
-                                        outputs.decode, config.intra_period));
+    VKC_ASSIGN(vgrid_example::CodecReport rows,
+               vgrid_example::CodecReport::create(
+                   opt.output.csv, outputs.stream, outputs.decode,
+                   config.intra_period));
     report.emplace(std::move(rows));
-    VKC_TRY(vr_example::check_apart(opt.output.path,
-                                    {outputs.stream, opt.output.csv}));
-    std::printf("codec: %s\n",
-                vr_example::codec_settings(config, opt.codec.quantization_table)
-                    .c_str());
-    if (const vr::networking::StreamServer* server = stream->server()) {
+    VKC_TRY(vgrid_example::check_apart(opt.output.path,
+                                       {outputs.stream, opt.output.csv}));
+    std::printf("codec: %s\n", vgrid_example::codec_settings(
+                                   config, opt.codec.quantization_table)
+                                   .c_str());
+    if (const vgrid::networking::StreamServer* server = stream->server()) {
       std::printf("serving on port %u\n", unsigned{server->port()});
     }
   }
@@ -174,7 +176,7 @@ vkc::Status run(const Options& opt) {
   // the cameras held for a restart. After the device, so every picture on it
   // goes first. A Ctrl+C before here skips their discovery, which takes
   // seconds and does not see one.
-  if (vr_example::interrupted()) {
+  if (vgrid_example::interrupted()) {
     std::printf("interrupted before the cameras opened\n");
     return {};
   }
@@ -187,7 +189,7 @@ vkc::Status run(const Options& opt) {
   std::optional<vol::VoxelBlockGrid> volume;
   std::optional<tsdf::Fuser> fuser;
   std::optional<mesh::MarchingCubes> extractor;
-  if (opt.operation != vr_example::config::Operation::Stream) {
+  if (opt.operation != vgrid_example::config::Operation::Stream) {
     VKC_ASSIGN(
         vol::VoxelBlockGrid grid,
         tsdf::create_fusion_grid(device, allocator, opt.fusion.voxel_size_m,
@@ -211,12 +213,12 @@ vkc::Status run(const Options& opt) {
 
   // --- Stream, until run.frames or Ctrl+C ---
   // A Ctrl+C since the check above ends the run here, before any set.
-  if (vr_example::interrupted()) {
+  if (vgrid_example::interrupted()) {
     std::printf("interrupted before streaming\n");
     return {};
   }
   VKC_TRY(array->start());
-  const char* verb = (opt.operation == vr_example::config::Operation::Stream)
+  const char* verb = (opt.operation == vgrid_example::config::Operation::Stream)
                          ? "streamed"
                          : "fused";
   sensor::RigSets sets(*array, static_cast<std::size_t>(opt.run.frames));
@@ -279,7 +281,7 @@ vkc::Status run(const Options& opt) {
                     static_cast<double>(reported) / seconds_since(t_start));
       }
       // After the set in hand, so a run that ends well holds one.
-      if (vr_example::interrupted()) {
+      if (vgrid_example::interrupted()) {
         std::printf("  interrupted after %zu frames\n", sets.frames());
         break;
       }
@@ -314,19 +316,20 @@ vkc::Status run(const Options& opt) {
 
   // --- Mesh -> PLY ---
   VKC_ASSIGN(mesh::Mesh final_mesh, extractor->extract_host(*volume, 0.0f));
-  VKC_TRY(vr::io::write_ply(opt.output.path, final_mesh));
+  VKC_TRY(vgrid::mesh_io::write_ply(opt.output.path, final_mesh));
   std::printf(
       "done: fused %zu frames in %.1fs (%.1f fps), mesh %zu vertices / %zu "
       "triangles -> %s\n",
       sets.frames(), secs, fps, final_mesh.vertices.size(),
       final_mesh.triangle_count(), opt.output.path.c_str());
   if (stream && opt.codec.sweep) {
-    const eval::CompareOptions compare = vr_example::codec_compare_options(
+    const eval::CompareOptions compare = vgrid_example::codec_compare_options(
         opt.fusion.voxel_size_m, opt.fusion.truncation_m);
     VKC_ASSIGN(const eval::ReferenceMesh reference,
                eval::ReferenceMesh::create(final_mesh, compare));
-    VKC_TRY(vr_example::run_codec_sweep(device, allocator, *volume, reference,
-                                        *extractor, config, *stream->player()));
+    VKC_TRY(vgrid_example::run_codec_sweep(device, allocator, *volume,
+                                           reference, *extractor, config,
+                                           *stream->player()));
   }
   return {};
 }
@@ -334,7 +337,8 @@ vkc::Status run(const Options& opt) {
 }  // namespace
 
 int run_main(const Options& opt) {
-  vr_example::print_info_log();  // output.serve's viewers joining and leaving
+  vgrid_example::print_info_log();  // output.serve's viewers joining and
+                                    // leaving
   const vkc::Status status = run(opt);
   if (!status.ok()) {
     std::fprintf(stderr, "fuse_orbbec failed: %s\n", status.message().c_str());
@@ -344,7 +348,7 @@ int run_main(const Options& opt) {
 }
 
 int main(int argc, char** argv) {
-  return vr_example::configured_main(
-      argc, argv, vr_example::config::Application::FuseOrbbec, "fuse_orbbec",
+  return vgrid_example::configured_main(
+      argc, argv, vgrid_example::config::Application::FuseOrbbec, "fuse_orbbec",
       run_main);
 }

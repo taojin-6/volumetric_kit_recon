@@ -32,6 +32,7 @@
 
 namespace vr_example {
 
+namespace config = volumetric_kit::core::config;
 namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 

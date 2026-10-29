@@ -39,9 +39,9 @@ endif()
 target_compile_features(recon_sender PUBLIC cxx_std_17)
 
 # PUBLIC: the headers take the frame contract's DeviceFrame, the fuser and its
-# report, and the codec stream and its frame.
+# report, and grid's codec stream and its frame.
 target_link_libraries(recon_sender PUBLIC volumetric_kit::sensor_frame
-                                          recon_tsdf recon_codec_stream)
+                                          recon_tsdf grid_codec_stream)
 
 target_include_directories(
   recon_sender PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"

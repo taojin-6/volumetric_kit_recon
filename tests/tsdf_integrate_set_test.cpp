@@ -30,30 +30,30 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/grid/volume/hash_types.hpp"
+#include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/hash_types.hpp"
-#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 #include "depth_inputs.hpp"
-#include "grid_readback.hpp"
-#include "sphere_scene.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
+#include "volumetric_kit/grid/testing/sphere_scene.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
-namespace vol = volumetric_kit::recon::volume;
+namespace vol = volumetric_kit::grid::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
 namespace {
 
-constexpr std::uint32_t kWidth = vr_test::kSphereWidth;
-constexpr std::uint32_t kHeight = vr_test::kSphereHeight;
+constexpr std::uint32_t kWidth = vgrid_test::kSphereWidth;
+constexpr std::uint32_t kHeight = vgrid_test::kSphereHeight;
 constexpr int kCameras = 3;
 
-using View = vr_test::SphereView<sensor::DepthCameraParams>;
+using View = vgrid_test::SphereView<sensor::DepthCameraParams>;
 
 vol::VoxelGridParams grid_params() {
   vol::VoxelGridParams grid{};
@@ -105,9 +105,9 @@ int check_same(const vkc::test::Gpu& ctx, vol::VoxelBlockGrid& a,
                vol::VoxelBlockGrid& b, bool exact) {
   std::size_t observed = 0;
   std::size_t blocks = 0;
-  CHECK(vr_test::compare_grids(
+  CHECK(vgrid_test::compare_grids(
       ctx, a, b,
-      [exact](vr_test::VoxelWords x, vr_test::VoxelWords y) {
+      [exact](vgrid_test::VoxelWords x, vgrid_test::VoxelWords y) {
         if (exact) {
           return x.weight == y.weight && x.tsdf == y.tsdf && x.color == y.color;
         }
@@ -143,7 +143,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
   std::vector<View> views;
   for (int c = 0; c < kCameras; ++c) {
-    views.push_back(vr_test::sphere_view<sensor::DepthCameraParams>(c));
+    views.push_back(vgrid_test::sphere_view<sensor::DepthCameraParams>(c));
   }
   // Camera 0 marks its coverage: a band of its colour says it has none.
   for (std::uint32_t row = 0; row < kHeight; ++row) {
@@ -279,7 +279,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     bad_depths[2].depth = vkc::StorageInput(small.value());
     CHECK(grid->map().allocate_from_depth(bad_depths).status().domain() ==
           vkc::Status::Code::InvalidArgument);
-    auto none = vr_test::blocks_of(grid.value());
+    auto none = vgrid_test::blocks_of(grid.value());
     CHECK(none.ok() && none.value().empty());
 
     CHECK(settle([&](vol::AllocFailures* why) {
@@ -289,8 +289,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     bad[2] = {vkc::StorageInput(small.value()), views[2].cam, nullptr};
     CHECK(integrator->integrate(grid.value(), bad).domain() ==
           vkc::Status::Code::InvalidArgument);
-    auto weight = vr_test::read_attribute<float>(dev, alloc, grid.value(),
-                                                 vol::kWeightAttribute);
+    auto weight = vgrid_test::read_attribute<float>(dev, alloc, grid.value(),
+                                                    vol::kWeightAttribute);
     CHECK(weight.ok());
     for (const float w : weight.value()) CHECK(w == 0.0f);
 

@@ -55,39 +55,42 @@
 #include <utility>
 #include <vector>
 
-#include "codec_fixture.hpp"
-#include "grid_readback.hpp"
-#include "networking_loopback.hpp"
-#include "stage_rows.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 #include "volumetric_kit/core/testing/scratch_dir.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
-#include "volumetric_kit/recon/codec/decode_grid.hpp"
-#include "volumetric_kit/recon/codec/decoder.hpp"
-#include "volumetric_kit/recon/codec/encoder.hpp"
-#include "volumetric_kit/recon/codec_stream/codec_stream.hpp"
+#include "volumetric_kit/grid/codec/decode_grid.hpp"
+#include "volumetric_kit/grid/codec/decoder.hpp"
+#include "volumetric_kit/grid/codec/encoder.hpp"
+#include "volumetric_kit/grid/codec_stream/codec_stream.hpp"
+#include "volumetric_kit/grid/mesh/marching_cubes.hpp"
+#include "volumetric_kit/grid/mesh/mesh.hpp"
+#include "volumetric_kit/grid/stream/stream_reader.hpp"
+#include "volumetric_kit/grid/testing/codec_fixture.hpp"
+#include "volumetric_kit/grid/testing/grid_readback.hpp"
+#include "volumetric_kit/grid/testing/networking_loopback.hpp"
+#include "volumetric_kit/grid/testing/stage_rows.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
-#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/sender/fuse_inputs.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
-#include "volumetric_kit/recon/stream/stream_reader.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/sensor/camera/array_calibration.hpp"
 
 namespace vr = volumetric_kit::recon;
+
+namespace vgrid = volumetric_kit::grid;
 namespace vkc = volumetric_kit::core;
 namespace camera = volumetric_kit::sensor::camera;
-namespace codec = volumetric_kit::recon::codec;
-namespace codec_stream = volumetric_kit::recon::codec_stream;
+namespace codec = volumetric_kit::grid::codec;
+namespace codec_stream = volumetric_kit::grid::codec_stream;
 namespace sender = volumetric_kit::recon::sender;
 namespace sensor = volumetric_kit::sensor;
-namespace stream = volumetric_kit::recon::stream;
-namespace networking = volumetric_kit::recon::networking;
-namespace net = vr_test::net;
+namespace stream = volumetric_kit::grid::stream;
+namespace networking = volumetric_kit::grid::networking;
+namespace net = vgrid_test::net;
 
 namespace {
 
@@ -307,26 +310,26 @@ struct Walls {
   bool back() const { return vertices[1] > 0 && vertices[3] > 0; }
 };
 
-int read_walls(vr::mesh::MarchingCubes& extractor,
-               vr::volume::VoxelBlockGrid& grid, Walls* out) {
+int read_walls(vgrid::mesh::MarchingCubes& extractor,
+               vgrid::volume::VoxelBlockGrid& grid, Walls* out) {
   *out = {};
   auto mesh = extractor.extract_host(grid);
   CHECK(mesh.ok());
-  for (const vr::mesh::Vertex& v : mesh->vertices) {
+  for (const vgrid::mesh::Vertex& v : mesh->vertices) {
     const bool b = v.position.x > kOffsetM / 2;
     ++out->vertices[(b ? 2 : 0) + (v.position.z > kMidM ? 1 : 0)];
   }
   auto blocks = grid.map().compact_active_blocks();
   CHECK(blocks.ok());
-  const vr::volume::VoxelGridParams& params = grid.map().grid();
+  const vgrid::volume::VoxelGridParams& params = grid.map().grid();
   const double extent = double(params.voxel_size) * params.block_size;
-  for (const vr::volume::BlockIndex& block : *blocks) {
+  for (const vgrid::volume::BlockIndex& block : *blocks) {
     if ((block.coord.z + 0.5) * extent < kMidM) {
       out->near_blocks.push_back(block.coord);
     }
   }
   std::sort(out->near_blocks.begin(), out->near_blocks.end(),
-            vr::volume::coord_less);
+            vgrid::volume::coord_less);
   return 0;
 }
 
@@ -334,7 +337,7 @@ int read_walls(vr::mesh::MarchingCubes& extractor,
 bool holds(const std::vector<vr::Vec3i>& whole,
            const std::vector<vr::Vec3i>& part) {
   return std::includes(whole.begin(), whole.end(), part.begin(), part.end(),
-                       vr::volume::coord_less);
+                       vgrid::volume::coord_less);
 }
 
 // What one set cost on the device, as Device::counters count it, and whether
@@ -362,22 +365,22 @@ bool sent_as_logged(const sender::SetSender::Sent& sent,
   if (logged.publishes != 1 || sent.coded.has_value() != coded) return false;
   const vkc::StageMetrics& rows = logged.rows;
   for (const char* row : {"frame prep", "wait: front"}) {
-    if (vr_test::find_row(rows, row) == nullptr) return false;
+    if (vgrid_test::find_row(rows, row) == nullptr) return false;
   }
-  if (!coded) return vr_test::find_row(rows, "write") == nullptr;
+  if (!coded) return vgrid_test::find_row(rows, "write") == nullptr;
   for (const char* row : {"codec encode", "  ..forward", "  ..tables", "crc",
                           "write", "wait: frame"}) {
-    if (vr_test::find_row(rows, row) == nullptr) return false;
+    if (vgrid_test::find_row(rows, row) == nullptr) return false;
   }
   const vkc::StageRow* front =
-      vr_test::find_row(sent.coded->encode, "  ..forward");
-  const vkc::StageRow* in_set = vr_test::find_row(rows, "  ..forward");
+      vgrid_test::find_row(sent.coded->encode, "  ..forward");
+  const vkc::StageRow* in_set = vgrid_test::find_row(rows, "  ..forward");
   return front != nullptr && front->device != vkc::DeviceTime::None &&
          in_set->device == front->device && in_set->gpu_ms == front->gpu_ms &&
-         vr_test::find_row(sent.coded->encode, "frame prep") == nullptr &&
-         vr_test::find_row(sent.coded->encode, "integrate") == nullptr &&
-         vr_test::find_row(sent.coded->encode, "  ..tables") != nullptr &&
-         vr_test::find_row(sent.coded->decode, "codec decode") != nullptr &&
+         vgrid_test::find_row(sent.coded->encode, "frame prep") == nullptr &&
+         vgrid_test::find_row(sent.coded->encode, "integrate") == nullptr &&
+         vgrid_test::find_row(sent.coded->encode, "  ..tables") != nullptr &&
+         vgrid_test::find_row(sent.coded->decode, "codec decode") != nullptr &&
          sent.coded->bytes > 0 && sent.coded->blocks > 0;
 }
 
@@ -418,7 +421,8 @@ int code_sets(vkc::test::GpuContext& gpu, const Fusion& fusion,
   CHECK(grid.ok());
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
   CHECK(fuser.ok());
-  auto extractor = vr::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
+  auto extractor =
+      vgrid::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
   CHECK(extractor.ok());
   std::optional<codec_stream::CodecStream> coded;
   if (!path.empty()) {
@@ -494,11 +498,11 @@ int code_sets(vkc::test::GpuContext& gpu, const Fusion& fusion,
       run.counts->push_back(
           {c.submits, c.host_waits, c.staging_buffers, c.dispatches, c.barriers,
            sent->fused.redone, sent->coded && sent->coded->tail,
-           vr_test::find_row(logged.rows, "wait: redo") != nullptr});
+           vgrid_test::find_row(logged.rows, "wait: redo") != nullptr});
     }
     if (s == 1) {  // read once: the whole attribute is slow in Debug
-      auto weights = vr_test::read_attribute<float>(
-          gpu.device, gpu.allocator, *grid, vr::volume::kWeightAttribute);
+      auto weights = vgrid_test::read_attribute<float>(
+          gpu.device, gpu.allocator, *grid, vgrid::volume::kWeightAttribute);
       CHECK(weights.ok() && !weights->empty());
       CHECK(*std::max_element(weights->begin(), weights->end()) ==
             fusion.max_weight);
@@ -551,9 +555,10 @@ int check_stream(vkc::test::GpuContext& gpu, const std::string& path,
 
   auto decoder = codec::Decoder::create(gpu.device, gpu.allocator);
   CHECK(decoder.ok());
-  auto extractor = vr::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
+  auto extractor =
+      vgrid::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
   CHECK(extractor.ok());
-  std::optional<vr::volume::VoxelBlockGrid> player;
+  std::optional<vgrid::volume::VoxelBlockGrid> player;
   constexpr std::uint32_t kMaxBlocks = 1u << 20;  // far past the scene's
   stream::Position pos = reader.begin();
   stream::Record record;
@@ -888,8 +893,8 @@ int moved_from(vkc::test::GpuContext& gpu) {
 // once, before its decode, its rows its frame's encode with "crc", "write",
 // "publish" and the waits, and each frame as code() returns it. A frame out
 // of order is refused, its front dropped, and the stream goes on.
-int halves(vkc::test::GpuContext& gpu, vr::volume::VoxelBlockGrid& source,
-           vr::volume::VoxelBlockGrid& other,
+int halves(vkc::test::GpuContext& gpu, vgrid::volume::VoxelBlockGrid& source,
+           vgrid::volume::VoxelBlockGrid& other,
            const vkc::test::Scratch& scratch) {
   codec::EncoderConfig config;
   config.intra_period = 3;
@@ -907,7 +912,7 @@ int halves(vkc::test::GpuContext& gpu, vr::volume::VoxelBlockGrid& source,
   vkc::Result<vr::tsdf::Fuser> fuser =
       vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
   CHECK(a.ok() && b.ok() && fuser.ok());
-  const auto send = [&](vr::volume::VoxelBlockGrid& grid, std::size_t frame,
+  const auto send = [&](vgrid::volume::VoxelBlockGrid& grid, std::size_t frame,
                         vkc::StageMetrics* rows, int* published) {
     vkc::Result<sender::SetSender> out =
         sender::SetSender::create(gpu.device, *fuser, grid, &*b, {});
@@ -919,7 +924,7 @@ int halves(vkc::test::GpuContext& gpu, vr::volume::VoxelBlockGrid& source,
   };
   for (std::size_t frame = 0; frame < 5; ++frame) {
     const bool refused = frame == 2 || frame == 3;
-    vr::volume::VoxelBlockGrid& grid = refused ? other : source;
+    vgrid::volume::VoxelBlockGrid& grid = refused ? other : source;
     const vkc::Result<codec_stream::SentFrame> x =
         a->code(grid, frame, set_time(frame));
     CHECK(x.ok() != refused);
@@ -930,15 +935,15 @@ int halves(vkc::test::GpuContext& gpu, vr::volume::VoxelBlockGrid& source,
     CHECK(y.ok() != refused && published == 1);
     for (const char* row : {"codec encode", "  ..forward", "crc", "write",
                             "publish", "wait: front", "wait: frame"}) {
-      CHECK(vr_test::find_row(rows, row) != nullptr);
+      CHECK(vgrid_test::find_row(rows, row) != nullptr);
     }
     if (refused) continue;
     CHECK(y->coded.has_value() && !y->fused.redone);
     const codec_stream::SentFrame& sent = *y->coded;
     CHECK(sent.type == x->type && sent.bytes == x->bytes &&
           sent.blocks == x->blocks);
-    CHECK(vr_test::find_row(sent.encode, "codec encode") != nullptr &&
-          vr_test::find_row(sent.decode, "codec decode") != nullptr);
+    CHECK(vgrid_test::find_row(sent.encode, "codec encode") != nullptr &&
+          vgrid_test::find_row(sent.decode, "codec decode") != nullptr);
   }
   // Out of order: refused, its front dropped, so the next records afresh.
   vkc::StageMetrics rows;

@@ -1,18 +1,23 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// The fusing examples' side of the integration boundary: core-validated
-// settings reach the sender's config, the Replica sensor's options and, where
-// the driver is built, the Orbbec streams unchanged, and the live templates
-// hold what they document. The codec's side is example_config_test.cpp. No
-// file assets, device or camera are opened.
+// The fusing examples' side of the integration boundary: every fusing
+// template loads and maps into the codec's runtime options (grid's
+// codec_config.hpp), core-validated settings reach the sender's config, the
+// Replica sensor's options and, where the driver is built, the Orbbec streams
+// unchanged, and the live templates hold what they document. The codec's side
+// is grid's example_config_test.cpp. No file assets, device or camera are
+// opened.
+#include <cstdio>
 #include <filesystem>
 #include <string>
 #include <utility>
 
+#include "codec_config.hpp"
 #include "fuse_sender.hpp"
 #include "replica_config.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
+#include "volumetric_kit/grid/networking/stream_server.hpp"
 #ifdef VR_TEST_ORBBEC_CONFIG
 #include "orbbec_config.hpp"
 #endif
@@ -20,8 +25,70 @@
 namespace cfg = volumetric_kit::core::config;
 namespace vr = volumetric_kit::recon;
 namespace sensor = volumetric_kit::sensor;
+namespace vgrid = volumetric_kit::grid;
 
 int main() {
+  struct Example {
+    const char* file;
+    cfg::Application application;
+  };
+  const Example examples[] = {
+      {"fuse_replica", cfg::Application::FuseReplica},
+      {"codec_replica", cfg::Application::CodecReplica},
+      {"fuse_orbbec", cfg::Application::FuseOrbbec},
+      {"codec_orbbec", cfg::Application::FuseOrbbec},
+      {"serve_orbbec", cfg::Application::FuseOrbbec},
+      {"stream_orbbec", cfg::Application::FuseOrbbec},
+      {"readback_orbbec", cfg::Application::FuseOrbbec},
+      {"dump_orbbec", cfg::Application::FuseOrbbec},
+      {"fuse_render", cfg::Application::FuseRender},
+      {"fuse_viewer", cfg::Application::FuseViewer},
+      {"rig_viewer", cfg::Application::RigViewer},
+  };
+  for (const auto& example : examples) {
+    const auto loaded = cfg::load(
+        std::string(VR_CONFIG_FIXTURES) + "/" + example.file + ".json",
+        example.application);
+    if (!loaded)
+      std::fprintf(stderr, "%s: %s\n", example.file,
+                   loaded.status().message().c_str());
+    CHECK(loaded);
+    // codec_orbbec alone writes codec rows, and it and serve_orbbec frames;
+    // serve_orbbec alone serves them, on the default port to every interface,
+    // a joiner waiting for the key the stream makes for it.
+    // Every live example fuses Dynamic, by core's default, the rest Classic.
+    const bool coded = std::string(example.file) == "codec_orbbec";
+    const bool served = std::string(example.file) == "serve_orbbec";
+    const bool live = example.application == cfg::Application::FuseOrbbec ||
+                      example.application == cfg::Application::RigViewer;
+    CHECK(loaded->fusion.dynamic == live);
+    CHECK(loaded->output.csv.empty() != coded);
+    CHECK(loaded->output.stream.empty() != (coded || served));
+    CHECK(loaded->output.serve == (served ? 47801 : 0));
+    const vgrid::codec_stream::CodecOutputs outputs =
+        vgrid_example::codec_outputs(loaded.value().output);
+    CHECK(outputs.serve.has_value() == served);
+    CHECK(!served || (outputs.serve->host.empty() &&
+                      outputs.serve->port == vgrid::networking::kDefaultPort &&
+                      !outputs.serve->replay_gop));
+    // No scenario codes a true SDF: codec_mesh alone sets it, in code.
+    const auto encoder = vgrid_example::encoder_config(loaded->codec);
+    CHECK(encoder.ok() && !encoder->true_sdf);
+  }
+
+  // codec_replica codes every frame, then its sweep, at period 30 with U = R,
+  // as the freeze measured it (DECISIONS, the 2026-10-17 freeze).
+  const auto replica =
+      cfg::load(std::string(VR_CONFIG_FIXTURES) + "/codec_replica.json",
+                cfg::Application::CodecReplica);
+  CHECK(replica && replica->codec.encode_every == 1 && replica->codec.sweep);
+  CHECK(replica->codec.intra_period == 30 && replica->codec.update_size == 0);
+  const auto replica_encoder = vgrid_example::encoder_config(replica->codec);
+  CHECK(replica_encoder.ok() && replica_encoder->intra_period == 30);
+  CHECK(replica_encoder->segment_size == 64 &&
+        replica_encoder->resolved_update_size() ==
+            replica_encoder->segment_size);
+
   const auto readback =
       cfg::load(std::string(VR_CONFIG_FIXTURES) + "/readback_orbbec.json",
                 cfg::Application::FuseOrbbec);
