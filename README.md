@@ -208,11 +208,11 @@ paths.
 
 ### Video decoders
 
-The HEVC and JPEG decoders (`volumetric_kit::sensor_video`,
-`sensor/src/volumetric_kit/sensor/video/`) decode on the GPU's hardware and hand their pictures out on
-the device only. Every Apple build has them, on VideoToolbox with no
-FFmpeg; their pictures reach Vulkan through `PixelBufferImporter`
-(`volumetric_kit::sensor_apple`). On Linux they are
+The sensor package's HEVC and JPEG decoders (`volumetric_kit::sensor_video`)
+decode on the GPU's hardware and hand their pictures out on the device only.
+Every Apple build has them, on VideoToolbox with no FFmpeg; their pictures
+reach Vulkan through `PixelBufferImporter` (`volumetric_kit::sensor_apple`).
+On Linux they are
 off by default: NVDEC through FFmpeg ≥ 6.1, found through pkg-config, and
 nvJPEG, with the CUDA 13 toolkit's headers (`sensor/cmake/vs_cuda.cmake`).
 `VS_WITH_FFMPEG` on Apple fails the configure. The H.265 syntax the Apple
