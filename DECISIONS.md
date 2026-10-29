@@ -5400,8 +5400,16 @@ synchronization validation.
 returned anything in its camera's warm-up (a surface there from the start,
 or a background's sporadic return) or where it returned for under three
 samples in a row (`TODO(tsdf)`); partial evidence lowering the weight cap
-so slow motion slides; pixels that drop in and out; the noise model's edge
-and incidence terms.
+so slow motion slides; the noise model's edge and incidence terms; and
+pixels that drop in and out over no return. A still surface there flags
+`Vanished` at each dropout after three valid samples (the entry above), and
+each resets its ray's band. A column that walks in and stands still, its
+pixels dropping out i.i.d. at 15% (take3, lab RTX 4090), was flagged 41k
+times a second while it stood, and kept 97.0% of its surface against 97.5%
+both on main with the same dropouts and here without them, at 4.4 mm rms
+(main 4.8): pinholes spread over its face, where main's are at its rim.
+The candidate, the owner's call: flag on the second invalid sample in a
+row, 33 ms later on a real departure, for one more state bit.
 
 ## Measured lessons
 
