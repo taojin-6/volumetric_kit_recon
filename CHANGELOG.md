@@ -142,6 +142,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   faces; positions and triangles are unchanged. It came with the grid 0.3.0
   pin above (grid 0.2.1, grid #5).
 
+### Fixed
+
+- `examples`: **the viewer builds with GCC and warnings as errors.** The
+  vertex bulk copy in `recon_gfx_bridge.hpp` casts its destination to
+  `void*`, as GCC's `-Wclass-memaccess` asks for a trivially copyable type
+  that is not trivial.
+
 ## [0.1.0] - 2026-10-28
 
 ### Changed
