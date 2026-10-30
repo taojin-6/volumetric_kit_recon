@@ -5947,8 +5947,9 @@ states, none by default.
 - The Femto rig, bit for bit: its recorded take (take1, four cameras), the
   first 120 sets replayed through `SetSender` under Dynamic at 1 cm, its
   frames stating the Femto Mega's noise, meshes at set 119 the same as
-  main's (on sensor 0.9.0): 1,697,282 triangles, every one's positions and
-  normals bit for bit, over two runs of each. Stating b = 0.96 mm/m instead
+  main's (on sensor 0.9.0): 1,697,282 triangles, every one's positions bit
+  for bit and its normals the same as dumped (16 bits a component), over two
+  runs of each. Stating b = 0.96 mm/m instead
   gives 1,697,708. A mesh's triangle order varies from run to run, on main
   too, so the meshes are compared as sets of triangles.
 - Four planted bugs, each killed: `fuse_inputs` dropping the noise, or
