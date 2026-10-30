@@ -46,8 +46,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prep now crops each frame with colour to what both its cameras see, by
   their fields of view, with no option (sensor's DECISIONS.md, the
   2026-10-29 same-view entry). For `fuse_orbbec` (its PLY and its coded
-  stream), `fuse_realsense`, `rig_viewer` and a sender that prepares its
-  sets with that prep (`sender::SetSender`):
+  stream), `fuse_realsense`, `rig_viewer` and any sender that fuses sets
+  prepared there (`sender::SetSender`):
   - depth its colour camera does not see is no longer fused, which fusion
     left untextured: on the Femto Mega's factory calibrations, a band at
     the top of the depth picture and a wider one at the bottom (17-33 and
