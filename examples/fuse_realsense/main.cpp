@@ -48,9 +48,10 @@ int run_main(const vgrid_example::config::Config& opt) {
     std::fprintf(stderr, "fuse_realsense: %s\n", depth.message().c_str());
     return 2;
   }
+  // A RealSense camera stamps on the host's clock always.
   const vkc::Status status = vr_example::run_live_fusion(
       opt, "fuse_realsense", vr_example::open_realsense_array,
-      vr_example::sensor_counters);
+      /*host_clock=*/true, vr_example::sensor_counters);
   if (!status.ok()) {
     std::fprintf(stderr, "fuse_realsense failed: %s\n",
                  status.message().c_str());
