@@ -5879,14 +5879,19 @@ states, none by default.
   all zero, or a negative or non-finite term) is refused before any work,
   the message naming its slot. No floor is guessed for it. Classic reads
   no noise. The single-frame `integrate` overloads state none, so Dynamic
-  refuses them; it takes the set form, a frame a camera.
+  refuses them before anything else, saying so; it takes the set form, a
+  frame a camera.
 - `fuse_realsense`'s FFS opener states the D455 pair's disparity noise,
   0.04 px (`kD455FfsDisparitySigma`): the temporal sigma measured with the
   23-36-37 checkpoint at 1280 x 720, projector off, pooled over 0.33-3 m
-  (0.076, 0.042 and 0.016 px a bin). The template runs 960 x 544, which is
-  not measured; held in pixels there, the noise it makes is 4/3 the
-  1280 x 720 one, the cautious side. Another checkpoint is measured for its
-  own value, and the value becomes a scenario key then, not before.
+  (0.076, 0.042 and 0.016 px a bin). It is not a bound: the 0.33-1 m bin
+  and the 3-5 m one (0.057 px), inside the default 5 m gate, are above it.
+  The template runs 960 x 544, which is not measured; held in pixels there,
+  0.04 px is worth about 0.053 px at 1280 x 720, above the pooled value but
+  still below those two bins. With the projector on, the bins are 0.017,
+  0.028, 0.014 and 0.043 px; the opener states 0.04 px either way. Another
+  checkpoint is measured for its own value, and the value becomes a
+  scenario key then, not before.
 - The dataset source (`ReplicaSensor`) states none: rendered depth has no
   frame-to-frame noise, and its camera moves, which the change test's fixed
   cameras rule out. A dataset scenario with `fusion.dynamic` is refused; no
@@ -5895,14 +5900,21 @@ states, none by default.
 **What it changes.**
 - `fuse_orbbec` and `rig_viewer` on the Femto rig: nothing. The driver
   states exactly `{0, 0.00095f, 0}`, recon's old default bit for bit
-  (sensor's `sensor_orbbec_conversion` pins it, b the float 0x3A79096C);
-  `fuse_inputs` copies it (`recon_sender_fuse_inputs`); the push constants
-  and the kernel are unchanged.
+  (sensor's `sensor_orbbec_conversion` pins the constant, b the float
+  0x3A79096C; that the driver states it on every frame is the rig's hand
+  check); `fuse_inputs` copies it (`recon_sender_fuse_inputs`); the push
+  constants and the kernel are unchanged.
 - `fuse_realsense`, the camera's own depth: c = 0.13 / (fx B), 2.08e-3 per
   metre at 1280 x 720, in place of the Femto's floor. The two cross at
   z = b / c = 0.46 m; farther, the floor is higher than before, so the
   change test alarms less there, not more.
-- `fuse_realsense` on FFS: c = 0.04 / (fx B) of the rectified rig.
+- `fuse_realsense` on FFS: c = 0.04 / (fx B) of the rectified rig. It
+  crosses the Femto's floor at z = 0.02375 fx B, about 1.1 m at the
+  template's 960 x 544 (fx B about 47 px m) and 1.5 m at 1280 x 720. Nearer,
+  where people stand, the floor is lower than before, so the change test
+  can reset more there; farther it is higher. The D455's FFS hand check
+  looks for false resets near the camera and past 3 m, where the measured
+  noise is above the stated one.
 - A producer that states nothing (a hand-built `DeviceFrame`, a driver not
   yet measured, a dataset) fuses Classic and is refused under Dynamic,
   rather than taking the Femto's floor unseen.
@@ -5918,10 +5930,14 @@ states, none by default.
   each refusal states a known noise but for its own fault; an unknown noise
   is refused naming its slot, and so is a negative, NaN, infinite or all -0
   one.
-- `recon_tsdf_dynamic_change`: an unknown noise is refused under Dynamic,
-  alone or beside a camera that states one, and fused under Classic.
-- `recon_tsdf_integrate`: a single frame is refused under Dynamic before
-  any work; the seven Dynamic sites take the set form.
+- `recon_tsdf_dynamic_change`: each camera's test takes its own frame's
+  noise: a camera stating a 0.5 m floor never sees a 2.5 cm card go, and
+  one stating the Femto Mega's beside it does, either way round. An
+  unknown noise is refused under Dynamic, alone or beside a camera that
+  states one, and fused under Classic.
+- `recon_tsdf_integrate`: a single frame, from the host or a buffer, is
+  refused under Dynamic before any work, as a single frame; the seven
+  Dynamic sites take the set form.
 - `recon_example_fuse_keyframe`: the noise a driver states reaches the
   change test through `GpuFramePrep` and `fuse_inputs`; a frame stating
   none is refused under Dynamic, keeping no keyframe.
@@ -5952,9 +5968,12 @@ states, none by default.
   runs of each. Stating b = 0.96 mm/m instead
   gives 1,697,708. A mesh's triangle order varies from run to run, on main
   too, so the meshes are compared as sets of triangles.
-- Four planted bugs, each killed: `fuse_inputs` dropping the noise, or
-  giving every frame the first one's; the change test accepting an unknown
-  noise; the FFS opener not stating its sigma.
+- Seven planted bugs, each killed: `fuse_inputs` dropping the noise, or
+  giving every frame the first one's; the integrator giving every camera's
+  change test the first frame's noise, or the Femto Mega's; the change test
+  accepting an unknown noise; the buffer overload taking a single frame
+  under Dynamic to the set form's check; the FFS opener not stating its
+  sigma.
 - Not run: the cameras. The Femto rig and the D455 under Dynamic (chip and
   FFS depth) are the owner's hand checks.
 

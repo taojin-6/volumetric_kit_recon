@@ -82,8 +82,11 @@ inline sensor::RealSenseStereo::Options realsense_stereo_options(
 /// The D455 infrared pair's disparity noise under FFS, in pixels: the
 /// frame-to-frame sigma measured with the 23-36-37 checkpoint at 1280 x 720,
 /// projector off, pooled over 0.33-3 m (0.076, 0.042 and 0.016 px a bin).
-/// The template's 960 x 544 is not measured; held in pixels there, the depth
-/// noise it makes is 4/3 the 1280 x 720 one, the cautious side. Another
+/// Two bins are above it: 0.33-1 m, and 3-5 m (0.057 px), inside the default
+/// 5 m depth gate. The template's 960 x 544 is not measured; held in pixels
+/// there, it is worth about 0.053 px at 1280 x 720, above the pooled value
+/// but still below those two bins. With the projector on, the bins are
+/// 0.017, 0.028, 0.014 and 0.043 px; the value is stated either way. Another
 /// checkpoint is measured for its own.
 inline constexpr float kD455FfsDisparitySigma = 0.04f;
 
