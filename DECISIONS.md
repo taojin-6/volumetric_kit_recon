@@ -5811,24 +5811,35 @@ Eight planted bugs were killed: either projector dropped, the infrared
 cameras at the depth size, `Rgba8` views, the colour size rectified, FFS's
 near gate dropped, and FFS refused with `sensor_ffs` or let through without
 it. Checked by hand, not a test, on the D455 (firmware 5.17.0.10,
-USB 3.2), 900 frames at 1 cm voxels, the box to itself:
+USB 3.2), 900 frames at 1 cm voxels, the box to itself, on sensor 0.9.0's
+prep:
 
 | | FFS, 960x544, projector off | the camera's own, 1280x720, projector on |
 | --- | --- | --- |
-| frames | 900 in 31.7 s; 30.0 fps after the first frame (1.7 s) | 900 in 31.6 s; 30 fps after the first (1.6 s) |
-| camera | 940 received, 2 dropped, 38 failed at start-up | 937 received, 0 dropped, 37 failed at start-up |
-| GPU state | P2, SM 2565 MHz median (2235–2760), memory 10251 MHz, PCIe 4.0 x16, 84% busy | P8, SM 540 MHz, memory 405 MHz, 26% busy (idle clocks) |
+| frames | 900 in 32.2 s; 29.5 fps after the first frame (1.7 s), the camera's rate | 900 in 30.5 s; 30 fps after the first (0.5 s) |
+| camera | 940 received, 2 dropped, 38 failed at start-up | 903 received, 0 dropped, 3 failed at start-up |
+| GPU state | P2, SM 2625 MHz median (2280–2775), memory 10251 MHz, PCIe 4.0 x16, 83% busy | P8 for 270 of 305 samples, SM 465 MHz median, memory 405 MHz, PCIe 1.0, 21% busy (idle clocks) |
 | FFS on the device (Nsight Systems, 450 frames) | 27.77 ms median, 27.93 p95: the network 27.76, its input and depth kernels 0.007 and 0.003 | - |
-| prep / integration, device | 0.109 / 0.536 ms | 1.16 / 6.94 ms at idle clocks |
-| arrival / capture to published, p50 | 29.8 / 45.6 ms | 9.4 / 25.3 ms |
-| GPU memory, process peak | 2604 MiB | 1377 MiB |
-| mesh | 251,974 triangles; walls flat | 632,966 triangles; walls rough |
+| prep / integration, device | 0.120 / 0.527 ms | 1.21 / 5.10 ms at idle clocks |
+| arrival / capture to published, p50 | 29.7 / 45.5 ms | 7.7 / 23.7 ms |
+| GPU memory, the loop's steady | 2604 MiB | 895 MiB |
+| GPU memory, the mesh extract after it | 1351 MiB | 1197 MiB |
+| mesh | 252,790 triangles; walls flat | 493,639 triangles; walls rough |
 
-- At 960x544 a frame's GPU work, FFS's 27.8 ms, the rectifier's 0.1 ms
-  (sensor #8 and #10's measure, not repeated here), prep and integration,
-  is about 28.5 ms of the camera's 33.3 ms, so 30 fps holds with fusion
-  running, and FFS's time is the same as on an idle box (27.7 ms, sensor
-  #10). FFS adds about 20 ms to the latency, its network's run.
+- At 960x544 FFS keeps up with the camera with fusion running: each frame
+  is published 29.7 ms after it arrives (30.3 p95), inside the 33.3 ms
+  between frames at 30 fps. Its sensor thread's work, FFS's 27.8 ms, the
+  rectifier's 0.1 ms (sensor #8 and #10's measure, not repeated here) and
+  the host's, is about 28.3 ms a frame; fusion's prep and integration run
+  on the loop's thread beside it. FFS's time is the same as on an idle box
+  (27.7 ms, sensor #10), and it adds about 20 ms to the latency, its
+  network's run. In this run the camera delivered framesets 33.9 ms apart
+  (29.5 fps), so FFS idled between them; an earlier run fused at 30.0.
+- FFS holds about 1.7 GiB more GPU memory than the camera's own depth while
+  the loop runs (its engine and buffers, 2604 against 895 MiB). The mesh
+  extract after the loop, once the camera is released, peaks about the
+  same for either (1.2–1.4 GiB; the FFS figure from an earlier run, as the
+  0.5 s sampling missed it in this one).
 - FFS keeps the GPU at its working clocks, which the camera's own depth
   never asks for: their device rows differ by the clocks, not the work.
 
