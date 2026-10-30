@@ -5774,7 +5774,7 @@ not a test:
 the projector on, and Fast-FoundationStereo (FFS) on its infrared pair with
 it off, FFS on NVIDIA only. sensor 0.7.0 brought `RealSenseStereo` and
 0.8.0 `sensor_ffs`'s `StereoDepthSensor`, which rectifies any calibrated
-pair and runs FFS on a thread of its own as an `IRgbdSensor`; core 0.32.0
+pair and runs FFS on a thread of its own as an `IRgbdSensor`; core 0.33.0
 the `FuseRealsense` keys that choose it.
 
 **Decision.**

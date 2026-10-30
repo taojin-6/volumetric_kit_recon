@@ -19,7 +19,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   opens. Template: `config/examples/fuse_realsense_ffs.json`, its model and
   plans under `models/` beside it (ignored, as `results/` is). It runs on
   the sensor 0.9.0 pin (below), whose `RealSenseStereo` came in 0.7.0 and
-  `sensor_ffs` in 0.8.0. recon pins core 0.32.0, which brings the keys; the
+  `sensor_ffs` in 0.8.0. recon pins core 0.33.0, which brings the keys; the
   core floor rises with it. CI's CUDA leg installs TensorRT and builds
   `VS_WITH_FFS`.
 
@@ -55,6 +55,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **core 0.32.0** (46877ff), core main at #73's merge, which dropped the
+  `fusion.depth_within_color` key: a rig_viewer scenario that still sets it
+  is now refused as an unknown field. The pin was core's FuseRealsense branch
+  head (7850255); the floor stays 0.31.0, the first core with that profile.
 - build: **recon pins sensor 0.9.0** (sensor #9's merge, `9466540`;
   BREAKING for the live programs' results), CI takes sensor's actions at
   the new pin, and `VR_SENSOR_MIN_VERSION` rises to 0.9.0. Sensor's frame
