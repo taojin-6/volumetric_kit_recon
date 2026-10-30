@@ -5936,6 +5936,27 @@ states, none by default.
   and their numbers (the rim test's 6.5 / 12.8 mm among them) are
   unchanged.
 
+**Validation.**
+- Apple M5 Max, macOS 27.2, Release with warnings as errors and the Orbbec
+  driver, on sensor 0.10.0: the suite, 44 tests, under the validation
+  layer; the 18 tsdf and sender tests under synchronization validation too.
+- RTX 4090, Ubuntu 26.04, Release with warnings as errors, the Orbbec,
+  FFmpeg, CUDA, RealSense (librealsense 2.59.1) and FFS (TensorRT 11.4)
+  options: the suite, 46 tests, under the validation layer, the FFS
+  opener's among them.
+- The Femto rig, bit for bit: its recorded take (take1, four cameras), the
+  first 120 sets replayed through `SetSender` under Dynamic at 1 cm, its
+  frames stating the Femto Mega's noise, meshes at set 119 the same as
+  main's (on sensor 0.9.0): 1,697,282 triangles, every one's positions and
+  normals bit for bit, over two runs of each. Stating b = 0.96 mm/m instead
+  gives 1,697,708. A mesh's triangle order varies from run to run, on main
+  too, so the meshes are compared as sets of triangles.
+- Four planted bugs, each killed: `fuse_inputs` dropping the noise, or
+  giving every frame the first one's; the change test accepting an unknown
+  noise; the FFS opener not stating its sigma.
+- Not run: the cameras. The Femto rig and the D455 under Dynamic (chip and
+  FFS depth) are the owner's hand checks.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
