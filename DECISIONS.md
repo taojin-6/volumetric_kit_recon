@@ -916,6 +916,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   past or into a gap whose nearest return left, whoever fused them (a
   camera that supports them fuses them again that set, at one sample's
   weight).
+- [**2026-10-29**](#2026-10-29--fuse_realsense-is-an-example-of-its-own-on-fuse_orbbecs-run-and-a-core-profile-of-its-own) —
+  `fuse_realsense` is an example of its own on `fuse_orbbec`'s run
+  (`run_live_fusion`, the one live loop) and a core profile of its own
+  (`FuseRealsense`): the camera's own depth, colour at auto exposure, no
+  codec yet.
 
 ## Decision record
 
@@ -5617,6 +5622,63 @@ The rim test's footprint and search are in pixels of one voxel
 size; a finer grid changes them with it, unmeasured. A static outline
 within 6 pixels of a change takes no rim distance that set, so it shows
 its projective steps while something moves beside it.
+
+### 2026-10-29 — fuse_realsense is an example of its own on fuse_orbbec's run, and a core profile of its own.
+
+**Context.** sensor 0.4.0 brought `RealSenseSensor`, a RealSense D400
+camera's own depth (its projector on) and its colour camera's YUYV on the
+host, as an `IRgbdSensor`; the owner's plan (the RealSense and stereo-depth
+design, 2026-10-29) fuses it live with `fuse_orbbec`'s loop, and later
+depth from its infrared pair by stereo matching, as one more depth source.
+
+**Decision.**
+- One example per source, so `fuse_realsense`, not a `fuse_orbbec` option.
+  Its run is `fuse_orbbec`'s, moved whole into
+  `examples/common/live_fusion.hpp` (`run_live_fusion`), which takes the
+  program's camera opener and each camera's counters: one live loop, not a
+  copy. The array report and clock that loop needs are `live_sets.hpp`'s,
+  on the array alone, so `rig_viewer` keeps them too.
+- The camera is a `SensorArray` of one, which the array accepts with no
+  sync role or rig clock, so prep, fusion, the per-set table and the
+  counters are the rig's, and a set is the camera's frame.
+- Its scenario is core's `FuseRealsense` profile (core 0.31.0), since every
+  desktop program loads a core profile and takes only `--config` and
+  `--help` (core's 2026-10-11 entry): the camera's serial, modes and depth
+  gate, `fuse_orbbec`'s fusion keys, the PLY and the run length. No codec,
+  outputs beyond the PLY, stream operation or diagnostics until a use needs
+  them: the readback reads no host picture, and the dump writes JPEGs.
+- Colour at auto exposure, with no key for a manual one: with a manual
+  exposure the D455's colour drifts from its depth by up to half a frame
+  (16.7 ms at 30 fps; sensor #6's review), which misplaces colour on a
+  moving subject.
+- The opener is where a depth source is chosen. Depth from the infrared
+  pair (`StereoDepthSensor` over the camera's stereo source) joins there as
+  another `IRgbdSensor`, with a scenario key to choose it, the loop
+  unchanged.
+
+**Validation.** On the lab RTX 4090 (Ubuntu 26.04, Release, the Orbbec,
+RealSense and video drivers): the full suite, 44 tests, under the
+validation layer, and core's 528 with the profile and its consumer check.
+Three planted bugs were killed: the counters' order, a clock check that
+ignores a camera's clock, and the options' colour width. Checked by hand,
+not a test:
+- `fuse_realsense` on the D455 (1 cm voxels): 900 frames in 31.7 s, 30 fps
+  after the camera's first 1.6 s; 37 start-up framesets refused, none
+  dropped. At 30 fps the GPU is about 20% busy and idles in P8, its clocks
+  sampled every 100 ms at 450 MHz SM and 405 MHz memory against a boost of
+  2595 and 10501 MHz. A frame's 1.20 ms of prep and 5.05 ms of integration
+  on the device are therefore its cost at idle clocks: not a budget, and not
+  comparable with the rig's below. On the host it costs 0.22 ms, and 7.2 ms
+  from arrival to published, the latency at 30 fps as it runs; the process
+  peaked at 895 MiB of GPU memory.
+- `fuse_orbbec` on the four-Femto rig, 25 sets, twice each against main:
+  prep 0.42 against 0.40 ms and integration 1.33 against 1.34 ms on the
+  device (the means of both runs), the same rate, and meshes within 0.2% in
+  the second pair. 25 sets stay inside the change detector's 30-frame
+  warm-up, so Dynamic's test and reset ran only on the D455. In the first
+  pair one camera's H.265 joined a second before its first key frame (24
+  lost), which left the branch's mesh 11% smaller; the driver is unchanged
+  by the re-pin.
 
 ## Measured lessons
 

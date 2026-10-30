@@ -9,9 +9,12 @@
 add_subdirectory(common)
 add_subdirectory(fuse_replica)
 add_subdirectory(codec_replica)
-# The live counterpart, when the Orbbec driver is built.
+# The live counterparts, each when its driver is built.
 if(TARGET volumetric_kit::sensor_orbbec)
   add_subdirectory(fuse_orbbec)
+endif()
+if(TARGET volumetric_kit::sensor_realsense)
+  add_subdirectory(fuse_realsense)
 endif()
 
 # The gfx-linked reconstruction viewer examples (fuse_render headless PNG +
@@ -32,8 +35,15 @@ endif()
 # Exercise each real executable's startup contract without creating resources,
 # with the check grid's examples run (its tests/example_config_entry.cmake).
 if(VR_BUILD_TESTS)
-  foreach(_vr_example fuse_replica codec_replica fuse_orbbec fuse_render
-                      fuse_viewer rig_viewer)
+  foreach(
+    _vr_example
+    fuse_replica
+    codec_replica
+    fuse_orbbec
+    fuse_realsense
+    fuse_render
+    fuse_viewer
+    rig_viewer)
     if(TARGET ${_vr_example})
       add_test(
         NAME recon_${_vr_example}_config_entry

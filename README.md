@@ -188,6 +188,30 @@ and output settings before opening any resource. Relative paths are resolved
 from the scenario file's directory, including the sync, calibration and output
 paths.
 
+### Optional: librealsense
+
+`fuse_realsense` fuses one RealSense D400 camera (the D455) with its own
+depth, computed on the camera with its projector on, and needs the sensor
+package's RealSense driver: librealsense 2.59.1 or later, installed from the
+platform's packages
+([the package's README](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/README.md#realsense-driver)).
+
+```sh
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
+    -DVS_WITH_REALSENSE=ON
+build/examples/fuse_realsense/fuse_realsense \
+    --config config/examples/fuse_realsense.json
+```
+
+It runs `fuse_orbbec`'s fusion on its one camera, posed at the origin and
+still: each frame's YUYV colour is converted and undistorted on the GPU,
+fused Dynamic, and the mesh written to the PLY. `source.serial` names the
+camera when several are attached; the colour and depth sizes and
+`source.fps` pick its modes (1280x800 and 1280x720 at 30 fps by default).
+Its colour runs at auto exposure. The camera's first second or so of
+framesets, which pair depth with stale colour, are refused and counted
+failed in the report at the end.
+
 ## Codec evaluation
 
 `codec_replica` runs grid's codec on a fused room sequence; grid's

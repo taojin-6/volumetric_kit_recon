@@ -24,6 +24,7 @@ mesh-source notes are grid's ([its config/README.md](https://github.com/taojin-6
 | `fuse_orbbec` | [stream_orbbec.json](examples/stream_orbbec.json) | Live stream/decode only |
 | `fuse_orbbec` | [readback_orbbec.json](examples/readback_orbbec.json) | Live stream with luma readback |
 | `fuse_orbbec` | [dump_orbbec.json](examples/dump_orbbec.json) | Live stream with readback, first sets' JPEGs and luma written |
+| `fuse_realsense` | [fuse_realsense.json](examples/fuse_realsense.json) | Live RealSense camera, its own depth, to PLY |
 | `fuse_render` | [fuse_render.json](examples/fuse_render.json) | Dataset to image |
 | `fuse_viewer` | [fuse_viewer.json](examples/fuse_viewer.json) | Dataset in a window |
 | `rig_viewer` | [rig_viewer.json](examples/rig_viewer.json) | Live rig in a window |
@@ -99,6 +100,15 @@ needs `source.color_codec: "mjpeg"`. Writing slows the sets it writes.
 `run.frames` counts frames, so four cameras' 40 frames are 10 sets: a run
 that ends before N sets says so with a warning, and a set the run's end cuts
 writes only the frames it keeps.
+
+`fuse_realsense` (core's FuseRealsense profile) fuses one RealSense camera's
+own depth, with its projector on, and its colour, to the PLY at
+`output.path`, Dynamic by default as `fuse_orbbec` is: the camera sits still.
+It takes `source.serial` (empty: the only camera attached), the colour and
+depth sizes and `source.fps` (1280x800 and 1280x720 at 30 fps by default),
+the fusion keys and `run.frames`; not the Orbbec rig's keys, the codec, its
+outputs, `operation: "stream"` or diagnostics. Its colour runs at auto
+exposure.
 
 `operation: "stream"` refuses an explicitly supplied `fusion`, `codec` or
 `output` section, including settings equal to their defaults. Leave those

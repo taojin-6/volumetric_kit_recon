@@ -61,6 +61,11 @@ jobs:
       # Apple the Orbbec driver needs sensor's video decoders, which `ffmpeg`
       # and `cuda` build on 24.04 (VS_WITH_FFMPEG, VS_WITH_CUDA; the toolkit
       # installed per job). sensor's own CI tests the driver and the decoders.
+      # `realsense_sdk` puts every leg on VS_WITH_REALSENSE=ON, as sensor's CI
+      # does (librealsense from RealSense's apt repository per job on Ubuntu,
+      # the Mac's formula checked), so fuse_realsense builds on each and the
+      # 26.04 leg builds it without the Orbbec driver; the sanitizer job
+      # keeps the drivers off.
       # `assimp` builds grid's optional mesh loader on Linux and macOS; the
       # other legs build image / PLY IO without it.
       #
@@ -76,6 +81,7 @@ jobs:
             build_types: '["Release"]'
             assimp: true
             orbbec_sdk: true
+            realsense_sdk: true
             ffmpeg: true
             cuda: true
             sync_validation: true
@@ -84,12 +90,14 @@ jobs:
             # ubuntu:26.04
             container: '{"image":"ubuntu@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4","__GL_SHADER_DISK_CACHE_PATH":"/__w/_tool/nvidia-glcache","__GL_SHADER_DISK_CACHE_SKIP_CLEANUP":"1"}}'
             build_types: '["Release"]'
+            realsense_sdk: true
             sync_validation: true
           - os: macos-26
             runner: mac
             container: ''
             build_types: '["Debug","Release"]'
             orbbec_sdk: true
+            realsense_sdk: true
             assimp: true
     uses: ./.github/workflows/_build.yml
     with:
@@ -98,6 +106,7 @@ jobs:
       container: ${{ matrix.container }}
       build_types: ${{ matrix.build_types }}
       orbbec_sdk: ${{ matrix.orbbec_sdk || false }}
+      realsense_sdk: ${{ matrix.realsense_sdk || false }}
       ffmpeg: ${{ matrix.ffmpeg || false }}
       cuda: ${{ matrix.cuda || false }}
       assimp: ${{ matrix.assimp || false }}

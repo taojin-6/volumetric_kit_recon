@@ -45,11 +45,12 @@ repos:
         files: \.(h|hpp|hxx|inl|ipp|c|cc|cpp|cxx|cu|cuh|mm)$
         exclude: ^examples/
 
-      # The workflows take the core's homebrew-key action and sensor's
-      # install-orbbec-sdk action at recon's pins of the two
-      # (third_party/CMakeLists.txt), so a re-pin that misses a workflow fails
-      # here, not by installing the old pin's SDK in CI. gfx's
-      # homebrew-key-at-core-pin hook does the same for its core pin.
+      # The workflows take the core's homebrew-key and check-workflow-triggers
+      # actions and sensor's install-orbbec-sdk and install-librealsense
+      # actions at recon's pins of the two (third_party/CMakeLists.txt), so a
+      # re-pin that misses a workflow fails here, not by installing the old
+      # pin's SDK in CI. gfx's homebrew-key-at-core-pin hook does the same for
+      # its core pin.
       - id: sibling-actions-at-pins
         name: the core's and sensor's actions at recon's pins
         language: system
@@ -57,7 +58,7 @@ repos:
         files: ^(third_party/CMakeLists\.txt|\.github/workflows/.*\.yml)$
         entry: >-
           sh -c 'rc=0;
-          for p in volumetric_kit_core:homebrew-key volumetric_kit_sensor:install-orbbec-sdk; do
+          for p in volumetric_kit_core:homebrew-key volumetric_kit_core:check-workflow-triggers volumetric_kit_sensor:install-orbbec-sdk volumetric_kit_sensor:install-librealsense; do
           repo=${p%%:*}; act=${p#*:};
           pin=$(sed -n "/$repo\.git/{n;s/^ *GIT_TAG \([0-9a-f]*\).*/\1/p;}" third_party/CMakeLists.txt);
           uses=$(grep -rnoE "[^ ]*/actions/$act(@[^ ]*)?" .github/workflows);

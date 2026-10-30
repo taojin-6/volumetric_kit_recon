@@ -4,10 +4,11 @@
 #pragma once
 
 /// @file examples/common/fuse_orbbec_sets.hpp
-/// @brief The live examples' cameras: opened (fuse_orbbec's and rig_viewer's)
-///        and read as a sensor array, and the report of the array's counters
-///        and a rig's skew over its sets (`sensor::RigSets`). Header-only,
-///        compiled only into the examples built with the Orbbec driver.
+/// @brief The Orbbec examples' cameras: opened (fuse_orbbec's and
+///        rig_viewer's), read as a sensor array, and each camera's counters,
+///        `lost` among them, in the array's report (`live_sets.hpp`).
+///        Header-only, compiled only into the examples built with the Orbbec
+///        driver.
 
 #include <algorithm>
 #include <chrono>
@@ -18,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "live_sets.hpp"
 #include "orbbec_config.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -52,19 +54,6 @@ inline std::string orbbec_camera_report(
   const sensor::camera::Mat4d pose = posed != nullptr && posed->color_to_world
                                          ? *posed->color_to_world
                                          : sensor::camera::Mat4d(1.0);
-  // " WxH <lens> @ fx=.. fy=.. cx=.. cy=..", a camera's part of its line.
-  const auto camera = [](const sensor::camera::CameraModel& model,
-                         const std::string& lens) {
-    char size[32];
-    char intrinsics[96];
-    std::snprintf(size, sizeof size, " %ux%u ", model.size.width,
-                  model.size.height);
-    std::snprintf(intrinsics, sizeof intrinsics,
-                  " @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f", model.intrinsics.fx,
-                  model.intrinsics.fy, model.intrinsics.cx,
-                  model.intrinsics.cy);
-    return size + lens + intrinsics;
-  };
   const std::string exposure =
       sensor.color_controls
           ? ", exposure " + std::to_string(sensor.color_controls->exposure) +
@@ -77,8 +66,9 @@ inline std::string orbbec_camera_report(
          info.firmware_version + ", " + info.connection_type + " " +
          info.ip_address + ", sync " + sensor::to_string(info.sync_mode) +
          ", " + sensor::to_string(sensor.clock) + " clock\n" + "  colour" +
-         camera(*sensor.color, info.color_lens_model) + exposure + at +
-         "  depth" + camera(*sensor.depth, info.depth_lens_model) + "\n";
+         camera_summary(*sensor.color, info.color_lens_model) + exposure + at +
+         "  depth" + camera_summary(*sensor.depth, info.depth_lens_model) +
+         "\n";
 }
 
 /// @brief Print an opened camera's @ref orbbec_camera_report.
@@ -192,68 +182,25 @@ inline vkc::Result<sensor::SensorArray> open_orbbec_array(
   return sensor::SensorArray::open(std::move(sensors), options);
 }
 
-/// @return Whether every sensor of @p array stamps its frames on the host's
-///         clock, so a set's time is on the system clock: a rig's always
-///         are, a single camera's only with `source.host_clock`.
-inline bool on_host_clock(sensor::SensorArray& array) {
-  for (std::size_t i = 0; i < array.size(); ++i) {
-    if (array.sensor(i).info().clock != sensor::ClockDomain::Host) {
-      return false;
-    }
-  }
-  return true;
+/// @return An Orbbec camera's counters (`OrbbecSensor::orbbec_stats`), for
+///         @ref array_report: its first four as @ref counters_text, then
+///         ", <lost> lost" (which `IRgbdSensor::stats` counts failed).
+/// @pre @p camera is an `OrbbecSensor`.
+inline std::string orbbec_counters(const sensor::IRgbdSensor& camera) {
+  const sensor::OrbbecStreamStats s =
+      static_cast<const sensor::OrbbecSensor&>(camera).orbbec_stats();
+  return counters_text({s.received, s.delivered, s.dropped, s.failed}) + ", " +
+         std::to_string(s.lost) + " lost";
 }
 
-/// @brief Print a single camera's first set's age against the host's clock,
-///        once @p sets has handed out @p set, its first; nothing for a rig or
-///        a later set. The SDK's host clock is the system clock: on it
-///        (`source.host_clock`) the frame is milliseconds old; the camera's
-///        own is where it was last set.
-inline void print_first_frame_age(sensor::SensorArray& array,
-                                  const sensor::RigSets& sets,
-                                  const sensor::FrameSet& set) {
-  if (sets.sets() != 1 || array.size() != 1) return;
-  const auto host = std::chrono::duration_cast<std::chrono::nanoseconds>(
-      std::chrono::system_clock::now().time_since_epoch());
-  std::printf("  first frame %.1f ms before the host's clock\n",
-              (static_cast<double>(host.count()) -
-               static_cast<double>(set.timestamp_ns)) /
-                  1e6);
-}
-
-/// @brief Print @p array's sets, each camera's counters, `lost` included,
-///        and for a rig each secondary's mean and worst skew to the primary
-///        over @p sets.
+/// @brief Print @p array's report (@ref array_report) with each camera's
+///        @ref orbbec_counters.
 /// @param sets  The run's sets; null, for a run that polls the array itself
 ///              (rig_viewer's), prints no skew.
 /// @pre The array's sensors are all `OrbbecSensor`s.
 inline void print_rig_stats(sensor::SensorArray& array,
                             const sensor::RigSets* sets) {
-  const sensor::SensorArrayStats st = array.stats();
-  std::printf("%llu sets, %llu missing a camera, %llu frames unmatched\n",
-              static_cast<unsigned long long>(st.sets),
-              static_cast<unsigned long long>(st.incomplete),
-              static_cast<unsigned long long>(st.unmatched));
-  for (std::size_t i = 0; i < array.size(); ++i) {
-    const auto& camera =
-        static_cast<const sensor::OrbbecSensor&>(array.sensor(i));
-    const sensor::OrbbecStreamStats s = camera.orbbec_stats();
-    std::printf(
-        "  %s: %llu received, %llu delivered, %llu dropped, %llu failed, "
-        "%llu lost",
-        camera.info().id.c_str(), static_cast<unsigned long long>(s.received),
-        static_cast<unsigned long long>(s.delivered),
-        static_cast<unsigned long long>(s.dropped),
-        static_cast<unsigned long long>(s.failed),
-        static_cast<unsigned long long>(s.lost));
-    const sensor::RigSets::Skew lag =
-        sets != nullptr ? sets->skew(i) : sensor::RigSets::Skew{};
-    if (lag.frames > 0) {
-      std::printf("; skew to the primary %+.2f ms mean, %.2f ms worst",
-                  lag.sum_ms / static_cast<double>(lag.frames), lag.worst_ms);
-    }
-    std::printf("\n");
-  }
+  std::fputs(array_report(array, sets, orbbec_counters).c_str(), stdout);
 }
 
 }  // namespace vr_example
