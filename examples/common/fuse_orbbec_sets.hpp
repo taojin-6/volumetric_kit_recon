@@ -183,21 +183,14 @@ inline vkc::Result<sensor::SensorArray> open_orbbec_array(
 }
 
 /// @return An Orbbec camera's counters (`OrbbecSensor::orbbec_stats`), for
-///         @ref array_report: the interface's, then "<lost> lost".
+///         @ref array_report: its first four as @ref counters_text, then
+///         ", <lost> lost" (which `IRgbdSensor::stats` counts failed).
 /// @pre @p camera is an `OrbbecSensor`.
 inline std::string orbbec_counters(const sensor::IRgbdSensor& camera) {
   const sensor::OrbbecStreamStats s =
       static_cast<const sensor::OrbbecSensor&>(camera).orbbec_stats();
-  char text[192];
-  std::snprintf(
-      text, sizeof text,
-      "%llu received, %llu delivered, %llu dropped, %llu failed, %llu lost",
-      static_cast<unsigned long long>(s.received),
-      static_cast<unsigned long long>(s.delivered),
-      static_cast<unsigned long long>(s.dropped),
-      static_cast<unsigned long long>(s.failed),
-      static_cast<unsigned long long>(s.lost));
-  return text;
+  return counters_text({s.received, s.delivered, s.dropped, s.failed}) + ", " +
+         std::to_string(s.lost) + " lost";
 }
 
 /// @brief Print @p array's report (@ref array_report) with each camera's

@@ -64,7 +64,8 @@ inline const char* lens_name(const sensor::camera::RationalDistortion& d) {
 /// @return An opened camera's report, three lines each ending in a newline:
 ///         what it reports, its link and clock; its colour camera's model at
 ///         the opened mode and its exposure as read back; its depth camera's,
-///         and how far the colour camera sits from it.
+///         and where the depth camera sits in the colour camera's frame
+///         (`SensorInfo::depth_to_color`'s translation).
 /// @param info    The camera's `RealSenseSensor::device_info()`.
 /// @param sensor  Its `IRgbdSensor::info()`, with both camera models.
 inline std::string realsense_camera_report(
@@ -75,17 +76,17 @@ inline std::string realsense_camera_report(
                 " gain " + std::to_string(sensor.color_controls->gain)
           : std::string(", auto exposure");
   const sensor::camera::Mat4d& to_color = sensor.depth_to_color;
-  char baseline[96];
-  std::snprintf(baseline, sizeof baseline,
-                ", colour at (%.1f, %.1f, %.1f) mm\n", to_color[3].x * 1e3,
-                to_color[3].y * 1e3, to_color[3].z * 1e3);
+  char at[96];
+  std::snprintf(at, sizeof at,
+                ", at (%.1f, %.1f, %.1f) mm in the colour camera's frame\n",
+                to_color[3].x * 1e3, to_color[3].y * 1e3, to_color[3].z * 1e3);
   return "camera: " + info.name + " " + info.serial + ", firmware " +
          info.firmware_version + ", USB " + info.usb_type + ", " +
          sensor::to_string(sensor.clock) + " clock\n" + "  colour" +
          camera_summary(*sensor.color, lens_name(sensor.color->distortion)) +
          exposure + "\n" + "  depth" +
          camera_summary(*sensor.depth, lens_name(sensor.depth->distortion)) +
-         baseline;
+         at;
 }
 
 /// @brief Open fuse_realsense's camera (@ref realsense_options), print its

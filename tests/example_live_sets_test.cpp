@@ -124,7 +124,8 @@ int realsense() {
   lens.k5 = -2e-3;
   CHECK(std::string(vr_example::lens_name(lens)) == "rational");
 
-  // What the camera reported, its two cameras and where the colour one sits.
+  // What the camera reported, its two cameras and where the depth one sits
+  // in the colour one's frame: depth_to_color's translation, as it is.
   sensor::RealSenseDeviceInfo info;
   info.name = "RealSense D455";
   info.serial = "215122251234";
@@ -150,7 +151,7 @@ int realsense() {
       "  colour 1280x800 brown-conrady @ fx=640.5 fy=640.0 cx=645.2 cy=401.5, "
       "auto exposure\n"
       "  depth 1280x720 pinhole @ fx=657.3 fy=657.3 cx=651.4 cy=359.0, "
-      "colour at (-59.0, -0.1, 0.4) mm\n";
+      "at (-59.0, -0.1, 0.4) mm in the colour camera's frame\n";
   if (auto_exposure != expected) {
     std::fprintf(stderr, "realsense report:\n%s", auto_exposure.c_str());
   }

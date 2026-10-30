@@ -40,11 +40,9 @@ inline std::string camera_summary(const sensor::camera::CameraModel& model,
   return text;
 }
 
-/// @return Any camera's counters (`IRgbdSensor::stats`): "<received>
-///         received, <delivered> delivered, <dropped> dropped, <failed>
-///         failed".
-inline std::string sensor_counters(const sensor::IRgbdSensor& camera) {
-  const sensor::SensorStats s = camera.stats();
+/// @return Counters as a camera's line shows them: "<received> received,
+///         <delivered> delivered, <dropped> dropped, <failed> failed".
+inline std::string counters_text(const sensor::SensorStats& s) {
   char text[160];
   std::snprintf(text, sizeof text,
                 "%llu received, %llu delivered, %llu dropped, %llu failed",
@@ -53,6 +51,12 @@ inline std::string sensor_counters(const sensor::IRgbdSensor& camera) {
                 static_cast<unsigned long long>(s.dropped),
                 static_cast<unsigned long long>(s.failed));
   return text;
+}
+
+/// @return Any camera's counters (`IRgbdSensor::stats`), as
+///         @ref counters_text.
+inline std::string sensor_counters(const sensor::IRgbdSensor& camera) {
+  return counters_text(camera.stats());
 }
 
 /// @return @p array's sets, then a line per camera, "  <id>: " and its
