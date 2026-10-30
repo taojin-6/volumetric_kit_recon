@@ -84,13 +84,13 @@ find_package(Vulkan REQUIRED)
 # see, which the live examples rely on with no option of their own
 # (fuse_realsense builds only with sensor_realsense, and even without FFS with
 # its RealSenseStereo, which 0.7.0 brought; it runs FFS only with sensor_ffs,
-# which 0.8.0 brought); the oldest grid is VR_GRID_MIN_VERSION: 0.5.0, whose
-# CodecStream writes the live examples' Audio track (TrackKind::Audio, 0.4.0)
-# muxed by pts; 0.3.0 brought codec_outputs passing output.max_viewers to the
-# server.
+# which 0.8.0 brought); the oldest grid is VR_GRID_MIN_VERSION: 0.6.0, whose
+# StreamServer serves the live examples' Audio track with the frames; 0.5.0
+# brought CodecStream writing it (TrackKind::Audio, 0.4.0) muxed by pts, and
+# 0.3.0 codec_outputs passing output.max_viewers to the server.
 set(VR_CORE_MIN_VERSION 0.34.0)
 set(VR_SENSOR_MIN_VERSION 0.11.0)
-set(VR_GRID_MIN_VERSION 0.5.0)
+set(VR_GRID_MIN_VERSION 0.6.0)
 add_subdirectory(third_party)
 
 add_subdirectory(src)

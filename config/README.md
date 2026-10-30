@@ -109,8 +109,8 @@ input's name as the OS lists it; omitted, none. The core takes it only with
 (`source.sync_config` or `source.host_clock`), so `fuse_realsense`, which
 takes neither output yet, refuses it. The run prints the input it records,
 and its counters at the end. It needs a build with sensor's microphone driver
-(README, "Optional: a microphone"). `output.serve` with a mic is refused
-until grid serves an Audio track; `output.stream` records it.
+(README, "Optional: a microphone"). `output.stream` records its track and
+`output.serve` serves it, both with the frames.
 
 `fuse_realsense` (core's FuseRealsense profile) fuses one RealSense camera's
 depth and its colour to the PLY at `output.path`, Dynamic by default as

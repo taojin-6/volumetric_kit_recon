@@ -244,7 +244,8 @@ counters also count the rectifier's submit and wait on the sensor's thread
 
 With `source.audio` ([config/README.md](config/README.md)), `fuse_orbbec`
 records a mic beside the cameras into its `.vrst`, as signed 16-bit samples
-on the host's clock. It needs the sensor package's microphone driver,
+on the host's clock, and serves it with the frames under `output.serve`. It
+needs the sensor package's microphone driver,
 `VS_WITH_PORTAUDIO`, on an installed PortAudio
 ([the package's README](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/README.md#microphone-driver));
 a build without it refuses the key before anything opens. macOS asks for the
