@@ -65,6 +65,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   keeps all its depth. Sensor 0.6.0 to 0.8.0 (stereo rectifier fixes,
   `RealSenseStereo`, stereo depth by FFS) need no recon change.
 
+- **recon pins grid 0.3.1** (d1fcbc4, grid #8's merge): grid's `Encoder`
+  holds each P-frame one quantization step against its reference, so the
+  sender's still surfaces stop flickering between steps and code fewer
+  bits. I-frames are quantized afresh; the format and the decoder are
+  unchanged. The floor stays 0.3.0: no recon code or test depends on it.
+
 - **Dynamic fusion evicts on change and averages conflict** (BREAKING for
   Dynamic's results; DECISIONS.md, 2026-10-29). A Dynamic set runs each
   camera's `ChangeDetector`, resets along the rays that changed (the new
