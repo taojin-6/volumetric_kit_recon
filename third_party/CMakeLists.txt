@@ -26,21 +26,17 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.31.0 (7850255, the head of core's
-# feat/fuse-realsense-profile, whose FuseRealsense profile fuse_realsense
-# loads), as are the Homebrew key action in .github/workflows/_build.yml and the
-# workflow-trigger check in .github/workflows/lint.yml; the vkc_require_core
-# checks below say which core each part needs. The tests are main()s of their
-# own on the core's test support. TODO: once that core PR merges, and before
-# this pin reaches main, re-pin to its merge commit and set VR_CORE_MIN_VERSION,
-# with its comment in the root CMakeLists.txt and the version CHANGELOG and
-# DECISIONS' 2026-10-29 entry name, to the version it lands as: another open
-# core PR also claims 0.31.0, so it may land as 0.32.0, and a floor left at
-# 0.31.0 would then accept a core without the profile.
+# The pin is core 0.32.0 (46877ff, core main at #73's merge, which dropped the
+# fusion.depth_within_color key rig_viewer no longer reads), as are the Homebrew
+# key action in .github/workflows/_build.yml and the workflow-trigger check in
+# .github/workflows/lint.yml. The floor stays 0.31.0, the first core with the
+# FuseRealsense profile fuse_realsense loads; the vkc_require_core checks below
+# say which core each part needs. The tests are main()s of their own on the
+# core's test support.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 78502552393f4f2cac0ce0409fb1c8950d5c3e5d)
+  GIT_TAG 46877ff4d7b3a454a43fb442c995c307bfa744d9)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
