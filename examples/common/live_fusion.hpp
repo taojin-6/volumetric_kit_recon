@@ -308,20 +308,18 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
   const double secs = seconds_since(t_start);
   const double fps =
       static_cast<double>(sets.frames()) / (secs > 0.0 ? secs : 1.0);
-  // Before any error: a run that stalls still reports what it counted, and
-  // finishes the stream it recorded, the mic's last chunks in it, and reports
-  // the frames it coded.
+  // Before any error: a run that stalls still finishes the stream it
+  // recorded, the mic's last chunks in it, then reports what it counted, the
+  // mic's line with what the stream wrote of it, and the frames it coded.
   const vkc::Status heard = audio.finish();
+  const bool coded = stream && stream->coded() > 0;
+  const vkc::Status finished = coded ? stream->finish() : vkc::Status{};
   std::fputs(array_report(*array, &sets, counters).c_str(), stdout);
   std::fputs(audio.report().c_str(), stdout);
   std::fputs(dump.report().c_str(), stdout);
-  vkc::Status finished;
-  if (stream && stream->coded() > 0) {
-    finished = stream->finish();
-    // A coded frame per source set; one frame alone has no bitrate.
-    if (!report->rows().empty()) {
-      report->print(opt.source.fps, report->rows().size() > 1 ? 1 : 0);
-    }
+  // A coded frame per source set; one frame alone has no bitrate.
+  if (coded && !report->rows().empty()) {
+    report->print(opt.source.fps, report->rows().size() > 1 ? 1 : 0);
   }
   VKC_TRY(streamed);
   VKC_TRY(heard);

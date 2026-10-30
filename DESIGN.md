@@ -1101,7 +1101,8 @@ thread after each set is sent, appending each chunk as a key record at its
 capture time with its sequence, and drains it once more before the stream
 finishes; grid's `CodecStream::append` muxes the records with the frames by
 pts. A drain that fails ends the audio with a warning, and fusion goes on.
-The mic's counters follow the cameras'. Grid's server serves one track, so
+The mic's counters follow the cameras', with what the stream, finished
+first, wrote and dropped of its chunks. Grid's server serves one track, so
 `output.serve` with a mic is refused before any camera opens; the file
 records both. With no mic, the session and its bytes are as before audio.
 A run that fails part-way still finishes its stream and

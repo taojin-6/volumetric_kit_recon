@@ -147,13 +147,19 @@ class AudioFeed {
   bool lost() const noexcept { return lost_; }
 
   /// @return The mic's line beside the cameras' (@ref array_report):
-  ///         "  audio <id>: " and its counters (@ref counters_text), and
-  ///         "; ended early" once a drain failed, with a newline; empty with
-  ///         no mic.
+  ///         "  audio <id>: " and its counters (@ref counters_text),
+  ///         "; ended early" once a drain failed, and "; the stream: <n>
+  ///         written, <n> dropped before the first frame"
+  ///         (`CodecStream::appended`), with a newline; empty with no mic.
+  ///         Final once the stream has finished.
   std::string report() const {
     if (mic_ == nullptr) return {};
+    const volumetric_kit::grid::codec_stream::AppendedRecords out =
+        stream_->appended(track_);
     return "  audio " + mic_->info().id + ": " + counters_text(mic_->stats()) +
-           (lost_ ? "; ended early\n" : "\n");
+           (lost_ ? "; ended early" : "") +
+           "; the stream: " + std::to_string(out.written) + " written, " +
+           std::to_string(out.dropped) + " dropped before the first frame\n";
   }
 
  private:

@@ -11,13 +11,14 @@
 // unbroken, and its samples; the two chunks before the first frame dropped,
 // and the chunks captured after the last frame there too, as the last drain
 // takes them. The feed drains once a frame and once more at the end, then
-// stops the mic, and reports its counters. A mic whose drain fails ends the
-// audio there, warned once, and the frames go on. With no mic the feed does
-// nothing, and the file is byte for byte the one the session before audio
-// writes. With output.serve, a session with the mic's track is refused as
-// the stream is made. open_audio opens nothing for an empty source.audio, and
-// a build without the microphone driver refuses a named one. The device part
-// skips with no device.
+// stops the mic, and reports its counters and what the stream wrote and
+// dropped of its chunks. A mic whose drain fails ends the audio there, warned
+// once, and the frames go on. With no mic the feed does nothing, and the file
+// is byte for byte the one the session before audio writes. With
+// output.serve, a session with the mic's track is refused as the stream is
+// made. open_audio opens nothing for an empty source.audio, and a build
+// without the microphone driver refuses a named one. The device part skips
+// with no device.
 
 #include <cmath>
 #include <cstddef>
@@ -174,7 +175,7 @@ volumetric_kit::core::config::Config scenario() {
 // The file at `path` coded from `session`: kFrames frames of `grid`, the
 // feed of `mic` (or none) started first, sent after each frame once the mic
 // captured up to kLagNs past it, and finished after kTailNs more, before the
-// stream.
+// stream; its report taken once the stream has finished, as a run's is.
 int run(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
         const stream::Session& session, FakeMic* mic, const std::string& path,
         std::string* report) {
@@ -196,8 +197,8 @@ int run(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
   if (mic != nullptr) mic->capture(frame_pts(kFrames - 1) + kTailNs);
   CHECK(feed.finish().ok());
   CHECK(feed.send().ok());  // finished: nothing more
-  *report = feed.report();
   CHECK(coded.finish().ok());
+  *report = feed.report();
   return 0;
 }
 
@@ -263,13 +264,16 @@ int recorded(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
   CHECK(check_file(path, session, first_ns, kEarlyChunks, captured - 1) == 0);
   CHECK(report == "  audio fake-mic: " + std::to_string(captured) +
                       " received, " + std::to_string(captured) +
-                      " delivered, 0 dropped, 0 failed\n");
+                      " delivered, 0 dropped, 0 failed; the stream: " +
+                      std::to_string(captured - kEarlyChunks) + " written, " +
+                      std::to_string(kEarlyChunks) +
+                      " dropped before the first frame\n");
   return 0;
 }
 
 // A mic whose fourth drain fails: the audio ends there, the feed warns and
 // drains no more, finishing stops the mic, and every frame is coded; the file
-// holds the chunks the first three drains took.
+// holds the chunks the first three drains took, as the report says.
 int lost(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
          const vkc::test::Scratch& scratch) {
   FakeMic mic(kStartNs, 4);
@@ -282,8 +286,13 @@ int lost(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
   // The third drain took what was captured up to frame 2's pts + 100 ms.
   const std::uint64_t taken = (frame_pts(2) + kLagNs - kStartNs) / kChunkNs;
   CHECK(check_file(path, session, kStartNs, 0, taken - 1) == 0);
-  CHECK(report.size() > 14 &&
-        report.compare(report.size() - 14, 14, "; ended early\n") == 0);
+  // The mic captured on until finishing stopped it.
+  CHECK(report == "  audio fake-mic: " + std::to_string(mic.captured) +
+                      " received, " + std::to_string(taken) +
+                      " delivered, 0 dropped, 0 failed; ended early; the "
+                      "stream: " +
+                      std::to_string(taken) +
+                      " written, 0 dropped before the first frame\n");
   return 0;
 }
 
