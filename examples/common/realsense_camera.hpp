@@ -79,9 +79,19 @@ inline sensor::RealSenseStereo::Options realsense_stereo_options(
 }
 
 #ifdef VR_EXAMPLE_FFS
+/// The D455 infrared pair's disparity noise under FFS, in pixels: the
+/// frame-to-frame sigma measured with the 23-36-37 checkpoint at 1280 x 720,
+/// projector off, pooled over 0.33-3 m (0.076, 0.042 and 0.016 px a bin).
+/// The template's 960 x 544 is not measured; held in pixels there, the depth
+/// noise it makes is 4/3 the 1280 x 720 one, the cautious side. Another
+/// checkpoint is measured for its own.
+inline constexpr float kD455FfsDisparitySigma = 0.04f;
+
 /// @return FFS depth's options: the pair rectified to the depth size as luma
 ///         at alpha 0 (luma carries no coverage, so no border is matched),
-///         and the model, its plan cache and the depth gate.
+///         the model, its plan cache and the depth gate, and the pair's
+///         disparity noise (@ref kD455FfsDisparitySigma), from which every
+///         frame states its depth noise.
 inline sensor::StereoDepthSensor::Options ffs_depth_options(
     const config::Config& opt) {
   sensor::StereoDepthSensor::Options o;
@@ -92,6 +102,7 @@ inline sensor::StereoDepthSensor::Options ffs_depth_options(
   o.ffs.plan_cache = opt.source.ffs_plan_cache;
   o.ffs.min_depth = opt.fusion.min_depth_m;
   o.ffs.max_depth = opt.fusion.max_depth_m;
+  o.ffs.disparity_sigma = kD455FfsDisparitySigma;
   return o;
 }
 #endif

@@ -14,9 +14,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <string>
 #include <string_view>
 #include <vector>
 
+#include "depth_inputs.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/buffer_readback.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
@@ -96,6 +98,20 @@ vkc::Result<tsdf::TsdfIntegrator> dynamic_integrator(
   return tsdf::TsdfIntegrator::create(device, allocator, change);
 }
 
+// One frame under Dynamic: the set form, the frame slot 0's and stating the
+// Femto Mega's noise, as its driver does. The single-frame overloads state
+// none, so Dynamic refuses them.
+vkc::Status integrate_dynamic(tsdf::TsdfIntegrator& integ,
+                              vol::VoxelBlockGrid& grid, const float* depth,
+                              const sensor::DepthCameraParams& cam,
+                              float max_weight,
+                              const tsdf::ColorFrame* color = nullptr) {
+  return integ.integrate(grid,
+                         {tsdf::FrameInput{vkc::StorageInput(depth), cam, color,
+                                           0, vr_test::kFemtoNoise}},
+                         max_weight, tsdf::IntegrationMode::Dynamic);
+}
+
 int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   const vkc::test::Gpu ctx{device, allocator};
   vol::VoxelGridParams gp{};
@@ -151,8 +167,7 @@ int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   tsdf::TsdfIntegrator integ = std::move(integ_result).value();
   const auto fuse = [&](vol::VoxelBlockGrid& g, const std::vector<float>& d,
                         float max_weight) {
-    return integ.integrate(g, d.data(), cam, max_weight,
-                           tsdf::IntegrationMode::Dynamic);
+    return integrate_dynamic(integ, g, d.data(), cam, max_weight);
   };
   // The z of every active block of `g` stamped changed after `since`, or -1
   // for a failed read.
@@ -837,16 +852,20 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   const std::int32_t pd = find_ptr(dyn_active.value(), vr::Vec3i(0, 0, 12));
   CHECK(pd >= 0);
   const std::size_t vd = static_cast<std::size_t>(pd) + corner_local;
-  CHECK(dyn_integ
-            ->integrate(vbg_dyn, depth.data(), cam, 5.0f,
-                        tsdf::IntegrationMode::Dynamic)
+  // A single frame states no depth noise, so Dynamic refuses it before any
+  // work; the set form takes the camera's.
+  const vkc::Status no_noise = dyn_integ->integrate(
+      vbg_dyn, depth.data(), cam, 5.0f, tsdf::IntegrationMode::Dynamic);
+  CHECK(no_noise.domain() == vkc::Status::Code::InvalidArgument);
+  CHECK(no_noise.message().find("states no depth noise") != std::string::npos);
+  CHECK(floats(vbg_dyn, vol::kWeightAttribute)[vd] == 0.0f);
+  CHECK(integrate_dynamic(dyn_integ.value(), vbg_dyn, depth.data(), cam, 5.0f)
             .ok());
   std::vector<float> dyn_weight = floats(vbg_dyn, vol::kWeightAttribute);
   CHECK(dyn_weight[vd] > 0.0f);  // fused at sdf = +0.02
-  CHECK(dyn_integ
-            ->integrate(vbg_dyn, depth_far.data(), cam, 5.0f,
-                        tsdf::IntegrationMode::Dynamic)
-            .ok());
+  CHECK(
+      integrate_dynamic(dyn_integ.value(), vbg_dyn, depth_far.data(), cam, 5.0f)
+          .ok());
   dyn_weight = floats(vbg_dyn, vol::kWeightAttribute);
   const std::vector<float> dyn_tsdf = floats(vbg_dyn, vol::kTsdfAttribute);
   CHECK(dyn_weight[vd] == 0.0f && dyn_tsdf[vd] == 0.0f);  // stale voxel reset
@@ -974,10 +993,9 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // Dynamic throughout, its own integrator, for the recede below.
   auto c_integ = dynamic_integrator(gpu.device, gpu.allocator);
   CHECK(c_integ.ok());
-  CHECK(c_integ
-            ->integrate(vbg_c, depth.data(), cam, 5.0f,
-                        tsdf::IntegrationMode::Dynamic, &frame)
-            .ok());
+  CHECK(
+      integrate_dynamic(c_integ.value(), vbg_c, depth.data(), cam, 5.0f, &frame)
+          .ok());
   std::vector<std::uint32_t> c_color = words(vbg_c, vol::kColorAttribute);
   std::vector<float> c_weight = floats(vbg_c, vol::kWeightAttribute);
   CHECK(c_weight[c_front] > 0.0f);
@@ -990,9 +1008,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   // the geometry: the front voxel is now free space well past the band (plane
   // at 0.6 m, voxel at 0.485) on changed rays. Its weight, tsdf, and color all
   // reset to the pristine zero.
-  CHECK(c_integ
-            ->integrate(vbg_c, depth_far.data(), cam, 5.0f,
-                        tsdf::IntegrationMode::Dynamic, &frame)
+  CHECK(integrate_dynamic(c_integ.value(), vbg_c, depth_far.data(), cam, 5.0f,
+                          &frame)
             .ok());
   c_color = words(vbg_c, vol::kColorAttribute);
   c_weight = floats(vbg_c, vol::kWeightAttribute);
@@ -1168,16 +1185,14 @@ int gpu_main(vkc::test::GpuContext& gpu) {
       static_cast<std::size_t>(dzp12) + local_index(0, 0, 1, bs);
   auto dz_integ = dynamic_integrator(gpu.device, gpu.allocator);
   CHECK(dz_integ.ok());
-  CHECK(dz_integ
-            ->integrate(vbg_dz, depth.data(), cam, 5.0f,
-                        tsdf::IntegrationMode::Dynamic, &frame)
+  CHECK(integrate_dynamic(dz_integ.value(), vbg_dz, depth.data(), cam, 5.0f,
+                          &frame)
             .ok());  // fuse depth + color
   std::vector<std::uint32_t> dz_color = words(vbg_dz, vol::kColorAttribute);
   std::vector<float> dz_weight = floats(vbg_dz, vol::kWeightAttribute);
   CHECK(dz_weight[dz_front] > 0.0f && dz_color[dz_front] != 0u);  // fused
-  CHECK(dz_integ
-            ->integrate(vbg_dz, depth_far.data(), cam, 5.0f,
-                        tsdf::IntegrationMode::Dynamic)
+  CHECK(integrate_dynamic(dz_integ.value(), vbg_dz, depth_far.data(), cam,
+                          5.0f)
             .ok());  // depth-only recede
   dz_color = words(vbg_dz, vol::kColorAttribute);
   dz_weight = floats(vbg_dz, vol::kWeightAttribute);

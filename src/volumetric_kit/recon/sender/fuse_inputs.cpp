@@ -38,9 +38,11 @@ FuseInputs fuse_inputs(
       color = &in.colors.back();
     }
     // The camera's place in the set is its slot, the same every set, so a
-    // camera missing from one leaves the others' change histories theirs.
+    // camera missing from one leaves the others' change histories theirs;
+    // its noise is what its producer stated.
     in.frames.push_back({core::StorageInput(*frame->depth), frame->depth_camera,
-                         color, static_cast<std::uint32_t>(c)});
+                         color, static_cast<std::uint32_t>(c),
+                         frame->depth_noise});
   }
   return in;
 }

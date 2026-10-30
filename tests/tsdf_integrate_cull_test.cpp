@@ -21,6 +21,7 @@
 #include <string_view>
 #include <vector>
 
+#include "depth_inputs.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -219,12 +220,13 @@ int run(const vkc::test::Gpu& ctx, const char* name, tsdf::IntegrationMode mode,
     // frustum alone is the witness's; a slot each, the frames' the same in
     // both calls.
     const auto slots = static_cast<std::uint32_t>(frames.size());
+    const sensor::DepthNoise& noise = vr_test::kFemtoNoise;
     std::vector<tsdf::FrameInput> fa;
     std::vector<tsdf::FrameInput> fb{
-        {vkc::StorageInput(all.depth.data()), all.cam, nullptr, 0}};
+        {vkc::StorageInput(all.depth.data()), all.cam, nullptr, 0, noise}};
     for (std::uint32_t i = 0; i < slots; ++i) {
-      fa.push_back({depths[i].depth, frames[i].cam, &colors[i], i + 1});
-      fb.push_back({depths[i].depth, frames[i].cam, &colors[i], i + 1});
+      fa.push_back({depths[i].depth, frames[i].cam, &colors[i], i + 1, noise});
+      fb.push_back({depths[i].depth, frames[i].cam, &colors[i], i + 1, noise});
     }
     fb.push_back(fb.front());
     fb.back().slot = slots + 1;

@@ -22,21 +22,9 @@
 #include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/sensor/frame/camera_params.hpp"
+#include "volumetric_kit/sensor/frame/depth_noise.hpp"
 
 namespace volumetric_kit::recon::tsdf {
-
-/// @brief A depth sensor's noise floor: the standard deviation of one sample
-///        at depth z, `sigma(z) = a + b z + c z^2`, in metres for z in metres.
-///
-/// The only thing @ref ChangeDetector knows about a sensor. Time-of-flight
-/// noise grows about linearly with depth, stereo noise as its square, a lidar
-/// is about constant. The default is the Femto Mega's, fitted on a static
-/// four-camera capture: 0.95 mm per metre of depth.
-struct DepthNoise {
-  float a = 0.0f;      ///< Constant term (m); at least 0.
-  float b = 0.00095f;  ///< Linear term (m per m); at least 0.
-  float c = 0.0f;      ///< Quadratic term (m per m^2); at least 0.
-};
 
 /// @brief What @ref ChangeDetector's mask says of a pixel in a frame: the low
 ///        two bits of the pixel's `uint32` word (@ref change_of).
@@ -81,8 +69,8 @@ constexpr float vanished_depth(std::uint32_t word) noexcept {
 ///        the frame they happen, 98%).
 ///
 /// A pixel's residual is `r = (d - d_hist) / sigma_r`, with `d_hist` its
-/// history and `sigma_r` its own temporal noise, floored by the sensor's
-/// @ref DepthNoise at the sample's depth. Two
+/// history and `sigma_r` its own temporal noise, floored by the camera's
+/// depth noise (`sensor::DepthNoise`) at the sample's depth. Two
 /// cumulative sums, `S+ = max(0, S+ + r - k)` for farther and
 /// `S- = max(0, S- - r - k)` for nearer, alarm past @ref h; one frame with
 /// `|r|` past @ref one_frame alarms too.
@@ -116,8 +104,12 @@ struct ChangeDetectorConfig {
 /// per pixel on the device: a running depth `d_hist` and the pixel's own
 /// temporal noise `sigma_r` (sqrt(pi/2) times the running mean of
 /// `|d - d_hist|`, each sample clipped at 3 `sigma_r`), floored by the
-/// sensor's @ref DepthNoise at the sample's depth. Each frame, one pass a
-/// camera (@ref record_detect) tests every valid sample against it
+/// camera's depth noise at the sample's depth: `sensor::DepthNoise`, as the
+/// camera's producer states it with each frame
+/// (`sensor::DeviceFrame::depth_noise`), the only thing the detector knows
+/// of a sensor. A camera whose noise is unknown is refused, never given a
+/// model. Each frame, one pass a camera (@ref record_detect) tests every valid
+/// sample against it
 /// (@ref ChangeDetectorConfig) and writes the camera's mask
 /// (@ref PixelChange). An alarm restarts the pixel's history from the sample,
 /// clears both sums, and stops `sigma_r` learning for
@@ -151,7 +143,7 @@ struct ChangeDetectorConfig {
 /// core::CommandBatch batch(device, allocator);
 /// for (std::uint32_t c = 0; c < cameras; ++c) {
 ///   VKC_TRY(detector.record_detect(batch, c, core::StorageInput(depth[c]),
-///                                  params[c], noise));
+///                                  params[c], noise[c]));
 /// }
 /// VKC_TRY(batch.submit());
 /// const core::Buffer* changed = detector.mask(0);  // uint32 per pixel
@@ -199,7 +191,10 @@ class VR_TSDF_API ChangeDetector {
   /// @param params  The depth camera: its size, and the
   ///                `[min_depth, max_depth]` a valid sample lies in, both
   ///                finite. The rest is not read.
-  /// @param noise   The camera's noise floor.
+  /// @param noise   The camera's depth noise, as its producer states it
+  ///                (`sensor::DeviceFrame::depth_noise`): the floor under
+  ///                each pixel's own. It must be known
+  ///                (`sensor::DepthNoise::known`).
   /// @param gate    Optional word; 0 tests nothing and leaves the camera's
   ///                history and mask as they were (a set its allocation
   ///                left incomplete, fused again later), but for a first
@@ -211,13 +206,14 @@ class VR_TSDF_API ChangeDetector {
   ///         `Status::Code::InvalidArgument` for a moved-from detector, a
   ///         @p camera past the slots, an empty image, a @p depth that
   ///         cannot be bound as the image, a non-finite depth bound, a
-  ///         @p noise with a negative, non-finite or all-zero term, or a
-  ///         bad @p gate; or an allocation's or the upload's failure.
+  ///         @p noise that is unknown (all zero: its producer states none)
+  ///         or has a negative or non-finite term, or a bad @p gate; or an
+  ///         allocation's or the upload's failure.
   /// @pre The batch of this camera's last record has resolved.
   core::Status record_detect(
       core::CommandBatch& batch, std::uint32_t camera,
       const core::StorageInput& depth, const sensor::DepthCameraParams& params,
-      const DepthNoise& noise = {},
+      const sensor::DepthNoise& noise,
       const volumetric_kit::grid::volume::DeviceCount* gate = nullptr,
       core::GpuStageScope* stage = nullptr);
 
@@ -226,7 +222,7 @@ class VR_TSDF_API ChangeDetector {
   /// @return As @ref record_detect, or the submit's failure.
   core::Status detect(std::uint32_t camera, const core::StorageInput& depth,
                       const sensor::DepthCameraParams& params,
-                      const DepthNoise& noise = {});
+                      const sensor::DepthNoise& noise);
 
   /// @brief Camera @p camera's mask as its last pass left it.
   /// @return A device-local buffer of `width * height` `uint32` words,
@@ -248,11 +244,11 @@ class VR_TSDF_API ChangeDetector {
   /// @return OK; or @ref record_detect's `Status::Code::InvalidArgument` for a
   ///         moved-from detector, a camera past the slots, an empty or
   ///         oversized image (its history past one binding's range
-  ///         included), a non-finite depth bound, or a noise model with a
-  ///         negative, non-finite or all-zero term.
+  ///         included), a non-finite depth bound, or a @p noise that is
+  ///         unknown or has a negative or non-finite term.
   core::Status check(std::uint32_t camera,
                      const sensor::DepthCameraParams& params,
-                     const DepthNoise& noise) const;
+                     const sensor::DepthNoise& noise) const;
 
   /// @return The configuration this was created with.
   const ChangeDetectorConfig& config() const noexcept { return config_; }

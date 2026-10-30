@@ -26,6 +26,7 @@
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/sensor/frame/camera_params.hpp"
 #include "volumetric_kit/sensor/frame/color_space.hpp"
+#include "volumetric_kit/sensor/frame/depth_noise.hpp"
 
 namespace volumetric_kit::recon::tsdf {
 
@@ -118,9 +119,11 @@ struct FrameInput {
   /// camera every set, and a set's frames have slots of their own. Classic
   /// reads neither this nor @ref noise.
   std::uint32_t slot = 0;
-  /// The camera's depth noise, which @ref IntegrationMode::Dynamic's change
-  /// test is floored by.
-  DepthNoise noise{};
+  /// The camera's depth noise, as its producer states it: a prepared frame's
+  /// `sensor::DeviceFrame::depth_noise`, which `sender::fuse_inputs` copies.
+  /// @ref IntegrationMode::Dynamic's change test is floored by it, and
+  /// refuses a frame whose noise is unknown (all zero, the default).
+  sensor::DepthNoise noise{};
 };
 
 /// @brief @p camera as the voxel layer's depth camera, for
@@ -233,7 +236,9 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    5.0).
   /// @param mode        Classic accumulates; dynamic resets along the rays that
   ///                    changed (see @ref IntegrationMode). A single frame is
-  ///                    slot 0's, with the default noise.
+  ///                    slot 0's and states no depth noise, so Dynamic
+  ///                    refuses it: Dynamic takes the set form, each
+  ///                    @ref FrameInput with its camera's noise.
   /// @param color       Optional @ref ColorFrame fused into the grid's `color`
   ///                    attribute (a `uint32` packed-RGB attribute the grid
   ///                    must then carry); `nullptr` integrates depth only. A
@@ -278,8 +283,9 @@ class VR_TSDF_API TsdfIntegrator {
   ///         or @p grid lacks a `uint32` `color` attribute; under Dynamic, also
   ///         for a frame's slot past @ref ChangeDetector::kMaxCameras, two
   ///         frames of a set with one slot, or a noise model
-  ///         @ref ChangeDetector::record_detect refuses; otherwise a buffer
-  ///         or dispatch failure.
+  ///         @ref ChangeDetector::record_detect refuses (an unknown one
+  ///         included, as a single frame's is); otherwise a buffer or
+  ///         dispatch failure.
   core::Status integrate(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
                          const float* depth,
                          const sensor::DepthCameraParams& cam,

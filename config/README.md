@@ -51,7 +51,7 @@ required where the application needs them.
 | `--max-frames` / `--frames` / `--sets` | `run.frames` / `run.frames` / `run.sets` |
 | `--width` / `--height` for a window or image | `window.width` / `window.height` |
 | `--height` / `--up-vector` for a mesh | `source.height_m` / `source.up_vector` (three numbers) |
-| `--dynamic` / `--static` | `fusion.dynamic: true` / `false` (Dynamic is for fixed cameras, a rig: it compares each camera with its own past, which means nothing for a moving camera) |
+| `--dynamic` / `--static` | `fusion.dynamic: true` / `false` (Dynamic is for fixed cameras, a rig: it compares each camera with its own past, which means nothing for a moving camera, against the depth noise its driver states; a source that states none, such as a dataset, is refused) |
 | `-o` for fusion/render | `output.path` or `output.prefix` |
 | `-o` for a codec | `output.prefix` (PLYs) and `output.stream` (coded frames) |
 

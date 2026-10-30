@@ -3,9 +3,10 @@
 
 // A failed prepare or fuse must leave the viewer's last successful keyframe
 // available for texturing, and the frame is fused in the integration mode the
-// helper is given, the one fusion.dynamic selects. Exercise the actual example
-// helper and GPU passes, with no window, camera or dataset. The device part
-// skips without a device.
+// helper is given, the one fusion.dynamic selects: under Dynamic with the
+// depth noise its driver stated, through the prep, and refused when the
+// driver states none. Exercise the actual example helper and GPU passes, with
+// no window, camera or dataset. The device part skips without a device.
 
 #include <algorithm>
 #include <cstdint>
@@ -15,6 +16,7 @@
 #include <tuple>
 #include <vector>
 
+#include "depth_inputs.hpp"
 #include "fuse_frame.hpp"
 #include "volumetric_kit/core/testing/buffer_readback.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
@@ -42,7 +44,8 @@ constexpr std::uint32_t kWidth = 16, kHeight = 12;
 constexpr std::size_t kPixels = kWidth * kHeight;
 constexpr std::uint32_t kColor = 0x00563412u;
 
-// A wall facing an identity camera: `depth` (mm) and `color` are its pixels.
+// A wall facing an identity camera: `depth` (mm) and `color` are its pixels;
+// its depth noise the Femto Mega's, as that driver states it.
 sensor::RgbdFrame wall(const std::vector<std::uint16_t>& depth,
                        const std::vector<std::uint32_t>& color) {
   sensor::RgbdFrame frame;
@@ -53,6 +56,7 @@ sensor::RgbdFrame wall(const std::vector<std::uint16_t>& depth,
   frame.metres_per_unit = 0.001f;
   frame.min_depth = 0.1f;
   frame.max_depth = 5.0f;
+  frame.depth_noise = vr_test::kFemtoNoise;
   frame.timestamp_ns = 1;
   return frame;
 }
@@ -62,6 +66,7 @@ int check_retained(const vkc::test::Gpu& gpu,
                    const std::optional<sensor::DeviceFrame>& keyframe) {
   CHECK(keyframe && keyframe->has_color());
   CHECK(keyframe->timestamp_ns == 1);
+  CHECK(keyframe->depth_noise == vr_test::kFemtoNoise);
   CHECK(keyframe->depth_camera.cam_to_world == vr::Mat4f(1.0f));
   CHECK(keyframe->color_camera.cam_to_world == vr::Mat4f(1.0f));
   auto depth = vkc::test::read_back<float>(gpu.device, gpu.allocator,
@@ -100,7 +105,9 @@ int check_retained(const vkc::test::Gpu& gpu,
 // fuse_keyframe fuses in the mode it is given: a wall at 1 m, then the same
 // camera seeing it at 2 m, so the first wall's band is free space well ahead
 // of the second's. Classic leaves weight there; Dynamic, its change test
-// running from a pixel's second sample, resets all of it.
+// running from a pixel's second sample, resets all of it. Dynamic refuses a
+// frame whose driver states no depth noise, keeping no keyframe; Classic
+// fuses it.
 int check_mode(vkc::test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
   auto volume = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
                                              0.15f, 256);
@@ -129,9 +136,19 @@ int check_mode(vkc::test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
   const std::vector<std::uint32_t> color(kPixels, kColor);
   sensor::RgbdFrame frame = wall(depth, color);
   std::optional<sensor::DeviceFrame> keyframe;
+  if (mode == kDynamic) {
+    sensor::RgbdFrame unstated = frame;
+    unstated.depth_noise = {};
+    const vkc::Status refused = vr_example::fuse_keyframe(
+        *fuser, *volume, *prep, unstated, keyframe, 20.0f, mode, nullptr);
+    CHECK(refused.domain() == vkc::Status::Code::InvalidArgument);
+    CHECK(refused.message().find("states no depth noise") != std::string::npos);
+    CHECK(!keyframe);
+  }
   CHECK(vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
                                   20.0f, mode, nullptr)
             .ok());
+  CHECK(keyframe && keyframe->depth_noise == vr_test::kFemtoNoise);
   CHECK(near_weight() > 0.0);
   std::fill(depth.begin(), depth.end(), 2000);
   frame.timestamp_ns = 2;

@@ -43,9 +43,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   left, where a surface first seen over no return gives way to no return
   again for two samples in a row: a lone dropout changes nothing).
   `ChangeDetectorConfig::memory` is at most 511. The sensor is described
-  only by its noise floor, `DepthNoise` (`sigma(z) = a + b z + c z^2`,
-  default the Femto Mega's 0.95 mm per metre); the defaults are the
-  operating point measured on the rig (DECISIONS.md, 2026-10-29).
+  only by its noise floor, sensor's `DepthNoise` (`sigma(z) = a + b z +
+  c z^2`) as each frame states it (below); the defaults are the operating
+  point measured on the rig (DECISIONS.md, 2026-10-29).
 
 - **`fuse_orbbec` serves `output.max_viewers` viewers at once** (default 4),
   so a scenario serves more than 4 without a code change
@@ -54,6 +54,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server; both floors rise with them.
 
 ### Changed
+
+- **BREAKING: Dynamic takes each camera's depth noise from its frame**
+  (DECISIONS.md, 2026-10-30). `tsdf::DepthNoise` is gone, with no alias:
+  `FrameInput::noise` and `ChangeDetector`'s `record_detect`, `detect` and
+  `check` take sensor's `sensor::DepthNoise`
+  (`volumetric_kit/sensor/frame/depth_noise.hpp`), whose default, all zero,
+  means unknown, and `record_detect` and `detect` no longer default it.
+  `sender::fuse_inputs` copies each prepared frame's `depth_noise`, as its
+  driver stated it. Dynamic refuses a frame whose noise is unknown, naming
+  its camera's slot: so are the single-frame `integrate` overloads, which
+  state none (Dynamic takes the set form), and a dataset scenario with
+  `fusion.dynamic`. Classic is unchanged. The Femto Mega's driver states
+  exactly the old default, so `fuse_orbbec` and `rig_viewer` fuse bit for
+  bit as before; `fuse_realsense` gets its camera's own noise in place of
+  the Femto's floor, and on FFS the D455 pair's 0.04 px its opener states.
+  It needs sensor 0.10.0, whose frames state their noise.
 
 - build: **core 0.32.0** (46877ff), core main at #73's merge, which dropped the
   `fusion.depth_within_color` key: a rig_viewer scenario that still sets it

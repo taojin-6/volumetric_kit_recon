@@ -782,19 +782,20 @@ pixels fuses nothing, as it allocates nothing (2026-09-30).
 
 **Dynamic: change evicts, conflict averages** (2026-10-29). Each frame
 names its fixed camera's slot (`FrameInput::slot`, distinct in a set; the
-sender's is the camera's index) and noise (`FrameInput::noise`), and the
-integrator owns a `ChangeDetector` (its config from `TsdfIntegrator::create`
-and `FuserConfig::change`). A Dynamic set is one instant, three passes a
-frame: every frame's change test; every frame's reset (`tsdf_reset.comp`,
-the integrate kernel's body built as `VR_TSDF_RESET`), which, on a ray its
-camera flagged -- the voxel's nearest pixel -- sets every voxel in front of
-the new sample and in its band back to unobserved (tsdf, weight and colour
-0) and keeps the history behind the band; a `Vanished` ray, with no new
-sample, resets up to the band of the surface that left (the mask word's
-depth); then every frame's fuse, in slot order. Free space past the band
-averages in as +`trunc_dist` at a tenth of a sample's weight, geometry only
-(it is a sample of what lies behind, so it brings no colour), and only into
-a voxel that holds weight: it wears away
+sender's is the camera's index) and noise (`FrameInput::noise`: sensor's
+`DepthNoise`, the frame's `DeviceFrame::depth_noise` as its producer states
+it; 2026-10-30), and the integrator owns a `ChangeDetector` (its config from
+`TsdfIntegrator::create` and `FuserConfig::change`). A Dynamic set is one
+instant, three passes a frame: every frame's change test; every frame's
+reset (`tsdf_reset.comp`, the integrate kernel's body built as
+`VR_TSDF_RESET`), which, on a ray its camera flagged -- the voxel's nearest
+pixel -- sets every voxel in front of the new sample and in its band back
+to unobserved (tsdf, weight and colour 0) and keeps the history behind the
+band; a `Vanished` ray, with no new sample, resets up to the band of the
+surface that left (the mask word's depth); then every frame's fuse, in slot
+order. Free space past the band averages in as +`trunc_dist` at a tenth of
+a sample's weight, geometry only (it is a sample of what lies behind, so it
+brings no colour), and only into a voxel that holds weight: it wears away
 a surface no change removed but never evicts one, cameras that disagree
 average into one surface, and free space never makes an unobserved voxel
 observed, so a reset region and the blocks a mover left stay unobserved
@@ -858,9 +859,11 @@ to the iOS port, alongside the actual caller and peak-memory measurements.
 `ChangeDetector` (`tsdf/change_detector.hpp`) tells a fixed camera's real
 change from its noise, a pixel against its own past (2026-10-29). Each
 camera slot (up to 64) keeps a history per pixel on the device -- a running
-depth, the pixel's own temporal noise `sigma_r`, floored by the sensor's
-`DepthNoise` (`sigma(z) = a + b z + c z^2`, its only knowledge of the
-sensor), two cumulative sums, four counters and two flags, 20 bytes -- and one
+depth, the pixel's own temporal noise `sigma_r`, floored by the camera's
+depth noise (sensor's `DepthNoise`, `sigma(z) = a + b z + c z^2`, its only
+knowledge of the sensor, as the camera's producer states it with each frame;
+a camera whose noise is unknown, all zero, is refused, never given a model),
+two cumulative sums, four counters and two flags, 20 bytes -- and one
 pass a camera a frame (`record_detect`) tests every valid sample and writes
 the camera's mask, a `uint32` a pixel: `PixelChange::None`, `Nearer`,
 `Farther` or `Vanished` in its low two bits (`change_of`). Two-sided CUSUM
@@ -940,7 +943,9 @@ read back in a batch of its own.
 `recon_sender` is what a sender does with a prepared set
 (`sender/set_sender.hpp`, the 2026-10-26 entry). `fuse_inputs`
 (`sender/fuse_inputs.hpp`) hands prepared frames to the fuser, nothing
-uploaded.
+uploaded: each frame's slot is its place in the set and its noise the
+frame's `depth_noise`, so a frame whose producer states none is refused
+under Dynamic.
 
 **The set step** (`SetSender`). `send` records the set's fusion
 (`Fuser::record_fuse`), its free pass every `free_after` sets

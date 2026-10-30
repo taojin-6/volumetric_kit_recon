@@ -36,7 +36,10 @@
 // make its frame a key, one however many join, the period following from it,
 // through the sender and through code, a set whose fusion is done again
 // included, and each viewer's first frame is that key. A sender over a
-// moved-from stream is refused. On a grid holding a sphere, with no frames to
+// moved-from stream is refused. The cameras state the Femto Mega's depth
+// noise, as its driver does; a Dynamic sender refuses a set with a camera
+// that states none, naming its slot, before coding it, and a Classic one
+// fuses it. On a grid holding a sphere, with no frames to
 // fuse, a sender's frames are the file CodecStream::code writes, byte for
 // byte, frames the decoder refuses and one out of order included. The device
 // part skips with no device.
@@ -56,6 +59,7 @@
 #include <utility>
 #include <vector>
 
+#include "depth_inputs.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 #include "volumetric_kit/core/testing/scratch_dir.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
@@ -193,6 +197,7 @@ std::uint64_t coded_pts(std::size_t set) {
 // back wall 2 m ahead, the near wall 1 m ahead over the left of its picture
 // in the first kNearSets sets, and its colour as packed words on the host.
 // Before set `patch_until`, it sees only a 4x4-pixel patch of the back wall.
+// Its depth noise is the Femto Mega's, unless it states none.
 class Camera final : public sensor::IRgbdSensor {
  public:
   Camera(std::string id, sensor::SyncRole role, std::size_t patch_until = 0)
@@ -231,6 +236,7 @@ class Camera final : public sensor::IRgbdSensor {
     f.depth_camera = {{kW, kH}, {48.0, 48.0, 31.5, 23.5}, {}};
     f.min_depth = 0.1f;
     f.max_depth = 5.0f;
+    if (states_noise_) f.depth_noise = vr_test::kFemtoNoise;
     f.color_packed = pixels->color.data();
     f.color_camera = f.depth_camera;
     f.timestamp_ns = set_time(set);
@@ -238,6 +244,9 @@ class Camera final : public sensor::IRgbdSensor {
     f.pixels = std::move(pixels);
     frames_.push_back(std::move(f));
   }
+
+  // Its frames from now on state no depth noise.
+  void state_no_noise() { states_noise_ = false; }
 
   const sensor::SensorInfo& info() const noexcept override { return info_; }
   vkc::Status set_queue_depth(std::size_t) override { return {}; }
@@ -255,6 +264,7 @@ class Camera final : public sensor::IRgbdSensor {
 
  private:
   std::size_t patch_until_;
+  bool states_noise_ = true;
   sensor::SensorInfo info_;
   std::vector<sensor::RgbdFrame> frames_;
 };
@@ -898,6 +908,55 @@ int moved_from(vkc::test::GpuContext& gpu) {
   return 0;
 }
 
+// A set with a camera whose frame states no depth noise: a Dynamic sender
+// refuses it, naming the camera's slot, and codes nothing; a Classic one,
+// which reads no noise, fuses and codes it. The prep hands each camera's
+// noise on as it was stated.
+int unstated_noise(vkc::test::GpuContext& gpu) {
+  for (const bool dynamic : {true, false}) {
+    std::vector<Camera*> cameras;
+    auto opened = open_cameras(gpu, 2, 0, &cameras);
+    CHECK(opened.ok());
+    sensor::SensorArray array = std::move(opened).value();
+    cameras[1]->state_no_noise();
+    Fusion fusion;
+    fusion.dynamic = dynamic;
+    auto grid = vr::tsdf::create_fusion_grid(gpu.device, gpu.allocator,
+                                             fusion.voxel_size_m,
+                                             fusion.truncation_m, 1024);
+    auto fuser = make_fuser(gpu);
+    auto made = codec_stream::CodecStream::create(gpu.device, gpu.allocator, {},
+                                                  geometry_session());
+    CHECK(grid.ok() && fuser.ok() && made.ok());
+    sender::SetSender::Config sending;
+    sending.max_weight = fusion.max_weight;
+    sending.mode = mode_of(fusion);
+    auto out =
+        sender::SetSender::create(gpu.device, *fuser, *grid, &*made, sending);
+    CHECK(out.ok());
+    std::optional<sensor::FrameSet> set = next_set(array, cameras, 0);
+    CHECK(set.has_value());
+    vkc::CommandBatch front(gpu.device, gpu.allocator);
+    auto prepared = array.record_process(front, *set, nullptr);
+    CHECK(prepared.ok() && prepared->frames.size() == 2);
+    CHECK(prepared->frames[0]->depth_noise == vr_test::kFemtoNoise);
+    CHECK(prepared->frames[1]->depth_noise == sensor::DepthNoise{});
+    auto sent = out->send(front, prepared->frames,
+                          std::make_shared<sensor::FrameSet>(std::move(*set)),
+                          0, prepared->timestamp_ns);
+    if (dynamic) {
+      CHECK(sent.status().domain() == vkc::Status::Code::InvalidArgument);
+      const std::string& why = sent.status().message();
+      CHECK(why.find("camera slot 1") != std::string::npos &&
+            why.find("states no depth noise") != std::string::npos);
+      CHECK(made->coded() == 0);
+    } else {
+      CHECK(sent.ok() && sent->coded.has_value() && made->coded() == 1);
+    }
+  }
+  return 0;
+}
+
 // A sender's frames (SetSender::send with no frames to fuse, so each set is
 // its frame alone), recorded into a front batch, then finished: the file
 // CodecStream::code writes, byte for byte, I- and P-frames, and two frames on
@@ -1046,6 +1105,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(code_sets(gpu, never, "", &kept) == 0);
   CHECK(keys_case(gpu, scratch) == 0);
   CHECK(moved_from(gpu) == 0);
+  CHECK(unstated_noise(gpu) == 0);
   // A sphere's grid, and one at twice its voxel size, which the player of a
   // stream begun on the first refuses.
   const codec_fixture::Sphere sphere{vr::Vec3f(0.01f, -0.02f, 0.03f), 0.09f};
