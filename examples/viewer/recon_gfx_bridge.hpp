@@ -94,7 +94,10 @@ inline gassets::Mesh to_gfx_mesh(const rmesh::Mesh& mesh) {
   // source range; seam B deletes the copy outright, which is the real fix.
   out.vertices.resize(mesh.vertices.size());
   if (!mesh.vertices.empty()) {
-    std::memcpy(out.vertices.data(), mesh.vertices.data(),
+    // The void* says the bulk copy is meant: both layouts are trivially
+    // copyable (asserted above), though gfx's Vertex, with its member
+    // initializers, is not trivial, which GCC's -Wclass-memaccess flags.
+    std::memcpy(static_cast<void*>(out.vertices.data()), mesh.vertices.data(),
                 mesh.vertices.size() * sizeof(gassets::Vertex));
   }
   out.indices = mesh.indices;
