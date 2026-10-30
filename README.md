@@ -235,7 +235,10 @@ build/examples/fuse_realsense/fuse_realsense \
 default), which sensor's `tools/ffs/export_onnx.py` exports, and
 `source.ffs_plan_cache` the directory its TensorRT plans are kept in: the
 first run at a size builds one, which takes minutes, and later runs load it
-in about a second.
+in about a second. In the run's per-set table, FFS's time is in no row of
+its own, only in "wait: cameras" and arrival→published, and the per-set
+counters also count the rectifier's submit and wait on the sensor's thread
+(DECISIONS.md, 2026-10-29).
 
 ## Codec evaluation
 

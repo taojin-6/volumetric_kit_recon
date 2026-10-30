@@ -184,6 +184,8 @@ inline std::string realsense_camera_report(
 ///         `SensorArray::open`'s.
 inline vkc::Result<sensor::SensorArray> open_realsense_array(
     const config::Config& opt, vkc::Device& device, vkc::Allocator& allocator) {
+  // fuse_realsense refuses this first, before the GPU opens; checked here too
+  // so that the opener never hands SensorArray an empty list.
   VKC_TRY(check_realsense_depth(opt));
   const auto t_open = std::chrono::steady_clock::now();
   const auto seconds = [&t_open] {
@@ -207,6 +209,10 @@ inline vkc::Result<sensor::SensorArray> open_realsense_array(
                sensor::RealSenseStereo::open(realsense_stereo_options(opt)));
     const sensor::RealSenseDeviceInfo found = camera.device_info();
     std::printf("loading FFS's plan, or building it (minutes, once)\n");
+    // TODO: give the per-set table FFS's rows (rectify, network) once
+    // sensor's StereoDepthSensor reports its stage times; until then its time
+    // is inside "wait: cameras", and the per-set counters, which count the
+    // whole device, take in the rectifier's submit and wait (DECISIONS.md).
     VKC_ASSIGN(std::unique_ptr<sensor::StereoDepthSensor> depth,
                sensor::StereoDepthSensor::create(
                    device, allocator,

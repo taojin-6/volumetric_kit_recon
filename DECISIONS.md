@@ -5772,18 +5772,22 @@ not a test:
 
 **Context.** The owner keeps both RealSense depths: the camera's own with
 the projector on, and Fast-FoundationStereo (FFS) on its infrared pair with
-it off, FFS on NVIDIA only. sensor 0.8.0 brought `RealSenseStereo` and
-`sensor_ffs`'s `StereoDepthSensor`, which rectifies any calibrated pair and
-runs FFS on a thread of its own as an `IRgbdSensor`; core 0.32.0 the
-`FuseRealsense` keys that choose it.
+it off, FFS on NVIDIA only. sensor 0.7.0 brought `RealSenseStereo` and
+0.8.0 `sensor_ffs`'s `StereoDepthSensor`, which rectifies any calibrated
+pair and runs FFS on a thread of its own as an `IRgbdSensor`; core 0.32.0
+the `FuseRealsense` keys that choose it.
 
 **Decision.**
 - One program, `fuse_realsense`, its depth the scenario's `source.depth`,
   chosen in its opener alone (the entry above): the camera's own is a
   `RealSenseSensor`, FFS a `StereoDepthSensor` over a `RealSenseStereo`.
-  Either is a `SensorArray` of one, so prep, fusion, the per-set table and
-  the counters are the same; FFS's depth stays on the device, where the prep
-  reads it in place.
+  Either is a `SensorArray` of one, so prep, fusion and the per-set table
+  are the same; FFS's depth stays on the device, where the prep reads it in
+  place. Under FFS the table's per-set counters, which count the whole
+  device, also take in the sensor thread's rectifier: one more submit and
+  host wait a set, its dispatches and barriers, and its wait in "blocked
+  ms". FFS itself is in no row (its time is inside "wait: cameras" and
+  arrival→published): `StereoDepthSensor` reports no stage times yet.
 - The pair is rectified to the depth size as luma at alpha 0: luma carries
   no coverage, so at alpha 0 no border is matched as picture. The infrared
   cameras run at the driver's own mode (1280x720), which the rectifier
