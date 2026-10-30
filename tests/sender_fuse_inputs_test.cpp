@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "depth_inputs.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/recon/sender/fuse_inputs.hpp"
@@ -48,7 +49,7 @@ sensor::DeviceFrame frame(std::uint32_t width, bool color,
 }
 
 int run() {
-  const sensor::DepthNoise femto{0.0f, 0.00095f, 0.0f};
+  const sensor::DepthNoise& femto = vr_test::kFemtoNoise;
   const sensor::DepthNoise stereo =
       sensor::DepthNoise::stereo(0.04, 500.0, 0.1);
   const sensor::DepthNoise constant{0.001f, 0.0f, 0.0f};
