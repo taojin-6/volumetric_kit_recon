@@ -8,6 +8,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`fuse_realsense` takes FFS depth** (README, "Optional: FFS depth";
+  [config/README.md](config/README.md)): with `source.depth: "ffs"` it
+  opens the camera's infrared cameras, projector off, as sensor's
+  `StereoDepthSensor` (each pair rectified on the GPU and matched by
+  Fast-FoundationStereo on TensorRT), in place of the camera's own depth,
+  with the same loop; `source.emitter` sets the projector for either. Built
+  where sensor builds `sensor_ffs` (`VS_WITH_FFS`: CUDA and TensorRT 11, an
+  NVIDIA GPU); any other build refuses an FFS scenario before anything
+  opens. Template: `config/examples/fuse_realsense_ffs.json`, its model and
+  plans under `models/` beside it (ignored, as `results/` is). It runs on
+  the sensor 0.9.0 pin (below), whose `RealSenseStereo` came in 0.7.0 and
+  `sensor_ffs` in 0.8.0. recon pins core 0.33.0, which brings the keys; the
+  core floor rises with it. CI's CUDA leg installs TensorRT and builds
+  `VS_WITH_FFS`.
+
 - **`fuse_realsense`**, live fusion of one RealSense D400 camera (the D455)
   with its own depth, its projector on, to a PLY (README, "Optional:
   librealsense"; [config/README.md](config/README.md)). It is built where

@@ -5,9 +5,10 @@
 // template loads and maps into the codec's runtime options (grid's
 // codec_config.hpp), core-validated settings reach the sender's config, the
 // Replica sensor's options and, where each driver is built, the Orbbec streams
-// and the RealSense camera's options unchanged, and the live templates hold
-// what they document. The codec's side is grid's example_config_test.cpp. No
-// file assets, device or camera are opened.
+// and the RealSense camera's options (and, with sensor_ffs, FFS depth's)
+// unchanged, and the live templates hold what they document. The codec's side
+// is grid's example_config_test.cpp. No file assets, device or camera are
+// opened.
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -23,6 +24,7 @@
 #endif
 #ifdef VR_TEST_REALSENSE_CONFIG
 #include "realsense_camera.hpp"
+namespace vkc = volumetric_kit::core;
 #endif
 
 namespace cfg = volumetric_kit::core::config;
@@ -45,6 +47,7 @@ int main() {
       {"readback_orbbec", cfg::Application::FuseOrbbec},
       {"dump_orbbec", cfg::Application::FuseOrbbec},
       {"fuse_realsense", cfg::Application::FuseRealsense},
+      {"fuse_realsense_ffs", cfg::Application::FuseRealsense},
       {"fuse_render", cfg::Application::FuseRender},
       {"fuse_viewer", cfg::Application::FuseViewer},
       {"rig_viewer", cfg::Application::RigViewer},
@@ -273,6 +276,87 @@ int main() {
   CHECK(opened.depth_width == 848 && opened.depth_height == 100);
   CHECK(opened.fps == 15);
   CHECK(opened.min_depth == 0.4F && opened.max_depth == 3.5F);
+  CHECK(opened.emitter);
+  CHECK(vr_example::check_realsense_depth(named.value()).ok());
+  CHECK(vr_example::realsense_depth_line(named.value()) ==
+        "depth: the camera's own, projector on\n");
+  // The projector off when the scenario says so.
+  const auto dark = cfg::parse(
+      R"({"version":1,"operation":"fuse","source":{"kind":"live","emitter":false}})",
+      cfg::Application::FuseRealsense);
+  CHECK(dark && !vr_example::realsense_options(dark.value()).emitter);
+  CHECK(vr_example::realsense_depth_line(dark.value()) ==
+        "depth: the camera's own, projector off\n");
+
+  // fuse_realsense_ffs's template: FFS on the infrared pair at 960x544, the
+  // projector off, the camera's colour and rate as the driver's own, and the
+  // model and its plans beside the scenario.
+  const auto ffs =
+      cfg::load(std::string(VR_CONFIG_FIXTURES) + "/fuse_realsense_ffs.json",
+                cfg::Application::FuseRealsense);
+  CHECK(ffs && ffs->source.depth == cfg::DepthSource::Ffs);
+  const sensor::RealSenseStereo::Options pair =
+      vr_example::realsense_stereo_options(ffs.value());
+  const sensor::RealSenseStereo::Options pair_driver;
+  CHECK(pair.serial.empty() && !pair.emitter && !pair.color_controls);
+  CHECK(pair.infrared_width == pair_driver.infrared_width &&
+        pair.infrared_height == pair_driver.infrared_height &&
+        pair.color_width == pair_driver.color_width &&
+        pair.color_height == pair_driver.color_height &&
+        pair.fps == pair_driver.fps);
+  const auto models = std::filesystem::path(VR_CONFIG_FIXTURES) / "models";
+  CHECK(ffs->source.ffs_model ==
+        (models / "ffs_23-36-37_960x544.onnx").lexically_normal().string());
+  CHECK(ffs->source.ffs_plan_cache ==
+        (models / "ffs_plans").lexically_normal().string());
+  CHECK(ffs->output.path ==
+        (results / "realsense_ffs.ply").lexically_normal().string());
+  CHECK(vr_example::realsense_depth_line(ffs.value()) ==
+        "depth: FFS on the infrared cameras at 960x544 (" +
+            ffs->source.ffs_model + "), projector off\n");
+  // Every field the pair takes reaches its option, none crossed.
+  const auto lit = cfg::parse(R"({
+    "version": 1, "operation": "fuse",
+    "source": {"kind": "live", "serial": "215122251234", "depth": "ffs",
+               "emitter": true, "color_width": 640, "color_height": 480,
+               "fps": 15, "depth_width": 1280, "depth_height": 736,
+               "ffs_model": "/m/ffs.onnx", "ffs_plan_cache": "/m/plans"},
+    "fusion": {"min_depth_m": 0.4, "max_depth_m": 3.5}
+  })",
+                              cfg::Application::FuseRealsense);
+  CHECK(lit);
+  const sensor::RealSenseStereo::Options lit_pair =
+      vr_example::realsense_stereo_options(lit.value());
+  CHECK(lit_pair.serial == "215122251234" && lit_pair.emitter);
+  CHECK(lit_pair.color_width == 640 && lit_pair.color_height == 480);
+  CHECK(lit_pair.fps == 15);
+  CHECK(lit_pair.infrared_width == pair_driver.infrared_width &&
+        lit_pair.infrared_height == pair_driver.infrared_height);
+#ifdef VR_EXAMPLE_FFS
+  // With sensor_ffs: FFS is opened, the pair rectified to the depth size as
+  // luma at alpha 0, and the model, its plans and the depth gate passed on.
+  CHECK(vr_example::check_realsense_depth(ffs.value()).ok());
+  const sensor::StereoDepthSensor::Options depth =
+      vr_example::ffs_depth_options(ffs.value());
+  CHECK(depth.rectify.size.width == 960 && depth.rectify.size.height == 544);
+  CHECK(depth.rectify.alpha == 0.0f);
+  CHECK(depth.rectify.output == sensor::StereoRectifier::Output::Luma8);
+  CHECK(depth.ffs.model.string() == ffs->source.ffs_model);
+  CHECK(depth.ffs.plan_cache.string() == ffs->source.ffs_plan_cache);
+  CHECK(depth.ffs.min_depth == 0.25F && depth.ffs.max_depth == 5.F);
+  const sensor::StereoDepthSensor::Options lit_depth =
+      vr_example::ffs_depth_options(lit.value());
+  CHECK(lit_depth.rectify.size.width == 1280 &&
+        lit_depth.rectify.size.height == 736);
+  CHECK(lit_depth.ffs.model.string() == "/m/ffs.onnx" &&
+        lit_depth.ffs.plan_cache.string() == "/m/plans");
+  CHECK(lit_depth.ffs.min_depth == 0.4F && lit_depth.ffs.max_depth == 3.5F);
+#else
+  // Without it, FFS is refused, saying how to build it.
+  const vkc::Status refused = vr_example::check_realsense_depth(ffs.value());
+  CHECK(refused.domain() == vkc::Status::Code::Unsupported);
+  CHECK(refused.message().find("VS_WITH_FFS=ON") != std::string::npos);
+#endif
 #endif
   return 0;
 }

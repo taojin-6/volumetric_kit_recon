@@ -974,12 +974,12 @@ dataset examples poll their frames through `sensor::IRgbdSensor&` — the
 fuse loop never learns what is behind it — and prepare each on its own.
 The three live ones read their cameras raw as a `SensorArray`,
 `fuse_orbbec` one Orbbec camera or a rig, `fuse_realsense` one
-`RealSenseSensor` and `rig_viewer` an Orbbec rig, and prepare each set in
-one batch (`SensorArray::process`). The prep crops each frame with colour
-to what both its cameras see, by their fields of view (sensor's 2026-10-29
-same-view entry): depth outside the colour camera's view is not fused, and
-colour outside the depth camera's view has coverage 0, so it colours and
-textures nothing.
+`RealSenseSensor` or `StereoDepthSensor` and `rig_viewer` an Orbbec rig,
+and prepare each set in one batch (`SensorArray::process`). The prep crops
+each frame with colour to what both its cameras see, by their fields of
+view (sensor's 2026-10-29 same-view entry): depth outside the colour
+camera's view is not fused, and colour outside the depth camera's view has
+coverage 0, so it colours and textures nothing.
 The four dataset examples take `ReplicaSensor` as the source: frame cap,
 stride and the depth gate are its options, stamped on each frame it hands
 out, and its disk probe at `open` visits only the frames those options
@@ -1026,7 +1026,7 @@ rates and atlas-copy times in `rig_report.hpp`,
 the live array's report (its counters, each camera's line through a
 counters function, a rig's skew) and clock in `live_sets.hpp`, the Orbbec
 camera lines and counters (`lost` among them) in `fuse_orbbec_sets.hpp`, and
-the RealSense camera's line and its scenario's options in
+the RealSense camera's line, its depth and its scenario's options in
 `realsense_camera.hpp`.
 The per-set table of `fuse_orbbec`, `fuse_realsense`, `codec_replica` and
 `rig_viewer` is `set_log.hpp`'s.
@@ -1091,15 +1091,23 @@ That run is `examples/common/live_fusion.hpp`'s `run_live_fusion`, which
 takes the program's camera opener and its counters, so it is the one loop
 of both live programs that fuse to a PLY.
 **`fuse_realsense`** (`VS_WITH_REALSENSE`) is that run on one RealSense
-D400 camera's own depth (core's `FuseRealsense` profile): a
-`RealSenseSensor` with its projector on, at the scenario's modes and depth
-gate (`realsense_options`), read as a `SensorArray` of one, at the origin;
-its YUYV colour is staged and converted on the GPU by the array's prep, and
-its counters are the interface's. The profile takes no Orbbec rig keys,
-codec, outputs beyond the PLY, stream operation or diagnostics. The opener
-(`open_realsense_array`) is where a depth source is chosen, so stereo depth
-from the camera's infrared pair joins as another `IRgbdSensor` there, the
-loop unchanged.
+D400 camera (core's `FuseRealsense` profile), its depth the scenario's
+`source.depth`, chosen in the opener (`open_realsense_array`) alone, so the
+loop is the same for both:
+- `camera`: a `RealSenseSensor`, the camera's own depth with its projector
+  on, at the scenario's modes and depth gate (`realsense_options`).
+- `ffs` (with sensor's `sensor_ffs`, `VS_WITH_FFS`; `VR_EXAMPLE_FFS` in the
+  example): a `StereoDepthSensor` over a `RealSenseStereo`, the camera's
+  infrared cameras with the projector off (`realsense_stereo_options`),
+  rectified to the depth size as luma at alpha 0 and matched by FFS
+  (`ffs_depth_options`) on the sensor's own thread; its depth stays on the
+  device, where the prep reads it in place. A build without `sensor_ffs`
+  refuses the scenario before any GPU or camera opens
+  (`check_realsense_depth`).
+Either is read as a `SensorArray` of one, at the origin; its YUYV colour is
+staged and converted on the GPU by the array's prep, and its counters are
+the interface's. The profile takes no Orbbec rig keys, codec, outputs beyond
+the PLY, stream operation or diagnostics.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VS_WITH_ORBBEC`, and
 `VS_WITH_FFMPEG` off Apple; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file, opened as

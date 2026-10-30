@@ -26,17 +26,16 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.32.0 (46877ff, core main at #73's merge, which dropped the
-# fusion.depth_within_color key rig_viewer no longer reads), as are the Homebrew
-# key action in .github/workflows/_build.yml and the workflow-trigger check in
-# .github/workflows/lint.yml. The floor stays 0.31.0, the first core with the
-# FuseRealsense profile fuse_realsense loads; the vkc_require_core checks below
-# say which core each part needs. The tests are main()s of their own on the
-# core's test support.
+# The pin is core 0.33.0 (b0e1a9e, core main at #72's merge, whose FuseRealsense
+# source.depth chooses fuse_realsense's depth), as are the Homebrew key action
+# in .github/workflows/_build.yml and the workflow-trigger check in
+# .github/workflows/lint.yml; the vkc_require_core checks below say which core
+# each part needs. The tests are main()s of their own on the core's test
+# support.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 46877ff4d7b3a454a43fb442c995c307bfa744d9)
+  GIT_TAG b0e1a9ecbd6d3b4ff6c2e3a8b787dba27d1db0db)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
@@ -73,10 +72,10 @@ endif()
 # never main; an application that also fetches sensor declares it first, and
 # FetchContent keeps that declaration, as with the core. Work on both checkouts
 # at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_SENSOR=<sensor
-# checkout>. Its drivers (VS_WITH_ORBBEC, VS_WITH_REALSENSE, VS_WITH_FFMPEG,
-# VS_WITH_CUDA) are given on recon's configure. sensor's own CI tests sensor, so
-# its tests and -Werror stay off in this build; recon's examples take its test
-# fixtures (VS_TEST_DATA_DIR, which it sets).
+# checkout>. Its drivers and stereo depth (VS_WITH_ORBBEC, VS_WITH_REALSENSE,
+# VS_WITH_FFMPEG, VS_WITH_CUDA, VS_WITH_FFS) are given on recon's configure.
+# sensor's own CI tests sensor, so its tests and -Werror stay off in this build;
+# recon's examples take its test fixtures (VS_TEST_DATA_DIR, which it sets).
 #
 # The pin is sensor 0.9.0 (9466540, sensor #9's merge), as are its Orbbec SDK
 # and librealsense actions in .github/workflows (the sibling-actions-at-pins

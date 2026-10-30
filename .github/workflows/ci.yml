@@ -65,7 +65,10 @@ jobs:
       # does (librealsense from RealSense's apt repository per job on Ubuntu,
       # the Mac's formula checked), so fuse_realsense builds on each and the
       # 26.04 leg builds it without the Orbbec driver; the sanitizer job
-      # keeps the drivers off.
+      # keeps the drivers off. `ffs` builds sensor_ffs (VS_WITH_FFS, TensorRT
+      # from the CUDA repository per job) on 24.04, the CUDA leg, and with it
+      # fuse_realsense's FFS depth; the other legs build fuse_realsense
+      # without it, and their tests check that it refuses an FFS scenario.
       # `assimp` builds grid's optional mesh loader on Linux and macOS; the
       # other legs build image / PLY IO without it.
       #
@@ -84,6 +87,7 @@ jobs:
             realsense_sdk: true
             ffmpeg: true
             cuda: true
+            ffs: true
             sync_validation: true
           - os: ubuntu-26.04
             runner: vk-linux-gpu
@@ -109,6 +113,7 @@ jobs:
       realsense_sdk: ${{ matrix.realsense_sdk || false }}
       ffmpeg: ${{ matrix.ffmpeg || false }}
       cuda: ${{ matrix.cuda || false }}
+      ffs: ${{ matrix.ffs || false }}
       assimp: ${{ matrix.assimp || false }}
       sync_validation: ${{ matrix.sync_validation || false }}
 

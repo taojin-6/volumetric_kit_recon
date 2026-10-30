@@ -59,6 +59,15 @@ on:
         required: false
         type: boolean
         default: false
+      ffs:
+        description: >-
+          Install TensorRT from NVIDIA's CUDA repository and build with
+          sensor's VS_WITH_FFS=ON, so this leg builds sensor_ffs (FFS stereo
+          depth) and fuse_realsense's FFS depth, and runs their tests. Linux
+          only; needs cuda.
+        required: false
+        type: boolean
+        default: false
       assimp:
         description: >-
           Install Assimp and build grid's optional mesh loader with
@@ -187,9 +196,10 @@ jobs:
           # shellcheck disable=SC2086  # intentional: split $pkgs into separate args
           sudo apt-get install -y --no-install-recommends $pkgs
           # The CUDA toolkit for VS_WITH_CUDA (sensor's cmake/vs_cuda.cmake): cuda.h,
-          # nvjpeg.h and the nvcc FindCUDAToolkit locates it by; recon
-          # compiles no CUDA code. libcuda comes from the container toolkit
-          # at run time, as for NVDEC, and libnvjpeg from this package.
+          # nvjpeg.h and the nvcc FindCUDAToolkit locates it by, which with
+          # VS_WITH_FFS compiles sensor_ffs's kernels; recon compiles no CUDA
+          # code. libcuda comes from the container toolkit at run time, as for
+          # NVDEC, and libnvjpeg from this package.
           # NVIDIA's repository key comes as a .deb that dpkg installs as
           # root, so only the file pinned here is installed: per repository,
           # the SHA256 its signed package index lists for it. Any other
@@ -216,6 +226,18 @@ jobs:
             sudo apt-get install -y --no-install-recommends cuda-nvcc-13-4 \
               cuda-cudart-dev-13-4 cuda-driver-dev-13-4 libnvjpeg-dev-13-4
             echo "CUDAToolkit_ROOT=/usr/local/cuda-13.4" >> "$GITHUB_ENV"
+            # TensorRT for VS_WITH_FFS (sensor's cmake/vs_ffs.cmake), from the
+            # same repository, at the version built for this CUDA, every
+            # package of it pinned as sensor's CI pins it, so apt takes no
+            # newer one; it installs 2.6 GB.
+            # TODO: take this install from a sensor action, as librealsense's.
+            if [ "${{ inputs.ffs }}" = "true" ]; then
+              trt=11.4.0.106-1+cuda13.4
+              sudo apt-get install -y --no-install-recommends \
+                "libnvinfer11=${trt}" "libnvinfer-headers-dev=${trt}" \
+                "libnvinfer-safe-headers-dev=${trt}" "libnvinfer-dev=${trt}" \
+                "libnvonnxparsers11=${trt}" "libnvonnxparsers-dev=${trt}"
+            fi
           fi
           # On a hosted runner, point the loader at lavapipe for the rest of the
           # job. On the GPU box we pin nothing: the NVIDIA Vulkan ICD injected by
@@ -301,7 +323,7 @@ jobs:
       - name: Homebrew key
         id: brew
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
-        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@46877ff4d7b3a454a43fb442c995c307bfa744d9
+        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@b0e1a9ecbd6d3b4ff6c2e3a8b787dba27d1db0db
         with:
           formulae: ${{ steps.formulae.outputs.formulae }}
 
@@ -423,6 +445,7 @@ jobs:
                 -DVS_WITH_REALSENSE=${{ inputs.realsense_sdk && 'ON' || 'OFF' }} \
                 -DVS_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
                 -DVS_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }} \
+                -DVS_WITH_FFS=${{ inputs.ffs && 'ON' || 'OFF' }} \
                 -DVGRID_WITH_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}; then
               ok=1
               break
