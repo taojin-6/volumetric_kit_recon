@@ -69,6 +69,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **the viewers pin gfx main after #168** (`df3a0de`), which needs
+  core 0.20.0: the live viewers' windows render at 4x MSAA, resolved in the
+  pass (gfx #167, #168). `fuse_render` and the viewer tests' offscreen
+  targets stay single-sampled; recon's code needed no change.
+
 - build: **recon pins grid 0.6.0** (grid #11's merge, `cf7c99a`), and
   `VR_GRID_MIN_VERSION` rises to it: its `StreamServer` serves every track,
   track 0's keys anchoring the GOP, so `fuse_orbbec` with `source.audio`

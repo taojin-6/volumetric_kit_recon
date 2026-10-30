@@ -56,8 +56,8 @@ FetchContent_Declare(
   # washed out. A rendering floor, and the newest, so it covers the older ones;
   # recon_example_viewer_pass checks it.
   #
-  # It refuses a core older than 0.18.0 (gfx's VG_VKC_MIN_VERSION).
-  GIT_TAG f147e00e7fb45382da8874198684656496f09b7c # gfx main, after #152
+  # It refuses a core older than 0.20.0 (gfx's VG_VKC_MIN_VERSION).
+  GIT_TAG df3a0de4184f6b989faa8d8ffbe0a338e00642a5 # gfx main, after #168
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
