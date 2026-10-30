@@ -74,8 +74,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   merge, `4618234`); CI takes the core's and sensor's actions at the new
   pins, and the three floors rise to them, for the mic above: the core's
   `source.audio`, sensor's `IAudioSensor` and `Microphone`, grid's
-  `TrackKind::Audio` (0.4.0) and `CodecStream::append`. Nothing else
-  changes for recon: a stream with no Audio track writes the bytes it did.
+  `TrackKind::Audio` (0.4.0) and `CodecStream::append`.
 
 - **BREAKING: Dynamic takes each camera's depth noise from its frame**
   (DECISIONS.md, 2026-10-30). `tsdf::DepthNoise` is gone, with no alias:

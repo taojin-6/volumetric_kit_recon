@@ -151,8 +151,10 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
       opt.output.serve != 0) {
     const codec_stream::CodecOutputs outputs =
         vgrid_example::set_codec_outputs(opt);
-    // With a mic and output.serve, the server refuses the two tracks here
-    // (Unsupported) until grid serves more than one.
+    // TODO: drop once grid's StreamServer serves Audio tracks, with the lines
+    // on it in DESIGN.md, config/README.md and the CHANGELOG; until then,
+    // with a mic and output.serve, the server refuses the two tracks here
+    // (Unsupported), and this says why.
     vkc::Result<codec_stream::CodecStream> made =
         codec_stream::CodecStream::create(
             device, allocator, encoder,
