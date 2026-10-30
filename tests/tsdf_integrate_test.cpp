@@ -23,6 +23,7 @@
 #include "volumetric_kit/core/testing/buffer_readback.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/compute_kernel.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
@@ -853,11 +854,18 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(pd >= 0);
   const std::size_t vd = static_cast<std::size_t>(pd) + corner_local;
   // A single frame states no depth noise, so Dynamic refuses it before any
-  // work; the set form takes the camera's.
+  // work, from the host or a buffer (an empty one, refused for that first
+  // under Classic); the set form takes the camera's.
+  constexpr std::string_view kSingle = "a single frame states no depth noise";
   const vkc::Status no_noise = dyn_integ->integrate(
       vbg_dyn, depth.data(), cam, 5.0f, tsdf::IntegrationMode::Dynamic);
   CHECK(no_noise.domain() == vkc::Status::Code::InvalidArgument);
-  CHECK(no_noise.message().find("states no depth noise") != std::string::npos);
+  CHECK(no_noise.message().find(kSingle) != std::string::npos);
+  const vkc::Buffer no_buffer{};
+  const vkc::Status no_noise_buffer = dyn_integ->integrate(
+      vbg_dyn, no_buffer, cam, 5.0f, tsdf::IntegrationMode::Dynamic);
+  CHECK(no_noise_buffer.domain() == vkc::Status::Code::InvalidArgument);
+  CHECK(no_noise_buffer.message().find(kSingle) != std::string::npos);
   CHECK(floats(vbg_dyn, vol::kWeightAttribute)[vd] == 0.0f);
   CHECK(integrate_dynamic(dyn_integ.value(), vbg_dyn, depth.data(), cam, 5.0f)
             .ok());

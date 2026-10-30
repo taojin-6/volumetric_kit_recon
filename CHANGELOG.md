@@ -63,13 +63,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   means unknown, and `record_detect` and `detect` no longer default it.
   `sender::fuse_inputs` copies each prepared frame's `depth_noise`, as its
   driver stated it. Dynamic refuses a frame whose noise is unknown, naming
-  its camera's slot: so are the single-frame `integrate` overloads, which
-  state none (Dynamic takes the set form), and a dataset scenario with
-  `fusion.dynamic`. Classic is unchanged. The Femto Mega's driver states
-  exactly the old default, so `fuse_orbbec` and `rig_viewer` fuse bit for
-  bit as before; `fuse_realsense` gets its camera's own noise in place of
-  the Femto's floor, and on FFS the D455 pair's 0.04 px its opener states.
-  It needs sensor 0.10.0, whose frames state their noise.
+  its camera's slot; it refuses the single-frame `integrate` overloads
+  outright, as they state none (Dynamic takes the set form), and a dataset
+  scenario with `fusion.dynamic`. Classic is unchanged. The Femto Mega's
+  driver states exactly the old default, so `fuse_orbbec` and `rig_viewer`
+  fuse bit for bit as before; `fuse_realsense` gets its camera's own noise
+  in place of the Femto's floor, and on FFS the D455 pair's 0.04 px its
+  opener states. It needs sensor 0.10.0, whose frames state their noise.
 
 - build: **core 0.32.0** (46877ff), core main at #73's merge, which dropped the
   `fusion.depth_within_color` key: a rig_viewer scenario that still sets it

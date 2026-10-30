@@ -235,9 +235,9 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param max_weight  The running-average weight cap (the ported default is
   ///                    5.0).
   /// @param mode        Classic accumulates; dynamic resets along the rays that
-  ///                    changed (see @ref IntegrationMode). A single frame is
-  ///                    slot 0's and states no depth noise, so Dynamic
-  ///                    refuses it: Dynamic takes the set form, each
+  ///                    changed (see @ref IntegrationMode). A single frame
+  ///                    states no depth noise, so Dynamic refuses it before
+  ///                    any work: Dynamic takes the set form, each
   ///                    @ref FrameInput with its camera's noise.
   /// @param color       Optional @ref ColorFrame fused into the grid's `color`
   ///                    attribute (a `uint32` packed-RGB attribute the grid
@@ -281,10 +281,10 @@ class VR_TSDF_API TsdfIntegrator {
   ///         non-finite intrinsic, depth bound or pose entry, @p grid lacks a
   ///         `float` `tsdf`/`weight` attribute, or @p color is set but empty
   ///         or @p grid lacks a `uint32` `color` attribute; under Dynamic, also
-  ///         for a frame's slot past @ref ChangeDetector::kMaxCameras, two
-  ///         frames of a set with one slot, or a noise model
-  ///         @ref ChangeDetector::record_detect refuses (an unknown one
-  ///         included, as a single frame's is); otherwise a buffer or
+  ///         for a single frame (this overload's), a frame's slot past
+  ///         @ref ChangeDetector::kMaxCameras, two frames of a set with one
+  ///         slot, or a noise model @ref ChangeDetector::record_detect
+  ///         refuses (an unknown one included); otherwise a buffer or
   ///         dispatch failure.
   core::Status integrate(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
                          const float* depth,
