@@ -1103,8 +1103,9 @@ finishes; grid's `CodecStream::append` muxes the records with the frames by
 pts. A drain that fails ends the audio with a warning, and fusion goes on.
 The mic's counters follow the cameras', with what the stream, finished
 first, wrote and dropped of its chunks. With `output.serve`, grid's server
-serves both tracks, as the file records them. With no mic, the session and
-its bytes are as before audio.
+serves both tracks, as the file records them, except the audio past the last
+set, which a viewer may miss as the stream finishes. With no mic, the session
+and its bytes are as before audio.
 A run that fails part-way still finishes its stream and
 reports the frames it coded; one that coded no set leaves none.
 The report's bitrate is at `source.fps`, and `codec.sweep` sweeps the last

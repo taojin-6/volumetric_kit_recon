@@ -91,7 +91,7 @@ recon builds on sensor (`volumetric_kit::sensor_*`, the camera and sensor
 tiers; [its README](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/README.md#building)
 covers its options, drivers and decoders), fetched pinned by commit after
 the core and checked with `vkc_require_sibling(volumetric_kit::sensor ...)`
-at `VR_SENSOR_MIN_VERSION` (0.1.0); recon's configure passes it the `VS_`
+at `VR_SENSOR_MIN_VERSION`; recon's configure passes it the `VS_`
 options. sensor's own CI tests sensor, so its tests and `-Werror` stay off
 here. An application that fetches sensor itself declares it first; to build
 against a local sensor checkout, pass
@@ -99,7 +99,7 @@ against a local sensor checkout, pass
 
 recon builds on grid, fetched pinned by commit after the core and checked
 with `vkc_require_sibling(volumetric_kit::grid ...)` at
-`VR_GRID_MIN_VERSION` (0.1.0). grid's own CI tests grid, so its tests and
+`VR_GRID_MIN_VERSION`. grid's own CI tests grid, so its tests and
 `-Werror` stay off here; recon's tests and examples turn on its test support
 and its examples' helpers. An application that fetches grid itself declares
 it first; to build against a local grid checkout, pass
