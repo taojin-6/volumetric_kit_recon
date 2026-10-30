@@ -32,9 +32,11 @@ struct FuseInputs {
 ///        `sensor::GpuFramePrep` hands them out: nothing is uploaded, and depth
 ///        and colour are fused through their own cameras, a colour pixel's
 ///        coverage read off its high byte (@ref
-///        tsdf::ColorFrame::coverage_in_alpha). An empty entry is skipped, and
+///        tsdf::ColorFrame::coverage_in_alpha). An empty entry is skipped;
 ///        each frame's @ref tsdf::FrameInput::slot is its index in
-///        @p frames, the camera's place in the set.
+///        @p frames, the camera's place in the set, and its
+///        @ref tsdf::FrameInput::noise the frame's `depth_noise`, as its
+///        producer stated it (unknown stays unknown, which Dynamic refuses).
 /// @param frames  The prepared frames; they must outlive the inputs, which
 ///                borrow their buffers.
 VR_SENDER_API FuseInputs

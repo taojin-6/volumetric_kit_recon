@@ -37,7 +37,9 @@
 // - A closed gate word tests nothing: a 5 cm step behind it is flagged on
 //   the next frame the gate opens, as the history never saw it; the word is
 //   found at its offset, and a bad one is refused.
-// - The refusals, and move construction.
+// - The refusals, each for its own reason with a known noise otherwise; an
+//   unknown noise (all zero, as a producer that states none) names its slot.
+//   Then move construction.
 // Skips where no device is present.
 
 #include <algorithm>
@@ -48,6 +50,7 @@
 #include <cstdio>
 #include <limits>
 #include <random>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -61,6 +64,7 @@
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/change_detector.hpp"
 
+#include "depth_inputs.hpp"
 #include "volumetric_kit/core/testing/buffer_readback.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 
@@ -334,7 +338,7 @@ int gate_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
     vkc::CommandBatch batch(gpu.device, gpu.allocator);
     CHECK(detector
               .record_detect(batch, kSlot, vkc::StorageInput(depth.data()), cam,
-                             {}, &gate)
+                             vr_test::kFemtoNoise, &gate)
               .ok());
     mask.assign(depth.size(), 0xFFu);
     CHECK(batch
@@ -360,7 +364,7 @@ int gate_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
     vkc::CommandBatch batch(gpu.device, gpu.allocator);
     return detector
                .record_detect(batch, kSlot, vkc::StorageInput(depth.data()),
-                              cam, {}, &bad)
+                              cam, vr_test::kFemtoNoise, &bad)
                .domain() == vkc::Status::Code::InvalidArgument;
   };
   CHECK(refused({&words.value(), 6, 1}));
@@ -414,13 +418,14 @@ int no_return_case(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
       sporadic[i] = sporadic_depth(t);
     }
     vkc::CommandBatch batch(gpu.device, gpu.allocator);
-    CHECK(
-        detector
-            .record_detect(batch, kMover, vkc::StorageInput(mover.data()), cam)
-            .ok());
+    CHECK(detector
+              .record_detect(batch, kMover, vkc::StorageInput(mover.data()),
+                             cam, vr_test::kFemtoNoise)
+              .ok());
     CHECK(detector
               .record_detect(batch, kSporadic,
-                             vkc::StorageInput(sporadic.data()), cam)
+                             vkc::StorageInput(sporadic.data()), cam,
+                             vr_test::kFemtoNoise)
               .ok());
     CHECK(batch
               .readback(*detector.mask(kMover), 0,
@@ -524,14 +529,14 @@ int no_return_dropout_case(vkc::test::GpuContext& gpu,
               : 0.0f;
     }
     vkc::CommandBatch batch(gpu.device, gpu.allocator);
-    CHECK(
-        detector
-            .record_detect(batch, kStill, vkc::StorageInput(still.data()), cam)
-            .ok());
-    CHECK(
-        detector
-            .record_detect(batch, kFar, vkc::StorageInput(far.data()), far_cam)
-            .ok());
+    CHECK(detector
+              .record_detect(batch, kStill, vkc::StorageInput(still.data()),
+                             cam, vr_test::kFemtoNoise)
+              .ok());
+    CHECK(detector
+              .record_detect(batch, kFar, vkc::StorageInput(far.data()),
+                             far_cam, vr_test::kFemtoNoise)
+              .ok());
     CHECK(batch
               .readback(*detector.mask(kStill), 0,
                         kStillPixels * sizeof(std::uint32_t), still_mask.data())
@@ -617,12 +622,13 @@ int lone_dropout_case(vkc::test::GpuContext& gpu,
     vkc::CommandBatch batch(gpu.device, gpu.allocator);
     CHECK(detector
               .record_detect(batch, kLone, vkc::StorageInput(lone_depth.data()),
-                             cam)
+                             cam, vr_test::kFemtoNoise)
               .ok());
     if (!dropped) {
       CHECK(detector
                 .record_detect(batch, kTwinSlot,
-                               vkc::StorageInput(depth.data()), cam)
+                               vkc::StorageInput(depth.data()), cam,
+                               vr_test::kFemtoNoise)
                 .ok());
     }
     CHECK(batch
@@ -676,26 +682,47 @@ int refusals(vkc::test::GpuContext& gpu, tsdf::ChangeDetector& detector) {
   const auto refused = [](const vkc::Status& s) {
     return s.domain() == vkc::Status::Code::InvalidArgument;
   };
-  CHECK(refused(detector.detect(tsdf::ChangeDetector::kMaxCameras, host, cam)));
+  const auto says = [](const vkc::Status& s, const char* what) {
+    return s.message().find(what) != std::string::npos;
+  };
+  // Each refused for its own reason: the noise is known.
+  const sensor::DepthNoise& tof = vr_test::kFemtoNoise;
+  CHECK(detector.check(0, cam, tof).ok());
+  CHECK(refused(
+      detector.detect(tsdf::ChangeDetector::kMaxCameras, host, cam, tof)));
   CHECK(refused(detector.detect(
-      0, vkc::StorageInput(static_cast<const void*>(nullptr)), cam)));
+      0, vkc::StorageInput(static_cast<const void*>(nullptr)), cam, tof)));
   sensor::DepthCameraParams empty = cam;
   empty.width = 0;
-  CHECK(refused(detector.detect(0, host, empty)));
+  CHECK(refused(detector.detect(0, host, empty, tof)));
   sensor::DepthCameraParams unbounded = cam;
   unbounded.max_depth = std::numeric_limits<float>::infinity();
-  CHECK(refused(detector.detect(0, host, unbounded)));
-  for (const tsdf::DepthNoise& bad :
-       {tsdf::DepthNoise{0.0f, 0.0f, 0.0f},
-        tsdf::DepthNoise{-1e-3f, 1e-3f, 0.0f},
-        tsdf::DepthNoise{0.0f, std::nanf(""), 0.0f}}) {
-    CHECK(refused(detector.detect(0, host, cam, bad)));
+  CHECK(refused(detector.detect(0, host, unbounded, tof)));
+  // A frame whose producer states no noise is refused, never given one;
+  // so is a model with a negative or non-finite term.
+  const vkc::Status unknown = detector.detect(5, host, cam, {});
+  CHECK(refused(unknown));
+  CHECK(says(unknown, "camera slot 5") &&
+        says(unknown, "states no depth noise"));
+  CHECK(refused(detector.check(5, cam, sensor::DepthNoise{})));
+  for (const sensor::DepthNoise& bad :
+       {sensor::DepthNoise{-1e-3f, 1e-3f, 0.0f},
+        sensor::DepthNoise{0.0f, std::nanf(""), 0.0f},
+        sensor::DepthNoise{0.0f, 0.0f, std::numeric_limits<float>::infinity()},
+        sensor::DepthNoise{-0.0f, -0.0f, -0.0f}}) {
+    const vkc::Status s = detector.detect(0, host, cam, bad);
+    CHECK(refused(s));
+    CHECK(says(s, "camera slot 0"));
   }
+  CHECK(says(detector.detect(0, host, cam, {-1e-3f, 1e-3f, 0.0f}),
+             "negative or non-finite"));
   auto small = vkc::device_storage_buffer(gpu.allocator, 64);
   CHECK(small.ok());
-  CHECK(refused(detector.detect(0, vkc::StorageInput(small.value()), cam)));
+  CHECK(
+      refused(detector.detect(0, vkc::StorageInput(small.value()), cam, tof)));
   // Nothing refused made a history.
   CHECK(detector.mask(0) == nullptr);
+  CHECK(detector.mask(5) == nullptr);
 
   for (const tsdf::ChangeDetectorConfig& bad :
        {tsdf::ChangeDetectorConfig{-0.5f},
@@ -730,7 +757,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   {
     const std::vector<float> depth(kPixels, 2.0f);
     CHECK(made.value()
-              .detect(0, vkc::StorageInput(depth.data()), camera(kSide))
+              .detect(0, vkc::StorageInput(depth.data()), camera(kSide),
+                      vr_test::kFemtoNoise)
               .domain() == vkc::Status::Code::InvalidArgument);
   }
   if (refusals(gpu, detector) != 0) return 1;
@@ -739,8 +767,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   if (no_return_dropout_case(gpu, detector) != 0) return 1;
   if (lone_dropout_case(gpu, detector) != 0) return 1;
 
-  const tsdf::DepthNoise tof{};  // the Femto's
-  const tsdf::DepthNoise stereo{0.0f, 0.0f, kStereoC};
+  const sensor::DepthNoise tof = vr_test::kFemtoNoise;
+  const sensor::DepthNoise stereo{0.0f, 0.0f, kStereoC};
   const sensor::DepthCameraParams cam = camera(kSide);
 
   Scene scene;

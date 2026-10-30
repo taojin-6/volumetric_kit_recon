@@ -3,7 +3,8 @@
 
 // The true distance near outlines (DECISIONS.md, 2026-10-29), through
 // tsdf::Fuser. Depth is ray-cast and noise-free from a Femto-like camera
-// (640 x 576, fx 504) into 1 cm voxels, so every outline below is sharp.
+// (640 x 576, fx 504) into 1 cm voxels, so every outline below is sharp;
+// each frame states the Femto Mega's noise, as its driver does.
 //
 // One camera, in each mode, ten sets of a still scene: a wall 2.5 m away, a
 // square plate facing the camera 1.2 m away, turned 20 degrees in its plane
@@ -42,6 +43,7 @@
 #include <tuple>
 #include <vector>
 
+#include "depth_inputs.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -354,7 +356,9 @@ int still_scene(vkc::test::GpuContext& gpu, tsdf::IntegrationMode mode) {
   const std::vector<float> depth = render(cam, plate, true);
   for (int set = 0; set < 10; ++set) {
     CHECK(fuser
-              ->fuse(grid, {{vkc::StorageInput(depth.data()), cam, nullptr, 0}},
+              ->fuse(grid,
+                     {{vkc::StorageInput(depth.data()), cam, nullptr, 0,
+                       vr_test::kFemtoNoise}},
                      kMaxWeight, mode)
               .ok());
   }
@@ -427,7 +431,9 @@ int moving_plate(vkc::test::GpuContext& gpu) {
     const Plate plate = plate_at(s);
     const std::vector<float> depth = render(cam, plate, false);
     CHECK(fuser
-              ->fuse(grid, {{vkc::StorageInput(depth.data()), cam, nullptr, 0}},
+              ->fuse(grid,
+                     {{vkc::StorageInput(depth.data()), cam, nullptr, 0,
+                       vr_test::kFemtoNoise}},
                      kMaxWeight, tsdf::IntegrationMode::Dynamic)
               .ok());
     if (s < kPlateMoves - 1) continue;
@@ -566,7 +572,7 @@ int moving_sphere(vkc::test::GpuContext& gpu) {
     }
     for (std::size_t k = 0; k < cams.size(); ++k) {
       frames.push_back({vkc::StorageInput(depths[k].data()), cams[k], nullptr,
-                        static_cast<std::uint32_t>(k)});
+                        static_cast<std::uint32_t>(k), vr_test::kFemtoNoise});
     }
     CHECK(fuser->fuse(grid, frames, kMaxWeight, tsdf::IntegrationMode::Dynamic)
               .ok());

@@ -128,7 +128,7 @@ core::Result<ChangeDetector> ChangeDetector::create(
 
 core::Status ChangeDetector::check(std::uint32_t camera,
                                    const sensor::DepthCameraParams& params,
-                                   const DepthNoise& noise) const {
+                                   const sensor::DepthNoise& noise) const {
   constexpr const char* kWhat = "ChangeDetector::record_detect";
   if (!valid()) {
     return core::Status::invalid_argument(std::string(kWhat) +
@@ -152,12 +152,15 @@ core::Status ChangeDetector::check(std::uint32_t camera,
     return core::Status::invalid_argument(std::string(kWhat) +
                                           ": a non-finite depth bound");
   }
-  const auto term = [](float x) { return std::isfinite(x) && x >= 0.0f; };
-  if (!(term(noise.a) && term(noise.b) && term(noise.c) &&
-        (noise.a > 0.0f || noise.b > 0.0f || noise.c > 0.0f))) {
+  if (!noise.known()) {
+    // All zero is a producer that does not know its noise; the floor is never
+    // guessed for it.
+    const bool unknown = noise.a == 0.0f && noise.b == 0.0f && noise.c == 0.0f;
     return core::Status::invalid_argument(
-        std::string(kWhat) +
-        ": the noise model needs finite terms of at least 0, not all 0");
+        std::string(kWhat) + ": camera slot " + std::to_string(camera) +
+        (unknown ? ": its frame states no depth noise (all zero), which the "
+                   "change test needs"
+                 : ": its depth noise has a negative or non-finite term"));
   }
   return {};
 }
@@ -165,7 +168,7 @@ core::Status ChangeDetector::check(std::uint32_t camera,
 core::Status ChangeDetector::record_detect(
     core::CommandBatch& batch, std::uint32_t camera,
     const core::StorageInput& depth, const sensor::DepthCameraParams& params,
-    const DepthNoise& noise,
+    const sensor::DepthNoise& noise,
     const volumetric_kit::grid::volume::DeviceCount* gate,
     core::GpuStageScope* stage) {
   constexpr const char* kWhat = "ChangeDetector::record_detect";
@@ -252,7 +255,7 @@ core::Status ChangeDetector::record_detect(
 core::Status ChangeDetector::detect(std::uint32_t camera,
                                     const core::StorageInput& depth,
                                     const sensor::DepthCameraParams& params,
-                                    const DepthNoise& noise) {
+                                    const sensor::DepthNoise& noise) {
   if (!valid()) {
     return core::Status::invalid_argument(
         "ChangeDetector::detect: moved-from detector");

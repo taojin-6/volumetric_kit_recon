@@ -77,13 +77,13 @@ endif()
 # sensor's own CI tests sensor, so its tests and -Werror stay off in this build;
 # recon's examples take its test fixtures (VS_TEST_DATA_DIR, which it sets).
 #
-# The pin is sensor 0.9.0 (9466540, sensor #9's merge), as are its Orbbec SDK
+# The pin is sensor 0.10.0 (586573a, sensor #12's merge), as are its Orbbec SDK
 # and librealsense actions in .github/workflows (the sibling-actions-at-pins
 # hook).
 FetchContent_Declare(
   volumetric_kit_sensor
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
-  GIT_TAG 9466540911e462808733c0001facfef237af4cbb)
+  GIT_TAG 586573aafb3987d7ae6514b11e02064123447978)
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)

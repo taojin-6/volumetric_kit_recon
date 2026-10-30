@@ -545,6 +545,15 @@ if(TARGET grid_mesh_io_assimp)
   add_test(NAME recon_io_textured_mesh COMMAND recon_io_textured_mesh_test)
 endif()
 
+# sender tier: fuse_inputs (sender/fuse_inputs.hpp), prepared frames to the
+# fuser's inputs, field by field: an empty entry skipped, each frame's slot its
+# index and its noise its frame's depth_noise, unknown kept unknown. Host only.
+add_executable(recon_sender_fuse_inputs_test sender_fuse_inputs_test.cpp)
+target_link_libraries(recon_sender_fuse_inputs_test
+                      PRIVATE volumetric_kit::recon_sender)
+vr_target_warnings(recon_sender_fuse_inputs_test)
+add_test(NAME recon_sender_fuse_inputs COMMAND recon_sender_fuse_inputs_test)
+
 # sender tier: the set step (sender/set_sender.hpp) with no camera driver: fake
 # cameras read as a sensor array, each set's prep, fusion, free pass and frame
 # recorded by the sender and coded into a .vrst whose records, keys, sets and

@@ -161,10 +161,12 @@ int gpu_main(vkc::test::GpuContext& gpu) {
                        v.cam.height, v.cam.cam_to_world},
                       {}});
   }
+  // Each camera states the Femto Mega's noise, which Dynamic needs.
   std::vector<tsdf::FrameInput> set;
   for (int c = 0; c < kCameras; ++c) {
     set.push_back({vkc::StorageInput(views[c].depth.data()), views[c].cam,
-                   &colors[std::size_t(c)], static_cast<std::uint32_t>(c)});
+                   &colors[std::size_t(c)], static_cast<std::uint32_t>(c),
+                   vr_test::kFemtoNoise});
   }
 
   // The reference: the tier calls on a grid with room for the set, twice, so

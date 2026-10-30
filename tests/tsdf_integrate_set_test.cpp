@@ -158,10 +158,12 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   c0.coverage_in_alpha = true;
   tsdf::ColorFrame c1{views[1].color.data(), color_cam(views[1]), {}};
 
+  // Each states the Femto Mega's noise, which Dynamic needs.
+  const sensor::DepthNoise& noise = vr_test::kFemtoNoise;
   const std::vector<tsdf::FrameInput> frames{
-      {vkc::StorageInput(depth_bufs[0]), views[0].cam, &c0, 0},
-      {vkc::StorageInput(views[1].depth.data()), views[1].cam, &c1, 1},
-      {vkc::StorageInput(depth_bufs[2]), views[2].cam, nullptr, 2}};
+      {vkc::StorageInput(depth_bufs[0]), views[0].cam, &c0, 0, noise},
+      {vkc::StorageInput(views[1].depth.data()), views[1].cam, &c1, 1, noise},
+      {vkc::StorageInput(depth_bufs[2]), views[2].cam, nullptr, 2, noise}};
   // The set, with an empty frame second, and the list it allocates from. The
   // empty frame shares a slot, as it is skipped before slots are checked.
   sensor::DepthCameraParams empty_cam = views[1].cam;

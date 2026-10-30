@@ -29,6 +29,7 @@
 #include <tuple>
 #include <vector>
 
+#include "depth_inputs.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -159,7 +160,8 @@ int fuse(tsdf::TsdfIntegrator& integrator, vol::VoxelBlockGrid& grid,
   for (const View& v : views) {
     const bool is_f = v.cam.cam_to_world == vr::Mat4f(1.0f);
     frames.push_back({vkc::StorageInput(v.depth.data()), v.cam,
-                      is_f ? &color : &g_color, is_f ? 0u : 1u});
+                      is_f ? &color : &g_color, is_f ? 0u : 1u,
+                      vr_test::kFemtoNoise});
   }
   CHECK(integrator.integrate(grid, frames, 5.0f, kDynamic).ok());
   return 0;

@@ -6,7 +6,8 @@
 // turned toward the wall's centre, B's depth reading 8 mm long throughout --
 // the cameras disagree by more than noise, as calibrated rigs do. Depth is
 // ray-cast and noise-free, so every change below is real and nothing else
-// is. One sequence of 71 sets:
+// is; each camera states the Femto Mega's noise, as its driver would. One
+// sequence of 71 sets:
 //
 // - sets 0-34, a card 2.5 cm in front of the wall, inside the wall's band:
 //   while the scene is still, no voxel's weight ever falls -- the cameras'
@@ -35,9 +36,16 @@
 // set 51 nothing of the box meshes and no voxel of its band reads as inside
 // a surface. No weight falls in any other set.
 //
+// Then each camera's own noise: the card again, gone at set 35, with a
+// camera that states a floor of 0.5 m, far above the card's 2.5 cm, so its
+// own test never sees the card go. Both stating it, no weight falls as the
+// card leaves; one stating it and the other the Femto Mega's noise, either
+// way round, the other's test sees the card go and weights fall.
+//
 // And the refusals: two frames of a set with one slot, a slot past the
-// detector's, a noise model the detector refuses -- Dynamic only, as
-// Classic reads neither. Skips (exit 0) where no device is present.
+// detector's, a noise model the detector refuses, an unknown one (all zero,
+// a frame whose producer states none) among them -- Dynamic only, as Classic
+// reads neither. Skips (exit 0) where no device is present.
 
 #include <cmath>
 #include <cstddef>
@@ -48,6 +56,7 @@
 #include <utility>
 #include <vector>
 
+#include "depth_inputs.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -208,10 +217,13 @@ int refusals(vkc::test::GpuContext& gpu, tsdf::Fuser& fuser,
         fuser.fuse(grid, frames, kMaxWeight, tsdf::IntegrationMode::Dynamic);
     return !r.ok() && r.status().domain() == vkc::Status::Code::InvalidArgument;
   };
-  CHECK(refused({{in, a, nullptr, 3}, {in, a, nullptr, 3}}));
-  CHECK(refused({{in, a, nullptr, tsdf::ChangeDetector::kMaxCameras}}));
-  CHECK(refused({{in, a, nullptr, 0, tsdf::DepthNoise{0.0f, 0.0f, 0.0f}}}));
-  CHECK(refused({{in, a, nullptr, 0, tsdf::DepthNoise{0.0f, -1e-3f, 0.0f}}}));
+  const sensor::DepthNoise& tof = vr_test::kFemtoNoise;
+  CHECK(refused({{in, a, nullptr, 3, tof}, {in, a, nullptr, 3, tof}}));
+  CHECK(refused({{in, a, nullptr, tsdf::ChangeDetector::kMaxCameras, tof}}));
+  // A frame that states no noise, alone or beside one that does.
+  CHECK(refused({{in, a, nullptr, 0}}));
+  CHECK(refused({{in, a, nullptr, 0, tof}, {in, a, nullptr, 1}}));
+  CHECK(refused({{in, a, nullptr, 0, sensor::DepthNoise{0.0f, -1e-3f, 0.0f}}}));
   // Classic reads neither the slots nor the noise.
   CHECK(fuser
             .fuse(grid, {{in, a, nullptr, 3}, {in, a, nullptr, 3}}, kMaxWeight,
@@ -247,10 +259,11 @@ int no_return_case(vkc::test::GpuContext& gpu) {
     const Thing thing = set >= 40 && set < 50 ? Thing::Box : Thing::None;
     const std::vector<float> da = render(a, thing, 0.0f, true);
     const std::vector<float> db = render(b, thing, kOffsetB, true);
-    auto fused = fuser->fuse(grid,
-                             {{vkc::StorageInput(da.data()), a, nullptr, 0},
-                              {vkc::StorageInput(db.data()), b, nullptr, 1}},
-                             kMaxWeight, tsdf::IntegrationMode::Dynamic);
+    auto fused = fuser->fuse(
+        grid,
+        {{vkc::StorageInput(da.data()), a, nullptr, 0, vr_test::kFemtoNoise},
+         {vkc::StorageInput(db.data()), b, nullptr, 1, vr_test::kFemtoNoise}},
+        kMaxWeight, tsdf::IntegrationMode::Dynamic);
     CHECK(fused.ok());
     auto w = vgrid_test::read_attribute<float>(dev, alloc, grid,
                                                vol::kWeightAttribute);
@@ -313,6 +326,66 @@ int no_return_case(vkc::test::GpuContext& gpu) {
   return 0;
 }
 
+// The weights that fall as the first scene's card leaves (set 35, against
+// set 34), a fuser and grid of their own, camera A and B stating `noise_a`
+// and `noise_b`; SIZE_MAX on a failure.
+std::size_t fallen_as_card_leaves(vkc::test::GpuContext& gpu,
+                                  const sensor::DepthNoise& noise_a,
+                                  const sensor::DepthNoise& noise_b) {
+  constexpr std::size_t kFailed = SIZE_MAX;
+  vkc::Device& dev = gpu.device;
+  vkc::Allocator& alloc = gpu.allocator;
+  auto fuser = tsdf::Fuser::create(dev, alloc);
+  auto made = tsdf::create_fusion_grid(dev, alloc, kVoxel, kTrunc, 1024);
+  if (!fuser.ok() || !made.ok()) return kFailed;
+  vol::VoxelBlockGrid& grid = made.value();
+  const sensor::DepthCameraParams a = camera_a();
+  const sensor::DepthCameraParams b = camera_b();
+  std::vector<float> before;
+  for (int set = 0; set <= 35; ++set) {
+    const std::vector<float> da = render(a, thing_at(set), 0.0f);
+    const std::vector<float> db = render(b, thing_at(set), kOffsetB);
+    auto fused =
+        fuser->fuse(grid,
+                    {{vkc::StorageInput(da.data()), a, nullptr, 0, noise_a},
+                     {vkc::StorageInput(db.data()), b, nullptr, 1, noise_b}},
+                    kMaxWeight, tsdf::IntegrationMode::Dynamic);
+    if (!fused.ok()) return kFailed;
+    if (set < 34) continue;
+    auto w = vgrid_test::read_attribute<float>(dev, alloc, grid,
+                                               vol::kWeightAttribute);
+    if (!w.ok()) return kFailed;
+    if (set == 34) {
+      before = w.value();
+      continue;
+    }
+    std::size_t fell = 0;
+    for (std::size_t i = 0; i < before.size(); ++i) {
+      fell += w.value()[i] < before[i] ? 1 : 0;
+    }
+    return fell;
+  }
+  return kFailed;
+}
+
+// Each camera's test takes its own frame's noise: a camera stating 0.5 m
+// never sees the 2.5 cm card go, while one stating the Femto Mega's does.
+int own_noise_case(vkc::test::GpuContext& gpu) {
+  constexpr sensor::DepthNoise kLoose{0.5f, 0.0f, 0.0f};
+  const sensor::DepthNoise& tof = vr_test::kFemtoNoise;
+  const std::size_t loose = fallen_as_card_leaves(gpu, kLoose, kLoose);
+  const std::size_t b_sees = fallen_as_card_leaves(gpu, kLoose, tof);
+  const std::size_t a_sees = fallen_as_card_leaves(gpu, tof, kLoose);
+  std::printf(
+      "own noise, weights fallen as the card leaves: %zu with both cameras "
+      "at 0.5 m, %zu with B's the Femto's, %zu with A's\n",
+      loose, b_sees, a_sees);
+  CHECK(loose == 0);
+  CHECK(b_sees > 0 && b_sees != SIZE_MAX);
+  CHECK(a_sees > 0 && a_sees != SIZE_MAX);
+  return 0;
+}
+
 }  // namespace
 
 int gpu_main(vkc::test::GpuContext& gpu) {
@@ -336,9 +409,12 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     const std::vector<float> da = render(a, thing, 0.0f);
     const std::vector<float> db = render(b, thing, kOffsetB);
     std::vector<tsdf::FrameInput> frames;
-    if (set != 40)
-      frames.push_back({vkc::StorageInput(da.data()), a, nullptr, 0});
-    frames.push_back({vkc::StorageInput(db.data()), b, nullptr, 1});
+    if (set != 40) {
+      frames.push_back(
+          {vkc::StorageInput(da.data()), a, nullptr, 0, vr_test::kFemtoNoise});
+    }
+    frames.push_back(
+        {vkc::StorageInput(db.data()), b, nullptr, 1, vr_test::kFemtoNoise});
     auto fused =
         fuser->fuse(grid, frames, kMaxWeight, tsdf::IntegrationMode::Dynamic);
     CHECK(fused.ok());
@@ -426,6 +502,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 
   if (refusals(gpu, fuser.value(), grid) != 0) return 1;
   if (no_return_case(gpu) != 0) return 1;
+  if (own_noise_case(gpu) != 0) return 1;
   std::puts("tsdf_dynamic_change: OK");
   return 0;
 }

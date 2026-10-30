@@ -332,7 +332,7 @@ jobs:
       # sensor pin in third_party/CMakeLists.txt, which holds the SDK pin.
       - name: Install the Orbbec SDK
         if: steps.detect.outputs.present == 'true' && inputs.orbbec_sdk
-        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@9466540911e462808733c0001facfef237af4cbb
+        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@586573aafb3987d7ae6514b11e02064123447978
 
       # librealsense, on the Ubuntu legs that build VS_WITH_REALSENSE: the
       # pinned release from RealSense's apt repository, its key checked, by
@@ -340,7 +340,7 @@ jobs:
       # formula is checked with the others above.
       - name: Install librealsense
         if: steps.detect.outputs.present == 'true' && inputs.realsense_sdk && runner.os == 'Linux'
-        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-librealsense@9466540911e462808733c0001facfef237af4cbb
+        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-librealsense@586573aafb3987d7ae6514b11e02064123447978
 
       # Report the Vulkan device the runner sees (the real GPU in a self-hosted
       # container, lavapipe on a hosted Linux runner, MoltenVK on macOS). On a

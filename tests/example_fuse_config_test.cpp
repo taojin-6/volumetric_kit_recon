@@ -334,7 +334,9 @@ int main() {
         lit_pair.infrared_height == pair_driver.infrared_height);
 #ifdef VR_EXAMPLE_FFS
   // With sensor_ffs: FFS is opened, the pair rectified to the depth size as
-  // luma at alpha 0, and the model, its plans and the depth gate passed on.
+  // luma at alpha 0, the model, its plans and the depth gate passed on, and
+  // the pair's measured disparity noise stated, so its frames state their
+  // depth noise (sensor's FfsStereo defaults it to unknown).
   CHECK(vr_example::check_realsense_depth(ffs.value()).ok());
   const sensor::StereoDepthSensor::Options depth =
       vr_example::ffs_depth_options(ffs.value());
@@ -344,6 +346,8 @@ int main() {
   CHECK(depth.ffs.model.string() == ffs->source.ffs_model);
   CHECK(depth.ffs.plan_cache.string() == ffs->source.ffs_plan_cache);
   CHECK(depth.ffs.min_depth == 0.25F && depth.ffs.max_depth == 5.F);
+  CHECK(sensor::FfsStereo::Options{}.disparity_sigma == 0.0f);
+  CHECK(depth.ffs.disparity_sigma == 0.04f);
   const sensor::StereoDepthSensor::Options lit_depth =
       vr_example::ffs_depth_options(lit.value());
   CHECK(lit_depth.rectify.size.width == 1280 &&
@@ -351,6 +355,7 @@ int main() {
   CHECK(lit_depth.ffs.model.string() == "/m/ffs.onnx" &&
         lit_depth.ffs.plan_cache.string() == "/m/plans");
   CHECK(lit_depth.ffs.min_depth == 0.4F && lit_depth.ffs.max_depth == 3.5F);
+  CHECK(lit_depth.ffs.disparity_sigma == 0.04f);
 #else
   // Without it, FFS is refused, saying how to build it.
   const vkc::Status refused = vr_example::check_realsense_depth(ffs.value());

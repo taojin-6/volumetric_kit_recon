@@ -191,6 +191,15 @@ std::optional<volumetric_kit::grid::volume::FrustumPlanes> fusion_reach(
   return planes;
 }
 
+// A single frame under Dynamic, refused before any work: it states no depth
+// noise, which the change test needs.
+core::Status single_frame_dynamic() {
+  return core::Status::invalid_argument(
+      "TsdfIntegrator::integrate: a single frame states no depth noise, which "
+      "Dynamic's change test needs; Dynamic takes the set form, each frame "
+      "with its camera's noise");
+}
+
 }  // namespace
 
 // The voxel layer's depth camera is a copy of the camera vocabulary's: the same
@@ -339,6 +348,7 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
                                        float max_weight, IntegrationMode mode,
                                        const ColorFrame* color,
                                        core::StageMetrics* metrics) {
+  if (mode == IntegrationMode::Dynamic) return single_frame_dynamic();
   return integrate(grid, {FrameInput{core::StorageInput(depth), cam, color}},
                    max_weight, mode, metrics);
 }
@@ -349,6 +359,7 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                                        float max_weight, IntegrationMode mode,
                                        const ColorFrame* color,
                                        core::StageMetrics* metrics) {
+  if (mode == IntegrationMode::Dynamic) return single_frame_dynamic();
   return integrate(grid, {FrameInput{core::StorageInput(depth), cam, color}},
                    max_weight, mode, metrics);
 }
