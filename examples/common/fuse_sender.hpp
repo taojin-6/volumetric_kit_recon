@@ -19,6 +19,7 @@
 #include "config.hpp"
 #include "fuse_frame.hpp"
 #include "set_log.hpp"
+#include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/grid/stream/audio.hpp"
 #include "volumetric_kit/grid/stream/session.hpp"
@@ -41,8 +42,9 @@ inline constexpr std::uint16_t kAudioTrack = 1;
 ///         Audio track as track @ref kAudioTrack: on the host's clock, a
 ///         record a chunk at its nominal rate, its id as the sensor, and
 ///         signed 16-bit samples at its channels and rate as the params.
-/// @param audio  The mic's info (`IAudioSensor::info`), or null for none:
-///               then the session is exactly the one before audio.
+/// @param audio  The mic's info (`IAudioSensor::info`), its chunks stamped on
+///               the host's clock (`VKC_CHECK`), or null for none: then the
+///               session is exactly the one before audio.
 inline volumetric_kit::grid::stream::Session live_session(
     const char* program, const config::Config& opt, bool host_clock,
     const volumetric_kit::sensor::AudioInfo* audio) {
@@ -51,6 +53,8 @@ inline volumetric_kit::grid::stream::Session live_session(
       vgrid_example::codec_session(program, {opt.source.fps, 1});
   if (host_clock) session.tracks[0].clock = stream::kHostClock;
   if (audio != nullptr) {
+    VKC_CHECK(audio->clock == volumetric_kit::sensor::ClockDomain::Host,
+              "a mic's track is on the host's clock: its chunks must be too");
     stream::AudioParams params;
     params.codec = stream::AudioCodec::PcmS16;
     params.channels = audio->channels;
