@@ -73,16 +73,16 @@ find_package(Vulkan REQUIRED)
 # volumetric_kit_grid, linked PUBLIC. The oldest core recon's libraries build
 # with is checked in the core that arrives (third_party/, which also checks the
 # config tier the examples and tests need): 0.33.0, whose FuseRealsense
-# source.depth chooses fuse_realsense's depth (the version that lands as:
-# third_party's TODO); 0.31.0 brought the FuseRealsense profile, 0.30.0 the
-# output.max_viewers fuse_orbbec serves by, 0.29.0 the vulkan/fwd.hpp the public
-# headers include, and 0.28.0 the test support the tests run on. The oldest
-# sensor is 0.9.0, whose frame prep crops a frame with colour to what both its
-# cameras see, which the live examples rely on with no option of their own
-# (fuse_realsense builds only with sensor_realsense, and even without FFS with
-# its RealSenseStereo, which 0.7.0 brought; it runs FFS only with sensor_ffs,
-# which 0.8.0 brought); the oldest grid is VR_GRID_MIN_VERSION: 0.3.0, whose
-# codec_outputs passes output.max_viewers to the server.
+# source.depth chooses fuse_realsense's depth; 0.31.0 brought the FuseRealsense
+# profile, 0.30.0 the output.max_viewers fuse_orbbec serves by, 0.29.0 the
+# vulkan/fwd.hpp the public headers include, and 0.28.0 the test support the
+# tests run on. The oldest sensor is 0.9.0, whose frame prep crops a frame with
+# colour to what both its cameras see, which the live examples rely on with no
+# option of their own (fuse_realsense builds only with sensor_realsense, and
+# even without FFS with its RealSenseStereo, which 0.7.0 brought; it runs FFS
+# only with sensor_ffs, which 0.8.0 brought); the oldest grid is
+# VR_GRID_MIN_VERSION: 0.3.0, whose codec_outputs passes output.max_viewers to
+# the server.
 set(VR_CORE_MIN_VERSION 0.33.0)
 set(VR_SENSOR_MIN_VERSION 0.9.0)
 set(VR_GRID_MIN_VERSION 0.3.0)

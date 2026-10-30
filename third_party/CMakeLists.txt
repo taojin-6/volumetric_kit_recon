@@ -26,22 +26,16 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.33.0 (e331baa, the head of core #72, whose FuseRealsense
-# source.depth chooses fuse_realsense's depth, on core main at #73's merge,
-# which dropped the fusion.depth_within_color key rig_viewer no longer reads),
-# as are the Homebrew key action in .github/workflows/_build.yml and the
-# workflow-trigger check in .github/workflows/lint.yml; the vkc_require_core
-# checks below say which core each part needs. The tests are main()s of their
-# own on the core's test support. TODO: once that core PR merges, and before
-# this pin reaches main, re-pin to its merge commit, with the two actions, and
-# set VR_CORE_MIN_VERSION, with its comment in the root CMakeLists.txt and the
-# version CHANGELOG and DECISIONS' entry name, to the version it lands as:
-# another open core PR also claims the next minor, so it may land as 0.34.0, and
-# a floor left at 0.33.0 would then accept a core without source.depth.
+# The pin is core 0.33.0 (b0e1a9e, core main at #72's merge, whose FuseRealsense
+# source.depth chooses fuse_realsense's depth), as are the Homebrew key action
+# in .github/workflows/_build.yml and the workflow-trigger check in
+# .github/workflows/lint.yml; the vkc_require_core checks below say which core
+# each part needs. The tests are main()s of their own on the core's test
+# support.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG e331baaea797961b342d1c0de18b00dd19dd8b46)
+  GIT_TAG b0e1a9ecbd6d3b4ff6c2e3a8b787dba27d1db0db)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)

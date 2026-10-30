@@ -323,7 +323,7 @@ jobs:
       - name: Homebrew key
         id: brew
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
-        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@e331baaea797961b342d1c0de18b00dd19dd8b46
+        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@b0e1a9ecbd6d3b4ff6c2e3a8b787dba27d1db0db
         with:
           formulae: ${{ steps.formulae.outputs.formulae }}
 
