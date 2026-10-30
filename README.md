@@ -240,6 +240,21 @@ its own, only in "wait: cameras" and arrival→published, and the per-set
 counters also count the rectifier's submit and wait on the sensor's thread
 (DECISIONS.md, 2026-10-29).
 
+### Optional: a microphone
+
+With `source.audio` ([config/README.md](config/README.md)), `fuse_orbbec`
+records a mic beside the cameras into its `.vrst`, as signed 16-bit samples
+on the host's clock. It needs the sensor package's microphone driver,
+`VS_WITH_PORTAUDIO`, on an installed PortAudio
+([the package's README](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/README.md#microphone-driver));
+a build without it refuses the key before anything opens. macOS asks for the
+process's microphone access the first time it opens an input.
+
+```sh
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
+    -DVS_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk> -DVS_WITH_PORTAUDIO=ON
+```
+
 ## Codec evaluation
 
 `codec_replica` runs grid's codec on a fused room sequence; grid's

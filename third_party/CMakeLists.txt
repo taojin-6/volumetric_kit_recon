@@ -26,16 +26,16 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.33.0 (b0e1a9e, core main at #72's merge, whose FuseRealsense
-# source.depth chooses fuse_realsense's depth), as are the Homebrew key action
-# in .github/workflows/_build.yml and the workflow-trigger check in
+# The pin is core 0.34.0 (4600477, core #74's merge, whose source.audio names
+# the input the live examples record), as are the Homebrew key action in
+# .github/workflows/_build.yml and the workflow-trigger check in
 # .github/workflows/lint.yml; the vkc_require_core checks below say which core
 # each part needs. The tests are main()s of their own on the core's test
 # support.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG b0e1a9ecbd6d3b4ff6c2e3a8b787dba27d1db0db)
+  GIT_TAG 46004772550bdec306758d419b2266eb486ae9eb)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
@@ -73,17 +73,18 @@ endif()
 # FetchContent keeps that declaration, as with the core. Work on both checkouts
 # at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_SENSOR=<sensor
 # checkout>. Its drivers and stereo depth (VS_WITH_ORBBEC, VS_WITH_REALSENSE,
-# VS_WITH_FFMPEG, VS_WITH_CUDA, VS_WITH_FFS) are given on recon's configure.
-# sensor's own CI tests sensor, so its tests and -Werror stay off in this build;
-# recon's examples take its test fixtures (VS_TEST_DATA_DIR, which it sets).
+# VS_WITH_FFMPEG, VS_WITH_CUDA, VS_WITH_FFS, VS_WITH_PORTAUDIO) are given on
+# recon's configure. sensor's own CI tests sensor, so its tests and -Werror stay
+# off in this build; recon's examples take its test fixtures (VS_TEST_DATA_DIR,
+# which it sets).
 #
-# The pin is sensor 0.10.0 (586573a, sensor #12's merge), as are its Orbbec SDK
+# The pin is sensor 0.11.0 (000746d, sensor #13's merge), as are its Orbbec SDK
 # and librealsense actions in .github/workflows (the sibling-actions-at-pins
 # hook).
 FetchContent_Declare(
   volumetric_kit_sensor
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
-  GIT_TAG 586573aafb3987d7ae6514b11e02064123447978)
+  GIT_TAG 000746d27fec9e987eda7a8448f1680e73e47f44)
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)
@@ -99,11 +100,11 @@ vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
 # turn on grid's test support, and recon's examples and tests its example
 # helpers (grid_example_common), which grid builds with its examples.
 #
-# The pin is grid 0.3.1 (d1fcbc4, grid #8's merge).
+# The pin is grid 0.5.0 (4618234, grid #10's merge).
 FetchContent_Declare(
   volumetric_kit_grid
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
-  GIT_TAG d1fcbc4faa46f0cfe1be146bdb9eb7e1732ca30d)
+  GIT_TAG 46182342caa31cb65035fe3ef8a791eb9a335b2f)
 set(VGRID_BUILD_TEST_SUPPORT ${VR_BUILD_TESTS})
 if(VR_BUILD_EXAMPLES OR VR_BUILD_TESTS)
   set(VGRID_BUILD_EXAMPLES ON)

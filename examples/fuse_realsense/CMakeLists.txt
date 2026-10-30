@@ -10,7 +10,7 @@ add_executable(fuse_realsense main.cpp)
 
 target_link_libraries(
   fuse_realsense
-  PRIVATE vr_example_common
+  PRIVATE vr_example_live_audio
           volumetric_kit::grid_eval
           volumetric_kit::grid_mesh_io
           volumetric_kit::recon_sender

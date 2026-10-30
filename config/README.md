@@ -102,6 +102,16 @@ needs `source.color_codec: "mjpeg"`. Writing slows the sets it writes.
 that ends before N sets says so with a warning, and a set the run's end cuts
 writes only the frames it keeps.
 
+`source.audio` records a mic beside the cameras into the coded stream, as an
+Audio track on the host's clock: `default`, the system's default input, or an
+input's name as the OS lists it; omitted, none. The core takes it only with
+`output.stream` or `output.serve` and every camera on the host's clock
+(`source.sync_config` or `source.host_clock`), so `fuse_realsense`, which
+takes neither output yet, refuses it. The run prints the input it records,
+and its counters at the end. It needs a build with sensor's microphone driver
+(README, "Optional: a microphone"). `output.serve` with a mic is refused
+until grid serves an Audio track; `output.stream` records it.
+
 `fuse_realsense` (core's FuseRealsense profile) fuses one RealSense camera's
 depth and its colour to the PLY at `output.path`, Dynamic by default as
 `fuse_orbbec` is: the camera sits still. It takes `source.serial` (empty: the

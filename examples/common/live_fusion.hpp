@@ -7,7 +7,8 @@
 /// @brief The live examples' run, whichever cameras they open: fuse_orbbec's
 ///        and fuse_realsense's. The cameras are read as a sensor array, each
 ///        set prepared on the device and fused (and coded, where the scenario
-///        says) through a sender, and the mesh written to a PLY; with the
+///        says) through a sender, any mic recorded beside them into the
+///        stream (`live_audio.hpp`), and the mesh written to a PLY; with the
 ///        array's report (`live_sets.hpp`). Header-only.
 
 #include <algorithm>
@@ -28,6 +29,7 @@
 #include "fuse_device.hpp"
 #include "fuse_sender.hpp"
 #include "interrupt.hpp"
+#include "live_audio.hpp"
 #include "live_sets.hpp"
 #include "set_dump.hpp"
 #include "set_log.hpp"
@@ -76,7 +78,11 @@ using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
 /// under another name, is refused before any camera opens; a stream that
 /// codes no set is removed again. Each set is coded at its time, on the
 /// clock the stream's session names (@ref live_session), and `codec.sweep`
-/// then sweeps the codec over the last grid. operation=stream
+/// then sweeps the codec over the last grid. With `source.audio`, the mic
+/// opens before the GPU, its track joins the session, and it records from
+/// when the cameras stream (@ref AudioFeed), its counters beside theirs; a
+/// session with audio is not served yet, which the stream refuses before any
+/// camera opens. operation=stream
 /// polls, counts and releases each set, with no GPU preparation, fusion or
 /// mesh, so the run measures the cameras' stream and decode alone.
 /// diagnostics.readback and diagnostics.dump_sets read and write each set's
@@ -119,6 +125,15 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
   VKC_TRY(dump.check());
   VKC_ASSIGN(const vgrid::codec::EncoderConfig encoder,
              vgrid_example::encoder_config(opt.codec));
+  // The mic source.audio names, if any, which the core lets through only with
+  // a stream and the cameras on the host's clock: opened before the GPU, so a
+  // name no input has is refused first, and started once the cameras stream.
+  VKC_ASSIGN(const std::unique_ptr<sensor::IAudioSensor> mic, open_audio(opt));
+  if (mic) {
+    const sensor::AudioInfo& a = mic->info();
+    std::printf("recording audio from %s: %u Hz, %u channel(s)\n",
+                a.model.c_str(), unsigned{a.sample_rate}, unsigned{a.channels});
+  }
 
   // --- GPU, first: the cameras' pictures are prepared, or decoded, on it ---
   VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
@@ -136,11 +151,21 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
       opt.output.serve != 0) {
     const codec_stream::CodecOutputs outputs =
         vgrid_example::set_codec_outputs(opt);
-    VKC_ASSIGN(codec_stream::CodecStream made,
-               codec_stream::CodecStream::create(
-                   device, allocator, encoder,
-                   live_session(program, opt, host_clock), outputs));
-    stream.emplace(std::move(made));
+    // With a mic and output.serve, the server refuses the two tracks here
+    // (Unsupported) until grid serves more than one.
+    vkc::Result<codec_stream::CodecStream> made =
+        codec_stream::CodecStream::create(
+            device, allocator, encoder,
+            live_session(program, opt, host_clock,
+                         mic ? &mic->info() : nullptr),
+            outputs);
+    if (!made.ok() && mic && outputs.serve &&
+        made.status().domain() == vkc::Status::Code::Unsupported) {
+      return made.status().with_context(
+          "source.audio with output.serve, which serves no audio yet");
+    }
+    VKC_TRY(made.status());
+    stream.emplace(std::move(made).value());
     VKC_ASSIGN(vgrid_example::CodecReport rows,
                vgrid_example::CodecReport::create(
                    opt.output.csv, outputs.stream, outputs.decode,
@@ -208,6 +233,9 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
     return {};
   }
   VKC_TRY(array->start());
+  // The mic's chunks follow each set into the stream, as track kAudioTrack.
+  AudioFeed audio(mic.get(), stream ? &*stream : nullptr, kAudioTrack, program);
+  VKC_TRY(audio.start());
   const char* verb =
       (opt.operation == config::Operation::Stream) ? "streamed" : "fused";
   sensor::RigSets sets(*array, static_cast<std::size_t>(opt.run.frames));
@@ -261,6 +289,7 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
       } else {
         s.published();  // operation=stream: polled and released only
       }
+      VKC_TRY(audio.send());
       if (sets.frames() / 100 > reported / 100) {
         reported = sets.frames();
         std::printf("  %s %zu frames (%.1f fps)\n", verb, reported,
@@ -278,8 +307,11 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
   const double fps =
       static_cast<double>(sets.frames()) / (secs > 0.0 ? secs : 1.0);
   // Before any error: a run that stalls still reports what it counted, and
-  // finishes the stream it recorded and reports the frames it coded.
+  // finishes the stream it recorded, the mic's last chunks in it, and reports
+  // the frames it coded.
+  const vkc::Status heard = audio.finish();
   std::fputs(array_report(*array, &sets, counters).c_str(), stdout);
+  std::fputs(audio.report().c_str(), stdout);
   std::fputs(dump.report().c_str(), stdout);
   vkc::Status finished;
   if (stream && stream->coded() > 0) {
@@ -290,6 +322,7 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
     }
   }
   VKC_TRY(streamed);
+  VKC_TRY(heard);
   VKC_TRY(finished);
   array.reset();
 
