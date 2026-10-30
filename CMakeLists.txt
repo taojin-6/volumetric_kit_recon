@@ -76,15 +76,16 @@ find_package(Vulkan REQUIRED)
 # source.depth chooses fuse_realsense's depth; 0.31.0 brought the FuseRealsense
 # profile, 0.30.0 the output.max_viewers fuse_orbbec serves by, 0.29.0 the
 # vulkan/fwd.hpp the public headers include, and 0.28.0 the test support the
-# tests run on. The oldest sensor is 0.9.0, whose frame prep crops a frame with
-# colour to what both its cameras see, which the live examples rely on with no
-# option of their own (fuse_realsense builds only with sensor_realsense, and
-# even without FFS with its RealSenseStereo, which 0.7.0 brought; it runs FFS
-# only with sensor_ffs, which 0.8.0 brought); the oldest grid is
-# VR_GRID_MIN_VERSION: 0.3.0, whose codec_outputs passes output.max_viewers to
-# the server.
+# tests run on. The oldest sensor is 0.10.0, whose frames state their depth
+# noise (DeviceFrame::depth_noise), which Dynamic's change test reads; 0.9.0
+# brought the frame prep's crop of a frame with colour to what both its cameras
+# see, which the live examples rely on with no option of their own
+# (fuse_realsense builds only with sensor_realsense, and even without FFS with
+# its RealSenseStereo, which 0.7.0 brought; it runs FFS only with sensor_ffs,
+# which 0.8.0 brought); the oldest grid is VR_GRID_MIN_VERSION: 0.3.0, whose
+# codec_outputs passes output.max_viewers to the server.
 set(VR_CORE_MIN_VERSION 0.33.0)
-set(VR_SENSOR_MIN_VERSION 0.9.0)
+set(VR_SENSOR_MIN_VERSION 0.10.0)
 set(VR_GRID_MIN_VERSION 0.3.0)
 add_subdirectory(third_party)
 

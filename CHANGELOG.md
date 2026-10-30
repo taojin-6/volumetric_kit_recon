@@ -69,7 +69,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   driver states exactly the old default, so `fuse_orbbec` and `rig_viewer`
   fuse bit for bit as before; `fuse_realsense` gets its camera's own noise
   in place of the Femto's floor, and on FFS the D455 pair's 0.04 px its
-  opener states. It needs sensor 0.10.0, whose frames state their noise.
+  opener states.
+
+- build: **recon pins sensor 0.10.0** (sensor #12's merge, `586573a`), CI
+  takes sensor's actions at the new pin, and `VR_SENSOR_MIN_VERSION` rises
+  to 0.10.0, whose frames state their depth noise (the entry above).
 
 - build: **core 0.32.0** (46877ff), core main at #73's merge, which dropped the
   `fusion.depth_within_color` key: a rig_viewer scenario that still sets it
