@@ -40,6 +40,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **recon pins sensor 0.9.0** (sensor #9's merge, `9466540`;
+  BREAKING for the live programs' results), CI takes sensor's actions at
+  the new pin, and `VR_SENSOR_MIN_VERSION` rises to 0.9.0. Sensor's frame
+  prep now crops each frame with colour to what both its cameras see, by
+  their fields of view, with no option (sensor's DECISIONS.md, the
+  2026-10-29 same-view entry). For `fuse_orbbec` (its PLY and its coded
+  stream), `fuse_realsense`, `rig_viewer` and a sender that prepares its
+  sets with that prep (`sender::SetSender`):
+  - depth its colour camera does not see is no longer fused, which fusion
+    left untextured: on the Femto Mega's factory calibrations, a band at
+    the top of the depth picture and a wider one at the bottom (17-33 and
+    58-71 of its 576 rows);
+  - colour outside its depth camera's view has coverage 0, so it no longer
+    colours voxels or textures triangles: on the Femto Mega, the colour
+    picture's sides (it keeps 74% of its width);
+  - in a rig, a camera no longer fuses depth only another camera could
+    colour, nor colours surfaces only another camera's depth saw.
+
+  `rig_viewer` no longer reads `fusion.depth_within_color`, which turned
+  the depth crop off (`--all-depth` before the config tier), since sensor's
+  `GpuFramePrepConfig::depth_within_color` is gone; the core's config still
+  accepts the key for it until the core drops it. A frame without colour
+  keeps all its depth. Sensor 0.6.0 to 0.8.0 (stereo rectifier fixes,
+  `RealSenseStereo`, stereo depth by FFS) need no recon change.
+
 - **Dynamic fusion evicts on change and averages conflict** (BREAKING for
   Dynamic's results; DECISIONS.md, 2026-10-29). A Dynamic set runs each
   camera's `ChangeDetector`, resets along the rays that changed (the new
