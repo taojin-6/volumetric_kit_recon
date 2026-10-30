@@ -1080,12 +1080,11 @@ and its pts the set's time; a set stamped before the last frame, as a clock
 stepping back stamps it, takes that frame's time. The session's Geometry
 track names that time's clock (`live_session`): the host's system clock
 (`stream::kHostClock`) when every camera stamps on it, as a rig's always
-do, else clock domain 1, the cameras' own. The session is fixed before the
-cameras open, so each program says which it will be (`fuse_orbbec`'s
-`orbbec_on_host_clock`; `fuse_realsense`'s always the host's), and the run
-checks the opened cameras against it (`on_host_clock`). A run that fails part-way
-still finishes its stream and reports the frames it coded; one that coded
-no set leaves none.
+do, else clock domain 1, the cameras' own. Each program says which before
+its cameras open (`fuse_orbbec`'s `orbbec_on_host_clock`; `fuse_realsense`'s
+always the host's), and the run checks the opened cameras against it
+(`on_host_clock`). A run that fails part-way still finishes its stream and
+reports the frames it coded; one that coded no set leaves none.
 The report's bitrate is at `source.fps`, and `codec.sweep` sweeps the last
 grid. A Ctrl+C or SIGTERM (`interrupt.hpp`, `rig_viewer`'s handler too,
 installed first) ends the run. During the setup, the run returns before the
@@ -1094,9 +1093,8 @@ they stream, it ends after the set in hand, as `run.frames` would: the
 stream is finished, its viewers closed, the cameras released and the PLY
 written. A second signal of the same kind ends the process.
 That run is `examples/common/live_fusion.hpp`'s `run_live_fusion`, which
-takes the program's camera opener, its cameras' clock and its counters,
-so it is the one loop
-of both live programs that fuse to a PLY.
+takes the program's camera opener, its cameras' clock and its counters, so
+it is the one loop of both live programs that fuse to a PLY.
 **`fuse_realsense`** (`VS_WITH_REALSENSE`) is that run on one RealSense
 D400 camera (core's `FuseRealsense` profile), its depth the scenario's
 `source.depth`, chosen in the opener (`open_realsense_array`) alone, so the

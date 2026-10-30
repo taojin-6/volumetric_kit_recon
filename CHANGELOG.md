@@ -163,12 +163,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- `examples`: **a live stream's geometry names the host's clock.** A
-  `fuse_orbbec` rig's, a `fuse_orbbec` camera's with `source.host_clock`, and
-  every `fuse_realsense` stream's Geometry track said clock domain 1 while its
-  pts were the host's system clock; it now says `stream::kHostClock`
-  (`live_session`), and the run checks the cameras it opens against it.
-  A single Orbbec camera on its own clock still names domain 1.
+- `examples`: **a live stream's geometry names the host's clock.** The
+  Geometry track of a `fuse_orbbec` rig's stream, or a camera's with
+  `source.host_clock`, said clock domain 1 while its pts were the host's
+  system clock; it now says `stream::kHostClock` (`live_session`), and the
+  run checks the cameras it opens against it. A single camera on its own
+  clock still names domain 1.
 
 - `examples`: **the viewer builds with GCC and warnings as errors.** The
   vertex bulk copy in `recon_gfx_bridge.hpp` casts its destination to

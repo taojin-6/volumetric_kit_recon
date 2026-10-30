@@ -246,8 +246,8 @@ vr_target_warnings(recon_example_fuse_config_test)
 add_test(NAME recon_example_fuse_config COMMAND recon_example_fuse_config_test)
 
 # fuse_orbbec's cameras (examples/common/fuse_orbbec_sets.hpp), where the driver
-# is built: the one camera a calibration file names, and a camera's report. Host
-# only.
+# is built: the one camera a calibration file names, a camera's report, and
+# whether its cameras stamp on the host's clock. Host only.
 if(TARGET volumetric_kit::sensor_orbbec)
   add_executable(recon_example_fuse_orbbec_sets_test
                  example_fuse_orbbec_sets_test.cpp)

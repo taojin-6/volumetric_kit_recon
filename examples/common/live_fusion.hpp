@@ -88,11 +88,8 @@ using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
 /// @param program   The program's name, for its stream and its messages.
 /// @param open      Opens its cameras, each printed, as an array.
 /// @param host_clock  Whether every camera @p open opens stamps on the host's
-///                  clock (@ref on_host_clock), known before they open, as
-///                  the session must say it: fuse_orbbec's
-///                  @ref orbbec_on_host_clock, fuse_realsense's always. A
-///                  value the opened cameras contradict is a programmer
-///                  error (`VKC_CHECK`).
+///                  clock, as the session then names; the opened cameras
+///                  must agree (`VKC_CHECK`).
 /// @param counters  Each camera's counters at the end.
 /// @return OK, or the first failure, a camera silent past
 ///         `RigSets::kSilenceLimit` among them; the counters, any stream and
@@ -174,8 +171,7 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
   std::optional<sensor::SensorArray> array;
   VKC_ASSIGN(array, open(opt, device, allocator));
   // A set's trigger is on the system clock only where every camera stamps on
-  // the host's, as a rig's always do, and the session said which before they
-  // opened.
+  // the host's, as a rig's always do.
   VKC_CHECK(on_host_clock(*array) == host_clock,
             "the cameras' clock is not the one the stream's session names");
 
