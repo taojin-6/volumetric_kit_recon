@@ -40,6 +40,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **core 0.32.0** (46877ff), core main at #73's merge, which dropped the
+  `fusion.depth_within_color` key: a rig_viewer scenario that still sets it
+  is now refused as an unknown field. The pin was core's FuseRealsense branch
+  head (7850255); the floor stays 0.31.0, the first core with that profile.
 - build: **recon pins sensor 0.9.0** (sensor #9's merge, `9466540`;
   BREAKING for the live programs' results), CI takes sensor's actions at
   the new pin, and `VR_SENSOR_MIN_VERSION` rises to 0.9.0. Sensor's frame

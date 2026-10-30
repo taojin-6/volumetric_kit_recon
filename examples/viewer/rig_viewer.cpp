@@ -321,9 +321,7 @@ int run(GLFWwindow* window, const Options& opt) {
   array_options.prep.color_queue_families[1] = shared->graphics_family();
   array_options.prep.color_queue_family_count = 2;
   // The prep crops each camera's frame to what both its cameras see, so
-  // depth its colour camera does not see is not fused. TODO: the core's
-  // config still accepts fusion.depth_within_color for rig_viewer, which no
-  // longer reads it; drop the key there.
+  // depth its colour camera does not see is not fused.
   // The streams, the same for every camera, at the calibration's colour
   // exposure, opened and printed as fuse_orbbec opens them.
   auto sensors = vr_example::open_orbbec_cameras(opt, array_options.calibration,
