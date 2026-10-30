@@ -975,8 +975,11 @@ fuse loop never learns what is behind it — and prepare each on its own.
 The three live ones read their cameras raw as a `SensorArray`,
 `fuse_orbbec` one Orbbec camera or a rig, `fuse_realsense` one
 `RealSenseSensor` or `StereoDepthSensor` and `rig_viewer` an Orbbec rig,
-and prepare each set in
-one batch (`SensorArray::process`).
+and prepare each set in one batch (`SensorArray::process`). The prep crops
+each frame with colour to what both its cameras see, by their fields of
+view (sensor's 2026-10-29 same-view entry): depth outside the colour
+camera's view is not fused, and colour outside the depth camera's view has
+coverage 0, so it colours and textures nothing.
 The four dataset examples take `ReplicaSensor` as the source: frame cap,
 stride and the depth gate are its options, stamped on each frame it hands
 out, and its disk probe at `open` visits only the frames those options
@@ -1112,8 +1115,7 @@ fuse_orbbec opens a rig (`open_orbbec_cameras`, at the calibration's colour
 controls), read as a
 `SensorArray`, its raw sets prepared, fused and textured from every camera
 on the GPU, and the atlas filled by
-device copies recorded in gfx's frame (the 2026-09-29 decision), fusing
-depth only inside each colour camera's view unless given `fusion.depth_within_color: false`, and
+device copies recorded in gfx's frame (the 2026-09-29 decision), and
 texturing a camera a set lacks from its last frame, a fallback view
 (`fusion.hold_ms`).
 `rig_viewer`'s panels show the newest set; its fuse thread also records every

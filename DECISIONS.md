@@ -248,7 +248,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   and fusion reads the buffers in place, depth and colour each with its own
   camera rather than registered. *Amended 2026-10-29:* depth mixes the four
   raw pixels around the source where they are one surface, nearest only at
-  an edge or a hole.
+  an edge or a hole; and a frame with colour keeps only what both its
+  cameras see, depth and colour each cropped to the other's field of view,
+  no longer an option (depth's an option from 2026-09-29; the same-view
+  entry).
 - [**2026-09-28**](#2026-09-28--memory-the-kernels-use-lives-on-the-device-on-every-platform-and-the-host-only-records-commands-against-it-one-commandbatch-per-call-parameters-inline-bulk-bytes-staged-at-the-edges-small-results-read-back) —
   Memory the kernels use lives on the device on every platform, and the host
   only records commands against it: one `CommandBatch` per call, parameters
@@ -278,7 +281,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   on the GPU, the atlas filled by device copies recorded in gfx's frame, and
   the frame prep's colour shared with gfx's queue family. It reads a
   `SensorArray` since 2026-10-07. *Amended 2026-10-16:* depth may be shared
-  too; the viewer keeps it EXCLUSIVE.
+  too; the viewer keeps it EXCLUSIVE. *Amended 2026-10-29:* the viewer no
+  longer chooses whether depth is kept to the colour view: sensor 0.9.0
+  crops every frame with colour to what both its cameras see.
 - [**2026-09-30**](#2026-09-30--a-rigs-cameras-fuse-in-one-batch-each-dispatch-binds-a-descriptor-set-of-its-own-over-the-same-kernel-and-the-set-is-compacted-once) —
   A rig's cameras fuse in one batch: each dispatch binds a descriptor set of
   its own over the same kernel, and the set is compacted once. A Dynamic set
@@ -399,7 +404,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--a-sensors-frame-is-rgbdframe-each-cameras-cameramodel-the-poses-in-double-a-sequence-number-and-the-pixels-it-holds-and-the-femto-megas-factory-extrinsic-is-made-a-rotation) —
   A sensor's frame is `RgbdFrame`: each camera's `CameraModel`, the poses in
   double, a sequence number, and the pixels it holds. The Femto Mega's factory
-  depth-to-colour rotation is not one, and is made one.
+  depth-to-colour rotation is not one, and is made one. *Amended
+  2026-10-29:* its depth may be on the device instead
+  (`RgbdFrame::depth_device`), held by its buffer.
 - [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--a-sensor-is-an-irgbdsensor-what-it-is-before-a-frame-sensorinfo-frames-polled-newest-or-drained-oldest-first-and-the-femto-mega-is-orbbecsensor) —
   A sensor is an `IRgbdSensor`: what it is before a frame (`SensorInfo`),
   frames polled newest or drained oldest first. The Femto Mega is
@@ -427,7 +434,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   `VR_WITH_FFMPEG` there is a configure error.
 - [**2026-10-06**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-06--gpuframeprep-takes-colour-on-the-device-only-and-a-sets-depth-is-staged-on-one-thread-amends-the-2026-09-28-decoded-frame-and-2026-10-06-one-batch-entries) —
   `GpuFramePrep` takes colour on the device only, and a set's depth is
-  staged on one thread. (Packed host colour came back the next day.)
+  staged on one thread. (Packed host colour came back the next day, and
+  host Y'CbCr planes on 2026-10-29.) *Amended 2026-10-29:* depth may come
+  from the device, read in place with no copy; only host depth is staged.
 - [**2026-10-06**](#2026-10-06--platforms-linux-android-macos-and-ios-with-gcc-or-clang-windows-and-msvc-are-not-supported-amends-the-2026-06-21-vulkan-path-entry) —
   Platforms: Linux, Android, macOS and iOS, with GCC or Clang; Windows and
   MSVC are not supported.
@@ -452,7 +461,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-07**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-07--gpuframeprep-stages-a-host-frames-packed-colour-beside-its-depth-amends-the-2026-10-06-device-only-gpuframeprep-entry) —
   `GpuFramePrep` stages a host frame's packed colour beside its depth
   (`RgbdFrame::color_packed`): one copy in the pass's own batch, no host
-  conversion, no threads.
+  conversion, no threads. *Amended 2026-10-29:* Y'CbCr planes on the host
+  are staged the same way.
 - [**2026-10-07**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-07--the-replica-source-is-an-irgbdsensor-and-the-examples-fuse-what-gpuframeprep-prepares-icameracapture-capturedframe-and-ownedframe-go-and-io-loads-depth-as-stored-amends-the-2026-08-02-sensor-tier-2026-09-14-examples-and-2026-10-06-irgbdsensor-entries) —
   The Replica source is an `IRgbdSensor` and the examples fuse what
   `GpuFramePrep` prepares: `ICameraCapture`, `CapturedFrame` and
@@ -892,6 +902,73 @@ entries relevant to your task; later amendments supersede earlier rules.
   pixel otherwise: a slope no longer comes out in half-pixel terraces, which
   fusion shaded as bands on floors and walls, and an edge or a hole is never
   blended. No option; about 1-2 µs of device time a frame.
+- [**2026-10-29**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-29--gpuframeprep-takes-ycbcr-planes-from-the-host-too-a-cameras-yuyv-among-them-staged-beside-the-depth-and-converted-on-the-device-amends-the-2026-10-06-device-only-gpuframeprep-and-2026-10-07-packed-colour-entries) —
+  `GpuFramePrep` takes Y'CbCr planes from the host too (`YuvImage::host`),
+  and YUYV (`YuvLayout::Yuyv`, 4:2:2) among the layouts: a UVC camera's
+  colour as its SDK hands it over, staged beside the depth as packed words
+  are and converted on the device. `PictureReadback` refuses YUYV.
+  *Amended the same day (the stereo entry):* luma alone (`YuvLayout::Luma`)
+  joins the layouts; `ColorParams` is 120 bytes.
+- [**2026-10-29**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-29--gpuframeprep-reads-depth-on-the-device-in-place-a-gpu-stages-depth-rgbdframedepth_device-taken-over-from-its-writers-queue-family-and-bound-where-it-is-amends-the-2026-10-06-sensor-frame-and-device-only-gpuframeprep-entries) —
+  `GpuFramePrep` reads depth on the device in place:
+  `RgbdFrame::depth_device` (a `DeviceDepth`), the 16-bit samples a GPU
+  stage such as stereo matching wrote, at any even byte of a storage buffer,
+  taken over from its writer's queue family and bound where it is, the
+  image's first sample a push constant. No copy and no host round trip; a
+  frame with nothing on the host still binds a word of the pass's slot. A
+  buffer several depths and pictures share is taken over once a batch.
+- [**2026-10-29**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-29--calibrated-stereo-pairs-are-the-stereo-tiers-and-stereorectifier-rectifies-them-on-the-gpu-as-opencvs-stereorectify-computes-it-sampling-through-the-colour-passs-own-code-amends-the-host-planes-entry-above) —
+  Calibrated stereo pairs are the `stereo` tier's (`IStereoSensor`,
+  `StereoFrame`), and `StereoRectifier` rectifies them: Bouguet's
+  rectification as OpenCV's `stereoRectify` computes it, once, then a
+  Vulkan pass a view that samples through the colour pass's own code, into
+  views CUDA can import. `YuvLayout::Luma` for mono pairs.
+  *Amended the same day (the stereo review entry):* rays past a lens's fold
+  are 0; a shared buffer is taken over once; the views are used in turn and
+  taken back with no transfer; a pair rectified already keeps square pixels.
+  *Again (the RealSense stereo entry):* `StereoInfo` carries the source's
+  id, model, clock, rate and colour exposure, which `depth_info()` copies;
+  `IStereoSensor` gains `set_frame_notify`.
+- [**2026-10-29**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-29--the-realsense-d400-driver-is-sensor_realsense-the-cameras-own-depth-and-its-colour-cameras-yuyv-on-the-host-librealsense-a-prerequisite-ci-installs-tested-against-rsutilh-with-no-camera) —
+  The RealSense D400 driver is `sensor_realsense` (`RealSenseSensor`): the
+  camera's own depth and its colour camera's YUYV on the host, converted on
+  the device by `GpuFramePrep`; librealsense 2.59.1 a prerequisite that CI
+  installs; tested against librealsense's own `rsutil.h`, with no camera and
+  no virtual one.
+- [**2026-10-29**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-29--stereorectifier-after-its-review-rays-past-a-lenss-fold-are-0-a-buffer-the-pictures-share-is-taken-over-once-and-the-views-are-used-in-turn-and-taken-back-with-no-transfer-amends-the-stereo-entry-above) —
+  `StereoRectifier` after its review: rays past a lens's fold are 0; a
+  buffer the pictures share is taken over once; the views are used in turn
+  (rectify, read, drop) with no pool, a pair dropped only once its reads
+  have completed, and taken back with no transfer; a pair rectified already
+  is scaled by one factor; luma alone needs no matrix.
+- [**2026-10-29**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-29--a-realsenses-infrared-cameras-are-realsensestereo-an-istereosensor-luma-on-the-host-the-projector-off-the-factory-calibration-as-stereoinfo-on-the-camera-realsensesensor-runs-on) —
+  A RealSense's two infrared cameras are `RealSenseStereo`, an
+  `IStereoSensor`: their Y8 as the camera rectifies them, luma on the host,
+  and the colour camera's YUYV, the projector off by default, the factory
+  calibration as `StereoInfo`; both RealSense drivers run on one internal
+  camera; `IStereoSensor` gains `set_frame_notify`, and `StereoInfo` what
+  the source is (id, model, clock, rate, colour exposure), which
+  `StereoRectifier::depth_info()` copies.
+- [**2026-10-29**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-29--stereo-depth-on-nvidia-ffsstereo-runs-fast-foundationstereo-on-tensorrt-between-two-cuda-kernels-from-the-rectifiers-views-straight-into-a-vulkan-depth-buffer-and-stereodepthsensor-makes-any-stereo-camera-an-irgbdsensor) —
+  Stereo depth on NVIDIA (`sensor_ffs`, `VS_WITH_FFS`): `FfsStereo` runs an
+  FFS export on TensorRT, its plan cached by GPU, TensorRT, model and size,
+  between a CUDA kernel reading the rectifier's views in place and one
+  writing 16-bit depth into a Vulkan buffer (`RgbdFrame::depth_device`);
+  `StereoDepthSensor` is any `IStereoSensor` as an `IRgbdSensor`, on a
+  thread of its own. Research use: NVlabs' code and the 23-36-37 weights,
+  exported by `tools/ffs/export_onnx.py`, never vendored.
+- [**2026-10-29**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-29--a-frame-with-colour-keeps-only-what-both-its-cameras-see-depth-outside-the-colour-cameras-view-and-colour-outside-the-depth-cameras-are-dropped-wherever-the-depth-comes-from-and-gpuframeprepconfigdepth_within_color-goes-amends-the-2026-09-28-gpu-pre-processing-entry) —
+  A frame with colour keeps only what both its cameras see by their fields
+  of view, each sensor's overlap from its own intrinsics and extrinsic, the
+  baseline left out of the view test: colour whose direction lies outside
+  the depth camera's view is a 0 word, and depth, from the host or the
+  device, is zeroed outside the colour camera's view or where it lands on
+  colour that is dropped. The depth range plays no part, and a frame
+  without colour keeps all its depth.
+  `GpuFramePrepConfig::depth_within_color` goes, with no option in its
+  place. In a rig a camera no longer fuses depth only another camera can
+  colour, nor colours surfaces only another camera's depth saw; the owner
+  chose that.
 - [**2026-10-29**](#2026-10-29--a-fixed-camera-flags-its-own-real-change-a-cusum-on-each-pixels-own-noise-on-the-device) —
   A fixed camera flags its own real change: `tsdf::ChangeDetector` keeps
   each pixel's history and own noise on the device, floored by the sensor's
@@ -3411,6 +3488,13 @@ The triangles removed were almost all untextured ones: the untextured share
 roughly halves, and each camera's share grows only because the total shrinks.
 A screenshot of each run shows the white walls and floor of the first gone
 from the second. The 8.6% left has not been broken down by cause.
+
+*Amended 2026-10-29:* the choice is gone. Sensor 0.9.0 crops every frame
+with colour to what both its cameras see, colour to the depth camera's view
+as well (sensor's same-view entry), with no option, so the viewer no longer
+reads `fusion.depth_within_color` (what `--all-depth` became). The table
+measured the earlier depth-only mask; the crop has not been measured on the
+rig.
 
 *Amended 2026-09-29, a fourth time:* a camera missing from a set **textures
 from its last frame** for up to `--hold-ms` on the rig's clock (2000 by

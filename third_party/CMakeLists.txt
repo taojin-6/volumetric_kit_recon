@@ -82,13 +82,13 @@ endif()
 # sensor's own CI tests sensor, so its tests and -Werror stay off in this build;
 # recon's examples take its test fixtures (VS_TEST_DATA_DIR, which it sets).
 #
-# The pin is sensor 0.8.0 (fc037df, sensor #10's merge), as are its Orbbec SDK
+# The pin is sensor 0.9.0 (9466540, sensor #9's merge), as are its Orbbec SDK
 # and librealsense actions in .github/workflows (the sibling-actions-at-pins
 # hook).
 FetchContent_Declare(
   volumetric_kit_sensor
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
-  GIT_TAG fc037df91104ba7d7828613aa94da2d039ccb9ac)
+  GIT_TAG 9466540911e462808733c0001facfef237af4cbb)
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)
@@ -104,11 +104,11 @@ vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
 # turn on grid's test support, and recon's examples and tests its example
 # helpers (grid_example_common), which grid builds with its examples.
 #
-# The pin is grid 0.3.0 (dc11031, grid #6's merge).
+# The pin is grid 0.3.1 (d1fcbc4, grid #8's merge).
 FetchContent_Declare(
   volumetric_kit_grid
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
-  GIT_TAG dc110319a8f693873a74450b65695958de38c40e)
+  GIT_TAG d1fcbc4faa46f0cfe1be146bdb9eb7e1732ca30d)
 set(VGRID_BUILD_TEST_SUPPORT ${VR_BUILD_TESTS})
 if(VR_BUILD_EXAMPLES OR VR_BUILD_TESTS)
   set(VGRID_BUILD_EXAMPLES ON)
