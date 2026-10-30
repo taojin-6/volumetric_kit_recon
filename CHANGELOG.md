@@ -18,9 +18,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that stops delivering ends the audio with a warning, and fusion goes on;
   its counters follow the cameras'. Built where sensor builds its
   microphone driver (`VS_WITH_PORTAUDIO`, on PortAudio) and refused
-  elsewhere; `output.serve` with a mic is refused until grid serves an
-  Audio track. Without `source.audio` the stream is byte for byte as
-  before. CI builds the driver on every leg but the sanitizer job's.
+  elsewhere; `output.serve` serves the Audio track with the frames (below).
+  Without `source.audio` the stream is byte for byte as before. CI builds
+  the driver on every leg but the sanitizer job's.
 
 - **`fuse_realsense` takes FFS depth** (README, "Optional: FFS depth";
   [config/README.md](config/README.md)): with `source.depth: "ffs"` it
@@ -68,6 +68,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server; both floors rise with them.
 
 ### Changed
+
+- build: **recon pins grid 0.6.0** (grid #11's merge, `cf7c99a`), and
+  `VR_GRID_MIN_VERSION` rises to it: its `StreamServer` serves every track,
+  track 0's keys anchoring the GOP, so `fuse_orbbec` with `source.audio`
+  and `output.serve`, which the run refused, serves the mic's track with the
+  frames, as the file records them. A stream with no Audio track writes and
+  serves the bytes it did. Grid's `serve_stream` replays every track of a
+  recording together; recon uses nothing else that changed.
 
 - build: **recon pins core 0.34.0** (core #74's merge, `4600477`), **sensor
   0.11.0** (sensor #13's merge, `000746d`) and **grid 0.5.0** (grid #10's

@@ -80,11 +80,11 @@ using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
 /// clock the stream's session names (@ref live_session), and `codec.sweep`
 /// then sweeps the codec over the last grid. With `source.audio`, the mic
 /// opens before the GPU, its track joins the session, and it records from
-/// when the cameras stream (@ref AudioFeed), its counters beside theirs; a
-/// session with audio is not served yet, which the stream refuses before any
-/// camera opens. operation=stream
-/// polls, counts and releases each set, with no GPU preparation, fusion or
-/// mesh, so the run measures the cameras' stream and decode alone.
+/// when the cameras stream (@ref AudioFeed), its counters beside theirs; with
+/// `output.serve`, the viewers get its track with the frames.
+/// operation=stream polls, counts and releases each set, with no GPU
+/// preparation, fusion or mesh, so the run measures the cameras' stream and
+/// decode alone.
 /// diagnostics.readback and diagnostics.dump_sets read and write each set's
 /// pictures as stages of their own. Before the cameras stream, a Ctrl+C
 /// returns with nothing recorded; after, the run ends after the set in hand,
@@ -151,23 +151,13 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
       opt.output.serve != 0) {
     const codec_stream::CodecOutputs outputs =
         vgrid_example::set_codec_outputs(opt);
-    // TODO: drop once grid's StreamServer serves Audio tracks, with the lines
-    // on it in DESIGN.md, config/README.md and the CHANGELOG; until then,
-    // with a mic and output.serve, the server refuses the two tracks here
-    // (Unsupported), and this says why.
-    vkc::Result<codec_stream::CodecStream> made =
-        codec_stream::CodecStream::create(
-            device, allocator, encoder,
-            live_session(program, opt, host_clock,
-                         mic ? &mic->info() : nullptr),
-            outputs);
-    if (!made.ok() && mic && outputs.serve &&
-        made.status().domain() == vkc::Status::Code::Unsupported) {
-      return made.status().with_context(
-          "source.audio with output.serve, which serves no audio yet");
-    }
-    VKC_TRY(made.status());
-    stream.emplace(std::move(made).value());
+    VKC_ASSIGN(codec_stream::CodecStream made,
+               codec_stream::CodecStream::create(
+                   device, allocator, encoder,
+                   live_session(program, opt, host_clock,
+                                mic ? &mic->info() : nullptr),
+                   outputs));
+    stream.emplace(std::move(made));
     VKC_ASSIGN(vgrid_example::CodecReport rows,
                vgrid_example::CodecReport::create(
                    opt.output.csv, outputs.stream, outputs.decode,

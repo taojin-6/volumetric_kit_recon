@@ -15,11 +15,14 @@
 // dropped of its chunks. A mic whose drain fails ends the audio there, warned
 // once, and the frames go on. With no mic the feed does nothing, and the file
 // is byte for byte the one the session before audio writes. With
-// output.serve, a session with the mic's track is refused as the stream is
-// made. open_audio opens nothing for an empty source.audio, and a build
-// without the microphone driver refuses a named one. The device part skips
-// with no device.
+// output.serve, on 127.0.0.1 as a live run serves, a viewer that joined
+// before the first frame gets the session with the mic's track and the
+// file's records as it holds them, both tracks, every one up to the last
+// frame's pts, then the end. open_audio opens
+// nothing for an empty source.audio, and a build without the microphone
+// driver refuses a named one. The device part skips with no device.
 
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -38,9 +41,11 @@
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/grid/codec/encoder.hpp"
 #include "volumetric_kit/grid/codec_stream/codec_stream.hpp"
+#include "volumetric_kit/grid/networking/stream_client.hpp"
 #include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/grid/stream/stream_reader.hpp"
 #include "volumetric_kit/grid/testing/codec_fixture.hpp"
+#include "volumetric_kit/grid/testing/networking_loopback.hpp"
 #include "volumetric_kit/grid/testing/stream_files.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
@@ -50,10 +55,12 @@
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace codec_stream = volumetric_kit::grid::codec_stream;
+namespace networking = volumetric_kit::grid::networking;
 namespace sensor = volumetric_kit::sensor;
 namespace stream = volumetric_kit::grid::stream;
 namespace vol = volumetric_kit::grid::volume;
 namespace vrst = vgrid_test::vrst;
+namespace net = vgrid_test::net;
 
 namespace {
 
@@ -172,32 +179,89 @@ volumetric_kit::core::config::Config scenario() {
   return opt;
 }
 
+// Every record `viewer`, a client of 127.0.0.1:`port`, reads into `viewed`
+// until the sender's end, within 5 s.
+int read_to_end(networking::StreamClient& viewer, std::uint16_t port,
+                std::vector<net::Got>* viewed) {
+  const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  for (;;) {
+    net::Got got;
+    const vkc::Result<bool> r =
+        viewer.next(std::chrono::milliseconds(10), &got.record, &got.payload);
+    if (!r.ok()) {
+      CHECK(r.status().domain() == vkc::Status::Code::IoError &&
+            net::client_reason(r.status().message(), port) ==
+                "the sender closed the connection");
+      return 0;
+    }
+    if (*r) viewed->push_back(std::move(got));
+    CHECK(std::chrono::steady_clock::now() < end);
+  }
+}
+
 // The file at `path` coded from `session`: kFrames frames of `grid`, the
 // feed of `mic` (or none) started first, sent after each frame once the mic
 // captured up to kLagNs past it, and finished after kTailNs more, before the
-// stream; its report taken once the stream has finished, as a run's is.
+// stream; its report taken once the stream has finished, as a run's is. With
+// `viewed`, also served on 127.0.0.1 as a live run serves (keys on demand): a
+// viewer joins before the first frame, its session checked, and reads into
+// `viewed` each record as it goes out, then what it gets up to the end.
 int run(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
         const stream::Session& session, FakeMic* mic, const std::string& path,
-        std::string* report) {
+        std::string* report, std::vector<net::Got>* viewed = nullptr) {
   codec_stream::CodecOutputs outputs;
   outputs.stream = path;
   outputs.decode = false;
+  if (viewed != nullptr) {
+    outputs.serve.emplace();
+    outputs.serve->host = "127.0.0.1";
+    outputs.serve->port = 0;
+    outputs.serve->replay_gop = false;
+  }
   vkc::Result<codec_stream::CodecStream> made =
       codec_stream::CodecStream::create(gpu.device, gpu.allocator, {}, session,
                                         outputs);
   CHECK(made.ok());
   codec_stream::CodecStream& coded = made.value();
+  std::uint16_t port = 0;
+  std::unique_ptr<networking::StreamClient> viewer;
+  if (viewed != nullptr) {
+    CHECK(coded.server() != nullptr);
+    port = coded.server()->port();
+    viewer = net::connect(port);
+    CHECK(viewer != nullptr && net::wait_session(*viewer));
+    CHECK(vrst::same(*viewer->session(), session));
+  }
+  // The viewer reads what has gone out: every frame coded and every chunk
+  // written. Read before the next frame, a key, so it is never behind one.
+  const auto view = [&]() -> int {
+    if (viewer == nullptr) return 0;
+    const std::uint64_t out =
+        coded.coded() + coded.appended(vr_example::kAudioTrack).written;
+    while (viewed->size() < out) {
+      net::Got got;
+      CHECK(net::next_within(*viewer, &got));
+      viewed->push_back(std::move(got));
+    }
+    return 0;
+  };
   vr_example::AudioFeed feed(mic, &coded, vr_example::kAudioTrack, kProgram);
   CHECK(feed.start().ok());
   for (std::size_t frame = 0; frame < kFrames; ++frame) {
     CHECK(coded.code(grid, frame, frame_pts(frame)).ok());
     if (mic != nullptr) mic->capture(frame_pts(frame) + kLagNs);
     CHECK(feed.send().ok());
+    CHECK(view() == 0);
   }
   if (mic != nullptr) mic->capture(frame_pts(kFrames - 1) + kTailNs);
   CHECK(feed.finish().ok());
   CHECK(feed.send().ok());  // finished: nothing more
+  CHECK(view() == 0);
   CHECK(coded.finish().ok());
+  // Then what reaches it of the chunks finish writes, those held past the
+  // last frame: grid's server closes as the stream finishes, so any of them
+  // or none.
+  if (viewer != nullptr) CHECK(read_to_end(*viewer, port, viewed) == 0);
   *report = feed.report();
   return 0;
 }
@@ -324,21 +388,41 @@ int no_mic(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
   return 0;
 }
 
-// A mic with output.serve: the stream refuses the session as it is made,
-// which a run does before its cameras open, until grid serves an Audio track.
-int served(vkc::test::GpuContext& gpu) {
-  FakeMic mic(kStartNs, 0);
-  codec_stream::CodecOutputs outputs;
-  outputs.decode = false;
-  outputs.serve.emplace();
-  outputs.serve->host = "127.0.0.1";
-  outputs.serve->port = 0;
-  const vkc::Result<codec_stream::CodecStream> made =
-      codec_stream::CodecStream::create(
-          gpu.device, gpu.allocator, {},
-          vr_example::live_session(kProgram, scenario(), true, &mic.info()),
-          outputs);
-  CHECK(made.status().domain() == vkc::Status::Code::Unsupported);
+// A mic with output.serve: the viewer gets the session with the mic's track
+// and the file's records in its order, each payload the file's: every frame
+// and every chunk up to the last frame's pts, both tracks, then any of the
+// chunks past it. The file is the one recorded() checks.
+int served(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
+           const vkc::test::Scratch& scratch) {
+  const std::uint64_t first_ns = kStartNs - kEarlyChunks * kChunkNs;
+  FakeMic mic(first_ns, 0);
+  const stream::Session session =
+      vr_example::live_session(kProgram, scenario(), true, &mic.info());
+  const std::string path = (scratch.path / "served.vrst").string();
+  std::string report;
+  std::vector<net::Got> viewed;
+  CHECK(run(gpu, grid, session, &mic, path, &report, &viewed) == 0);
+  CHECK(check_file(path, session, first_ns, kEarlyChunks, mic.captured - 1) ==
+        0);
+  const std::unique_ptr<stream::StreamReader> reader = vrst::open(path);
+  CHECK(reader != nullptr);
+  const vrst::ReadBack back = vrst::read_all(*reader);
+  std::size_t frames = 0;
+  std::size_t audio = 0;  // up to the last frame's pts
+  for (const stream::Record& r : back.records) {
+    if (r.info.track == 0) {
+      ++frames;
+    } else if (r.info.pts_ns <= frame_pts(kFrames - 1)) {
+      ++audio;
+    }
+  }
+  CHECK(frames == kFrames && audio > 0);
+  CHECK(viewed.size() >= frames + audio &&
+        viewed.size() <= back.records.size());
+  for (std::size_t i = 0; i < viewed.size(); ++i) {
+    CHECK(vrst::same(viewed[i].record.info, back.records[i].info));
+    CHECK(viewed[i].payload == back.payloads[i]);
+  }
   return 0;
 }
 
@@ -352,7 +436,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(recorded(gpu, *grid, scratch) == 0);
   CHECK(lost(gpu, *grid, scratch) == 0);
   CHECK(no_mic(gpu, *grid, scratch) == 0);
-  CHECK(served(gpu) == 0);
+  CHECK(served(gpu, *grid, scratch) == 0);
   std::puts("recon_example_live_audio: OK");
   return 0;
 }
