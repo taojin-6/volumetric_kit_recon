@@ -26,9 +26,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # a consumer fetches it by commit (DECISIONS.md, 2026-10-22).
 #
 # The camera and sensor options are volumetric_kit_sensor's (VS_WITH_ORBBEC,
-# VS_WITH_REALSENSE, VS_WITH_FFMPEG, VS_WITH_CUDA); a -D on recon's configure
-# reaches it as a cache variable, and a driver it builds builds its live example
-# (examples/CMakeLists.txt). Its camera-only build is the package's alone: recon
+# VS_WITH_REALSENSE, VS_WITH_FFMPEG, VS_WITH_CUDA, VS_WITH_FFS); a -D on recon's
+# configure reaches it as a cache variable, and a driver it builds builds its
+# live example (examples/CMakeLists.txt), as its stereo depth (sensor_ffs) gives
+# fuse_realsense FFS depth. Its camera-only build is the package's alone: recon
 # needs its frame contract.
 if(PROJECT_IS_TOP_LEVEL)
   set(_vr_examples_default ON)
@@ -71,15 +72,17 @@ find_package(Vulkan REQUIRED)
 # Pinned dependencies: volumetric_kit_core, volumetric_kit_sensor and
 # volumetric_kit_grid, linked PUBLIC. The oldest core recon's libraries build
 # with is checked in the core that arrives (third_party/, which also checks the
-# config tier the examples and tests need): 0.31.0, whose FuseRealsense profile
-# fuse_realsense loads (the version that profile lands as: third_party's TODO);
-# 0.30.0 brought the output.max_viewers fuse_orbbec serves by, 0.29.0 the
-# vulkan/fwd.hpp the public headers include, and 0.28.0 the test support the
-# tests run on. The oldest sensor is 0.1.0, its first, whose sensor_frame
-# recon's libraries link (fuse_realsense builds only with sensor_realsense,
-# which 0.4.0 brought); the oldest grid is VR_GRID_MIN_VERSION: 0.3.0, whose
-# codec_outputs passes output.max_viewers to the server.
-set(VR_CORE_MIN_VERSION 0.31.0)
+# config tier the examples and tests need): 0.32.0, whose FuseRealsense
+# source.depth chooses fuse_realsense's depth (the version that lands as:
+# third_party's TODO); 0.31.0 brought the FuseRealsense profile, 0.30.0 the
+# output.max_viewers fuse_orbbec serves by, 0.29.0 the vulkan/fwd.hpp the public
+# headers include, and 0.28.0 the test support the tests run on. The oldest
+# sensor is 0.1.0, its first, whose sensor_frame recon's libraries link
+# (fuse_realsense builds only with sensor_realsense, which 0.4.0 brought, and
+# runs FFS only with sensor_ffs, which 0.8.0 brought); the oldest grid is
+# VR_GRID_MIN_VERSION: 0.3.0, whose codec_outputs passes output.max_viewers to
+# the server.
+set(VR_CORE_MIN_VERSION 0.32.0)
 set(VR_SENSOR_MIN_VERSION 0.1.0)
 set(VR_GRID_MIN_VERSION 0.3.0)
 add_subdirectory(third_party)

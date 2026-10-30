@@ -53,6 +53,22 @@ if(VR_BUILD_TESTS)
           ${volumetric_kit_grid_SOURCE_DIR}/tests/example_config_entry.cmake)
     endif()
   endforeach()
+  # fuse_realsense's depth against its build: FFS refused before the GPU where
+  # sensor_ffs is not built, and let through where it is.
+  if(TARGET fuse_realsense)
+    if(TARGET volumetric_kit::sensor_ffs)
+      set(_vr_ffs ON)
+    else()
+      set(_vr_ffs OFF)
+    endif()
+    add_test(
+      NAME recon_fuse_realsense_depth
+      COMMAND
+        ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:fuse_realsense>
+        -DFFS=${_vr_ffs}
+        -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fuse-realsense-depth -P
+        ${PROJECT_SOURCE_DIR}/tests/example_fuse_realsense_depth.cmake)
+  endif()
   # The colour frame of the Replica runs below: the sensor package's JPEG
   # fixture (VS_TEST_DATA_DIR, which the package sets).
   set(_vr_color_fixture "${VS_TEST_DATA_DIR}/jpeg/patches_256x144.jpg")

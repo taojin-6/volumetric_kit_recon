@@ -26,21 +26,21 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.31.0 (7850255, the head of core's
-# feat/fuse-realsense-profile, whose FuseRealsense profile fuse_realsense
-# loads), as are the Homebrew key action in .github/workflows/_build.yml and the
-# workflow-trigger check in .github/workflows/lint.yml; the vkc_require_core
-# checks below say which core each part needs. The tests are main()s of their
-# own on the core's test support. TODO: once that core PR merges, and before
-# this pin reaches main, re-pin to its merge commit and set VR_CORE_MIN_VERSION,
+# The pin is core 0.32.0 (c1b29cc, the head of core #72, whose FuseRealsense
+# source.depth chooses fuse_realsense's depth), as are the Homebrew key action
+# in .github/workflows/_build.yml and the workflow-trigger check in
+# .github/workflows/lint.yml; the vkc_require_core checks below say which core
+# each part needs. The tests are main()s of their own on the core's test
+# support. TODO: once that core PR merges, and before this pin reaches main,
+# re-pin to its merge commit, with the two actions, and set VR_CORE_MIN_VERSION,
 # with its comment in the root CMakeLists.txt and the version CHANGELOG and
-# DECISIONS' 2026-10-29 entry name, to the version it lands as: another open
-# core PR also claims 0.31.0, so it may land as 0.32.0, and a floor left at
-# 0.31.0 would then accept a core without the profile.
+# DECISIONS' entry name, to the version it lands as: another open core PR also
+# claims the next minor, so it may land as 0.33.0, and a floor left at 0.32.0
+# would then accept a core without source.depth.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 78502552393f4f2cac0ce0409fb1c8950d5c3e5d)
+  GIT_TAG c1b29cce43c04bc5a778ec6936e1c45f5e656407)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
@@ -77,18 +77,18 @@ endif()
 # never main; an application that also fetches sensor declares it first, and
 # FetchContent keeps that declaration, as with the core. Work on both checkouts
 # at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_SENSOR=<sensor
-# checkout>. Its drivers (VS_WITH_ORBBEC, VS_WITH_REALSENSE, VS_WITH_FFMPEG,
-# VS_WITH_CUDA) are given on recon's configure. sensor's own CI tests sensor, so
-# its tests and -Werror stay off in this build; recon's examples take its test
-# fixtures (VS_TEST_DATA_DIR, which it sets).
+# checkout>. Its drivers and stereo depth (VS_WITH_ORBBEC, VS_WITH_REALSENSE,
+# VS_WITH_FFMPEG, VS_WITH_CUDA, VS_WITH_FFS) are given on recon's configure.
+# sensor's own CI tests sensor, so its tests and -Werror stay off in this build;
+# recon's examples take its test fixtures (VS_TEST_DATA_DIR, which it sets).
 #
-# The pin is sensor 0.5.0 (ffa20ea, sensor #5's merge), as are its Orbbec SDK
+# The pin is sensor 0.8.0 (fc037df, sensor #10's merge), as are its Orbbec SDK
 # and librealsense actions in .github/workflows (the sibling-actions-at-pins
 # hook).
 FetchContent_Declare(
   volumetric_kit_sensor
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
-  GIT_TAG ffa20eac6da8fcfbbfc2475e1f8bd8b4fbbec76a)
+  GIT_TAG fc037df91104ba7d7828613aa94da2d039ccb9ac)
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)

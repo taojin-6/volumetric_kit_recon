@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "operation": "fuse",
+  "source": {
+    "kind": "live",
+    "driver": "realsense",
+    "depth": "ffs",
+    "ffs_model": "models/ffs_23-36-37_960x544.onnx",
+    "ffs_plan_cache": "models/ffs_plans"
+  },
+  "run": {
+    "frames": 300
+  },
+  "output": {
+    "path": "results/realsense_ffs.ply"
+  }
+}

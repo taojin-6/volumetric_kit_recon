@@ -221,6 +221,14 @@ if(TARGET volumetric_kit::sensor_realsense)
                                            volumetric_kit::sensor_array)
   target_compile_definitions(recon_example_fuse_config_test
                              PRIVATE VR_TEST_REALSENSE_CONFIG=1)
+  # And, where sensor builds FFS, its depth's options (VR_EXAMPLE_FFS, as
+  # fuse_realsense is built).
+  if(TARGET volumetric_kit::sensor_ffs)
+    target_link_libraries(recon_example_fuse_config_test
+                          PRIVATE volumetric_kit::sensor_ffs)
+    target_compile_definitions(recon_example_fuse_config_test
+                               PRIVATE VR_EXAMPLE_FFS=1)
+  endif()
 endif()
 # fuse_sender.hpp reports through codec_report.hpp, which compares with eval's,
 # fuses with the frame prep's frames, and codec_config.hpp maps a mesh source
