@@ -5664,15 +5664,21 @@ ignores a camera's clock, and the options' colour width. Checked by hand,
 not a test:
 - `fuse_realsense` on the D455 (1 cm voxels): 900 frames in 31.7 s, 30 fps
   after the camera's first 1.6 s; 37 start-up framesets refused, none
-  dropped. A frame costs 1.20 ms of prep and 5.05 ms of integration on the
-  device, 0.22 ms on the host, 7.2 ms from arrival to published; the
-  process peaked at 895 MiB of GPU memory.
+  dropped. At 30 fps the GPU is about 20% busy and idles in P8, its clocks
+  sampled every 100 ms at 450 MHz SM and 405 MHz memory against a boost of
+  2595 and 10501 MHz. A frame's 1.20 ms of prep and 5.05 ms of integration
+  on the device are therefore its cost at idle clocks: not a budget, and not
+  comparable with the rig's below. On the host it costs 0.22 ms, and 7.2 ms
+  from arrival to published, the latency at 30 fps as it runs; the process
+  peaked at 895 MiB of GPU memory.
 - `fuse_orbbec` on the four-Femto rig, 25 sets, twice each against main:
   prep 0.42 against 0.40 ms and integration 1.33 against 1.34 ms on the
-  device (the means of both runs), the same rate, and meshes within 0.2% in the second pair. In the
-  first pair one camera's H.265 joined a second before its first key frame
-  (24 lost), which left the branch's mesh 11% smaller; the driver is
-  unchanged by the re-pin.
+  device (the means of both runs), the same rate, and meshes within 0.2% in
+  the second pair. 25 sets stay inside the change detector's 30-frame
+  warm-up, so Dynamic's test and reset ran only on the D455. In the first
+  pair one camera's H.265 joined a second before its first key frame (24
+  lost), which left the branch's mesh 11% smaller; the driver is unchanged
+  by the re-pin.
 
 ## Measured lessons
 

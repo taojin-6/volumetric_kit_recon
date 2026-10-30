@@ -3,13 +3,11 @@
 
 // fuse_realsense: live reconstruction from one Intel RealSense D400 camera
 // (the D455) with the camera's own depth, computed on the camera from its
-// infrared pair with the projector on (sensor::RealSenseSensor). The run is
-// fuse_orbbec's (vr_example::run_live_fusion): the camera read as a
-// sensor::SensorArray of one, each frame prepared on the GPU -- its YUYV
-// colour converted and undistorted there, its depth undistorted -- and fused
-// into a sparse TSDF volume through sender::SetSender, then after run.frames
-// frames a marching-cubes mesh written to a binary PLY, a table per frame at
-// the end (vr_example::SetLog).
+// infrared pair with the projector on (sensor::RealSenseSensor). The camera
+// is read as a sensor::SensorArray of one, its YUYV colour converted and
+// undistorted on the GPU, through the live examples' run
+// (vr_example::run_live_fusion, which fuse_orbbec shares and which documents
+// the run).
 //
 //   fuse_realsense --config config/examples/fuse_realsense.json
 //   fuse_realsense --help
@@ -20,8 +18,7 @@
 // colour runs at auto exposure, on the host's clock as the depth does. The
 // camera's framesets of its first second or so pair depth with stale colour,
 // and the driver refuses them: the camera's counters at the end count them
-// failed. Ctrl+C (or a SIGTERM) ends the run after the frame in hand, as
-// run.frames would; the camera is released and the PLY written.
+// failed.
 
 #include <cstdio>
 

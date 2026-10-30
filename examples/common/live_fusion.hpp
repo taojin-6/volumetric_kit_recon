@@ -67,14 +67,16 @@ using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
 /// @brief A live example's run: the device, any codec stream, the cameras
 ///        @p open opens, then sets until `run.frames` frames or a Ctrl+C,
 ///        each prepared, fused and, with `output.stream`, `output.csv` or
-///        `output.serve`, coded; the cameras' counters (@p counters), the
-///        per-set table and the PLY.
+///        `output.serve`, coded; the array's report (@ref array_report, with
+///        @p counters), the per-set table and the PLY.
 ///
 /// The codec stream is made before the cameras open, so a port in use, a
 /// rerun onto an existing stream, or a PLY that is its file or the CSV's
 /// under another name, is refused before any camera opens; a stream that
-/// codes no set is removed again. operation=stream polls, counts and
-/// releases each set, with no GPU preparation, fusion or mesh.
+/// codes no set is removed again. Each set is coded at its time, and
+/// `codec.sweep` then sweeps the codec over the last grid. operation=stream
+/// polls, counts and releases each set, with no GPU preparation, fusion or
+/// mesh, so the run measures the cameras' stream and decode alone.
 /// diagnostics.readback and diagnostics.dump_sets read and write each set's
 /// pictures as stages of their own. Before the cameras stream, a Ctrl+C
 /// returns with nothing recorded; after, the run ends after the set in hand,
@@ -84,8 +86,9 @@ using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
 /// @param program   The program's name, for its stream and its messages.
 /// @param open      Opens its cameras, each printed, as an array.
 /// @param counters  Each camera's counters at the end.
-/// @return OK, or the first failure; the counters, any stream and the dump's
-///         report are still reported when the run fails part-way.
+/// @return OK, or the first failure, a camera silent past
+///         `RigSets::kSilenceLimit` among them; the counters, any stream and
+///         the dump's report are still reported when the run fails part-way.
 inline vkc::Status run_live_fusion(const config::Config& opt,
                                    const char* program, OpenArray open,
                                    CameraCounters counters) {

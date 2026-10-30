@@ -31,8 +31,12 @@ include(FetchContent)
 # loads), as are the Homebrew key action in .github/workflows/_build.yml and the
 # workflow-trigger check in .github/workflows/lint.yml; the vkc_require_core
 # checks below say which core each part needs. The tests are main()s of their
-# own on the core's test support. TODO: re-pin to the merge of that core PR once
-# it lands.
+# own on the core's test support. TODO: once that core PR merges, and before
+# this pin reaches main, re-pin to its merge commit and set VR_CORE_MIN_VERSION,
+# with its comment in the root CMakeLists.txt and the version CHANGELOG and
+# DECISIONS' 2026-10-29 entry name, to the version it lands as: another open
+# core PR also claims 0.31.0, so it may land as 0.32.0, and a floor left at
+# 0.31.0 would then accept a core without the profile.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git

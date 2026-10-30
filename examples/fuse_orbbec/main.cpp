@@ -2,12 +2,11 @@
 // Copyright (c) 2026 Tao Jin
 
 // fuse_orbbec: live reconstruction from an Orbbec (Femto Mega) camera or a
-// synced rig of them. Reads its cameras (sensor::OrbbecSensor) as a
-// sensor::SensorArray, which groups a rig's frames by trigger and records
-// each set's prep into the set's one batch, fuses it there into a sparse TSDF
-// volume (tsdf::Fuser, through sender::SetSender), and after run.frames
-// frames extracts a marching-cubes mesh and writes it to a binary PLY. It
-// prints a table per set at the end (vr_example::SetLog).
+// synced rig of them (sensor::OrbbecSensor), read as a sensor::SensorArray
+// that groups a rig's frames by trigger, through the live examples' run
+// (vr_example::run_live_fusion, which fuse_realsense shares and which
+// documents the run: fusion, coding and serving, the stream operation, the
+// diagnostics, Ctrl+C). config/README.md lists the scenario's keys.
 //
 //   fuse_orbbec --config config/examples/fuse_orbbec.json
 //   fuse_orbbec --help
@@ -24,38 +23,8 @@
 // without it every camera sits at the origin with its depth as read, at auto
 // exposure. source.host_clock puts one camera on the
 // host's clock (OrbbecSensor::Options::sync_clock_to_host), which its first
-// frame's age checks; a rig is always on it. operation=stream only streams:
-// each set is polled, counted and released, with no GPU preparation, fusion or
-// mesh, so the run measures the cameras' stream and decode alone.
-// diagnostics.readback reads each set's luma back to the host through
-// sensor::PictureReadback, as a separate stage. diagnostics.dump_sets writes
-// the first sets' camera JPEGs, and with the readback their luma, into
-// diagnostics.dump_directory, which the run makes with the first set
-// (vr_example::SetDump). The run reports each camera's counters at the end,
-// `lost` among them, and a rig's skew of each secondary to the primary. It
-// gives up after ten seconds without a frame rather than waiting, still
-// reporting them.
-//
-// output.stream, output.csv or output.serve codes each fused set as one frame
-// of a codec stream (codec_stream::CodecStream) at the set's time,
-// the host's clock for a rig, and reports the stream, even when the run fails
-// part-way; codec.sweep then prints the codec's rate-distortion table on the
-// last grid. Only output.csv or codec.sweep decodes each frame too, for the
-// decode's rows and the sweep's grid. output.serve serves each frame live, as
-// it is recorded, on that port on every interface (networking::StreamServer),
-// to a player that connects, and prints each viewer joining and leaving.
-// fusion.dynamic, true by default, resets where a camera sees change, so
-// the stream and the PLY follow a changing scene, and every fusion.free_after
-// sets the grid frees the blocks such a surface left, as rig_viewer's does.
-//
-// Ctrl+C (or a SIGTERM) ends the run. Before the cameras stream, the run
-// returns with nothing recorded: the empty stream is removed and the cameras
-// are released. After, it ends after the set in hand, as run.frames would:
-// the stream is finished and its viewers closed, the cameras are released
-// and the PLY is written. A second signal of the same kind ends the process.
-//
-// The run is the live examples' (vr_example::run_live_fusion, which
-// fuse_realsense shares); this program opens the Orbbec cameras.
+// frame's age checks; a rig is always on it. Each camera's counters at the
+// end count its `lost` frames too (vr_example::orbbec_counters).
 
 #include <cstdio>
 
