@@ -31,6 +31,7 @@
 #include "live_sets.hpp"
 #include "set_dump.hpp"
 #include "set_log.hpp"
+#include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
@@ -73,8 +74,9 @@ using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
 /// The codec stream is made before the cameras open, so a port in use, a
 /// rerun onto an existing stream, or a PLY that is its file or the CSV's
 /// under another name, is refused before any camera opens; a stream that
-/// codes no set is removed again. Each set is coded at its time, and
-/// `codec.sweep` then sweeps the codec over the last grid. operation=stream
+/// codes no set is removed again. Each set is coded at its time, on the
+/// clock the stream's session names (@ref live_session), and `codec.sweep`
+/// then sweeps the codec over the last grid. operation=stream
 /// polls, counts and releases each set, with no GPU preparation, fusion or
 /// mesh, so the run measures the cameras' stream and decode alone.
 /// diagnostics.readback and diagnostics.dump_sets read and write each set's
@@ -85,13 +87,19 @@ using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
 /// @param opt       The scenario, validated by the core for the program.
 /// @param program   The program's name, for its stream and its messages.
 /// @param open      Opens its cameras, each printed, as an array.
+/// @param host_clock  Whether every camera @p open opens stamps on the host's
+///                  clock (@ref on_host_clock), known before they open, as
+///                  the session must say it: fuse_orbbec's
+///                  @ref orbbec_on_host_clock, fuse_realsense's always. A
+///                  value the opened cameras contradict is a programmer
+///                  error (`VKC_CHECK`).
 /// @param counters  Each camera's counters at the end.
 /// @return OK, or the first failure, a camera silent past
 ///         `RigSets::kSilenceLimit` among them; the counters, any stream and
 ///         the dump's report are still reported when the run fails part-way.
 inline vkc::Status run_live_fusion(const config::Config& opt,
                                    const char* program, OpenArray open,
-                                   CameraCounters counters) {
+                                   bool host_clock, CameraCounters counters) {
   namespace vgrid = volumetric_kit::grid;
   namespace vol = volumetric_kit::grid::volume;
   namespace mesh = volumetric_kit::grid::mesh;
@@ -134,8 +142,7 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
     VKC_ASSIGN(codec_stream::CodecStream made,
                codec_stream::CodecStream::create(
                    device, allocator, encoder,
-                   vgrid_example::codec_session(program, {opt.source.fps, 1}),
-                   outputs));
+                   live_session(program, opt, host_clock), outputs));
     stream.emplace(std::move(made));
     VKC_ASSIGN(vgrid_example::CodecReport rows,
                vgrid_example::CodecReport::create(
@@ -166,6 +173,11 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
       "opening the cameras; a Ctrl+C takes effect once they are open\n");
   std::optional<sensor::SensorArray> array;
   VKC_ASSIGN(array, open(opt, device, allocator));
+  // A set's trigger is on the system clock only where every camera stamps on
+  // the host's, as a rig's always do, and the session said which before they
+  // opened.
+  VKC_CHECK(on_host_clock(*array) == host_clock,
+            "the cameras' clock is not the one the stream's session names");
 
   // --- Volume, unless operation=stream ---
   std::optional<vol::VoxelBlockGrid> volume;
@@ -212,9 +224,6 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
                                               stream ? &*stream : nullptr,
                                               sender_config(opt, 1)));
   }
-  // A set's trigger is on the system clock only where every camera stamps on
-  // the host's, as a rig's always do.
-  const bool host_clock = on_host_clock(*array);
   const auto t_start = std::chrono::steady_clock::now();
   const vkc::Status streamed = [&]() -> vkc::Status {
     std::size_t reported = 0;  // the count last reported; a set may pass 100

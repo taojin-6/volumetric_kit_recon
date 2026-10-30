@@ -320,15 +320,17 @@ vr_target_warnings(recon_example_set_log_test)
 add_test(NAME recon_example_set_log COMMAND recon_example_set_log_test)
 
 # A sender's set into the run's figures (examples/common/fuse_sender.hpp): a set
-# stamped from what the set step returned, its frame's row kept. Host only.
+# stamped from what the set step returned, its frame's row kept; and a live
+# run's session, which builds on codec_config.hpp's and so links voxelize, as
+# its mesh sources need. Host only.
 add_executable(recon_example_fuse_sender_test example_fuse_sender_test.cpp)
 target_include_directories(recon_example_fuse_sender_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
 target_link_libraries(
   recon_example_fuse_sender_test
   PRIVATE grid_example_common volumetric_kit::core_config
-          volumetric_kit::grid_eval volumetric_kit::recon_sender
-          volumetric_kit::sensor_prep)
+          volumetric_kit::grid_eval volumetric_kit::grid_voxelize
+          volumetric_kit::recon_sender volumetric_kit::sensor_prep)
 vr_target_warnings(recon_example_fuse_sender_test)
 add_test(NAME recon_example_fuse_sender COMMAND recon_example_fuse_sender_test)
 

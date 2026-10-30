@@ -1077,7 +1077,13 @@ stream before the cameras and refuses there a port in use and a PLY that is
 the stream's or the CSV's file under another name (`check_apart`). A
 record's set is the set's index in the run
 and its pts the set's time; a set stamped before the last frame, as a clock
-stepping back stamps it, takes that frame's time. A run that fails part-way
+stepping back stamps it, takes that frame's time. The session's Geometry
+track names that time's clock (`live_session`): the host's system clock
+(`stream::kHostClock`) when every camera stamps on it, as a rig's always
+do, else clock domain 1, the cameras' own. The session is fixed before the
+cameras open, so each program says which it will be (`fuse_orbbec`'s
+`orbbec_on_host_clock`; `fuse_realsense`'s always the host's), and the run
+checks the opened cameras against it (`on_host_clock`). A run that fails part-way
 still finishes its stream and reports the frames it coded; one that coded
 no set leaves none.
 The report's bitrate is at `source.fps`, and `codec.sweep` sweeps the last
@@ -1088,7 +1094,8 @@ they stream, it ends after the set in hand, as `run.frames` would: the
 stream is finished, its viewers closed, the cameras released and the PLY
 written. A second signal of the same kind ends the process.
 That run is `examples/common/live_fusion.hpp`'s `run_live_fusion`, which
-takes the program's camera opener and its counters, so it is the one loop
+takes the program's camera opener, its cameras' clock and its counters,
+so it is the one loop
 of both live programs that fuse to a PLY.
 **`fuse_realsense`** (`VS_WITH_REALSENSE`) is that run on one RealSense
 D400 camera (core's `FuseRealsense` profile), its depth the scenario's
@@ -1183,8 +1190,8 @@ multi-keyframe post-scan atlas, which the multi-view path can carry.
 
 **On `fuse_orbbec`'s stream** (the 2026-10-20 entry): a capture-volume
 crop (`fusion.max_depth_m` is the limit there is), raw RGBD recording and
-replay, colour, an upright world, and the session's host clock and
-calibration (`codec_session` leaves both out). With
+replay, colour, an upright world, and the session's calibration
+(`codec_session` leaves it out). With
 `output.csv` or `codec.sweep` the stream still decodes each frame inside the
 set loop: on
 the lab rig (4 Femtos, RTX 4090, Release; 1 cm, Dynamic, period 30; 303

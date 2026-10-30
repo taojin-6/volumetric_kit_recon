@@ -2,20 +2,25 @@
 // Copyright (c) 2026 Tao Jin
 
 // A sender's set into the run's figures (examples/common/fuse_sender.hpp's
-// report_sent), the fusing half of example_codec_report_test.cpp. Host only.
+// report_sent), the fusing half of example_codec_report_test.cpp, and a live
+// run's session (live_session). Host only.
 
+#include <cstdint>
 #include <cstdio>
 
 #include "codec_report.hpp"
 #include "fuse_sender.hpp"
 #include "set_log.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/grid/codec/codec_params.hpp"
+#include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
 
 namespace codec = volumetric_kit::grid::codec;
 namespace sender = volumetric_kit::recon::sender;
+namespace stream = volumetric_kit::grid::stream;
 namespace vkc = volumetric_kit::core;
 
 namespace {
@@ -53,10 +58,29 @@ int sent_sets() {
   return 0;
 }
 
+// A live run's session is the codec session at the source's rate, its
+// geometry on the host's system clock when the cameras stamp on it, else on
+// clock domain 1, theirs.
+int live_sessions() {
+  volumetric_kit::core::config::Config opt;
+  opt.source.fps = 15;
+  for (const bool host : {true, false}) {
+    const stream::Session session =
+        vr_example::live_session("fuse_orbbec", opt, host);
+    CHECK(session.writer == "fuse_orbbec" && session.tracks.size() == 1);
+    const stream::Track& geometry = session.tracks[0];
+    CHECK(geometry.kind == stream::TrackKind::Geometry);
+    CHECK(geometry.rate.num == 15 && geometry.rate.den == 1);
+    CHECK(geometry.clock == (host ? stream::kHostClock : std::uint16_t{1}));
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main() {
   CHECK(sent_sets() == 0);
+  CHECK(live_sessions() == 0);
   std::puts("example_fuse_sender: OK");
   return 0;
 }

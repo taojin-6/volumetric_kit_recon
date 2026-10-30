@@ -161,6 +161,14 @@ open_orbbec_cameras(const config::Config& opt,
   return sensors;
 }
 
+/// @return Whether the cameras @ref open_orbbec_cameras opens for @p opt
+///         stamp on the host's clock, known before they open: a rig's
+///         (`source.sync_config`) always, a single camera's only with
+///         `source.host_clock`.
+inline bool orbbec_on_host_clock(const config::Config& opt) {
+  return !opt.source.sync_config.empty() || opt.source.host_clock;
+}
+
 /// @brief fuse_orbbec's cameras (@ref open_orbbec_cameras) read as an array
 ///        posed by `source.calibration`, preparing each set on @p device --
 ///        unless the stream operation, whose array builds no GPU pass.
