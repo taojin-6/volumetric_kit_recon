@@ -41,7 +41,7 @@ int run_main(const vgrid_example::config::Config& opt) {
                                     // leaving
   const vkc::Status status = vr_example::run_live_fusion(
       opt, "fuse_orbbec", vr_example::open_orbbec_array,
-      vr_example::orbbec_counters);
+      vr_example::orbbec_on_host_clock(opt), vr_example::orbbec_counters);
   if (!status.ok()) {
     std::fprintf(stderr, "fuse_orbbec failed: %s\n", status.message().c_str());
     return 1;

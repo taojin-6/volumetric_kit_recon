@@ -5,23 +5,40 @@
 
 /// @file examples/common/fuse_sender.hpp
 /// @brief The fusing examples' `sender::SetSender`: its config from the
-///        scenario, and what each set it sent did, into the run's figures.
-///        The codec helpers (`codec_config.hpp`, `codec_report.hpp`) include
-///        no fusion; this header joins the two.
+///        scenario, the session a live run's stream writes, and what each
+///        set it sent did, into the run's figures. The codec helpers
+///        (`codec_config.hpp`, `codec_report.hpp`) include no fusion; this
+///        header joins the two.
 
 #include <cstdint>
 #include <cstdio>
 
+#include "codec_config.hpp"
 #include "codec_report.hpp"
 #include "config.hpp"
 #include "fuse_frame.hpp"
 #include "set_log.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
 
 namespace vr_example {
 
 namespace config = volumetric_kit::core::config;
+
+/// @return The session a live run's stream writes and serves: @p program's
+///         `codec_session` at `source.fps`, its Geometry track on the host's
+///         system clock (`stream::kHostClock`) when @p host_clock -- every
+///         camera stamping on it, as each set's pts then is -- or else on
+///         clock domain 1, the cameras' own.
+inline volumetric_kit::grid::stream::Session live_session(
+    const char* program, const config::Config& opt, bool host_clock) {
+  namespace stream = volumetric_kit::grid::stream;
+  stream::Session session =
+      vgrid_example::codec_session(program, {opt.source.fps, 1});
+  if (host_clock) session.tracks[0].clock = stream::kHostClock;
+  return session;
+}
 
 /// @return @p opt's sender config (`sender::SetSender::Config`): fusion as
 ///         `fusion` says, and every @p code_every-th set coded.

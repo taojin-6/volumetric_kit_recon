@@ -4,7 +4,8 @@
 // fuse_orbbec's cameras (examples/common/fuse_orbbec_sets.hpp). The single
 // camera a calibration file names: the one asked for if posed, or the file's
 // only posed one, past a camera listed for its lenses alone. A camera's
-// report, its lens models and its colour exposure included. Host only; the
+// report, its lens models and its colour exposure included. Whether its
+// cameras stamp on the host's clock, from the scenario alone. Host only; the
 // run's sets are the library's (sensor_array_rig_sets_test.cpp).
 
 #include <cstdio>
@@ -13,6 +14,7 @@
 
 #include "fuse_orbbec_sets.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/sensor/camera/array_calibration.hpp"
 #include "volumetric_kit/sensor/camera/camera_model.hpp"
@@ -127,11 +129,25 @@ int report() {
   return 0;
 }
 
+int host_clock() {
+  // A rig is on the host's clock always; a single camera only with
+  // source.host_clock.
+  volumetric_kit::core::config::Config opt;
+  CHECK(!vr_example::orbbec_on_host_clock(opt));
+  opt.source.host_clock = true;
+  CHECK(vr_example::orbbec_on_host_clock(opt));
+  opt.source.host_clock = false;
+  opt.source.sync_config = "femto_mega_sync.json";
+  CHECK(vr_example::orbbec_on_host_clock(opt));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
   CHECK(posed() == 0);
   CHECK(report() == 0);
+  CHECK(host_clock() == 0);
   std::puts("example_fuse_orbbec_sets: OK");
   return 0;
 }
