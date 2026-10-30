@@ -8,6 +8,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The live run records a mic beside the cameras** (`source.audio`;
+  [config/README.md](config/README.md), README "Optional: a microphone"):
+  `fuse_orbbec` opens the input it names before the GPU, gives its
+  stream's session an Audio track (signed 16-bit samples at the mic's rate
+  and channels, on the host's clock, a record a chunk), starts the mic once
+  the cameras stream, and appends its chunks after each set and once more
+  at the end; grid's `CodecStream` muxes them with the frames by pts. A mic
+  that stops delivering ends the audio with a warning, and fusion goes on;
+  its counters follow the cameras'. Built where sensor builds its
+  microphone driver (`VS_WITH_PORTAUDIO`, on PortAudio) and refused
+  elsewhere; `output.serve` with a mic is refused until grid serves an
+  Audio track. Without `source.audio` the stream is byte for byte as
+  before. CI builds the driver on every leg but the sanitizer job's.
+
 - **`fuse_realsense` takes FFS depth** (README, "Optional: FFS depth";
   [config/README.md](config/README.md)): with `source.depth: "ffs"` it
   opens the camera's infrared cameras, projector off, as sensor's
@@ -54,6 +68,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server; both floors rise with them.
 
 ### Changed
+
+- build: **recon pins core 0.34.0** (core #74's merge, `4600477`), **sensor
+  0.11.0** (sensor #13's merge, `000746d`) and **grid 0.5.0** (grid #10's
+  merge, `4618234`); CI takes the core's and sensor's actions at the new
+  pins, and the three floors rise to them, for the mic above: the core's
+  `source.audio`, sensor's `IAudioSensor` and `Microphone`, grid's
+  `TrackKind::Audio` (0.4.0) and `CodecStream::append`.
 
 - **BREAKING: Dynamic takes each camera's depth noise from its frame**
   (DECISIONS.md, 2026-10-30). `tsdf::DepthNoise` is gone, with no alias:

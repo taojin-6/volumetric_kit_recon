@@ -12,31 +12,61 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <utility>
 
 #include "codec_config.hpp"
 #include "codec_report.hpp"
 #include "config.hpp"
 #include "fuse_frame.hpp"
 #include "set_log.hpp"
+#include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/grid/stream/audio.hpp"
 #include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
+#include "volumetric_kit/sensor/audio_sensor.hpp"
 
 namespace vr_example {
 
 namespace config = volumetric_kit::core::config;
 
+/// @brief The track @ref live_session gives a mic: the one after the
+///        Geometry track.
+inline constexpr std::uint16_t kAudioTrack = 1;
+
 /// @return The session a live run's stream writes and serves: @p program's
 ///         `codec_session` at `source.fps`, its Geometry track on the host's
 ///         system clock (`stream::kHostClock`) when @p host_clock -- every
 ///         camera stamping on it, as each set's pts then is -- or else on
-///         clock domain 1, the cameras' own.
+///         clock domain 1, the cameras' own; and, with @p audio, the mic's
+///         Audio track as track @ref kAudioTrack: on the host's clock, a
+///         record a chunk at its nominal rate, its id as the sensor, and
+///         signed 16-bit samples at its channels and rate as the params.
+/// @param audio  The mic's info (`IAudioSensor::info`), its chunks stamped on
+///               the host's clock (`VKC_CHECK`), or null for none: then the
+///               session is exactly the one before audio.
 inline volumetric_kit::grid::stream::Session live_session(
-    const char* program, const config::Config& opt, bool host_clock) {
+    const char* program, const config::Config& opt, bool host_clock,
+    const volumetric_kit::sensor::AudioInfo* audio) {
   namespace stream = volumetric_kit::grid::stream;
   stream::Session session =
       vgrid_example::codec_session(program, {opt.source.fps, 1});
   if (host_clock) session.tracks[0].clock = stream::kHostClock;
+  if (audio != nullptr) {
+    VKC_CHECK(audio->clock == volumetric_kit::sensor::ClockDomain::Host,
+              "a mic's track is on the host's clock: its chunks must be too");
+    stream::AudioParams params;
+    params.codec = stream::AudioCodec::PcmS16;
+    params.channels = audio->channels;
+    params.sample_rate = audio->sample_rate;
+    stream::Track track;
+    track.kind = stream::TrackKind::Audio;
+    track.clock = stream::kHostClock;
+    track.rate = {audio->sample_rate, audio->chunk_frames};
+    track.sensor = audio->id;
+    track.params = stream::encode_audio_params(params);
+    session.tracks.push_back(std::move(track));
+  }
   return session;
 }
 

@@ -75,6 +75,15 @@ on:
         required: false
         type: boolean
         default: false
+      portaudio:
+        description: >-
+          Install PortAudio (Ubuntu: portaudio19-dev; macOS: the runner's
+          Homebrew formula, checked) and build with sensor's
+          VS_WITH_PORTAUDIO=ON, so this leg builds the microphone driver the
+          live examples record source.audio with.
+        required: false
+        type: boolean
+        default: false
       build_types:
         description: >-
           JSON array of the CMAKE_BUILD_TYPEs this leg builds and tests, one
@@ -193,6 +202,10 @@ jobs:
             # not pull in the development package that provides that link.
             pkgs="$pkgs libassimp-dev zlib1g-dev"
           fi
+          # PortAudio, found through pkg-config (sensor's cmake/vs_portaudio.cmake).
+          if [ "${{ inputs.portaudio }}" = "true" ]; then
+            pkgs="$pkgs pkg-config portaudio19-dev"
+          fi
           # shellcheck disable=SC2086  # intentional: split $pkgs into separate args
           sudo apt-get install -y --no-install-recommends $pkgs
           # The CUDA toolkit for VS_WITH_CUDA (sensor's cmake/vs_cuda.cmake): cuda.h,
@@ -277,6 +290,11 @@ jobs:
           if [ "${{ inputs.realsense_sdk }}" = "true" ]; then
             pkgs="$pkgs librealsense"
           fi
+          # PortAudio for sensor's VS_WITH_PORTAUDIO (its
+          # cmake/vs_portaudio.cmake).
+          if [ "${{ inputs.portaudio }}" = "true" ]; then
+            pkgs="$pkgs portaudio"
+          fi
           echo "formulae=$pkgs" >> "$GITHUB_OUTPUT"
           # Without brew every formula would look missing.
           command -v brew >/dev/null || {
@@ -323,7 +341,7 @@ jobs:
       - name: Homebrew key
         id: brew
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
-        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@b0e1a9ecbd6d3b4ff6c2e3a8b787dba27d1db0db
+        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@46004772550bdec306758d419b2266eb486ae9eb
         with:
           formulae: ${{ steps.formulae.outputs.formulae }}
 
@@ -332,7 +350,7 @@ jobs:
       # sensor pin in third_party/CMakeLists.txt, which holds the SDK pin.
       - name: Install the Orbbec SDK
         if: steps.detect.outputs.present == 'true' && inputs.orbbec_sdk
-        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@586573aafb3987d7ae6514b11e02064123447978
+        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@000746d27fec9e987eda7a8448f1680e73e47f44
 
       # librealsense, on the Ubuntu legs that build VS_WITH_REALSENSE: the
       # pinned release from RealSense's apt repository, its key checked, by
@@ -340,7 +358,7 @@ jobs:
       # formula is checked with the others above.
       - name: Install librealsense
         if: steps.detect.outputs.present == 'true' && inputs.realsense_sdk && runner.os == 'Linux'
-        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-librealsense@586573aafb3987d7ae6514b11e02064123447978
+        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-librealsense@000746d27fec9e987eda7a8448f1680e73e47f44
 
       # Report the Vulkan device the runner sees (the real GPU in a self-hosted
       # container, lavapipe on a hosted Linux runner, MoltenVK on macOS). On a
@@ -446,6 +464,7 @@ jobs:
                 -DVS_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
                 -DVS_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }} \
                 -DVS_WITH_FFS=${{ inputs.ffs && 'ON' || 'OFF' }} \
+                -DVS_WITH_PORTAUDIO=${{ inputs.portaudio && 'ON' || 'OFF' }} \
                 -DVGRID_WITH_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}; then
               ok=1
               break

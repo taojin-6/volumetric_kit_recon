@@ -334,6 +334,24 @@ target_link_libraries(
 vr_target_warnings(recon_example_fuse_sender_test)
 add_test(NAME recon_example_fuse_sender COMMAND recon_example_fuse_sender_test)
 
+# A live run's mic (examples/common/live_audio.hpp), where the examples are
+# built, through their vr_example_live_audio (the microphone driver where sensor
+# builds it): a fake mic's tone chunks fed into a codec stream between frames,
+# both tracks in the file, the audio unbroken and at its chunks' times, the last
+# drain's chunks in it; a mic whose drain fails ends the audio and the frames go
+# on; no mic, the file of the session before audio, byte for byte; served, the
+# mic's session refused. No device is opened; the device part skips with no GPU.
+if(VR_BUILD_EXAMPLES)
+  add_executable(recon_example_live_audio_test example_live_audio_test.cpp)
+  target_link_libraries(
+    recon_example_live_audio_test
+    PRIVATE vr_example_live_audio volumetric_kit::core_test_policy
+            volumetric_kit::grid_eval volumetric_kit::grid_voxelize
+            volumetric_kit::recon_sender volumetric_kit::sensor_array)
+  vr_target_warnings(recon_example_live_audio_test)
+  add_test(NAME recon_example_live_audio COMMAND recon_example_live_audio_test)
+endif()
+
 # fuse_replica's --dirty-every survey (examples/common/remesh_report.hpp): the
 # changed blocks after a tick, the blocks they put back to marching cubes, and
 # the survey's windows. Skips (exit 0) with no device.

@@ -174,14 +174,15 @@ git -C "$recon_root" diff --check
 - For documentation-only changes, check formatting, links, and consistency;
   a build is unnecessary. The hooks can be scoped with `pre-commit run --files`.
 - `VR_BUILD_VIEWER`, grid's `VGRID_WITH_ASSIMP` and sensor's
-  `VS_WITH_ORBBEC`, `VS_WITH_REALSENSE`, `VS_WITH_FFMPEG`, `VS_WITH_CUDA`
-  and `VS_WITH_FFS` enable optional paths (sensor's options: [its
+  `VS_WITH_ORBBEC`, `VS_WITH_REALSENSE`, `VS_WITH_FFMPEG`, `VS_WITH_CUDA`,
+  `VS_WITH_FFS` and `VS_WITH_PORTAUDIO` enable optional paths (sensor's
+  options: [its
   README](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/README.md#building)).
-  Orbbec, librealsense, FFmpeg, TensorRT and Assimp are installed
+  Orbbec, librealsense, FFmpeg, TensorRT, PortAudio and Assimp are installed
   prerequisites, never fetched by this repository.
-- Tests use no real hardware: a camera is checked by hand through its example
-  (`fuse_orbbec`, `fuse_realsense`). Report such a check as run or not run,
-  never as a test.
+- Tests use no real hardware: a camera or a mic is checked by hand through its
+  example (`fuse_orbbec`, `fuse_realsense`). Report such a check as run or not
+  run, never as a test.
 - Tests are `main()`s of their own on the core's test support
   (`volumetric_kit/core/testing/`); GPU tests run on its harness and policy
   (`gpu_test.hpp`): CI sets `VKC_TEST_VALIDATION=1`, and any error the

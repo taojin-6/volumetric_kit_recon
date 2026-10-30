@@ -15,3 +15,15 @@ target_link_libraries(
          volumetric_kit::sensor_image_io)
 target_compile_features(vr_example_common PUBLIC cxx_std_17)
 vr_target_warnings(vr_example_common)
+
+# The live examples' mic (live_audio.hpp): sensor's microphone driver where
+# sensor builds it (VS_WITH_PORTAUDIO), which VR_EXAMPLE_MICROPHONE turns on;
+# elsewhere source.audio is refused as Unsupported.
+add_library(vr_example_live_audio INTERFACE)
+target_link_libraries(vr_example_live_audio INTERFACE vr_example_common)
+if(TARGET volumetric_kit::sensor_microphone)
+  target_link_libraries(vr_example_live_audio
+                        INTERFACE volumetric_kit::sensor_microphone)
+  target_compile_definitions(vr_example_live_audio
+                             INTERFACE VR_EXAMPLE_MICROPHONE=1)
+endif()

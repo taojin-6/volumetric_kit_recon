@@ -1088,7 +1088,24 @@ track names that time's clock (`live_session`): the host's system clock
 do, else clock domain 1, the cameras' own. Each program says which before
 its cameras open (`fuse_orbbec`'s `orbbec_on_host_clock`; `fuse_realsense`'s
 always the host's), and the run checks the opened cameras against it
-(`on_host_clock`). A run that fails part-way still finishes its stream and
+(`on_host_clock`).
+With `source.audio`, which the core allows only with a stream and every
+camera on the host's clock, the run records a mic beside the cameras
+(`live_audio.hpp`). `open_audio` opens the input before the GPU: sensor's
+`Microphone` where sensor builds `sensor_microphone` (`VS_WITH_PORTAUDIO`;
+`VR_EXAMPLE_MICROPHONE` in the examples), refused as `Unsupported` in any
+other build. `live_session` adds its Audio track, track 1: signed 16-bit
+samples at its rate and channels, on the host's clock, a record a chunk.
+`AudioFeed` starts the mic once the cameras stream, drains it on the run's
+thread after each set is sent, appending each chunk as a key record at its
+capture time with its sequence, and drains it once more before the stream
+finishes; grid's `CodecStream::append` muxes the records with the frames by
+pts. A drain that fails ends the audio with a warning, and fusion goes on.
+The mic's counters follow the cameras', with what the stream, finished
+first, wrote and dropped of its chunks. Grid's server serves one track, so
+`output.serve` with a mic is refused before any camera opens; the file
+records both. With no mic, the session and its bytes are as before audio.
+A run that fails part-way still finishes its stream and
 reports the frames it coded; one that coded no set leaves none.
 The report's bitrate is at `source.fps`, and `codec.sweep` sweeps the last
 grid. A Ctrl+C or SIGTERM (`interrupt.hpp`, `rig_viewer`'s handler too,

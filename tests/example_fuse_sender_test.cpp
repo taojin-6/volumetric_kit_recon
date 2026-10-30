@@ -3,11 +3,13 @@
 
 // A sender's set into the run's figures (examples/common/fuse_sender.hpp's
 // report_sent), the fusing half of example_codec_report_test.cpp, and a live
-// run's session (live_session). Host only.
+// run's session (live_session), with a mic's Audio track and without. Host
+// only.
 
 #include <cstdint>
 #include <cstdio>
 
+#include "codec_config.hpp"
 #include "codec_report.hpp"
 #include "fuse_sender.hpp"
 #include "set_log.hpp"
@@ -15,8 +17,11 @@
 #include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/grid/codec/codec_params.hpp"
+#include "volumetric_kit/grid/stream/audio.hpp"
 #include "volumetric_kit/grid/stream/session.hpp"
+#include "volumetric_kit/grid/testing/stream_files.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
+#include "volumetric_kit/sensor/audio_sensor.hpp"
 
 namespace codec = volumetric_kit::grid::codec;
 namespace sender = volumetric_kit::recon::sender;
@@ -60,13 +65,18 @@ int sent_sets() {
 
 // A live run's session is the codec session at the source's rate, its
 // geometry on the host's system clock when the cameras stamp on it, else on
-// clock domain 1, theirs.
+// clock domain 1, theirs; with no mic, nothing else: the codec session's own
+// fields and one track.
 int live_sessions() {
   volumetric_kit::core::config::Config opt;
   opt.source.fps = 15;
   for (const bool host : {true, false}) {
     const stream::Session session =
-        vr_example::live_session("fuse_orbbec", opt, host);
+        vr_example::live_session("fuse_orbbec", opt, host, nullptr);
+    stream::Session codec =
+        vgrid_example::codec_session("fuse_orbbec", {15, 1});
+    if (host) codec.tracks[0].clock = stream::kHostClock;
+    CHECK(vgrid_test::vrst::same(session, codec));
     CHECK(session.writer == "fuse_orbbec" && session.tracks.size() == 1);
     const stream::Track& geometry = session.tracks[0];
     CHECK(geometry.kind == stream::TrackKind::Geometry);
@@ -76,11 +86,46 @@ int live_sessions() {
   return 0;
 }
 
+// With a mic, the session gains its Audio track after the geometry's, as
+// track kAudioTrack: on the host's clock, a record a chunk at its nominal
+// rate, its id as the sensor, no picture size, and params that read back as
+// signed 16-bit samples at its channels and rate. The geometry is as without.
+int audio_sessions() {
+  volumetric_kit::core::config::Config opt;
+  opt.source.fps = 25;
+  volumetric_kit::sensor::AudioInfo mic;
+  mic.id = "hw:2,0";
+  mic.model = "a USB mic";
+  mic.sample_rate = 44100;
+  mic.channels = 2;
+  mic.chunk_frames = 441;
+  const stream::Session session =
+      vr_example::live_session("fuse_orbbec", opt, true, &mic);
+  CHECK(session.tracks.size() == 2 && vr_example::kAudioTrack == 1);
+  CHECK(vgrid_test::vrst::same(
+      session.tracks[0],
+      vr_example::live_session("fuse_orbbec", opt, true, nullptr).tracks[0]));
+  const stream::Track& audio = session.tracks[vr_example::kAudioTrack];
+  CHECK(audio.kind == stream::TrackKind::Audio);
+  CHECK(audio.clock == stream::kHostClock);
+  CHECK(audio.rate.num == 44100 && audio.rate.den == 441);
+  CHECK(audio.width == 0 && audio.height == 0);
+  CHECK(audio.sensor == "hw:2,0");
+  const vkc::Result<stream::AudioParams> params =
+      stream::decode_audio_params(audio.params);
+  CHECK(params.ok());
+  CHECK(params->codec == stream::AudioCodec::PcmS16);
+  CHECK(params->channels == 2 && params->sample_rate == 44100);
+  CHECK(audio.params.size() == stream::kAudioParamsBytes);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
   CHECK(sent_sets() == 0);
   CHECK(live_sessions() == 0);
+  CHECK(audio_sessions() == 0);
   std::puts("example_fuse_sender: OK");
   return 0;
 }
