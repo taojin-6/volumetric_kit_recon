@@ -25,6 +25,7 @@ mesh-source notes are grid's ([its config/README.md](https://github.com/taojin-6
 | `fuse_orbbec` | [readback_orbbec.json](examples/readback_orbbec.json) | Live stream with luma readback |
 | `fuse_orbbec` | [dump_orbbec.json](examples/dump_orbbec.json) | Live stream with readback, first sets' JPEGs and luma written |
 | `fuse_realsense` | [fuse_realsense.json](examples/fuse_realsense.json) | Live RealSense camera, its own depth, to PLY |
+| `fuse_realsense` | [fuse_realsense_ffs.json](examples/fuse_realsense_ffs.json) | Live RealSense camera, FFS depth on its infrared cameras (NVIDIA), to PLY |
 | `fuse_render` | [fuse_render.json](examples/fuse_render.json) | Dataset to image |
 | `fuse_viewer` | [fuse_viewer.json](examples/fuse_viewer.json) | Dataset in a window |
 | `rig_viewer` | [rig_viewer.json](examples/rig_viewer.json) | Live rig in a window |
@@ -102,13 +103,21 @@ that ends before N sets says so with a warning, and a set the run's end cuts
 writes only the frames it keeps.
 
 `fuse_realsense` (core's FuseRealsense profile) fuses one RealSense camera's
-own depth, with its projector on, and its colour, to the PLY at
-`output.path`, Dynamic by default as `fuse_orbbec` is: the camera sits still.
-It takes `source.serial` (empty: the only camera attached), the colour and
-depth sizes and `source.fps` (1280x800 and 1280x720 at 30 fps by default),
-the fusion keys and `run.frames`; not the Orbbec rig's keys, the codec, its
-outputs, `operation: "stream"` or diagnostics. Its colour runs at auto
-exposure.
+depth and its colour to the PLY at `output.path`, Dynamic by default as
+`fuse_orbbec` is: the camera sits still. It takes `source.serial` (empty: the
+only camera attached), the colour and depth sizes and `source.fps` (1280x800
+and 1280x720 at 30 fps by default), the fusion keys and `run.frames`; not the
+Orbbec rig's keys, the codec, its outputs, `operation: "stream"` or
+diagnostics. Its colour runs at auto exposure. `source.depth` picks the
+depth: `camera`, the camera's own (the default), or `ffs`, Fast-FoundationStereo
+on its infrared cameras, in builds with sensor's `sensor_ffs` only (README,
+"Optional: FFS depth"); any other build refuses it before anything opens.
+FFS needs `source.ffs_model`, its ONNX model at the depth size, and
+`source.ffs_plan_cache`, where its TensorRT plans are kept; its depth size is
+the rectified size it runs at, 960x544 by default. `source.emitter`, the
+projector, is on for the camera's depth and off for FFS unless stated.
+`fuse_realsense_ffs.json` expects the model and plans under `models/` beside
+it; point the two paths at yours.
 
 `operation: "stream"` refuses an explicitly supplied `fusion`, `codec` or
 `output` section, including settings equal to their defaults. Leave those

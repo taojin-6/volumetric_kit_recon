@@ -212,6 +212,31 @@ Its colour runs at auto exposure. The camera's first second or so of
 framesets, which pair depth with stale colour, are refused and counted
 failed in the report at the end.
 
+### Optional: FFS depth (NVIDIA)
+
+With `source.depth: "ffs"` (core's FuseRealsense), `fuse_realsense` takes its
+depth from Fast-FoundationStereo on the camera's infrared cameras instead,
+with the projector off: each pair rectified on the GPU and matched by
+TensorRT on the sensor's own thread (sensor's `StereoDepthSensor`), its depth
+left on the GPU for the frame prep, so the loop is the same. It needs the
+sensor package's `sensor_ffs`: `VS_WITH_FFS`, with `VS_WITH_CUDA` and
+TensorRT 11 or later, on Linux with an NVIDIA GPU
+([the package's README](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/README.md#building)).
+A build without it refuses an FFS scenario before anything opens.
+
+```sh
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
+    -DVS_WITH_REALSENSE=ON -DVS_WITH_CUDA=ON -DVS_WITH_FFS=ON
+build/examples/fuse_realsense/fuse_realsense \
+    --config config/examples/fuse_realsense_ffs.json
+```
+
+`source.ffs_model` is the FFS ONNX model at the depth size (960x544 by
+default), which sensor's `tools/ffs/export_onnx.py` exports, and
+`source.ffs_plan_cache` the directory its TensorRT plans are kept in: the
+first run at a size builds one, which takes minutes, and later runs load it
+in about a second.
+
 ## Codec evaluation
 
 `codec_replica` runs grid's codec on a fused room sequence; grid's

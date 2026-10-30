@@ -921,6 +921,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   (`run_live_fusion`, the one live loop) and a core profile of its own
   (`FuseRealsense`): the camera's own depth, colour at auto exposure, no
   codec yet.
+- [**2026-10-29**](#2026-10-29--fuse_realsense-takes-ffs-depth-from-the-cameras-infrared-pair-through-the-same-opener-and-loop-only-where-sensor-builds-sensor_ffs) —
+  `fuse_realsense` takes FFS depth from the camera's infrared pair, projector
+  off, through the same opener and loop (`source.depth`), where sensor builds
+  `sensor_ffs`; any other build refuses the scenario before anything opens.
 
 ## Decision record
 
@@ -5679,6 +5683,66 @@ not a test:
   pair one camera's H.265 joined a second before its first key frame (24
   lost), which left the branch's mesh 11% smaller; the driver is unchanged
   by the re-pin.
+
+### 2026-10-29 — fuse_realsense takes FFS depth from the camera's infrared pair, through the same opener and loop, only where sensor builds sensor_ffs.
+
+**Context.** The owner keeps both RealSense depths: the camera's own with
+the projector on, and Fast-FoundationStereo (FFS) on its infrared pair with
+it off, FFS on NVIDIA only. sensor 0.8.0 brought `RealSenseStereo` and
+`sensor_ffs`'s `StereoDepthSensor`, which rectifies any calibrated pair and
+runs FFS on a thread of its own as an `IRgbdSensor`; core 0.32.0 the
+`FuseRealsense` keys that choose it.
+
+**Decision.**
+- One program, `fuse_realsense`, its depth the scenario's `source.depth`,
+  chosen in its opener alone (the entry above): the camera's own is a
+  `RealSenseSensor`, FFS a `StereoDepthSensor` over a `RealSenseStereo`.
+  Either is a `SensorArray` of one, so prep, fusion, the per-set table and
+  the counters are the same; FFS's depth stays on the device, where the prep
+  reads it in place.
+- The pair is rectified to the depth size as luma at alpha 0: luma carries
+  no coverage, so at alpha 0 no border is matched as picture. The infrared
+  cameras run at the driver's own mode (1280x720), which the rectifier
+  resamples, and FFS's range is fusion's depth gate.
+- FFS builds where sensor builds `sensor_ffs` (`VS_WITH_FFS`: CUDA and
+  TensorRT), and `VR_EXAMPLE_FFS` turns it on in the example. A build
+  without it refuses an FFS scenario as a scenario is refused (exit 2),
+  saying how to build it, before any GPU or camera opens; the Mac never
+  builds it.
+- CI's CUDA leg (24.04) installs TensorRT 11.4.0.106, every package pinned
+  as sensor's CI pins it, and builds `VS_WITH_FFS`; the other legs check the
+  refusal. The plan cache and the model are the scenario's, with no
+  default: a model is exported for one size, and a plan takes minutes to
+  build.
+
+**Validation.** On the lab RTX 4090 (Ubuntu 26.04, Release, warnings as
+errors, the Orbbec, RealSense and video drivers and `VS_WITH_FFS`, TensorRT
+11.4): the suite, 45 tests, under the validation layer and synchronization
+validation; reconfigured without `VS_WITH_FFS`, the refusal's tests pass.
+Eight planted bugs were killed: either projector dropped, the infrared
+cameras at the depth size, `Rgba8` views, the colour size rectified, FFS's
+near gate dropped, and FFS refused with `sensor_ffs` or let through without
+it. Checked by hand, not a test, on the D455 (firmware 5.17.0.10,
+USB 3.2), 900 frames at 1 cm voxels, the box to itself:
+
+| | FFS, 960x544, projector off | the camera's own, 1280x720, projector on |
+| --- | --- | --- |
+| frames | 900 in 31.7 s; 30.0 fps after the first frame (1.7 s) | 900 in 31.6 s; 30 fps after the first (1.6 s) |
+| camera | 940 received, 2 dropped, 38 failed at start-up | 937 received, 0 dropped, 37 failed at start-up |
+| GPU state | P2, SM 2565 MHz median (2235–2760), memory 10251 MHz, PCIe 4.0 x16, 84% busy | P8, SM 540 MHz, memory 405 MHz, 26% busy (idle clocks) |
+| FFS on the device (Nsight Systems, 450 frames) | 27.77 ms median, 27.93 p95: the network 27.76, its input and depth kernels 0.007 and 0.003 | - |
+| prep / integration, device | 0.109 / 0.536 ms | 1.16 / 6.94 ms at idle clocks |
+| arrival / capture to published, p50 | 29.8 / 45.6 ms | 9.4 / 25.3 ms |
+| GPU memory, process peak | 2604 MiB | 1377 MiB |
+| mesh | 251,974 triangles; walls flat | 632,966 triangles; walls rough |
+
+- At 960x544 a frame's GPU work, FFS's 27.8 ms, the rectifier's 0.1 ms
+  (sensor #8 and #10's measure, not repeated here), prep and integration,
+  is about 28.5 ms of the camera's 33.3 ms, so 30 fps holds with fusion
+  running, and FFS's time is the same as on an idle box (27.7 ms, sensor
+  #10). FFS adds about 20 ms to the latency, its network's run.
+- FFS keeps the GPU at its working clocks, which the camera's own depth
+  never asks for: their device rows differ by the clocks, not the work.
 
 ## Measured lessons
 

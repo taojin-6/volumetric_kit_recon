@@ -174,11 +174,11 @@ git -C "$recon_root" diff --check
 - For documentation-only changes, check formatting, links, and consistency;
   a build is unnecessary. The hooks can be scoped with `pre-commit run --files`.
 - `VR_BUILD_VIEWER`, grid's `VGRID_WITH_ASSIMP` and sensor's
-  `VS_WITH_ORBBEC`, `VS_WITH_REALSENSE`, `VS_WITH_FFMPEG` and `VS_WITH_CUDA`
-  enable optional paths (sensor's options: [its
+  `VS_WITH_ORBBEC`, `VS_WITH_REALSENSE`, `VS_WITH_FFMPEG`, `VS_WITH_CUDA`
+  and `VS_WITH_FFS` enable optional paths (sensor's options: [its
   README](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/README.md#building)).
-  Orbbec, librealsense, FFmpeg and Assimp are installed prerequisites, never
-  fetched by this repository.
+  Orbbec, librealsense, FFmpeg, TensorRT and Assimp are installed
+  prerequisites, never fetched by this repository.
 - Tests use no real hardware: a camera is checked by hand through its example
   (`fuse_orbbec`, `fuse_realsense`). Report such a check as run or not run,
   never as a test.
