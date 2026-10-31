@@ -51,7 +51,9 @@ clean, independently consumable tiers.
 ## Building
 
 Requires CMake ≥ 3.21, a C++17 compiler, and the Vulkan toolchain (MoltenVK on
-Apple). See the CI workflows for platform dependency installation.
+Apple). See the CI workflows for platform dependency installation; the Linux
+legs take theirs from the core's CI images
+([tools/ci/images](https://github.com/taojin-6/volumetric_kit_core/tree/main/tools/ci/images)).
 
 ```sh
 recon_root="$(git rev-parse --show-toplevel)"
