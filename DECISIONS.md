@@ -1002,6 +1002,15 @@ entries relevant to your task; later amendments supersede earlier rules.
   `fuse_realsense` takes FFS depth from the camera's infrared pair, projector
   off, through the same opener and loop (`source.depth`), where sensor builds
   `sensor_ffs`; any other build refuses the scenario before anything opens.
+- [**2026-10-30**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-30--a-frame-states-its-depths-noise-depthnoise-the-frame-to-frame-sigma-its-producer-measured-on-rgbdframe-and-deviceframe-all-zero-meaning-unknown-and-every-producer-states-its-own) —
+  A frame states its depth's noise: `DepthNoise {a, b, c}`
+  (`frame/depth_noise.hpp`), the frame-to-frame sigma of one sample,
+  `a + b z + c z^2` metres, on `RgbdFrame` and `DeviceFrame`, which
+  `GpuFramePrep` copies; all zero means unknown, with no default, and a
+  consumer that needs a model refuses it. Every producer states its own: the
+  Femto Mega b = 0.95 mm/m in every mode, a RealSense's own depth stereo's
+  model at 0.13 px, and FFS the disparity sigma its caller states
+  (`FfsStereo::Options::disparity_sigma`, 0 unknown by default).
 - [**2026-10-30**](#2026-10-30--dynamic-floors-each-cameras-change-test-with-the-noise-its-frame-states-and-refuses-a-frame-that-states-none-amends-the-2026-10-29-change-detector-and-dynamic-entries) —
   Dynamic floors each camera's change test with the noise its frame states
   (sensor's `DepthNoise`, `DeviceFrame::depth_noise`, which
@@ -1009,6 +1018,29 @@ entries relevant to your task; later amendments supersede earlier rules.
   recon's own `DepthNoise`, the Femto Mega's default, goes with no alias.
   The Femto rig fuses bit for bit as before; `fuse_realsense` gets its
   camera's own noise, and its FFS opener states the D455 pair's 0.04 px.
+- [**2026-10-30**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-30--audio-sources-are-the-sensor-packages-iaudiosensor-on-the-interface-tier-microphone-over-portaudio-behind-vs_with_portaudio-and-audio-is-host-io) —
+  Audio sources are the sensor package's: `IAudioSensor` in
+  `sensor_interface`, polled, chunks of 16-bit PCM each stamped on the host
+  clock; `Microphone` (`sensor_microphone`, `VS_WITH_PORTAUDIO`), any OS
+  input through PortAudio, a prerequisite found through pkg-config. Audio is
+  host I/O: PCM in host memory, never on the GPU or in the per-frame GPU
+  path; a CPU audio codec (Opus) needs owner approval.
+- [**2026-10-31**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-31--frame-prep-may-drop-depth-outliers-gpuframeprepconfigdepth_outliers-keeps-a-return-where-at-least-20-returns-lie-within-8-pixel-footprints-of-it-off-by-default-and-every-device-decides-alike) —
+  Frame prep may drop depth outliers: `GpuFramePrepConfig::depth_outliers`,
+  off by default and one setting for every camera of a pass or an array,
+  keeps a return where at least `min_points` (20) returns, itself included,
+  lie strictly within `radius_px` (8) pixel footprints at its depth, and
+  writes 0 elsewhere. A radius in footprints, not metres, so the rule is the
+  same at every depth; float arithmetic that no compiler may fuse or
+  regroup, `precise` for the pixel's own point and xor barriers in the
+  neighbour loop, so every device decides alike at a cost Apple can carry.
+  *Amended the same day (the default-on entry):* on by default.
+- [**2026-10-31**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-31--frame-prep-drops-depth-outliers-by-default-one-setting-for-every-sensor-amends-the-depth-outlier-entry-above) —
+  Frame prep drops depth outliers by default: `DepthOutlierFilter::enabled`
+  is `true`, one setting for every sensor, the Femto Mega's included (0.35%
+  of its returns, most on rims). A removed return still reaches fusion as
+  no return, which carves a thin, passing ring into the background around a
+  moving person; handing it on as unknown is the follow-up.
 
 ## Decision record
 

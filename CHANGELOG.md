@@ -69,6 +69,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **recon pins sensor 0.13.0** (sensor #16's merge, `25008cd`;
+  BREAKING for the examples' results), CI takes sensor's actions at the new
+  pin, and `VR_SENSOR_MIN_VERSION` rises to 0.13.0. Sensor's frame prep now
+  drops depth outliers by default (sensor's DECISIONS.md, the 2026-10-31
+  depth-outlier entries): a return with fewer than 20 returns, itself
+  included, within 8 pixel footprints at its depth fuses as no return. So
+  `fuse_orbbec`, `fuse_realsense`, `rig_viewer` and any sender that fuses
+  sets prepared there (`sender::SetSender`) fuse fewer flying pixels: on
+  the Femto Mega rig the filter removes 0.35% of returns, most on rims, and
+  on FFS depth 77-83% of its flying pixels by sensor's proxy; the D455's
+  own depth is filtered alike, not measured. Under Dynamic it carves a thin
+  crack into the background around a moving person, gone once they move
+  on. The dataset examples' prep filters Replica's depth too, not measured.
+  recon has no option to turn it off: it is sensor's default
+  (`GpuFramePrepConfig::depth_outliers`), which no example sets.
+
 - build: **the viewers pin gfx main after #168** (`df3a0de`), which needs
   core 0.20.0: the live viewers' windows render at 4x MSAA, resolved in the
   pass (gfx #167, #168). `fuse_render` and the viewer tests' offscreen

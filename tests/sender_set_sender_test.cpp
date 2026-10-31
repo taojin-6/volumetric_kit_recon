@@ -83,6 +83,7 @@
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/sensor/camera/array_calibration.hpp"
+#include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
 
 namespace vr = volumetric_kit::recon;
 
@@ -193,11 +194,18 @@ std::uint64_t coded_pts(std::size_t set) {
   return set + 1 < kSets ? set_time(set) : set_time(set - 1);
 }
 
+// The patch a camera sees before `patch_until`, kPatchPx pixels a side:
+// enough returns that frame prep's outlier filter, on by default, keeps them
+// all (a 4x4 patch it drops whole).
+constexpr std::uint32_t kPatchPx = 5;
+static_assert(kPatchPx * kPatchPx >= sensor::DepthOutlierFilter{}.min_points,
+              "frame prep would drop the whole patch as outliers");
+
 // A camera on the host's clock at 30 fps whose frames the test pushes: the
 // back wall 2 m ahead, the near wall 1 m ahead over the left of its picture
 // in the first kNearSets sets, and its colour as packed words on the host.
-// Before set `patch_until`, it sees only a 4x4-pixel patch of the back wall.
-// Its depth noise is the Femto Mega's, unless it states none.
+// Before set `patch_until`, it sees only that patch of the back wall. Its
+// depth noise is the Femto Mega's, unless it states none.
 class Camera final : public sensor::IRgbdSensor {
  public:
   Camera(std::string id, sensor::SyncRole role, std::size_t patch_until = 0)
@@ -219,8 +227,8 @@ class Camera final : public sensor::IRgbdSensor {
     if (set < patch_until_) {
       for (std::uint32_t y = 0; y < kH; ++y) {
         for (std::uint32_t x = 0; x < kW; ++x) {
-          const bool patch =
-              x >= kW / 2 && x < kW / 2 + 4 && y >= kH / 2 && y < kH / 2 + 4;
+          const bool patch = x >= kW / 2 && x < kW / 2 + kPatchPx &&
+                             y >= kH / 2 && y < kH / 2 + kPatchPx;
           if (!patch) pixels->depth[std::size_t{y} * kW + x] = 0;  // none
         }
       }

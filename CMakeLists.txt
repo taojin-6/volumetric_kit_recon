@@ -77,11 +77,12 @@ find_package(Vulkan REQUIRED)
 # input the live examples record; 0.33.0 brought FuseRealsense's source.depth,
 # 0.31.0 the FuseRealsense profile, 0.30.0 the output.max_viewers fuse_orbbec
 # serves by, 0.29.0 the vulkan/fwd.hpp the public headers include, and 0.28.0
-# the test support the tests run on. The oldest sensor is 0.11.0, whose
-# IAudioSensor the live examples record through; 0.10.0 brought the frames'
-# depth noise (DeviceFrame::depth_noise), which Dynamic's change test reads, and
-# 0.9.0 the frame prep's crop of a frame with colour to what both its cameras
-# see, which the live examples rely on with no option of their own
+# the test support the tests run on. The oldest sensor is 0.13.0, whose frame
+# prep drops depth outliers by default; 0.12.0 brought the filter, 0.11.0 the
+# IAudioSensor the live examples record through, 0.10.0 the frames' depth noise
+# (DeviceFrame::depth_noise), which Dynamic's change test reads, and 0.9.0 the
+# frame prep's crop of a frame with colour to what both its cameras see. The
+# live examples rely on the crop and the filter with no option of their own
 # (fuse_realsense builds only with sensor_realsense, and even without FFS with
 # its RealSenseStereo, which 0.7.0 brought; it runs FFS only with sensor_ffs,
 # which 0.8.0 brought); the oldest grid is VR_GRID_MIN_VERSION: 0.6.0, whose
@@ -89,7 +90,7 @@ find_package(Vulkan REQUIRED)
 # brought CodecStream writing it (TrackKind::Audio, 0.4.0) muxed by pts, and
 # 0.3.0 codec_outputs passing output.max_viewers to the server.
 set(VR_CORE_MIN_VERSION 0.34.0)
-set(VR_SENSOR_MIN_VERSION 0.11.0)
+set(VR_SENSOR_MIN_VERSION 0.13.0)
 set(VR_GRID_MIN_VERSION 0.6.0)
 add_subdirectory(third_party)
 

@@ -67,7 +67,7 @@ jobs:
       # rig_viewer is built only with the Orbbec driver (VS_WITH_ORBBEC). The
       # action is sensor's, at the sensor pin, as in _build.yml.
       - name: Install the Orbbec SDK
-        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@000746d27fec9e987eda7a8448f1680e73e47f44
+        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@25008cd713ec199980991926b1644dc0a409fb49
 
       # No actions/cache step here, unlike every other leg -- deliberately, and
       # measured. build/_deps with gfx in it is a 131 MiB tarball: saving it took
