@@ -984,7 +984,10 @@ and prepare each set in one batch (`SensorArray::process`). The prep crops
 each frame with colour to what both its cameras see, by their fields of
 view (sensor's 2026-10-29 same-view entry): depth outside the colour
 camera's view is not fused, and colour outside the depth camera's view has
-coverage 0, so it colours and textures nothing.
+coverage 0, so it colours and textures nothing. Every example's prep drops
+depth outliers, sensor's default (its 2026-10-31 depth-outlier entries): a
+dropped return is no return to fusion and texturing. No example has an
+option for it.
 The four dataset examples take `ReplicaSensor` as the source: frame cap,
 stride and the depth gate are its options, stamped on each frame it hands
 out, and its disk probe at `open` visits only the frames those options
