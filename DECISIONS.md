@@ -1031,9 +1031,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   keeps a return where at least `min_points` (20) returns, itself included,
   lie strictly within `radius_px` (8) pixel footprints at its depth, and
   writes 0 elsewhere. A radius in footprints, not metres, so the rule is the
-  same at every depth; float arithmetic that no compiler may fuse or
-  regroup, `precise` for the pixel's own point and xor barriers in the
-  neighbour loop, so every device decides alike at a cost Apple can carry.
+  same at every depth, and every device decides alike.
   *Amended the same day (the default-on entry):* on by default.
 - [**2026-10-31**](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DECISIONS.md#2026-10-31--frame-prep-drops-depth-outliers-by-default-one-setting-for-every-sensor-amends-the-depth-outlier-entry-above) —
   Frame prep drops depth outliers by default: `DepthOutlierFilter::enabled`
