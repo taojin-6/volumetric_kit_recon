@@ -26,8 +26,9 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.34.0 (4600477, core #74's merge, whose source.audio names
-# the input the live examples record), as are the Homebrew key action in
+# The pin is core 0.35.0 (c52a86a, core #76's merge, whose allocator gives a
+# transient attachment, such as gfx's multisampled window set in the viewers,
+# lazily allocated memory), as are the Homebrew key action in
 # .github/workflows/_build.yml and the workflow-trigger check in
 # .github/workflows/lint.yml; the vkc_require_core checks below say which core
 # each part needs. The tests are main()s of their own on the core's test
@@ -35,7 +36,7 @@ include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 46004772550bdec306758d419b2266eb486ae9eb)
+  GIT_TAG c52a86ab8fcfd11fb6afbfeaf0ae9ef2209b18b2)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)

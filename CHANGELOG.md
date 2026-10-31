@@ -82,6 +82,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   serves the bytes it did. Grid's `serve_stream` replays every track of a
   recording together; recon uses nothing else that changed.
 
+- build: **recon pins core 0.35.0** (core #76's merge, `c52a86a`; was
+  0.34.0, `4600477`), and CI takes the core's actions at the new pin. The
+  core's allocator now gives an image with `TRANSIENT_ATTACHMENT` usage
+  lazily allocated memory where the device has it (Metal's memoryless
+  storage on Apple GPUs), which gfx's multisampled window set in the
+  viewers uses. recon's own allocator makes no such image, so its
+  `lazy_bytes` stays 0 and the viewers' memory gauge is unchanged.
+  `VR_CORE_MIN_VERSION` stays 0.34.0: recon needs nothing new.
+
 - build: **recon pins core 0.34.0** (core #74's merge, `4600477`), **sensor
   0.11.0** (sensor #13's merge, `000746d`) and **grid 0.5.0** (grid #10's
   merge, `4618234`); CI takes the core's and sensor's actions at the new
