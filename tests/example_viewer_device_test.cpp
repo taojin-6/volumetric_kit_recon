@@ -2,14 +2,16 @@
 // Copyright (c) 2026 Tao Jin
 
 // The device the live viewers share (examples/viewer/viewer_common.hpp): it is
-// built with the app's name and graphics requirements and the window's
-// validation setting, not the app's own, and without a window it is refused
-// with gfx's reason. Host only: no window, instance or device is made.
+// built with the app's name and graphics requirements, plus line fill for the
+// wireframe, and the window's validation setting, not the app's own, and
+// without a window it is refused with gfx's reason; and the View options'
+// flags (viewer_panels.hpp). Host only: no window, instance or device is made.
 
 #include <cstdio>
 #include <memory>
 
 #include "viewer_common.hpp"
+#include "viewer_panels.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 
 namespace vkc = volumetric_kit::core;

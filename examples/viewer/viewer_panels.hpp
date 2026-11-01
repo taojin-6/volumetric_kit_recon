@@ -5,9 +5,10 @@
 
 /// @file examples/viewer/viewer_panels.hpp
 /// @brief The Dear ImGui rows both viewers report recon's side in -- the
-///        map's occupancy and recon's device memory -- and `fuse_viewer`'s
-///        Reconstruction panel. Each builds into the ImGui frame the caller is
-///        driving (it calls neither NewFrame nor Render), as gfx's
+///        map's occupancy and recon's device memory -- `fuse_viewer`'s
+///        Reconstruction panel, and the View options both add to the mesh's
+///        shading (draw_mesh_view). Each builds into the ImGui frame the caller
+///        is driving (it calls neither NewFrame nor Render), as gfx's
 ///        `draw_metrics_panel` does.
 
 #include <algorithm>
@@ -17,9 +18,8 @@
 
 #include <imgui.h>
 
-#include "viewer_common.hpp"
-
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/grid/mesh/marching_cubes.hpp"
 #include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 
@@ -167,15 +167,28 @@ inline void draw_reconstruction_panel(const ReconstructionPanel& panel) {
   ImGui::End();
 }
 
+/// @brief The View options the live viewers add to the mesh's shading, both
+///        off at first: its triangles' edges over it, and its back faces
+///        culled. The viewers' device has line fill (viewer_device_config),
+///        so the edges always draw.
+struct MeshView {
+  bool wireframe = false;        ///< `kHybridMeshWireframe`
+  bool cull_back_faces = false;  ///< `kHybridMeshCullBackFaces`
+};
+
+/// @return @p view's gfx `HybridMeshFlags`, to OR into the shading's.
+inline std::uint32_t mesh_view_flags(const MeshView& view) {
+  namespace vgp = volumetric_kit::gfx::pipelines;
+  return (view.wireframe ? vgp::kHybridMeshWireframe : 0u) |
+         (view.cull_back_faces ? vgp::kHybridMeshCullBackFaces : 0u);
+}
+
 /// @brief Checkboxes for @p view in the current ImGui window: "wireframe",
-///        where the pipeline draws edges, then "cull back faces".
-/// @param view                 The options, which a click flips.
-/// @param wireframe_supported  `HybridMeshPipeline::wireframe_supported`.
-inline void draw_mesh_view(MeshView& view, bool wireframe_supported) {
-  if (wireframe_supported) {
-    ImGui::Checkbox("wireframe", &view.wireframe);
-    ImGui::SameLine();
-  }
+///        then "cull back faces".
+/// @param view  The options, which a click flips.
+inline void draw_mesh_view(MeshView& view) {
+  ImGui::Checkbox("wireframe", &view.wireframe);
+  ImGui::SameLine();
   ImGui::Checkbox("cull back faces", &view.cull_back_faces);
 }
 

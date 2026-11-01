@@ -137,7 +137,8 @@ if(VR_BUILD_TESTS)
 
   # What rig_viewer prints at the end (rig_report.hpp): the atlas copies' device
   # time from the profiler's late snapshots, and a count's rate. Host only;
-  # gfx_glfw for ImGui's headers, which the report's panel includes, and
+  # gfx_glfw for ImGui's headers, which the report's panel includes,
+  # gfx_pipelines for the View options' flags (viewer_panels.hpp), and
   # grid_example_common for its stage table.
   add_executable(
     recon_example_viewer_rig_report_test
@@ -181,9 +182,9 @@ endif()
 
 # fuse_viewer: the live window -- fuses on a background thread, draws the
 # growing reconstruction each frame following the capture trajectory, and shows
-# the Dear ImGui performance + reconstruction panels (gfx's ui tier). gfx_glfw
-# PUBLIC-links gfx_app, gfx_ui (and through it gfx_camera) and GLFW, so those
-# are not named again.
+# the Dear ImGui performance, reconstruction and View panels (gfx's ui tier).
+# gfx_glfw PUBLIC-links gfx_app, gfx_ui (and through it gfx_camera) and GLFW, so
+# those are not named again.
 add_executable(fuse_viewer fuse_viewer.cpp)
 target_link_libraries(
   fuse_viewer PRIVATE ${_viewer_recon_libs} volumetric_kit::gfx_glfw

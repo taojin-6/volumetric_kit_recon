@@ -1161,7 +1161,7 @@ int run(GLFWwindow* window, const Options& opt) {
         ImGui::RadioButton("normals", &mode,
                            static_cast<int>(Shading::Normals));
         shading = static_cast<Shading>(mode);
-        fuse_viewer::draw_mesh_view(mesh_view, pipeline.wireframe_supported());
+        fuse_viewer::draw_mesh_view(mesh_view);
         bool texture = texture_on.load();
         if (ImGui::Checkbox("texture from the cameras (next remesh)",
                             &texture)) {
