@@ -89,6 +89,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **recon pins grid 0.8.0** (grid #15's merge, `20bd1c1`; was
+  0.6.0). With `output.serve`, a viewer still connected when a live run
+  finishes now gets the stream's last records before its end, unless still
+  behind after 1 s (grid 0.7.0's `StreamServer::finish`), and on Linux a
+  viewer not on loopback is served over BBR where the kernel allows it
+  (0.7.1). The bytes written and served are unchanged, and
+  `VR_GRID_MIN_VERSION` stays 0.6.0: recon calls nothing new, such as
+  0.8.0's `StreamServer::draining()`.
+
 - build: **the viewers pin gfx main at #172's merge** (`77fefdc`), the same
   tree as the head #334 pinned (`ca05650`), now on gfx main.
 - build: **recon pins core 0.39.0** (core #83's merge, `6cfef9d`, on #82's
