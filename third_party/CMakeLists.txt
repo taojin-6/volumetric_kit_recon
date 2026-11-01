@@ -26,9 +26,9 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.35.0 (c52a86a, core #76's merge, whose allocator gives a
-# transient attachment, such as gfx's multisampled window set in the viewers,
-# lazily allocated memory), as are the Homebrew key action in
+# The pin is core 0.39.0 (6cfef9d, core #83's merge, whose FuseDecklink profile
+# fuse_decklink loads, on #82's 0.38.0, whose imported host pages the DeckLink
+# driver captures into), as are the Homebrew key action in
 # .github/workflows/_build.yml and the workflow-trigger check in
 # .github/workflows/lint.yml; the vkc_require_core checks below say which core
 # each part needs. The tests are main()s of their own on the core's test
@@ -36,7 +36,7 @@ include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG c52a86ab8fcfd11fb6afbfeaf0ae9ef2209b18b2)
+  GIT_TAG 6cfef9de354a8eca2e9f79e630af38884528827f)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
@@ -74,18 +74,19 @@ endif()
 # FetchContent keeps that declaration, as with the core. Work on both checkouts
 # at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_SENSOR=<sensor
 # checkout>. Its drivers and stereo depth (VS_WITH_ORBBEC, VS_WITH_REALSENSE,
-# VS_WITH_FFMPEG, VS_WITH_CUDA, VS_WITH_FFS, VS_WITH_PORTAUDIO) are given on
-# recon's configure. sensor's own CI tests sensor, so its tests and -Werror stay
-# off in this build; recon's examples take its test fixtures (VS_TEST_DATA_DIR,
-# which it sets).
+# VS_WITH_DECKLINK, VS_WITH_FFMPEG, VS_WITH_CUDA, VS_WITH_FFS,
+# VS_WITH_PORTAUDIO) are given on recon's configure. sensor's own CI tests
+# sensor, so its tests and -Werror stay off in this build; recon's examples take
+# its test fixtures (VS_TEST_DATA_DIR, which it sets).
 #
-# The pin is sensor 0.13.0 (25008cd, sensor #16's merge), as are its Orbbec SDK
-# and librealsense actions in .github/workflows (the sibling-actions-at-pins
-# hook).
+# The pin is sensor 0.19.0 (1d68b11, sensor #23's merge: the DeckLink driver, on
+# 0.16.0's V210 pictures, 0.17.0's stereo_calibration and 0.18.0's FFS near
+# gate), as are its Orbbec SDK and librealsense actions in .github/workflows
+# (the sibling-actions-at-pins hook).
 FetchContent_Declare(
   volumetric_kit_sensor
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
-  GIT_TAG 25008cd713ec199980991926b1644dc0a409fb49)
+  GIT_TAG 1d68b11167aa057aa604e8110ca5a6722d75f607)
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)

@@ -16,6 +16,9 @@ endif()
 if(TARGET volumetric_kit::sensor_realsense)
   add_subdirectory(fuse_realsense)
 endif()
+# fuse_decklink on every build: one without sensor's DeckLink driver or its FFS
+# depth refuses the scenario before anything opens.
+add_subdirectory(fuse_decklink)
 
 # The gfx-linked reconstruction viewer examples (fuse_render headless PNG +
 # fuse_viewer live window). OFF by default: opting in is the ONLY place the
@@ -41,6 +44,7 @@ if(VR_BUILD_TESTS)
     codec_replica
     fuse_orbbec
     fuse_realsense
+    fuse_decklink
     fuse_render
     fuse_viewer
     rig_viewer)
@@ -69,6 +73,22 @@ if(VR_BUILD_TESTS)
         -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fuse-realsense-depth -P
         ${PROJECT_SOURCE_DIR}/tests/example_fuse_realsense_depth.cmake)
   endif()
+  # fuse_decklink against its build: refused before the GPU, naming what is
+  # missing, without the DeckLink driver or FFS; let through with both.
+  foreach(_vr_tier decklink ffs)
+    if(TARGET volumetric_kit::sensor_${_vr_tier})
+      set(_vr_has_${_vr_tier} ON)
+    else()
+      set(_vr_has_${_vr_tier} OFF)
+    endif()
+  endforeach()
+  add_test(
+    NAME recon_fuse_decklink_build
+    COMMAND
+      ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:fuse_decklink>
+      -DDECKLINK=${_vr_has_decklink} -DFFS=${_vr_has_ffs}
+      -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fuse-decklink-build -P
+      ${PROJECT_SOURCE_DIR}/tests/example_fuse_decklink_build.cmake)
   # The colour frame of the Replica runs below: the sensor package's JPEG
   # fixture (VS_TEST_DATA_DIR, which the package sets).
   set(_vr_color_fixture "${VS_TEST_DATA_DIR}/jpeg/patches_256x144.jpg")

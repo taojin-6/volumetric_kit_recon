@@ -5,10 +5,11 @@
 // template loads and maps into the codec's runtime options (grid's
 // codec_config.hpp), core-validated settings reach the sender's config, the
 // Replica sensor's options and, where each driver is built, the Orbbec streams
-// and the RealSense camera's options (and, with sensor_ffs, FFS depth's)
-// unchanged, and the live templates hold what they document. The codec's side
-// is grid's example_config_test.cpp. No file assets, device or camera are
-// opened.
+// and the RealSense camera's options (and, with sensor_ffs, FFS depth's), and
+// the DeckLink stereo camera's (its cameras always; the driver's and FFS
+// depth's where built) unchanged, and the live templates hold what they
+// document. The codec's side is grid's example_config_test.cpp. No file
+// assets, device or camera are opened.
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -24,8 +25,10 @@
 #endif
 #ifdef VR_TEST_REALSENSE_CONFIG
 #include "realsense_camera.hpp"
-namespace vkc = volumetric_kit::core;
 #endif
+#include "decklink_camera.hpp"
+
+namespace vkc = volumetric_kit::core;
 
 namespace cfg = volumetric_kit::core::config;
 namespace vr = volumetric_kit::recon;
@@ -48,6 +51,7 @@ int main() {
       {"dump_orbbec", cfg::Application::FuseOrbbec},
       {"fuse_realsense", cfg::Application::FuseRealsense},
       {"fuse_realsense_ffs", cfg::Application::FuseRealsense},
+      {"fuse_decklink", cfg::Application::FuseDecklink},
       {"fuse_render", cfg::Application::FuseRender},
       {"fuse_viewer", cfg::Application::FuseViewer},
       {"rig_viewer", cfg::Application::RigViewer},
@@ -69,6 +73,7 @@ int main() {
     const bool served = std::string(example.file) == "serve_orbbec";
     const bool live = example.application == cfg::Application::FuseOrbbec ||
                       example.application == cfg::Application::FuseRealsense ||
+                      example.application == cfg::Application::FuseDecklink ||
                       example.application == cfg::Application::RigViewer;
     CHECK(loaded->fusion.dynamic == live);
     CHECK(loaded->output.csv.empty() != coded);
@@ -334,22 +339,24 @@ int main() {
         lit_pair.infrared_height == pair_driver.infrared_height);
 #ifdef VR_EXAMPLE_FFS
   // With sensor_ffs: FFS is opened, the pair rectified to the depth size as
-  // luma at alpha 0, the model, its plans and the depth gate passed on, and
-  // the pair's measured disparity noise stated, so its frames state their
-  // depth noise (sensor's FfsStereo defaults it to unknown).
+  // luma at alpha 0, the model, its plans, the depth gate and the near gate
+  // passed on, and the pair's measured disparity noise stated, so its frames
+  // state their depth noise (sensor's FfsStereo defaults it to unknown).
   CHECK(vr_example::check_realsense_depth(ffs.value()).ok());
   const sensor::StereoDepthSensor::Options depth =
-      vr_example::ffs_depth_options(ffs.value());
+      vr_example::realsense_ffs_options(ffs.value());
   CHECK(depth.rectify.size.width == 960 && depth.rectify.size.height == 544);
   CHECK(depth.rectify.alpha == 0.0f);
   CHECK(depth.rectify.output == sensor::StereoRectifier::Output::Luma8);
   CHECK(depth.ffs.model.string() == ffs->source.ffs_model);
   CHECK(depth.ffs.plan_cache.string() == ffs->source.ffs_plan_cache);
   CHECK(depth.ffs.min_depth == 0.25F && depth.ffs.max_depth == 5.F);
+  CHECK(sensor::FfsStereo::Options{}.max_disparity == 0.0f);
+  CHECK(depth.ffs.max_disparity == 192.0f);
   CHECK(sensor::FfsStereo::Options{}.disparity_sigma == 0.0f);
   CHECK(depth.ffs.disparity_sigma == 0.04f);
   const sensor::StereoDepthSensor::Options lit_depth =
-      vr_example::ffs_depth_options(lit.value());
+      vr_example::realsense_ffs_options(lit.value());
   CHECK(lit_depth.rectify.size.width == 1280 &&
         lit_depth.rectify.size.height == 736);
   CHECK(lit_depth.ffs.model.string() == "/m/ffs.onnx" &&
@@ -362,6 +369,126 @@ int main() {
   CHECK(refused.domain() == vkc::Status::Code::Unsupported);
   CHECK(refused.message().find("VS_WITH_FFS=ON") != std::string::npos);
 #endif
+#endif
+
+  // fuse_decklink's template: the stereo camera the provisional calibration
+  // made, bm-1 on SDI 2 its left camera and bm-2 on SDI 1 its right one,
+  // free-running at the cameras' default mode, so left and right may be
+  // half a frame apart; the user's calibration file under rigs/, and FFS's
+  // model and plans under models/, beside the scenario.
+  const auto decklink =
+      cfg::load(std::string(VR_CONFIG_FIXTURES) + "/fuse_decklink.json",
+                cfg::Application::FuseDecklink);
+  CHECK(decklink);
+  const vr_example::DecklinkCameras shipped =
+      vr_example::decklink_cameras(decklink.value());
+  CHECK(shipped.left.id == "bm-1" && shipped.left.input == "SDI 2");
+  CHECK(shipped.right.id == "bm-2" && shipped.right.input == "SDI 1");
+  CHECK(decklink->source.max_pair_skew_us == 16666);
+  CHECK(decklink->source.calibration ==
+        (std::filesystem::path(VR_CONFIG_FIXTURES) / "rigs" / "decklink" /
+         "array_calibration.json")
+            .lexically_normal()
+            .string());
+  const auto ffs_models = std::filesystem::path(VR_CONFIG_FIXTURES) / "models";
+  CHECK(decklink->source.ffs_model ==
+        (ffs_models / "ffs_23-36-37_960x544.onnx").lexically_normal().string());
+  CHECK(decklink->source.ffs_plan_cache ==
+        (ffs_models / "ffs_plans").lexically_normal().string());
+  CHECK(decklink->output.path ==
+        (results / "decklink.ply").lexically_normal().string());
+  // The stereo camera is the pair's two cameras, by id, whatever order
+  // source.cameras lists them in; every field reaches its option.
+  const auto listed = cfg::parse(R"({
+    "version": 1, "operation": "fuse",
+    "source": {"kind": "live", "driver": "decklink",
+               "cameras": [{"id": "east", "input": "SDI 3"},
+                           {"id": "west", "input": "SDI 4"}],
+               "pairs": [{"left": "west", "right": "east"}],
+               "color_width": 1920, "color_height": 1080, "fps": 25,
+               "depth_width": 1280, "depth_height": 736,
+               "max_pair_skew_us": 500, "calibration": "/r/rig.json",
+               "ffs_model": "/m/ffs.onnx", "ffs_plan_cache": "/m/plans"},
+    "fusion": {"min_depth_m": 0.8, "max_depth_m": 4.5}
+  })",
+                                 cfg::Application::FuseDecklink);
+  CHECK(listed);
+  const vr_example::DecklinkCameras west_east =
+      vr_example::decklink_cameras(listed.value());
+  CHECK(west_east.left.id == "west" && west_east.left.input == "SDI 4");
+  CHECK(west_east.right.id == "east" && west_east.right.input == "SDI 3");
+  // The camera opens only with the driver and FFS both built; a build
+  // without either refuses, naming each part missing and how to build it.
+  const vkc::Status build = vr_example::check_decklink_build();
+#if defined(VR_EXAMPLE_DECKLINK) && defined(VR_EXAMPLE_FFS)
+  CHECK(build.ok());
+#else
+  CHECK(build.domain() == vkc::Status::Code::Unsupported);
+#ifdef VR_EXAMPLE_DECKLINK
+  CHECK(build.message().find("VS_WITH_DECKLINK") == std::string::npos);
+#else
+  CHECK(build.message().find("VS_WITH_DECKLINK=ON") != std::string::npos);
+#endif
+#ifdef VR_EXAMPLE_FFS
+  CHECK(build.message().find("VS_WITH_FFS") == std::string::npos);
+#else
+  CHECK(build.message().find("VS_WITH_FFS=ON") != std::string::npos);
+#endif
+#endif
+#ifdef VR_EXAMPLE_DECKLINK
+  // The driver's options: the connectors as the pair names them, the mode,
+  // the bound in nanoseconds and the calibration; the start's wait the
+  // driver's own.
+  sensor::StereoCalibration lenses;
+  lenses.left.size = lenses.right.size = {1920, 1080};
+  lenses.left_to_right[3] = {-0.4, 0.0, 0.0, 1.0};
+  const sensor::DecklinkStereo::Options wired =
+      vr_example::decklink_options(listed.value(), lenses);
+  const sensor::DecklinkStereo::Options driver_defaults;
+  CHECK(wired.left.id == "west" && wired.left.input == "SDI 4");
+  CHECK(wired.right.id == "east" && wired.right.input == "SDI 3");
+  CHECK(wired.width == 1920 && wired.height == 1080 && wired.fps == 25);
+  CHECK(wired.max_skew_ns == 500'000);
+  CHECK(wired.calibration && wired.calibration->left.size.width == 1920 &&
+        wired.calibration->left_to_right[3].x == -0.4);
+  CHECK(wired.lock_timeout == driver_defaults.lock_timeout);
+  // The template's are the driver's defaults: 2160p30, half a frame apart.
+  const sensor::DecklinkStereo::Options shipped_options =
+      vr_example::decklink_options(decklink.value(), lenses);
+  CHECK(shipped_options.left.input == "SDI 2" &&
+        shipped_options.right.input == "SDI 1");
+  CHECK(shipped_options.width == driver_defaults.width &&
+        shipped_options.height == driver_defaults.height &&
+        shipped_options.fps == driver_defaults.fps &&
+        shipped_options.max_skew_ns == driver_defaults.max_skew_ns);
+#endif
+#ifdef VR_EXAMPLE_FFS
+  // FFS depth on the DeckLink cameras: R'G'B' views at the depth size and
+  // alpha 0, the model, its plans, the depth gate and the near gate passed
+  // on, and the cameras' disparity noise stated, so every frame states its
+  // depth noise (Dynamic refuses a frame without one).
+  const sensor::StereoDepthSensor::Options decklink_depth =
+      vr_example::decklink_ffs_options(decklink.value());
+  CHECK(decklink_depth.rectify.output ==
+        sensor::StereoRectifier::Output::Rgba8);
+  CHECK(decklink_depth.rectify.size.width == 960 &&
+        decklink_depth.rectify.size.height == 544);
+  CHECK(decklink_depth.rectify.alpha == 0.0f);
+  CHECK(decklink_depth.ffs.model.string() == decklink->source.ffs_model);
+  CHECK(decklink_depth.ffs.plan_cache.string() ==
+        decklink->source.ffs_plan_cache);
+  CHECK(decklink_depth.ffs.min_depth == 0.5F &&
+        decklink_depth.ffs.max_depth == 5.F);
+  CHECK(decklink_depth.ffs.max_disparity == 192.0f);
+  CHECK(decklink_depth.ffs.disparity_sigma == 0.07f);
+  const sensor::StereoDepthSensor::Options listed_depth =
+      vr_example::decklink_ffs_options(listed.value());
+  CHECK(listed_depth.rectify.size.width == 1280 &&
+        listed_depth.rectify.size.height == 736);
+  CHECK(listed_depth.ffs.model.string() == "/m/ffs.onnx" &&
+        listed_depth.ffs.plan_cache.string() == "/m/plans");
+  CHECK(listed_depth.ffs.min_depth == 0.8F &&
+        listed_depth.ffs.max_depth == 4.5F);
 #endif
   return 0;
 }

@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "operation": "fuse",
+  "source": {
+    "kind": "live",
+    "driver": "decklink",
+    "cameras": [
+      {"id": "bm-1", "input": "SDI 2"},
+      {"id": "bm-2", "input": "SDI 1"}
+    ],
+    "pairs": [{"left": "bm-1", "right": "bm-2"}],
+    "max_pair_skew_us": 16666,
+    "calibration": "rigs/decklink/array_calibration.json",
+    "ffs_model": "models/ffs_23-36-37_960x544.onnx",
+    "ffs_plan_cache": "models/ffs_plans"
+  },
+  "run": {
+    "frames": 300
+  },
+  "output": {
+    "path": "results/decklink.ply"
+  }
+}

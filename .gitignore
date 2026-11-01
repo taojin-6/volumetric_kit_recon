@@ -29,9 +29,10 @@ compile_commands.json
 /tests/assets/
 
 # What the templates in config/examples read and write beside them, never
-# committed: FFS's ONNX model and its TensorRT plans (models/, hundreds of MB)
-# and the runs' outputs (results/)
+# committed: FFS's ONNX model and its TensorRT plans (models/, hundreds of MB),
+# the user's own calibration files (rigs/) and the runs' outputs (results/)
 /config/examples/models/
+/config/examples/rigs/
 /config/examples/results/
 
 # Editor / OS

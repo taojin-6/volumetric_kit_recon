@@ -31,6 +31,7 @@
 #include "volumetric_kit/sensor/realsense/realsense_stereo.hpp"
 #include "volumetric_kit/sensor/rgbd_sensor.hpp"
 #ifdef VR_EXAMPLE_FFS
+#include "ffs_depth.hpp"
 #include "volumetric_kit/sensor/ffs/stereo_depth_sensor.hpp"
 #include "volumetric_kit/sensor/stereo/stereo_rectifier.hpp"
 #endif
@@ -90,23 +91,13 @@ inline sensor::RealSenseStereo::Options realsense_stereo_options(
 /// checkpoint is measured for its own.
 inline constexpr float kD455FfsDisparitySigma = 0.04f;
 
-/// @return FFS depth's options: the pair rectified to the depth size as luma
-///         at alpha 0 (luma carries no coverage, so no border is matched),
-///         the model, its plan cache and the depth gate, and the pair's
-///         disparity noise (@ref kD455FfsDisparitySigma), from which every
-///         frame states its depth noise.
-inline sensor::StereoDepthSensor::Options ffs_depth_options(
+/// @return FFS depth's options for the infrared cameras: their views as
+///         luma (`Luma8`) and @ref kD455FfsDisparitySigma
+///         (@ref ffs_depth_options).
+inline sensor::StereoDepthSensor::Options realsense_ffs_options(
     const config::Config& opt) {
-  sensor::StereoDepthSensor::Options o;
-  o.rectify.size = {opt.source.depth_width, opt.source.depth_height};
-  o.rectify.alpha = 0.0f;
-  o.rectify.output = sensor::StereoRectifier::Output::Luma8;
-  o.ffs.model = opt.source.ffs_model;
-  o.ffs.plan_cache = opt.source.ffs_plan_cache;
-  o.ffs.min_depth = opt.fusion.min_depth_m;
-  o.ffs.max_depth = opt.fusion.max_depth_m;
-  o.ffs.disparity_sigma = kD455FfsDisparitySigma;
-  return o;
+  return ffs_depth_options(opt, kD455FfsDisparitySigma,
+                           sensor::StereoRectifier::Output::Luma8);
 }
 #endif
 
@@ -144,16 +135,6 @@ inline std::string realsense_depth_line(const config::Config& opt) {
          ")" + projector;
 }
 
-/// @return A lens's name for a camera's line: "pinhole" with no distortion,
-///         "brown-conrady" with only its five coefficients, else "rational".
-inline const char* lens_name(const sensor::camera::RationalDistortion& d) {
-  if (d.k4 != 0.0 || d.k5 != 0.0 || d.k6 != 0.0) return "rational";
-  if (d.k1 != 0.0 || d.k2 != 0.0 || d.p1 != 0.0 || d.p2 != 0.0 || d.k3 != 0.0) {
-    return "brown-conrady";
-  }
-  return "pinhole";
-}
-
 /// @return An opened camera's report, three lines each ending in a newline:
 ///         what it reports, its link and clock; its colour camera's model at
 ///         the opened mode and its exposure as read back; its depth camera's,
@@ -187,7 +168,7 @@ inline std::string realsense_camera_report(
 ///        prepares each frame on @p device. The camera's own depth is a
 ///        `RealSenseSensor` (@ref realsense_options); FFS depth a
 ///        `StereoDepthSensor` over the camera's infrared pair
-///        (@ref realsense_stereo_options, @ref ffs_depth_options), which
+///        (@ref realsense_stereo_options, @ref realsense_ffs_options), which
 ///        rectifies each pair and runs FFS on @p device on a thread of its
 ///        own, its depth left there for the frame prep. Either way the YUYV
 ///        colour is converted on the device.
@@ -231,7 +212,7 @@ inline vkc::Result<sensor::SensorArray> open_realsense_array(
                sensor::StereoDepthSensor::create(
                    device, allocator,
                    std::make_unique<sensor::RealSenseStereo>(std::move(camera)),
-                   ffs_depth_options(opt)));
+                   realsense_ffs_options(opt)));
     std::fputs(realsense_camera_report(found, depth->info()).c_str(), stdout);
     sensors.push_back(std::move(depth));
 #endif
