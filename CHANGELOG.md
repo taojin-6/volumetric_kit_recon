@@ -89,6 +89,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **the viewers pin gfx main at #172's merge** (`77fefdc`), the same
+  tree as the head #334 pinned (`ca05650`), now on gfx main.
 - build: **recon pins core 0.39.0** (core #83's merge, `6cfef9d`, on #82's
   0.38.0) and **sensor 0.19.0** (sensor #23's merge, `1d68b11`: the DeckLink
   driver, on 0.16.0's V210 pictures, 0.17.0's stereo frames and 0.18.0's
