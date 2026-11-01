@@ -79,14 +79,14 @@ endif()
 # sensor, so its tests and -Werror stay off in this build; recon's examples take
 # its test fixtures (VS_TEST_DATA_DIR, which it sets).
 #
-# The pin is sensor 0.19.0 (f934c58, the DeckLink driver's head, on 0.16.0's
+# The pin is sensor 0.19.0 (acf9dbb, the DeckLink driver's head, on 0.16.0's
 # V210 pictures and 0.17.0's stereo_calibration), as are its Orbbec SDK and
 # librealsense actions in .github/workflows (the sibling-actions-at-pins hook).
 # TODO: re-pin to the DeckLink driver's merge once it lands.
 FetchContent_Declare(
   volumetric_kit_sensor
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
-  GIT_TAG f934c58b49df52cbaa7709e3f17af647cc8d861e)
+  GIT_TAG acf9dbb4af26af9f01c44714827c6e25877a2bcc)
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)
