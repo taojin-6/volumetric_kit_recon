@@ -355,6 +355,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // pipeline bakes the swapchain layout, which survives a resize, so the
   // overlay is built once.
   std::optional<vg::ui::ImGuiOverlay> overlay;
+  fuse_viewer::MeshView mesh_view;  // the View panel's wireframe and cull
   // Declared after the overlay, so it shuts down first, while the context it
   // binds is alive.
   std::unique_ptr<glfw::ImGuiGlfw> imgui_glfw;
@@ -896,6 +897,11 @@ int run(GLFWwindow* window, const Options& opt) {
       ImGui::SetNextWindowPos(ImVec2(16.0f, 408.0f), ImGuiCond_FirstUseEver);
       ImGui::SetNextWindowSize(ImVec2(400.0f, 250.0f), ImGuiCond_FirstUseEver);
       fuse_viewer::draw_reconstruction_panel(recon_panel);
+      ImGui::SetNextWindowPos(ImVec2(432.0f, 16.0f), ImGuiCond_FirstUseEver);
+      if (ImGui::Begin("View")) {
+        fuse_viewer::draw_mesh_view(mesh_view, pipeline.wireframe_supported());
+      }
+      ImGui::End();
     }
 
     fuse_viewer::record_view_pass(
@@ -937,9 +943,10 @@ int run(GLFWwindow* window, const Options& opt) {
           hybrid_frame.view_proj = view_proj;
           hybrid_frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
           hybrid_frame.flags =
-              (opt.render.shading == vgrid_example::config::Shading::Lit)
-                  ? vgp::kHybridMeshLit
-                  : 0u;
+              ((opt.render.shading == vgrid_example::config::Shading::Lit)
+                   ? vgp::kHybridMeshLit
+                   : 0u) |
+              fuse_viewer::mesh_view_flags(mesh_view);
           hybrid_frame.atlas = atlas.use(render_frame.number);
           hybrid_frame.draws = &draw;
           hybrid_frame.draw_count = 1;

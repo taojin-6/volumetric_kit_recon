@@ -29,6 +29,7 @@
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/glfw/shared_device.hpp"
+#include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/grid/mesh/device_mesh.hpp"
 #include "volumetric_kit/grid/mesh/marching_cubes.hpp"
@@ -50,14 +51,31 @@ namespace vol = volumetric_kit::grid::volume;
 /// @param validation  Whether to enable the validation layer
 ///                    (`window.validation`). `WindowedApp::adopt` ignores the
 ///                    app's own setting, so this is the only one.
-/// @return @p app's name and device requirements, and @p validation.
+/// @return @p app's name and device requirements, with `fillModeNonSolid`
+///         for the wireframe (every Mac and NVIDIA box offers it), and
+///         @p validation.
 inline vg::app::WindowDeviceConfig viewer_device_config(
     const vg::app::WindowedAppConfig& app, bool validation) {
   vg::app::WindowDeviceConfig config;
   config.instance.app_name = app.app_name;
   config.instance.enable_validation = validation;
   config.graphics = app.device;
+  config.graphics.features.fillModeNonSolid = VK_TRUE;
   return config;
+}
+
+/// @brief The View options the live viewers add to the mesh's shading, both
+///        off at first: its triangles' edges over it, and its back faces
+///        culled (draw_mesh_view, in viewer_panels.hpp, shows them).
+struct MeshView {
+  bool wireframe = false;        ///< `kHybridMeshWireframe`
+  bool cull_back_faces = false;  ///< `kHybridMeshCullBackFaces`
+};
+
+/// @return @p view's gfx `HybridMeshFlags`, to OR into the shading's.
+inline std::uint32_t mesh_view_flags(const MeshView& view) {
+  return (view.wireframe ? vg::pipelines::kHybridMeshWireframe : 0u) |
+         (view.cull_back_faces ? vg::pipelines::kHybridMeshCullBackFaces : 0u);
 }
 
 /// @brief The one device gfx, recon and the sensor package all adopt, with

@@ -18,7 +18,7 @@ namespace vg = volumetric_kit::gfx;
 int main() {
   vg::app::WindowedAppConfig app;
   app.app_name = "example_viewer_device_test";
-  app.device.features.fillModeNonSolid = VK_TRUE;
+  app.device.features.samplerAnisotropy = VK_TRUE;
   app.device.extensions.push_back("VK_EXT_test_only");
   // WindowedApp::adopt ignores this; the window's setting is the one used.
   app.enable_validation = true;
@@ -27,6 +27,9 @@ int main() {
       fuse_viewer::viewer_device_config(app, true);
   CHECK(on.instance.app_name == app.app_name);
   CHECK(on.instance.enable_validation);
+  CHECK(on.graphics.features.samplerAnisotropy == VK_TRUE);
+  // Line fill, for the View panel's wireframe, though the app asked none.
+  CHECK(app.device.features.fillModeNonSolid == VK_FALSE);
   CHECK(on.graphics.features.fillModeNonSolid == VK_TRUE);
   CHECK(on.graphics.extensions == app.device.extensions);
   CHECK(on.graphics.dynamic_rendering == app.device.dynamic_rendering);
@@ -42,6 +45,20 @@ int main() {
       fuse_viewer::make_viewer_device(nullptr, app, false);
   CHECK(!made.ok());
   CHECK(made.status().domain() == vkc::Status::Code::InvalidArgument);
+
+  // The View options' flags: none at first, each its gfx bit.
+  fuse_viewer::MeshView view;
+  CHECK(fuse_viewer::mesh_view_flags(view) == 0u);
+  view.wireframe = true;
+  CHECK(fuse_viewer::mesh_view_flags(view) ==
+        vg::pipelines::kHybridMeshWireframe);
+  view.cull_back_faces = true;
+  CHECK(fuse_viewer::mesh_view_flags(view) ==
+        (vg::pipelines::kHybridMeshWireframe |
+         vg::pipelines::kHybridMeshCullBackFaces));
+  view.wireframe = false;
+  CHECK(fuse_viewer::mesh_view_flags(view) ==
+        vg::pipelines::kHybridMeshCullBackFaces);
 
   std::puts("example_viewer_device: OK");
   return 0;

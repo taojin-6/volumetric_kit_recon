@@ -17,6 +17,8 @@
 
 #include <imgui.h>
 
+#include "viewer_common.hpp"
+
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/grid/mesh/marching_cubes.hpp"
 #include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
@@ -163,6 +165,18 @@ inline void draw_reconstruction_panel(const ReconstructionPanel& panel) {
                 to_mebibytes(panel.preloaded_bytes));
   }
   ImGui::End();
+}
+
+/// @brief Checkboxes for @p view in the current ImGui window: "wireframe",
+///        where the pipeline draws edges, then "cull back faces".
+/// @param view                 The options, which a click flips.
+/// @param wireframe_supported  `HybridMeshPipeline::wireframe_supported`.
+inline void draw_mesh_view(MeshView& view, bool wireframe_supported) {
+  if (wireframe_supported) {
+    ImGui::Checkbox("wireframe", &view.wireframe);
+    ImGui::SameLine();
+  }
+  ImGui::Checkbox("cull back faces", &view.cull_back_faces);
 }
 
 }  // namespace fuse_viewer

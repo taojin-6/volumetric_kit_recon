@@ -8,6 +8,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **wireframe and back-face culling in the live viewers.**
+  `rig_viewer`'s View panel, and a View panel `fuse_viewer` now shows with
+  its overlay, have "wireframe" (gfx's `kHybridMeshWireframe`: the triangles'
+  edges over the mesh, where the device draws them) and "cull back faces"
+  (`kHybridMeshCullBackFaces`), both off at first. The viewers' device asks
+  for `fillModeNonSolid`; gfx is pinned at its #172.
 - **`fuse_decklink`**, live fusion of two SDI cameras on a Blackmagic
   DeckLink card as one stereo camera, its depth from FFS on R'G'B' views,
   its colour the left camera's 10-bit picture (core's `FuseDecklink`; README,
