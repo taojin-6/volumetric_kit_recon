@@ -4,8 +4,10 @@
 // The render pass both live viewers record (examples/viewer/viewer_common.hpp):
 // one GPU-timed stage spans the whole pass, and the mesh and overlay draws
 // inside it are CPU-only stages; the overlay's colours show as authored on an
-// _SRGB target, as the swapchain's default is. Runs on a headless device,
-// which the test skips without.
+// _SRGB target, as the swapchain's default is; and a device made with the
+// viewers' graphics requirements (viewer_device_config) gives the mesh
+// pipeline its wireframe pass, which the View panel's box draws through. Runs
+// on headless devices, which the test skips without.
 
 #include <cstddef>
 #include <cstdint>
@@ -25,6 +27,7 @@
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
+#include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 
 namespace {
@@ -107,6 +110,29 @@ int records_the_viewer_pass(vg::app::HeadlessApp& app) {
   return 0;
 }
 
+// The viewers' graphics requirements give a device whose mesh pipeline draws
+// edges, so the View panel's wireframe shows.
+int the_viewers_device_draws_edges() {
+  vg::app::HeadlessAppConfig config;
+  config.app_name = "recon_example_viewer_pass_test (edges)";
+  config.enable_validation = vkc::test::instance_config().enable_validation;
+  config.device =
+      fuse_viewer::viewer_device_config(vg::app::WindowedAppConfig{}, false)
+          .graphics;
+  auto app = vg::app::HeadlessApp::create(config);
+  CHECK(app.ok());
+  vg::OffscreenTargetDesc desc;
+  desc.extent = kExtent;
+  desc.depth_format = VK_FORMAT_D32_SFLOAT;
+  auto target = vg::OffscreenTarget::create(app.value().allocator(), desc);
+  CHECK(target.ok());
+  auto pipeline = vg::pipelines::HybridMeshPipeline::create(
+      app.value().device(), app.value().allocator(), target.value().layout());
+  CHECK(pipeline.ok());
+  CHECK(pipeline.value().wireframe_supported());
+  return 0;
+}
+
 int run_pass_tests() {
   vg::app::HeadlessAppConfig config;
   config.app_name = "recon_example_viewer_pass_test";
@@ -123,6 +149,7 @@ int run_pass_tests() {
     return 1;
   }
   if (const int rc = records_the_viewer_pass(app.value())) return rc;
+  if (const int rc = the_viewers_device_draws_edges()) return rc;
   std::puts("viewer_pass: OK");
   return 0;
 }

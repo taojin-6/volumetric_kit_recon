@@ -56,8 +56,11 @@ FetchContent_Declare(
   # washed out. A rendering floor, and the newest, so it covers the older ones;
   # recon_example_viewer_pass checks it.
   #
+  # And at or past gfx #172, whose kHybridMeshCullBackFaces and
+  # kHybridMeshWireframe the View options draw with. A compile floor.
+  #
   # It refuses a core older than 0.20.0 (gfx's VG_VKC_MIN_VERSION).
-  GIT_TAG df3a0de4184f6b989faa8d8ffbe0a338e00642a5 # gfx main, after #168
+  GIT_TAG ca0565078dec899fe4a73afe312cc7fab2a0d742 # gfx #172's head
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
@@ -119,9 +122,13 @@ if(VR_BUILD_TESTS)
                  "${PROJECT_SOURCE_DIR}/tests/example_viewer_device_test.cpp")
   target_link_libraries(
     recon_example_viewer_device_test
-    PRIVATE volumetric_kit::core_test_base volumetric_kit::recon_core
-            volumetric_kit::grid_mesh volumetric_kit::sensor_frame
-            volumetric_kit::gfx_glfw Vulkan::Vulkan)
+    PRIVATE volumetric_kit::core_test_base
+            volumetric_kit::recon_core
+            volumetric_kit::grid_mesh
+            volumetric_kit::sensor_frame
+            volumetric_kit::gfx_glfw
+            volumetric_kit::gfx_pipelines
+            Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_device_test
                              PRIVATE ${_viewer_common_inc})
   vr_target_warnings(recon_example_viewer_device_test)
@@ -130,16 +137,21 @@ if(VR_BUILD_TESTS)
 
   # What rig_viewer prints at the end (rig_report.hpp): the atlas copies' device
   # time from the profiler's late snapshots, and a count's rate. Host only;
-  # gfx_glfw for ImGui's headers, which the report's panel includes, and
+  # gfx_glfw for ImGui's headers, which the report's panel includes,
+  # gfx_pipelines for the View options' flags (viewer_panels.hpp), and
   # grid_example_common for its stage table.
   add_executable(
     recon_example_viewer_rig_report_test
     "${PROJECT_SOURCE_DIR}/tests/example_viewer_rig_report_test.cpp")
   target_link_libraries(
     recon_example_viewer_rig_report_test
-    PRIVATE volumetric_kit::core_test_base volumetric_kit::sensor_array
-            volumetric_kit::recon_texture volumetric_kit::gfx_glfw
-            grid_example_common Vulkan::Vulkan)
+    PRIVATE volumetric_kit::core_test_base
+            volumetric_kit::sensor_array
+            volumetric_kit::recon_texture
+            volumetric_kit::gfx_glfw
+            volumetric_kit::gfx_pipelines
+            grid_example_common
+            Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_rig_report_test
                              PRIVATE ${_viewer_common_inc})
   vr_target_warnings(recon_example_viewer_rig_report_test)
@@ -158,6 +170,7 @@ if(VR_BUILD_TESTS)
             volumetric_kit::grid_mesh
             volumetric_kit::sensor_frame
             volumetric_kit::gfx_glfw
+            volumetric_kit::gfx_pipelines
             Vulkan::Vulkan)
   target_include_directories(recon_example_viewer_pass_test
                              PRIVATE ${_viewer_common_inc})
@@ -169,9 +182,9 @@ endif()
 
 # fuse_viewer: the live window -- fuses on a background thread, draws the
 # growing reconstruction each frame following the capture trajectory, and shows
-# the Dear ImGui performance + reconstruction panels (gfx's ui tier). gfx_glfw
-# PUBLIC-links gfx_app, gfx_ui (and through it gfx_camera) and GLFW, so those
-# are not named again.
+# the Dear ImGui performance, reconstruction and View panels (gfx's ui tier).
+# gfx_glfw PUBLIC-links gfx_app, gfx_ui (and through it gfx_camera) and GLFW, so
+# those are not named again.
 add_executable(fuse_viewer fuse_viewer.cpp)
 target_link_libraries(
   fuse_viewer PRIVATE ${_viewer_recon_libs} volumetric_kit::gfx_glfw

@@ -349,6 +349,8 @@ int run(GLFWwindow* window, const Options& opt) {
   app.set_profiler(&profiler);
   const fuse_viewer::ProfilerDetach profiler_guard{app};
 
+  fuse_viewer::MeshView mesh_view;  // the View panel's wireframe and cull
+
   // --- gfx ui: the Dear ImGui performance overlay ----------------------------
   // Optional: window.overlay=false skips both the context and the platform
   // backend, so the disabled path costs nothing and stays a clean A/B. The
@@ -879,7 +881,7 @@ int run(GLFWwindow* window, const Options& opt) {
     if (overlay) {
       imgui_glfw->new_frame();
       overlay->new_frame();
-      // Stack the two panels instead of letting ImGui default both to the same
+      // Stack the panels instead of letting ImGui default them to the same
       // spot (which hides one under the other on a fresh layout), and give each
       // room for its full contents -- the stage table and the memory rows are
       // clipped away at ImGui's default size. FirstUseEver, so a drag or resize
@@ -896,6 +898,11 @@ int run(GLFWwindow* window, const Options& opt) {
       ImGui::SetNextWindowPos(ImVec2(16.0f, 408.0f), ImGuiCond_FirstUseEver);
       ImGui::SetNextWindowSize(ImVec2(400.0f, 250.0f), ImGuiCond_FirstUseEver);
       fuse_viewer::draw_reconstruction_panel(recon_panel);
+      ImGui::SetNextWindowPos(ImVec2(432.0f, 16.0f), ImGuiCond_FirstUseEver);
+      if (ImGui::Begin("View")) {
+        fuse_viewer::draw_mesh_view(mesh_view);
+      }
+      ImGui::End();
     }
 
     fuse_viewer::record_view_pass(
@@ -937,9 +944,10 @@ int run(GLFWwindow* window, const Options& opt) {
           hybrid_frame.view_proj = view_proj;
           hybrid_frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
           hybrid_frame.flags =
-              (opt.render.shading == vgrid_example::config::Shading::Lit)
-                  ? vgp::kHybridMeshLit
-                  : 0u;
+              ((opt.render.shading == vgrid_example::config::Shading::Lit)
+                   ? vgp::kHybridMeshLit
+                   : 0u) |
+              fuse_viewer::mesh_view_flags(mesh_view);
           hybrid_frame.atlas = atlas.use(render_frame.number);
           hybrid_frame.draws = &draw;
           hybrid_frame.draw_count = 1;

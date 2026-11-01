@@ -50,13 +50,17 @@ namespace vol = volumetric_kit::grid::volume;
 /// @param validation  Whether to enable the validation layer
 ///                    (`window.validation`). `WindowedApp::adopt` ignores the
 ///                    app's own setting, so this is the only one.
-/// @return @p app's name and device requirements, and @p validation.
+/// @return @p app's name and device requirements, with `fillModeNonSolid`
+///         for the View panel's wireframe, and @p validation. A GPU without
+///         line fill is refused: every Mac and NVIDIA box has it, and the
+///         core has no optional features.
 inline vg::app::WindowDeviceConfig viewer_device_config(
     const vg::app::WindowedAppConfig& app, bool validation) {
   vg::app::WindowDeviceConfig config;
   config.instance.app_name = app.app_name;
   config.instance.enable_validation = validation;
   config.graphics = app.device;
+  config.graphics.features.fillModeNonSolid = VK_TRUE;
   return config;
 }
 

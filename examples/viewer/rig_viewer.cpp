@@ -91,6 +91,7 @@
 #include "set_log.hpp"
 #include "viewer_atlas.hpp"
 #include "viewer_common.hpp"
+#include "viewer_panels.hpp"  // draw_mesh_view
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
@@ -579,6 +580,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // Looking out of camera i, set by the View panel, until a drag orbits away.
   std::optional<std::size_t> from_camera;
   Shading shading = opt.render.shading;
+  fuse_viewer::MeshView mesh_view;  // the View panel's wireframe and cull
   std::atomic<bool> texture_on{opt.render.texture};
   // The fusion and texturing knobs the View panel tunes while the rig runs,
   // read by the fuse thread at each set and each remesh.
@@ -1159,6 +1161,7 @@ int run(GLFWwindow* window, const Options& opt) {
         ImGui::RadioButton("normals", &mode,
                            static_cast<int>(Shading::Normals));
         shading = static_cast<Shading>(mode);
+        fuse_viewer::draw_mesh_view(mesh_view);
         bool texture = texture_on.load();
         if (ImGui::Checkbox("texture from the cameras (next remesh)",
                             &texture)) {
@@ -1221,7 +1224,8 @@ int run(GLFWwindow* window, const Options& opt) {
           hybrid_frame.extent = extent;
           hybrid_frame.view_proj = view_proj;
           hybrid_frame.light_dir = -view.up + 0.5f * view.right - view.forward;
-          hybrid_frame.flags = shading_flags(shading);
+          hybrid_frame.flags =
+              shading_flags(shading) | fuse_viewer::mesh_view_flags(mesh_view);
           hybrid_frame.atlas = atlas.use(render_frame.number);
           hybrid_frame.draws = &draw;
           hybrid_frame.draw_count = 1;
