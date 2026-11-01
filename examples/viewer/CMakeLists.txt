@@ -60,7 +60,7 @@ FetchContent_Declare(
   # kHybridMeshWireframe the View options draw with. A compile floor.
   #
   # It refuses a core older than 0.20.0 (gfx's VG_VKC_MIN_VERSION).
-  GIT_TAG ca0565078dec899fe4a73afe312cc7fab2a0d742 # gfx #172's head
+  GIT_TAG 77fefdc06a6ff5494bced3fd793fdf37b8b94c6e # gfx main, #172's merge
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
