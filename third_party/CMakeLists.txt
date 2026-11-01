@@ -26,17 +26,17 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.39.0 (ba9ec5b, core #83's head, whose FuseDecklink profile
+# The pin is core 0.39.0 (6cfef9d, core #83's merge, whose FuseDecklink profile
 # fuse_decklink loads, on #82's 0.38.0, whose imported host pages the DeckLink
 # driver captures into), as are the Homebrew key action in
 # .github/workflows/_build.yml and the workflow-trigger check in
 # .github/workflows/lint.yml; the vkc_require_core checks below say which core
 # each part needs. The tests are main()s of their own on the core's test
-# support. TODO: re-pin to #83's merge once it lands.
+# support.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG ba9ec5bd7db8d344c8fb872cdf9d684acd33ab54)
+  GIT_TAG 6cfef9de354a8eca2e9f79e630af38884528827f)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)

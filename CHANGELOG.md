@@ -83,7 +83,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- build: **recon pins core 0.39.0** (core #83's head, `ba9ec5b`, on #82's
+- build: **recon pins core 0.39.0** (core #83's merge, `6cfef9d`, on #82's
   0.38.0) and **sensor 0.19.0** (sensor #23's merge, `1d68b11`: the DeckLink
   driver, on 0.16.0's V210 pictures, 0.17.0's stereo frames and 0.18.0's
   FFS near gate), CI takes their actions at the new pins, and both floors
