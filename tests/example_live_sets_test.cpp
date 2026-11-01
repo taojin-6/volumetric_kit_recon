@@ -159,14 +159,14 @@ int decklink() {
   depth.color = pair.left;
   depth.depth = rectified;
 
-  // The depth noise every frame carries: c = 0.08 / (384 * 0.5), quadratic
+  // The depth noise every frame carries: c = 0.07 / (384 * 0.5), quadratic
   // alone, so Dynamic fusion has a model.
   CHECK(vr_example::stereo_baseline(pair) > 0.5 - 1e-12 &&
         vr_example::stereo_baseline(pair) < 0.5 + 1e-12);
   const sensor::DepthNoise noise =
       vr_example::decklink_depth_noise(pair, rectified);
   CHECK(noise.known() && noise.a == 0.0f && noise.b == 0.0f);
-  CHECK(std::fabs(noise.c - 0.08f / (384.0f * 0.5f)) < 1e-9f);
+  CHECK(std::fabs(noise.c - 0.07f / (384.0f * 0.5f)) < 1e-9f);
 
   const std::string report =
       vr_example::decklink_camera_report(scenario.value(), pair, depth);
@@ -178,9 +178,8 @@ int decklink() {
       "  depth 960x544 pinhole @ fx=384.0 fy=384.0 cx=479.5 cy=271.5, FFS in "
       "the rectified left camera\n"
       "  baseline 500.0 mm, left and right at most 16.666 ms apart\n"
-      "  depth kept 0.80-4.50 m; FFS's near limit 1.00 m, not yet gated\n"
-      "  depth noise 1.7 mm at 2 m, 6.7 mm at 4 m (disparity 0.08 px, "
-      "provisional)\n";
+      "  depth kept 0.80-4.50 m; FFS's near limit 1.00 m, gated\n"
+      "  depth noise 1.5 mm at 2 m, 5.8 mm at 4 m (disparity 0.07 px)\n";
   if (report != expected) {
     std::fprintf(stderr, "decklink report:\n%s", report.c_str());
   }

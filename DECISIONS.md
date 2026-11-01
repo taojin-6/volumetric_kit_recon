@@ -1039,11 +1039,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   of its returns, most on rims). A removed return still reaches fusion as
   no return, which carves a thin, passing ring into the background around a
   moving person; handing it on as unknown is the follow-up.
-- [**2026-11-01**](#2026-11-01--fuse_decklink-is-a-program-of-its-own-on-the-live-run-built-on-every-build-its-ffs-views-are-rgb-and-its-disparity-noise-provisional) —
+- [**2026-11-01**](#2026-11-01--fuse_decklink-is-a-program-of-its-own-on-the-live-run-built-on-every-build-its-ffs-views-are-rgb-it-passes-ffss-near-gate-and-its-disparity-noise-is-measured) —
   `fuse_decklink`: a DeckLink card's two SDI cameras as one stereo camera,
   FFS depth on R'G'B' views, on the live run; built on every build, refusing
-  the scenario without sensor's DeckLink driver or FFS; a provisional
-  0.08 px disparity noise.
+  the scenario without sensor's DeckLink driver or FFS; FFS's near gate
+  passed (both openers); a measured 0.07 px disparity noise.
 
 ## Decision record
 
@@ -6012,7 +6012,7 @@ states, none by default.
 - Not run: the cameras. The Femto rig and the D455 under Dynamic (chip and
   FFS depth) are the owner's hand checks.
 
-### 2026-11-01 — fuse_decklink is a program of its own on the live run, built on every build; its FFS views are R'G'B' and its disparity noise provisional.
+### 2026-11-01 — fuse_decklink is a program of its own on the live run, built on every build; its FFS views are R'G'B', it passes FFS's near gate, and its disparity noise is measured.
 
 **Context.** sensor 0.19.0 brought `DecklinkStereo`: two SDI inputs of a
 DeckLink card as one `IStereoSensor`, its 10-bit pictures in device buffers,
@@ -6034,15 +6034,20 @@ DeckLink SDK's headers yet.
   reproduced fed it; the D455's infrared cameras stay luma. FFS depth's
   options are one function for both openers (`ffs_depth.hpp`); each
   camera's choices are a function of its own, so a test holds them.
-- The disparity noise is 0.08 px, provisional: the D455's worst measured
-  bin rounded up, until it is measured on these cameras (a `TODO:`). The
+- The disparity noise is 0.07 px: each pixel's disparity spread over 300
+  frames of the still lab, median 0.068 px, rounded up (the lab's pair on
+  its provisional calibration). It is heavy-tailed: depth edges and thin
+  things spread 0.2-0.5 px, so the one number fits walls and floors. The
   opener also returns the noise its frames state (`DecklinkArray`), for a
   consumer that needs it before any frame.
-- FFS's near gate (sensor's `FfsStereo::Options::max_disparity`) is not on
-  this sensor pin: the opener prints the near limit, `f B / 192`, as "not
-  yet gated" beside the depth range FFS keeps, and passes no gate yet (a
-  `TODO:` in `ffs_depth.hpp`). Until then a nearer surface comes back at
-  about that limit and is fused there.
+- Both openers pass FFS's near gate (sensor 0.18.0's
+  `FfsStereo::Options::max_disparity`, 192 for the exported checkpoint,
+  set in `ffs_depth.hpp`). A surface nearer than `f B / 192` comes back
+  saturated at about that limit, so FFS drops depth below 1.05 times it
+  rather than letting it be fused there. The opener prints the limit
+  beside the depth range FFS keeps. On the lab's pair (fx 370.9, 0.40 m)
+  the gate is 0.81 m; a D455's is at about `fuse_realsense`'s own 0.25 m
+  floor.
 
 **Evidence.** On the lab RTX 5090 (Release, warnings as errors, DeckLink
 SDK 16.0, RealSense, FFmpeg, CUDA and FFS on, under the validation layer):

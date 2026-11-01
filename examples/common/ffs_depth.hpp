@@ -28,10 +28,11 @@ namespace config = volumetric_kit::core::config;
 namespace sensor = volumetric_kit::sensor;
 
 /// @return FFS depth's options: the pair rectified to the scenario's depth
-///         size at alpha 0 as @p views, the model, its plan cache and the
-///         depth gate (`fusion.min_depth_m`, `max_depth_m`), and the
-///         camera's disparity noise, from which every frame states its depth
-///         noise.
+///         size at alpha 0 as @p views, the model, its plan cache, the depth
+///         gate (`fusion.min_depth_m`, `max_depth_m`) and the near gate at
+///         @ref kFfsMaxDisparity (FFS drops depth nearer than 1.05 `f B /`
+///         192), and the camera's disparity noise, from which every frame
+///         states its depth noise.
 /// @param opt              The scenario.
 /// @param disparity_sigma  The camera's disparity noise under FFS, in pixels
 ///                         at the depth size.
@@ -50,10 +51,7 @@ inline sensor::StereoDepthSensor::Options ffs_depth_options(
   o.ffs.min_depth = opt.fusion.min_depth_m;
   o.ffs.max_depth = opt.fusion.max_depth_m;
   o.ffs.disparity_sigma = disparity_sigma;
-  // TODO: o.ffs.max_disparity = kFfsMaxDisparity once the sensor pin has
-  // FfsStereo::Options::max_disparity, the near gate (sensor's
-  // feat/ffs-4k-prefilter-near-gate), and the DeckLink report's "not yet
-  // gated" goes; until then nearer surfaces' saturated depth is fused.
+  o.ffs.max_disparity = kFfsMaxDisparity;
   return o;
 }
 #endif

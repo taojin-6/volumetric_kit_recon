@@ -339,9 +339,9 @@ int main() {
         lit_pair.infrared_height == pair_driver.infrared_height);
 #ifdef VR_EXAMPLE_FFS
   // With sensor_ffs: FFS is opened, the pair rectified to the depth size as
-  // luma at alpha 0, the model, its plans and the depth gate passed on, and
-  // the pair's measured disparity noise stated, so its frames state their
-  // depth noise (sensor's FfsStereo defaults it to unknown).
+  // luma at alpha 0, the model, its plans, the depth gate and the near gate
+  // passed on, and the pair's measured disparity noise stated, so its frames
+  // state their depth noise (sensor's FfsStereo defaults it to unknown).
   CHECK(vr_example::check_realsense_depth(ffs.value()).ok());
   const sensor::StereoDepthSensor::Options depth =
       vr_example::realsense_ffs_options(ffs.value());
@@ -351,6 +351,8 @@ int main() {
   CHECK(depth.ffs.model.string() == ffs->source.ffs_model);
   CHECK(depth.ffs.plan_cache.string() == ffs->source.ffs_plan_cache);
   CHECK(depth.ffs.min_depth == 0.25F && depth.ffs.max_depth == 5.F);
+  CHECK(sensor::FfsStereo::Options{}.max_disparity == 0.0f);
+  CHECK(depth.ffs.max_disparity == 192.0f);
   CHECK(sensor::FfsStereo::Options{}.disparity_sigma == 0.0f);
   CHECK(depth.ffs.disparity_sigma == 0.04f);
   const sensor::StereoDepthSensor::Options lit_depth =
@@ -462,9 +464,9 @@ int main() {
 #endif
 #ifdef VR_EXAMPLE_FFS
   // FFS depth on the DeckLink cameras: R'G'B' views at the depth size and
-  // alpha 0, the model, its plans and the depth gate passed on, and the
-  // cameras' disparity noise stated, so every frame states its depth noise
-  // (Dynamic refuses a frame without one).
+  // alpha 0, the model, its plans, the depth gate and the near gate passed
+  // on, and the cameras' disparity noise stated, so every frame states its
+  // depth noise (Dynamic refuses a frame without one).
   const sensor::StereoDepthSensor::Options decklink_depth =
       vr_example::decklink_ffs_options(decklink.value());
   CHECK(decklink_depth.rectify.output ==
@@ -477,7 +479,8 @@ int main() {
         decklink->source.ffs_plan_cache);
   CHECK(decklink_depth.ffs.min_depth == 0.5F &&
         decklink_depth.ffs.max_depth == 5.F);
-  CHECK(decklink_depth.ffs.disparity_sigma == 0.08f);
+  CHECK(decklink_depth.ffs.max_disparity == 192.0f);
+  CHECK(decklink_depth.ffs.disparity_sigma == 0.07f);
   const sensor::StereoDepthSensor::Options listed_depth =
       vr_example::decklink_ffs_options(listed.value());
   CHECK(listed_depth.rectify.size.width == 1280 &&

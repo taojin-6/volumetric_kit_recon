@@ -13,11 +13,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its colour the left camera's 10-bit picture (core's `FuseDecklink`; README,
   "Optional: a DeckLink stereo camera"). The opener
   (`examples/common/decklink_camera.hpp`) prints the baseline, FFS's near
-  limit (not yet gated) and the depth noise, from a provisional disparity
-  noise of 0.08 px. Template: `config/examples/fuse_decklink.json`, the
+  limit and the depth noise, from a disparity noise of 0.07 px measured on
+  the lab's pair. Template: `config/examples/fuse_decklink.json`, the
   calibration file under `rigs/` beside it (ignored, as `models/` is). FFS
   depth's options move into `examples/common/ffs_depth.hpp`, shared with
-  `fuse_realsense`.
+  `fuse_realsense`, and pass sensor 0.18.0's near gate
+  (`max_disparity` 192): depth nearer than about 1.05 `f B / 192` is
+  dropped, not fused at that limit (0.81 m on the lab's DeckLink pair, about
+  `fuse_realsense`'s own 0.25 m floor on a D455).
 
 - **The live run records a mic beside the cameras** (`source.audio`;
   [config/README.md](config/README.md), README "Optional: a microphone"):
@@ -81,9 +84,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - build: **recon pins core 0.39.0** (core #83's head, `ba9ec5b`, on #82's
-  0.38.0) and **sensor 0.19.0** (the DeckLink driver's head, `acf9dbb`, on
-  0.16.0's V210 pictures and 0.17.0's stereo frames), CI takes their actions
-  at the new pins, and both floors rise to them for `fuse_decklink`. With
+  0.38.0) and **sensor 0.19.0** (sensor #23's merge, `1d68b11`: the DeckLink
+  driver, on 0.16.0's V210 pictures, 0.17.0's stereo frames and 0.18.0's
+  FFS near gate), CI takes their actions at the new pins, and both floors
+  rise to them for `fuse_decklink`. With
   core 0.37.0's `FuseRealsense`, `fuse_realsense` codes, serves and records
   audio as `fuse_orbbec` does, on the same run. Sensor 0.17.0's breaking
   change, the rectifier letting a frame's right picture go once read,

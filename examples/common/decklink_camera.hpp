@@ -52,11 +52,10 @@ namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 
 /// The Blackmagic cameras' disparity noise under FFS, in pixels at
-/// 960 x 544. Provisional: the D455's worst measured depth bin (0.076 px,
-/// 0.33-1 m, `kD455FfsDisparitySigma`'s study), rounded up.
-// TODO: measure it on this stereo camera (a still room, each pixel's
-// disparity spread over 300 frames) and state the value here.
-inline constexpr float kBlackmagicFfsDisparitySigma = 0.08f;
+/// 960 x 544: each pixel's disparity spread over 300 frames of a still room,
+/// median 0.068 px (the lab's pair, 2026-11-01), rounded up. It fits walls
+/// and floors; depth edges and thin things spread 0.2-0.5 px.
+inline constexpr float kBlackmagicFfsDisparitySigma = 0.07f;
 
 /// @return OK where this build can open fuse_decklink's camera: sensor's
 ///         DeckLink driver and its FFS depth both built;
@@ -130,7 +129,7 @@ inline sensor::DepthNoise decklink_depth_noise(
 ///         rectified left one); the baseline and how far apart left and
 ///         right may be; the depth FFS keeps (`fusion.min_depth_m` to
 ///         `max_depth_m`) and its near limit (`f B /`
-///         @ref kFfsMaxDisparity), not yet gated; and the depth noise
+///         @ref kFfsMaxDisparity), which FFS gates; and the depth noise
 ///         (@ref decklink_depth_noise) at 2 m and 4 m.
 /// @param opt    The scenario.
 /// @param pair   The stereo camera's calibration.
@@ -150,9 +149,8 @@ inline std::string decklink_camera_report(const config::Config& opt,
   std::snprintf(
       numbers, sizeof numbers,
       "  baseline %.1f mm, left and right at most %.3f ms apart\n"
-      "  depth kept %.2f-%.2f m; FFS's near limit %.2f m, not yet gated\n"
-      "  depth noise %.1f mm at 2 m, %.1f mm at 4 m (disparity %.2f px, "
-      "provisional)\n",
+      "  depth kept %.2f-%.2f m; FFS's near limit %.2f m, gated\n"
+      "  depth noise %.1f mm at 2 m, %.1f mm at 4 m (disparity %.2f px)\n",
       baseline * 1e3, opt.source.max_pair_skew_us * 1e-3,
       double{opt.fusion.min_depth_m}, double{opt.fusion.max_depth_m},
       rectified.intrinsics.fx * baseline / double{kFfsMaxDisparity},
