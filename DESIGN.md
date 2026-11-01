@@ -973,13 +973,14 @@ to the grid (a grow, a declined one, blocks left out), into the grid
 `volume::block_grid_params`' layout too.
 `fuse_set`'s caller names the integration mode, the one `fusion.dynamic`
 selects (`integration_mode`): `Classic` unless set, except in
-`fuse_orbbec`, `fuse_realsense` and `rig_viewer`, whose default is
-`Dynamic`; `rig_viewer`'s View panel switches it as the rig runs. The four
-dataset examples poll their frames through `sensor::IRgbdSensor&` — the
+`fuse_orbbec`, `fuse_realsense`, `fuse_decklink` and `rig_viewer`, whose
+default is `Dynamic`; `rig_viewer`'s View panel switches it as the rig
+runs. The four dataset examples poll their frames through `sensor::IRgbdSensor&` — the
 fuse loop never learns what is behind it — and prepare each on its own.
-The three live ones read their cameras raw as a `SensorArray`,
+The four live ones read their cameras raw as a `SensorArray`,
 `fuse_orbbec` one Orbbec camera or a rig, `fuse_realsense` one
-`RealSenseSensor` or `StereoDepthSensor` and `rig_viewer` an Orbbec rig,
+`RealSenseSensor` or `StereoDepthSensor`, `fuse_decklink` one
+`StereoDepthSensor` and `rig_viewer` an Orbbec rig,
 and prepare each set in one batch (`SensorArray::process`). The prep crops
 each frame with colour to what both its cameras see, by their fields of
 view (sensor's 2026-10-29 same-view entry): depth outside the colour
@@ -1035,9 +1036,10 @@ the live array's report (its counters, each camera's line through a
 counters function, a rig's skew) and clock in `live_sets.hpp`, the Orbbec
 camera lines and counters (`lost` among them) in `fuse_orbbec_sets.hpp`, and
 the RealSense camera's line, its depth and its scenario's options in
-`realsense_camera.hpp`.
-The per-set table of `fuse_orbbec`, `fuse_realsense`, `codec_replica` and
-`rig_viewer` is `set_log.hpp`'s.
+`realsense_camera.hpp`, the DeckLink camera's in `decklink_camera.hpp`, and
+FFS depth's options, which both stereo openers take, in `ffs_depth.hpp`.
+The per-set table of `fuse_orbbec`, `fuse_realsense`, `fuse_decklink`,
+`codec_replica` and `rig_viewer` is `set_log.hpp`'s.
 A `main.cpp` is the example's story: options, setup, the loop, the report.
 
 `fuse_replica` runs the spine on a posed Replica-SLAM RGB-D sequence and
@@ -1090,7 +1092,7 @@ track names that time's clock (`live_session`): the host's system clock
 (`stream::kHostClock`) when every camera stamps on it, as a rig's always
 do, else clock domain 1, the cameras' own. Each program says which before
 its cameras open (`fuse_orbbec`'s `orbbec_on_host_clock`; `fuse_realsense`'s
-always the host's), and the run checks the opened cameras against it
+and `fuse_decklink`'s always the host's), and the run checks the opened cameras against it
 (`on_host_clock`).
 With `source.audio`, which the core allows only with a stream and every
 camera on the host's clock, the run records a mic beside the cameras
@@ -1120,7 +1122,7 @@ stream is finished, its viewers closed, the cameras released and the PLY
 written. A second signal of the same kind ends the process.
 That run is `examples/common/live_fusion.hpp`'s `run_live_fusion`, which
 takes the program's camera opener, its cameras' clock and its counters, so
-it is the one loop of both live programs that fuse to a PLY.
+it is the one loop of the three live programs that fuse to a PLY.
 **`fuse_realsense`** (`VS_WITH_REALSENSE`) is that run on one RealSense
 D400 camera (core's `FuseRealsense` profile), its depth the scenario's
 `source.depth`, chosen in the opener (`open_realsense_array`) alone, so the
@@ -1131,14 +1133,30 @@ loop is the same for both:
   example): a `StereoDepthSensor` over a `RealSenseStereo`, the camera's
   infrared cameras with the projector off (`realsense_stereo_options`),
   rectified to the depth size as luma at alpha 0 and matched by FFS
-  (`ffs_depth_options`) on the sensor's own thread; its depth stays on the
+  (`realsense_ffs_options`) on the sensor's own thread; its depth stays on the
   device, where the prep reads it in place. A build without `sensor_ffs`
   refuses the scenario before any GPU or camera opens
   (`check_realsense_depth`).
 Either is read as a `SensorArray` of one, at the origin; its YUYV colour is
 staged and converted on the GPU by the array's prep, and its counters are
-the interface's. The profile takes no Orbbec rig keys, codec, outputs beyond
-the PLY, stream operation or diagnostics.
+the interface's. The profile takes no Orbbec rig keys, stream operation or
+diagnostics; it codes and serves as `fuse_orbbec` does (core 0.37.0).
+**`fuse_decklink`** (core's `FuseDecklink` profile) is that run on two SDI
+cameras of a DeckLink card as one stereo camera, its depth always FFS's.
+The opener (`open_decklink_array`) reads the calibration file, takes
+`source.pairs[0]`'s two cameras from it (sensor's `stereo_calibration`),
+opens them on their connectors as a `DecklinkStereo` on the run's device
+(`decklink_options`: the mode and the most left and right may lie apart),
+and puts a `StereoDepthSensor` over it, its views R'G'B' at alpha 0 and FFS
+stating the cameras' disparity noise (`decklink_ffs_options`). The depth is
+the rectified left camera's, the colour the left camera's own 10-bit
+picture, its lens and size, and `depth_to_color` the rectification's
+rotation: the frame contract every camera of different colour and depth
+sizes uses, so the prep needs nothing new. The array of one is posed by the
+file, by the left camera's id. It opens only with sensor's `sensor_decklink`
+and `sensor_ffs` (`VR_EXAMPLE_DECKLINK`, `VR_EXAMPLE_FFS`); any other build
+refuses the scenario before any GPU or camera opens
+(`check_decklink_build`).
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VS_WITH_ORBBEC`, and
 `VS_WITH_FFMPEG` off Apple; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file, opened as

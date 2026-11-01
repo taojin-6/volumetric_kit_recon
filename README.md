@@ -240,6 +240,32 @@ its own, only in "wait: cameras" and arrival→published, and the per-set
 counters also count the rectifier's submit and wait on the sensor's thread
 (DECISIONS.md, 2026-10-29).
 
+### Optional: a DeckLink stereo camera (NVIDIA)
+
+`fuse_decklink` fuses two SDI cameras on a Blackmagic DeckLink card as one
+stereo camera: sensor's `DecklinkStereo` brings both cameras' 10-bit
+pictures to the GPU with no CPU copy, FFS turns each frame into depth in the
+left camera, and the left camera's own picture is the colour. It needs
+sensor's DeckLink driver (`VS_WITH_DECKLINK`, the DeckLink SDK's headers at
+`DeckLinkSDK_ROOT`, its Linux directory, and Desktop Video to run) and FFS
+depth, above, on Linux x86-64 with an NVIDIA GPU
+([the package's README](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/README.md#building)).
+Every build has the program; one without either part refuses the scenario
+before anything opens.
+
+```sh
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
+    -DVS_WITH_DECKLINK=ON -DDeckLinkSDK_ROOT=<sdk>/Linux \
+    -DVS_WITH_CUDA=ON -DVS_WITH_FFS=ON
+build/examples/fuse_decklink/fuse_decklink \
+    --config config/examples/fuse_decklink.json
+```
+
+The cameras must send 2160p at `source.fps` (30 by default): set it on the
+camera or over USB. They free-run, so a still scene gives good depth and
+motion does not, until they are genlocked. The scenario's keys and the
+calibration file it reads: [config/README.md](config/README.md).
+
 ### Optional: a microphone
 
 With `source.audio` ([config/README.md](config/README.md)), `fuse_orbbec`

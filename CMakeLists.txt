@@ -26,12 +26,14 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # a consumer fetches it by commit (DECISIONS.md, 2026-10-22).
 #
 # The camera and sensor options are volumetric_kit_sensor's (VS_WITH_ORBBEC,
-# VS_WITH_REALSENSE, VS_WITH_FFMPEG, VS_WITH_CUDA, VS_WITH_FFS,
-# VS_WITH_PORTAUDIO); a -D on recon's configure reaches it as a cache variable,
-# and a driver it builds builds its live example (examples/CMakeLists.txt), as
-# its stereo depth (sensor_ffs) gives fuse_realsense FFS depth and its
-# microphone (sensor_microphone) the live examples source.audio. Its camera-only
-# build is the package's alone: recon needs its frame contract.
+# VS_WITH_REALSENSE, VS_WITH_DECKLINK, VS_WITH_FFMPEG, VS_WITH_CUDA,
+# VS_WITH_FFS, VS_WITH_PORTAUDIO); a -D on recon's configure reaches it as a
+# cache variable, and a driver it builds builds its live example
+# (examples/CMakeLists.txt), as its stereo depth (sensor_ffs) gives
+# fuse_realsense FFS depth and its microphone (sensor_microphone) the live
+# examples source.audio; fuse_decklink is built always and runs only with the
+# DeckLink driver and FFS both. Its camera-only build is the package's alone:
+# recon needs its frame contract.
 if(PROJECT_IS_TOP_LEVEL)
   set(_vr_examples_default ON)
 else()
@@ -73,24 +75,28 @@ find_package(Vulkan REQUIRED)
 # Pinned dependencies: volumetric_kit_core, volumetric_kit_sensor and
 # volumetric_kit_grid, linked PUBLIC. The oldest core recon's libraries build
 # with is checked in the core that arrives (third_party/, which also checks the
-# config tier the examples and tests need): 0.34.0, whose source.audio names the
-# input the live examples record; 0.33.0 brought FuseRealsense's source.depth,
-# 0.31.0 the FuseRealsense profile, 0.30.0 the output.max_viewers fuse_orbbec
-# serves by, 0.29.0 the vulkan/fwd.hpp the public headers include, and 0.28.0
-# the test support the tests run on. The oldest sensor is 0.13.0, whose frame
-# prep drops depth outliers by default; 0.12.0 brought the filter, 0.11.0 the
-# IAudioSensor the live examples record through, 0.10.0 the frames' depth noise
-# (DeviceFrame::depth_noise), which Dynamic's change test reads, and 0.9.0 the
-# frame prep's crop of a frame with colour to what both its cameras see. The
-# live examples rely on the crop and the filter with no option of their own
-# (fuse_realsense builds only with sensor_realsense, and even without FFS with
-# its RealSenseStereo, which 0.7.0 brought; it runs FFS only with sensor_ffs,
-# which 0.8.0 brought); the oldest grid is VR_GRID_MIN_VERSION: 0.6.0, whose
-# StreamServer serves the live examples' Audio track with the frames; 0.5.0
-# brought CodecStream writing it (TrackKind::Audio, 0.4.0) muxed by pts, and
-# 0.3.0 codec_outputs passing output.max_viewers to the server.
-set(VR_CORE_MIN_VERSION 0.34.0)
-set(VR_SENSOR_MIN_VERSION 0.13.0)
+# config tier the examples and tests need): 0.39.0, whose FuseDecklink profile
+# fuse_decklink loads; 0.34.0 brought the source.audio that names the input the
+# live examples record, 0.33.0 FuseRealsense's source.depth, 0.31.0 the
+# FuseRealsense profile, 0.30.0 the output.max_viewers fuse_orbbec serves by,
+# 0.29.0 the vulkan/fwd.hpp the public headers include, and 0.28.0 the test
+# support the tests run on. The oldest sensor is 0.19.0, whose DecklinkStereo
+# fuse_decklink opens (0.17.0 brought the stereo_calibration it pairs the
+# calibration file's two cameras with, and 0.16.0 the V210 pictures they
+# capture); 0.13.0's frame prep drops depth outliers by default, 0.12.0 brought
+# the filter, 0.11.0 the IAudioSensor the live examples record through, 0.10.0
+# the frames' depth noise (DeviceFrame::depth_noise), which Dynamic's change
+# test reads, and 0.9.0 the frame prep's crop of a frame with colour to what
+# both its cameras see. The live examples rely on the crop and the filter with
+# no option of their own (fuse_realsense builds only with sensor_realsense, and
+# even without FFS with its RealSenseStereo, which 0.7.0 brought; it runs FFS
+# only with sensor_ffs, which 0.8.0 brought); the oldest grid is
+# VR_GRID_MIN_VERSION: 0.6.0, whose StreamServer serves the live examples' Audio
+# track with the frames; 0.5.0 brought CodecStream writing it (TrackKind::Audio,
+# 0.4.0) muxed by pts, and 0.3.0 codec_outputs passing output.max_viewers to the
+# server.
+set(VR_CORE_MIN_VERSION 0.39.0)
+set(VR_SENSOR_MIN_VERSION 0.19.0)
 set(VR_GRID_MIN_VERSION 0.6.0)
 add_subdirectory(third_party)
 

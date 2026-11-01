@@ -216,19 +216,29 @@ if(TARGET volumetric_kit::sensor_orbbec)
 endif()
 if(TARGET volumetric_kit::sensor_realsense)
   # realsense_camera.hpp opens the camera as an array.
-  target_link_libraries(
-    recon_example_fuse_config_test PRIVATE volumetric_kit::sensor_realsense
-                                           volumetric_kit::sensor_array)
+  target_link_libraries(recon_example_fuse_config_test
+                        PRIVATE volumetric_kit::sensor_realsense)
   target_compile_definitions(recon_example_fuse_config_test
                              PRIVATE VR_TEST_REALSENSE_CONFIG=1)
-  # And, where sensor builds FFS, its depth's options (VR_EXAMPLE_FFS, as
-  # fuse_realsense is built).
-  if(TARGET volumetric_kit::sensor_ffs)
-    target_link_libraries(recon_example_fuse_config_test
-                          PRIVATE volumetric_kit::sensor_ffs)
-    target_compile_definitions(recon_example_fuse_config_test
-                               PRIVATE VR_EXAMPLE_FFS=1)
-  endif()
+endif()
+# decklink_camera.hpp, on every build, as fuse_decklink is built: the stereo
+# camera from its calibration file, opened as an array; where sensor builds
+# them, the DeckLink driver's options (VR_EXAMPLE_DECKLINK) and FFS depth's, the
+# RealSense camera's too (VR_EXAMPLE_FFS).
+target_link_libraries(
+  recon_example_fuse_config_test PRIVATE volumetric_kit::sensor_stereo
+                                         volumetric_kit::sensor_array)
+if(TARGET volumetric_kit::sensor_decklink)
+  target_link_libraries(recon_example_fuse_config_test
+                        PRIVATE volumetric_kit::sensor_decklink)
+  target_compile_definitions(recon_example_fuse_config_test
+                             PRIVATE VR_EXAMPLE_DECKLINK=1)
+endif()
+if(TARGET volumetric_kit::sensor_ffs)
+  target_link_libraries(recon_example_fuse_config_test
+                        PRIVATE volumetric_kit::sensor_ffs)
+  target_compile_definitions(recon_example_fuse_config_test
+                             PRIVATE VR_EXAMPLE_FFS=1)
 endif()
 # fuse_sender.hpp reports through codec_report.hpp, which compares with eval's,
 # fuses with the frame prep's frames, and codec_config.hpp maps a mesh source
@@ -262,19 +272,21 @@ if(TARGET volumetric_kit::sensor_orbbec)
            COMMAND recon_example_fuse_orbbec_sets_test)
 endif()
 
-# The live examples' array report (examples/common/live_sets.hpp), and, where
-# the RealSense driver is built, fuse_realsense's camera report
-# (examples/common/realsense_camera.hpp). Host only: fake sensors.
+# The live examples' array report (examples/common/live_sets.hpp),
+# fuse_decklink's camera report and depth noise
+# (examples/common/decklink_camera.hpp), and, where the RealSense driver is
+# built, fuse_realsense's camera report (examples/common/realsense_camera.hpp).
+# Host only: fake sensors.
 add_executable(recon_example_live_sets_test example_live_sets_test.cpp)
 target_include_directories(recon_example_live_sets_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
-target_link_libraries(recon_example_live_sets_test
-                      PRIVATE volumetric_kit::sensor_array)
+target_link_libraries(
+  recon_example_live_sets_test
+  PRIVATE grid_example_common volumetric_kit::core_config
+          volumetric_kit::sensor_array volumetric_kit::sensor_stereo)
 if(TARGET volumetric_kit::sensor_realsense)
-  target_link_libraries(
-    recon_example_live_sets_test
-    PRIVATE grid_example_common volumetric_kit::core_config
-            volumetric_kit::sensor_realsense)
+  target_link_libraries(recon_example_live_sets_test
+                        PRIVATE volumetric_kit::sensor_realsense)
   target_compile_definitions(recon_example_live_sets_test
                              PRIVATE VR_TEST_REALSENSE_CAMERA=1)
 endif()

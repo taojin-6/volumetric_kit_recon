@@ -26,6 +26,7 @@ mesh-source notes are grid's ([its config/README.md](https://github.com/taojin-6
 | `fuse_orbbec` | [dump_orbbec.json](examples/dump_orbbec.json) | Live stream with readback, first sets' JPEGs and luma written |
 | `fuse_realsense` | [fuse_realsense.json](examples/fuse_realsense.json) | Live RealSense camera, its own depth, to PLY |
 | `fuse_realsense` | [fuse_realsense_ffs.json](examples/fuse_realsense_ffs.json) | Live RealSense camera, FFS depth on its infrared cameras (NVIDIA), to PLY |
+| `fuse_decklink` | [fuse_decklink.json](examples/fuse_decklink.json) | Live DeckLink stereo camera, FFS depth (NVIDIA), to PLY |
 | `fuse_render` | [fuse_render.json](examples/fuse_render.json) | Dataset to image |
 | `fuse_viewer` | [fuse_viewer.json](examples/fuse_viewer.json) | Dataset in a window |
 | `rig_viewer` | [rig_viewer.json](examples/rig_viewer.json) | Live rig in a window |
@@ -106,8 +107,8 @@ writes only the frames it keeps.
 Audio track on the host's clock: `default`, the system's default input, or an
 input's name as the OS lists it; omitted, none. The core takes it only with
 `output.stream` or `output.serve` and every camera on the host's clock
-(`source.sync_config` or `source.host_clock`), so `fuse_realsense`, which
-takes neither output yet, refuses it. The run prints the input it records,
+(`fuse_orbbec`: `source.sync_config` or `source.host_clock`; a RealSense or
+DeckLink camera always is). The run prints the input it records,
 and its counters at the end. It needs a build with sensor's microphone driver
 (README, "Optional: a microphone"). `output.stream` records its track and
 `output.serve` serves it, both with the frames.
@@ -116,11 +117,11 @@ and its counters at the end. It needs a build with sensor's microphone driver
 depth and its colour to the PLY at `output.path`, Dynamic by default as
 `fuse_orbbec` is: the camera sits still. It takes `source.serial` (empty: the
 only camera attached), the colour and depth sizes and `source.fps` (1280x800
-and 1280x720 at 30 fps by default), the fusion keys and `run.frames`; not the
-Orbbec rig's keys, the codec, its outputs, `operation: "stream"` or
-diagnostics. Its colour runs at auto exposure. `source.depth` picks the
-depth: `camera`, the camera's own (the default), or `ffs`, Fast-FoundationStereo
-on its infrared cameras, in builds with sensor's `sensor_ffs` only (README,
+and 1280x720 at 30 fps by default), the fusion keys, `run.frames`, and the
+codec and its outputs as `fuse_orbbec`; not the Orbbec rig's keys,
+`operation: "stream"` or diagnostics. Its colour runs at auto exposure.
+`source.depth` picks the depth: `camera`, the camera's own (the default), or
+`ffs`, Fast-FoundationStereo on its infrared cameras, in builds with sensor's `sensor_ffs` only (README,
 "Optional: FFS depth"); any other build refuses it before anything opens.
 FFS needs `source.ffs_model`, its ONNX model at the depth size, and
 `source.ffs_plan_cache`, where its TensorRT plans are kept; its depth size is
@@ -128,6 +129,25 @@ the rectified size it runs at, 960x544 by default. `source.emitter`, the
 projector, is on for the camera's depth and off for FFS unless stated.
 `fuse_realsense_ffs.json` expects the model and plans under `models/` beside
 it; point the two paths at yours.
+
+`fuse_decklink` (core's FuseDecklink profile) fuses a DeckLink card's two SDI
+cameras as one stereo camera, its depth FFS's, Dynamic by default, to the
+PLY at `output.path`; it codes and serves as `fuse_orbbec` does. It takes
+`source.cameras`, two cameras each with an `id`, its key in the calibration
+file, and an `input`, the card connector its SDI output feeds (`SDI 1` to
+`SDI 4`); `source.pairs`, one `left` and `right` of them; and
+`source.calibration`, the file with both cameras' lenses and poses, which
+poses the depth by the left camera. The colour size and `source.fps` are the
+cameras' mode (3840x2160 at 30 fps by default); the depth size is FFS's
+(960x544), and FFS takes `source.ffs_model` and `source.ffs_plan_cache` as
+`fuse_realsense` does. `source.max_pair_skew_us` is the most a frame's left
+and right pictures may lie apart: half a frame by default, which free-running
+cameras always keep, so motion gives up to that much mismatch. The depth gate
+starts at 0.5 m (`fusion.min_depth_m`). It runs in builds with sensor's
+DeckLink driver and FFS only (README, "Optional: a DeckLink stereo camera").
+`fuse_decklink.json` expects your calibration file at
+`rigs/decklink/array_calibration.json` beside it; the template's camera ids
+and connectors are one lab's, so set yours.
 
 `operation: "stream"` refuses an explicitly supplied `fusion`, `codec` or
 `output` section, including settings equal to their defaults. Leave those

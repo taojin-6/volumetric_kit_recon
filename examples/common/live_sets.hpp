@@ -40,6 +40,16 @@ inline std::string camera_summary(const sensor::camera::CameraModel& model,
   return text;
 }
 
+/// @return A lens's name for a camera's line: "pinhole" with no distortion,
+///         "brown-conrady" with only its five coefficients, else "rational".
+inline const char* lens_name(const sensor::camera::RationalDistortion& d) {
+  if (d.k4 != 0.0 || d.k5 != 0.0 || d.k6 != 0.0) return "rational";
+  if (d.k1 != 0.0 || d.k2 != 0.0 || d.p1 != 0.0 || d.p2 != 0.0 || d.k3 != 0.0) {
+    return "brown-conrady";
+  }
+  return "pinhole";
+}
+
 /// @return Counters as a camera's line shows them: "<received> received,
 ///         <delivered> delivered, <dropped> dropped, <failed> failed".
 inline std::string counters_text(const sensor::SensorStats& s) {
