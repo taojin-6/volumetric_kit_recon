@@ -11,9 +11,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `examples`: **wireframe and back-face culling in the live viewers.**
   `rig_viewer`'s View panel, and a View panel `fuse_viewer` now shows with
   its overlay, have "wireframe" (gfx's `kHybridMeshWireframe`: the triangles'
-  edges over the mesh, where the device draws them) and "cull back faces"
-  (`kHybridMeshCullBackFaces`), both off at first. The viewers' device asks
-  for `fillModeNonSolid`; gfx is pinned at its #172.
+  edges alone, hidden ones removed, no fill) and "cull back faces"
+  (`kHybridMeshCullBackFaces`), both off at first. The viewers' device
+  requires `fillModeNonSolid`; gfx is pinned at its #173.
 - **`fuse_decklink`**, live fusion of two SDI cameras on a Blackmagic
   DeckLink card as one stereo camera, its depth from FFS on R'G'B' views,
   its colour the left camera's 10-bit picture (core's `FuseDecklink`; README,
@@ -98,8 +98,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `VR_GRID_MIN_VERSION` stays 0.6.0: recon calls nothing new, such as
   0.8.0's `StreamServer::draining()`.
 
-- build: **the viewers pin gfx main at #172's merge** (`77fefdc`), the same
-  tree as the head #334 pinned (`ca05650`), now on gfx main.
+- build: **the viewers pin gfx main at #173's merge** (`ffc1a17`), whose
+  wireframe is the edges alone.
 - build: **recon pins core 0.39.0** (core #83's merge, `6cfef9d`, on #82's
   0.38.0) and **sensor 0.19.0** (sensor #23's merge, `1d68b11`: the DeckLink
   driver, on 0.16.0's V210 pictures, 0.17.0's stereo frames and 0.18.0's

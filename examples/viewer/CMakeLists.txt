@@ -57,10 +57,11 @@ FetchContent_Declare(
   # recon_example_viewer_pass checks it.
   #
   # And at or past gfx #172, whose kHybridMeshCullBackFaces and
-  # kHybridMeshWireframe the View options draw with. A compile floor.
+  # kHybridMeshWireframe the View options draw with. A compile floor. #173 makes
+  # the wireframe the edges alone, hidden ones removed.
   #
   # It refuses a core older than 0.20.0 (gfx's VG_VKC_MIN_VERSION).
-  GIT_TAG 77fefdc06a6ff5494bced3fd793fdf37b8b94c6e # gfx main, #172's merge
+  GIT_TAG ffc1a17a3d14aeb546e5484067dbf0160e76c60c # gfx main, #173's merge
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 

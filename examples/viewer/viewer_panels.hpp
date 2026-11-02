@@ -168,9 +168,9 @@ inline void draw_reconstruction_panel(const ReconstructionPanel& panel) {
 }
 
 /// @brief The View options the live viewers add to the mesh's shading, both
-///        off at first: its triangles' edges over it, and its back faces
-///        culled. The viewers' device has line fill (viewer_device_config),
-///        so the edges always draw.
+///        off at first: its triangles' edges alone, hidden ones removed, and
+///        its back faces culled. The viewers' device has line fill
+///        (viewer_device_config), so the edges always draw.
 struct MeshView {
   bool wireframe = false;        ///< `kHybridMeshWireframe`
   bool cull_back_faces = false;  ///< `kHybridMeshCullBackFaces`
