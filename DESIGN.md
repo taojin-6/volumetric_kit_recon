@@ -1006,6 +1006,27 @@ replacing it only on success (`fuse_keyframe`). A failure therefore leaves
 its depth, colour and cameras available for the final and later remeshes.
 Preparing while the previous frame is held allocates a separate output pair.
 
+A recorded sensor plays back as one more `IRgbdSensor`:
+`examples/common/link/rgbd_stream_sensor.hpp`'s `RgbdStreamSensor`
+(`vr_example_link`) reads one sensor of a `.vrst` session, a phone's or
+any other's, from its `RgbdDepth` track in sensor's wire form
+(`sensor/wire/rgbd_wire.hpp`; sensor's 2026-11-02 wire-form decision). Its
+`SensorInfo` is the track's params with the track's id, clock and rate.
+Each frame is a record decoded in place: its depth and plane point into
+the payload the frame holds, and its cameras, pose, units, range and noise
+are the record's. Its timestamp is the record's pts and its sequence the
+record's seq, which its writer numbers from 0. A record lost, damaged or
+refused by the decode is a gap in the sequence and a skipped span, before
+the first frame too, and after the last where a finished file's footer
+counts the records; one whose seq is not above the last frame's leaves no
+gap. A read error the reader cannot get past ends the file. A tracked
+sensor's poses are placed by a
+registration (sensor's `TrackedRegistration`) for the file's session at
+world epoch 0. `Options::min_confidence` raises a record's floor where it
+has a plane (the lab's 2, whatever the phone fused at). It reads the depth
+alone, so its sensor names no colour camera; the pictures and a live link
+come next.
+
 Every example reads a scenario with `--config path.json`; `--help` prints
 that entry point. The optional core `config` tier owns the JSON format, typed
 settings, application defaults and static input validation. Each example
