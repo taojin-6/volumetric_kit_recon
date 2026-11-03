@@ -323,6 +323,28 @@ if(VR_BUILD_EXAMPLES)
            COMMAND recon_example_link_rgbd_stream_test)
 endif()
 
+# The same sensor with its pictures, decoded on this machine's hardware from
+# sessions of sensor's committed H.265 clips (VS_TEST_DATA_DIR); the file says
+# what it covers. It skips without a device path, unless VS_TEST_HEVC_BACKEND
+# promises one; without sensor_video, a device is refused.
+if(VR_BUILD_EXAMPLES)
+  add_executable(recon_example_link_rgbd_stream_color_test
+                 example_link_rgbd_stream_color_test.cpp)
+  target_link_libraries(
+    recon_example_link_rgbd_stream_color_test
+    PRIVATE vr_example_link volumetric_kit::core_test_policy)
+  if(TARGET volumetric_kit::sensor_video)
+    target_link_libraries(recon_example_link_rgbd_stream_color_test
+                          PRIVATE volumetric_kit::sensor_video)
+    target_compile_definitions(
+      recon_example_link_rgbd_stream_color_test
+      PRIVATE VR_TEST_LINK_VIDEO=1 VR_HEVC_DATA="${VS_TEST_DATA_DIR}/hevc")
+  endif()
+  vr_target_warnings(recon_example_link_rgbd_stream_color_test)
+  add_test(NAME recon_example_link_rgbd_stream_color
+           COMMAND recon_example_link_rgbd_stream_color_test)
+endif()
+
 # fuse_orbbec's dump of its first sets (examples/common/set_dump.hpp): the JPEGs
 # byte for byte, the luma as R = G = B PNGs, and the refusals. Host only.
 add_executable(recon_example_set_dump_test example_set_dump_test.cpp)

@@ -59,6 +59,15 @@ on:
         required: false
         type: boolean
         default: false
+      hevc_backend:
+        description: >-
+          The hardware this leg promises sensor's HEVC decoder runs on (cuda,
+          videotoolbox), passed to the tests as VS_TEST_HEVC_BACKEND, as
+          sensor's CI does: a test that decodes then fails, rather than
+          skips, where no device path opens. Empty promises none.
+        required: false
+        type: string
+        default: ''
       ffs:
         description: >-
           Install TensorRT from NVIDIA's CUDA repository and build with
@@ -498,5 +507,6 @@ jobs:
           VKC_REQUIRE_VULKAN_DEVICE: '1'
           VKC_TEST_VALIDATION: '1'
           VKC_TEST_SYNC_VALIDATION: ${{ inputs.sync_validation && '1' || '' }}
+          VS_TEST_HEVC_BACKEND: ${{ inputs.hevc_backend }}
           DYLD_LIBRARY_PATH: ${{ env.VR_LAYER_LIBRARY_PATH }}
         run: ctest --test-dir build --output-on-failure
