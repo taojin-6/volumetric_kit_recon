@@ -957,7 +957,10 @@ submits, a set not coded 1. A fusion done again (`FuseReport::redone`)
 records the front half again after it, in a batch of its own
 (`"wait: redo"`). `sent` runs once the set is published: a coded set's
 frame written and served, before the decode; a set not coded, after its
-fusion. `Sent` holds the fusion's report, a free pass's refusal, which does
+fusion. The set's pictures (`inputs`) go with the front batch
+(`CommandBatch::retain`), so a failed wait leaves them to the device rather
+than freeing them under work that may still run. `Sent` holds the fusion's
+report, a free pass's refusal, which does
 not stop the set, and the frame. The frame goes through the stream's halves;
 a set due a frame of a moved-from stream is refused before anything is
 recorded.

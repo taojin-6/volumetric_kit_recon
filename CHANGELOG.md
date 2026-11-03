@@ -313,6 +313,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `sender`: **`SetSender::send` no longer frees a set's pictures under work
+  that may still read them.** It dropped `inputs` after the front batch's
+  wait whatever the wait returned, and the live examples and codec_replica
+  hand over the last reference, so after a failed wait (not a lost device)
+  the prep could read freed pictures. The front batch now retains them
+  (core 0.45.0's `CommandBatch::retain` of a shared owner): let go once a
+  wait sees the work done, or with the batch when it is not submitted, and
+  after a failed wait kept by the device until it has waited for the work.
+  recon pins core 0.45.0 (core #93, `f618c63`; was 0.43.0), CI takes its
+  actions at the new pin, and the core floor rises to 0.45.0. Migration:
+  none; `send`'s signature and its success path are unchanged.
+
 - `examples`: **a live stream's geometry names the host's clock.** The
   Geometry track of a `fuse_orbbec` rig's stream, or a camera's with
   `source.host_clock`, said clock domain 1 while its pts were the host's

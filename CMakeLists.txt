@@ -75,13 +75,14 @@ find_package(Vulkan REQUIRED)
 # Pinned dependencies: volumetric_kit_core, volumetric_kit_sensor and
 # volumetric_kit_grid, linked PUBLIC. The oldest core recon's libraries build
 # with is checked in the core that arrives (third_party/, which also checks the
-# config tier the examples and tests need): 0.42.0, whose source.mobile and
-# diagnostics.track_log fuse_orbbec refuses; 0.39.0 brought the FuseDecklink
-# profile fuse_decklink loads, 0.34.0 the source.audio that names the input the
-# live examples record, 0.33.0 FuseRealsense's source.depth, 0.31.0 the
-# FuseRealsense profile, 0.30.0 the output.max_viewers fuse_orbbec serves by,
-# 0.29.0 the vulkan/fwd.hpp the public headers include, and 0.28.0 the test
-# support the tests run on. The oldest sensor is 0.27.0, whose wire form
+# config tier the examples and tests need): 0.45.0, whose CommandBatch::retain
+# of a shared owner SetSender keeps a set's pictures with; 0.42.0 brought the
+# source.mobile and diagnostics.track_log fuse_orbbec refuses, 0.39.0 the
+# FuseDecklink profile fuse_decklink loads, 0.34.0 the source.audio that names
+# the input the live examples record, 0.33.0 FuseRealsense's source.depth,
+# 0.31.0 the FuseRealsense profile, 0.30.0 the output.max_viewers fuse_orbbec
+# serves by, 0.29.0 the vulkan/fwd.hpp the public headers include and 0.28.0 the
+# test support the tests run on. The oldest sensor is 0.27.0, whose wire form
 # (sensor_wire) RgbdStreamSensor reads a session's depth records in; 0.19.0
 # brought the DecklinkStereo fuse_decklink opens (0.17.0 the stereo_calibration
 # it pairs the calibration file's two cameras with, and 0.16.0 the V210 pictures
@@ -98,7 +99,7 @@ find_package(Vulkan REQUIRED)
 # serving the live examples' Audio track with the frames, 0.5.0 CodecStream
 # writing it (TrackKind::Audio, 0.4.0) muxed by pts, and 0.3.0 codec_outputs
 # passing output.max_viewers to the server.
-set(VR_CORE_MIN_VERSION 0.42.0)
+set(VR_CORE_MIN_VERSION 0.45.0)
 set(VR_SENSOR_MIN_VERSION 0.27.0)
 set(VR_GRID_MIN_VERSION 0.12.0)
 add_subdirectory(third_party)

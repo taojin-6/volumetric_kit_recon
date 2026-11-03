@@ -620,6 +620,24 @@ target_link_libraries(
 vr_target_warnings(recon_sender_set_sender_test)
 add_test(NAME recon_sender_set_sender COMMAND recon_sender_set_sender_test)
 
+# sender tier: what SetSender::send's front batch reads goes with the batch. A
+# set's inputs, the last reference handed over, are alive at the front batch's
+# fence wait and let go by the time a send that waited returns; when the wait
+# fails (the test's vkWaitForFences returns a driver's error), they outlive send
+# and the caller's batch and go with the device. Linux and macOS, where a test
+# can stand in for a Vulkan call. The device part skips with no device.
+if(UNIX)
+  add_executable(recon_sender_set_sender_retain_test
+                 sender_set_sender_retain_test.cpp)
+  target_link_libraries(
+    recon_sender_set_sender_retain_test
+    PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_sender
+            Vulkan::Vulkan ${CMAKE_DL_LIBS})
+  vr_target_warnings(recon_sender_set_sender_retain_test)
+  add_test(NAME recon_sender_set_sender_retain
+           COMMAND recon_sender_set_sender_retain_test)
+endif()
+
 # What a sibling that fetches recon gets (subproject/): its configure, from a
 # clean tree, with each dependency this build fetched as a local source, so it
 # needs no network. The defaults hold, the sibling's vkc_require_sibling accepts
