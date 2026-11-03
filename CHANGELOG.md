@@ -8,6 +8,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **a recorded sensor plays back as an `IRgbdSensor`**
+  (`examples/common/link/rgbd_stream_sensor.hpp`, `vr_example_link`):
+  `RgbdStreamSensor::open_file` reads one sensor of a `.vrst` session from
+  its `RgbdDepth` track in sensor 0.27.0's wire form, each record decoded in
+  place, its cameras, pose, units, range and noise the record's. A record
+  lost, damaged or refused is a gap in the sequence and a skipped span
+  (`skipped()`). A tracked sensor's poses are placed by a
+  `TrackedRegistration` for the file's session at world epoch 0, and
+  `Options::min_confidence` raises the floor of records with a confidence
+  plane. The depth alone: the sensor names no colour camera. The sensor
+  floor rises to 0.27.0 and grid's to 0.12.0, which bring the wire form and
+  `TrackKind::RgbdDepth`.
 - `examples`: **wireframe and back-face culling in the live viewers.**
   `rig_viewer`'s View panel, and a View panel `fuse_viewer` now shows with
   its overlay, have "wireframe" (gfx's `kHybridMeshWireframe`: the triangles'

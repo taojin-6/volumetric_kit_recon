@@ -307,6 +307,22 @@ if(VR_BUILD_EXAMPLES)
            COMMAND recon_example_replica_sensor_test)
 endif()
 
+# A session's sensor as an IRgbdSensor (examples/common/link/
+# rgbd_stream_sensor.hpp), where the examples are built, on sessions written in
+# the test through grid's StreamWriter and sensor's wire form: a fixed and a
+# tracked sensor's frames round-trip and keep the frame contract; a registration
+# places tracked poses and is refused when not for the sensor; the floor raises
+# planes only; damage leaves a gap and a skipped span. Host only.
+if(VR_BUILD_EXAMPLES)
+  add_executable(recon_example_link_rgbd_stream_test
+                 example_link_rgbd_stream_test.cpp)
+  target_link_libraries(recon_example_link_rgbd_stream_test
+                        PRIVATE vr_example_link)
+  vr_target_warnings(recon_example_link_rgbd_stream_test)
+  add_test(NAME recon_example_link_rgbd_stream
+           COMMAND recon_example_link_rgbd_stream_test)
+endif()
+
 # fuse_orbbec's dump of its first sets (examples/common/set_dump.hpp): the JPEGs
 # byte for byte, the luma as R = G = B PNGs, and the refusals. Host only.
 add_executable(recon_example_set_dump_test example_set_dump_test.cpp)

@@ -27,3 +27,12 @@ if(TARGET volumetric_kit::sensor_microphone)
   target_compile_definitions(vr_example_live_audio
                              INTERFACE VR_EXAMPLE_MICROPHONE=1)
 endif()
+
+# One sensor of a .vrst session read back as a sensor::IRgbdSensor
+# (link/rgbd_stream_sensor.hpp): its depth track's records, in sensor's wire
+# form (sensor_wire), through grid's StreamReader.
+add_library(vr_example_link STATIC link/rgbd_stream_sensor.cpp)
+target_link_libraries(
+  vr_example_link PUBLIC vr_example_common volumetric_kit::sensor_wire
+                         volumetric_kit::grid_stream)
+vr_target_warnings(vr_example_link)
