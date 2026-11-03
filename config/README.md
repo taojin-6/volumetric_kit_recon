@@ -113,6 +113,10 @@ and its counters at the end. It needs a build with sensor's microphone driver
 (README, "Optional: a microphone"). `output.stream` records its track and
 `output.serve` serves it, both with the frames.
 
+`fuse_orbbec` refuses the phone the core's FuseOrbbec profile takes,
+`source.mobile` and `diagnostics.track_log`, before anything opens: it does
+not run the phone's session yet, and fuses the rig's cameras alone.
+
 `fuse_realsense` (core's FuseRealsense profile) fuses one RealSense camera's
 depth and its colour to the PLY at `output.path`, Dynamic by default as
 `fuse_orbbec` is: the camera sits still. It takes `source.serial` (empty: the

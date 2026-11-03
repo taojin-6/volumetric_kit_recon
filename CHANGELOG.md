@@ -89,6 +89,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **recon pins core 0.43.0** (core #89's merge, `2163deb`; was
+  0.39.0), **sensor 0.27.0** (sensor #35's merge, `ed3e40e`; was 0.19.0)
+  and **grid 0.12.0** (grid #18's merge, `17d48f3`; was 0.8.0), and CI
+  takes the core's and sensor's actions at the new pins. grid 0.11.0 and
+  later network on the core's net tier (0.43.0); recon calls no grid
+  networking call that moved, and reads no record payload's runs, which
+  0.12.0's `RecordPayload` makes up to three. Sensor 0.20.0-0.27.0 add
+  only: recon calls nothing new, and `VR_SENSOR_MIN_VERSION` stays 0.19.0,
+  `VR_GRID_MIN_VERSION` 0.6.0. **`fuse_orbbec` refuses core 0.42.0's phone,
+  `source.mobile` and `diagnostics.track_log`** (`Unsupported`, exit 2,
+  before anything opens; `vr_example::check_orbbec_phone`), as the core's
+  migration note asks of a FuseOrbbec consumer until it runs the phone:
+  the rig never fuses alone in a run that asked for it. The core floor
+  rises to 0.42.0 for those keys.
+
 - build: **recon pins grid 0.8.0** (grid #15's merge, `20bd1c1`; was
   0.6.0). With `output.serve`, a viewer still connected when a live run
   finishes now gets the stream's last records before its end, unless still
