@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -14,12 +15,20 @@
 #include <new>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "volumetric_kit/core/base/check.hpp"
+#include "volumetric_kit/core/base/log.hpp"
+#include "volumetric_kit/core/base/unique_fd.hpp"
+#include "volumetric_kit/core/net/dial.hpp"
+#include "volumetric_kit/grid/networking/stream_client.hpp"
+#include "volumetric_kit/grid/stream/chunks.hpp"
 #include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/grid/stream/stream_reader.hpp"
+#include "volumetric_kit/grid/stream/stream_writer.hpp"
 #include "volumetric_kit/sensor/camera/camera_model.hpp"
 #include "volumetric_kit/sensor/video/color_codes.hpp"
 #include "volumetric_kit/sensor/video/decoded_picture.hpp"
@@ -37,10 +46,21 @@ namespace vr_example::link {
 namespace {
 
 namespace stream = volumetric_kit::grid::stream;
+namespace gnet = volumetric_kit::grid::networking;
+namespace net = volumetric_kit::core::net;
 namespace wire = volumetric_kit::sensor::wire;
 namespace hevc = volumetric_kit::sensor::hevc;
 using Code = vkc::Status::Code;
 using FrameResult = vkc::Result<std::optional<sensor::RgbdFrame>>;
+using Clock = std::chrono::steady_clock;
+
+// A live stream ends at its third failure within kFailureWindow.
+constexpr std::size_t kMaxFailures = 3;
+constexpr std::chrono::seconds kFailureWindow{10};
+// How long listen's wait for the first session reads at a time.
+constexpr std::chrono::milliseconds kSessionSlice{10};
+// How long a failed accept waits before the next.
+constexpr std::chrono::milliseconds kAcceptRetry{10};
 
 // What the join holds, at most, of each kind: depth frames waiting for their
 // pictures, pictures waiting for their depth records, and access units sent
@@ -98,11 +118,20 @@ struct Run {
   std::uint64_t last = 0;
   std::uint64_t time = 0;   // the last non-zero time; 0 before one
   std::uint64_t found = 0;  // one past the greatest seq found
+  // Live, the first seq found since the start, which the spans count from:
+  // a start takes the records that come from then on. A file's count from 0.
+  std::optional<std::uint64_t> origin;
+
+  // A record numbered `seq` was found; `live`, it may be the origin.
+  void find(std::uint64_t seq, bool live) {
+    found = std::max(found, seq + 1);
+    if (live && !origin) origin = seq;
+  }
 
   // `seq` counts at `pts`: a span for the records it jumps over.
   void take(std::uint64_t seq, std::uint64_t pts,
             std::vector<RgbdStreamSensor::Skipped>* spans) {
-    const std::uint64_t expected = any ? last + 1 : 0;
+    const std::uint64_t expected = any ? last + 1 : origin.value_or(0);
     if (seq > expected) spans->push_back({expected, seq - expected, time, pts});
     if (!any || seq > last) last = seq;
     any = true;
@@ -114,7 +143,7 @@ struct Run {
   void end(std::uint64_t written,
            std::vector<RgbdStreamSensor::Skipped>* spans) const {
     const std::uint64_t reach = std::max(written, found);
-    const std::uint64_t expected = any ? last + 1 : 0;
+    const std::uint64_t expected = any ? last + 1 : origin.value_or(0);
     if (reach > expected) {
       spans->push_back({expected, reach - expected, time, 0});
     }
@@ -142,11 +171,280 @@ bool as_recorded(const Picture& p) {
 }
 #endif
 
+// `now + wait`, held at the clock's end for a wait past it.
+Clock::time_point after(std::chrono::milliseconds wait) {
+  const Clock::time_point now = Clock::now();
+  if (wait >= std::chrono::duration_cast<std::chrono::milliseconds>(
+                  Clock::time_point::max() - now)) {
+    return Clock::time_point::max();
+  }
+  return now + wait;
+}
+
+// What is left until `deadline`, in whole milliseconds; 0 past it.
+std::chrono::milliseconds left(Clock::time_point deadline) {
+  const Clock::time_point now = Clock::now();
+  if (deadline <= now) return std::chrono::milliseconds{0};
+  if (deadline == Clock::time_point::max()) {
+    return std::chrono::milliseconds::max();
+  }
+  return std::chrono::ceil<std::chrono::milliseconds>(deadline - now);
+}
+
+// A session as its `VRST` chunk carries it: two sessions are one when these
+// bytes are, every field of each.
+vkc::Result<std::vector<std::uint8_t>> session_bytes(
+    const stream::Session& session) {
+  VKC_ASSIGN(const stream::ChunkEncoder encoder,
+             stream::ChunkEncoder::create(session));
+  return encoder.session_chunk();
+}
+
+void warn(const std::string& message) {
+  vkc::log_message(vkc::LogLevel::Warning, "vr", message);
+}
+
+// One session's records over a live link, across its writer's connections:
+// the listener, the connection, the session the first one brought, the
+// records taken on each track, the recording and the failure cap.
+class Link {
+ public:
+  Link(std::unique_ptr<net::Listener> listener, std::string name)
+      : listener_(std::move(listener)), name_(std::move(name)) {}
+
+  ~Link() { end(); }
+  Link(const Link&) = delete;
+  Link& operator=(const Link&) = delete;
+
+  // Takes connections until one brings a session by `deadline`; it is the
+  // session from then on.
+  vkc::Status await_session(Clock::time_point deadline) {
+    while (!session_) {
+      if (!client_) {
+        VKC_TRY(accept(deadline));
+        if (!client_) {
+          if (Clock::now() < deadline) continue;
+          return vkc::Status::io_error(name_ + ": no session within the wait");
+        }
+      }
+      // In slices: a read returns at a record, not at the session, which a
+      // writer that has no frame yet sends alone.
+      stream::Record record;
+      std::vector<std::uint8_t> payload;
+      const vkc::Result<bool> read = client_->next(
+          std::min(left(deadline), kSessionSlice), &record, &payload);
+      if (!read.ok()) {
+        refuse(read.status().message());
+        continue;
+      }
+      if (client_->session() != nullptr) {
+        session_ = *client_->session();
+        VKC_ASSIGN(session_bytes_, session_bytes(*session_));
+        last_.assign(session_->tracks.size(), std::nullopt);
+        join();
+        if (read.value()) pending_ = Pending{record, std::move(payload)};
+      } else if (Clock::now() >= deadline) {
+        return vkc::Status::io_error(name_ + ": no session within the wait");
+      }
+    }
+    return {};
+  }
+
+  const stream::Session& session() const { return *session_; }
+
+  // Every record taken from now on goes into a new session file at `path`.
+  vkc::Status record_to(const std::string& path) {
+    VKC_ASSIGN(recording_, stream::StreamWriter::create(path, *session_));
+    return {};
+  }
+
+  // The session's next record by `deadline`, with its payload: true with
+  // one; false when none came by then, or once the stream has ended. A
+  // connection's failure is never returned; the recording's write error
+  // is, once.
+  vkc::Result<bool> next(Clock::time_point deadline, stream::Record* record,
+                         std::vector<std::uint8_t>* payload) {
+    for (;;) {
+      if (!error_.ok()) return std::exchange(error_, vkc::Status{});
+      if (ended_) return false;
+      if (pending_) {
+        *record = pending_->record;
+        *payload = std::move(pending_->payload);
+        pending_.reset();
+        if (take(*record, *payload)) return true;
+        continue;
+      }
+      if (!client_) {
+        VKC_TRY(accept(deadline));
+        if (!client_) return false;
+      }
+      const vkc::Result<bool> read =
+          client_->next(left(deadline), record, payload);
+      if (!read.ok()) {
+        if (accepted_) {
+          fail(read.status().message());
+        } else {
+          refuse(read.status().message());
+        }
+        if (Clock::now() >= deadline) return false;
+        continue;
+      }
+      if (!accepted_ && client_->session() != nullptr) {
+        const vkc::Result<std::vector<std::uint8_t>> bytes =
+            session_bytes(*client_->session());
+        if (!bytes.ok()) {
+          refuse(bytes.status().message());
+          continue;
+        }
+        if (bytes.value() != session_bytes_) {
+          refuse("another session than the first one's");
+          continue;
+        }
+        join();
+      }
+      if (read.value() && accepted_ && take(*record, *payload)) return true;
+      if (!read.value() && Clock::now() >= deadline) return false;
+    }
+  }
+
+  // The connection failed, or its stream did: let it go and take the
+  // writer's next; the third within kFailureWindow ends the stream.
+  void fail(const std::string& why) {
+    warn("RgbdStreamSensor: " + name_ + ": the writer's connection failed (" +
+         why + "); waiting for its next");
+    let_go();
+    ++stats_.failures;
+    const Clock::time_point now = Clock::now();
+    failures_.push_back(now);
+    while (now - failures_.front() >= kFailureWindow) failures_.pop_front();
+    if (failures_.size() >= kMaxFailures) {
+      warn("RgbdStreamSensor: " + name_ + ": " + std::to_string(kMaxFailures) +
+           " failures within " + std::to_string(kFailureWindow.count()) +
+           " s: the stream ends");
+      end();
+    }
+  }
+
+  // The connection goes, not as a failure: the next is taken as the
+  // writer redials.
+  void let_go() noexcept {
+    client_.reset();
+    pending_.reset();
+    accepted_ = false;
+    stats_.connected = false;
+  }
+
+  // No more connections, and the recording finished.
+  void end() noexcept {
+    ended_ = true;
+    let_go();
+    listener_.reset();
+    if (recording_) {
+      vkc::Status finished = recording_->finish();
+      recording_.reset();
+      if (!finished.ok()) {
+        try {
+          warn("RgbdStreamSensor: " + name_ +
+               ": the recording's footer: " + finished.message());
+        } catch (...) {
+        }
+        if (error_.ok()) error_ = std::move(finished);
+      }
+    }
+  }
+
+  bool ended() const noexcept { return ended_; }
+  const RgbdStreamSensor::LinkStats& stats() const noexcept { return stats_; }
+
+ private:
+  struct Pending {
+    stream::Record record;
+    std::vector<std::uint8_t> payload;
+  };
+
+  // The next connection by `deadline`, if one comes, to read.
+  vkc::Status accept(Clock::time_point deadline) {
+    if (!listener_) return {};
+    vkc::Result<vkc::UniqueFd> fd = listener_->accept(left(deadline));
+    if (!fd.ok()) {
+      // Out of descriptors, say, which Linux keeps failing at once: wait a
+      // little, and the next try takes it again.
+      warn("RgbdStreamSensor: " + name_ + ": " + fd.status().message());
+      std::this_thread::sleep_for(std::min(left(deadline), kAcceptRetry));
+      return {};
+    }
+    if (!fd.value().valid()) return {};
+    vkc::Result<std::unique_ptr<gnet::StreamClient>> client =
+        gnet::StreamClient::adopt(std::move(fd).value());
+    if (!client.ok()) {
+      ++stats_.refused;  // reset as it was taken
+      return {};
+    }
+    client_ = std::move(client).value();
+    return {};
+  }
+
+  // The connection brought the session: its records count from now on.
+  void join() {
+    accepted_ = true;
+    stats_.connected = true;
+    ++stats_.connections;
+  }
+
+  void refuse(const std::string& why) {
+    warn("RgbdStreamSensor: " + name_ + ": a connection refused: " + why);
+    client_.reset();
+    ++stats_.refused;
+  }
+
+  // Whether `record` is new on its track, and so taken: recorded, its seq
+  // the track's last. A seq not above the last is a record sent again.
+  bool take(const stream::Record& record,
+            const std::vector<std::uint8_t>& payload) {
+    std::optional<std::uint64_t>& last = last_[record.info.track];
+    if (last && record.info.seq <= *last) {
+      ++stats_.repeated;
+      return false;
+    }
+    last = record.info.seq;
+    if (recording_) {
+      vkc::Status written =
+          recording_->append(record.info, payload.data(), payload.size());
+      if (written.ok()) {
+        ++stats_.recorded;
+      } else {
+        recording_.reset();  // a file that may end inside the record
+        error_ = std::move(written).with_context(
+            "RgbdStreamSensor: recording " + name_ + "'s session");
+      }
+    }
+    return true;
+  }
+
+  std::unique_ptr<net::Listener> listener_;
+  std::string name_;  // "host:port", what each message names
+  std::unique_ptr<gnet::StreamClient> client_;
+  bool accepted_ = false;  // client_ brought the session
+  std::optional<stream::Session> session_;
+  std::vector<std::uint8_t> session_bytes_;  // its VRST chunk
+  std::optional<Pending> pending_;  // a record that came with the session
+  std::vector<std::optional<std::uint64_t>> last_;  // per track
+  std::unique_ptr<stream::StreamWriter> recording_;
+  std::deque<Clock::time_point> failures_;  // within the window
+  bool ended_ = false;
+  vkc::Status error_;  // the recording's, returned once
+  RgbdStreamSensor::LinkStats stats_;
+};
+
 }  // namespace
 
 struct RgbdStreamSensor::State {
+  // Where the records come from: a file's reader, or a live link.
   std::unique_ptr<stream::StreamReader> reader;
-  std::uint16_t track = 0;                     // the depth track's index
+  std::unique_ptr<Link> link;
+  std::vector<std::uint8_t> live_payload;  // the live record's, read with it
+  std::uint64_t arrival_ns = 0;            // when the live record came
+  std::uint16_t track = 0;                 // the depth track's index
   std::optional<std::uint16_t> picture_track;  // the picture track's, when read
   sensor::SensorInfo info;
   Options options;
@@ -173,6 +471,7 @@ struct RgbdStreamSensor::State {
   std::optional<sensor::HevcDecoder> decoder;
 #endif
   sensor::KeyGate gate;
+  bool picture_lost = false;  // the gate waits for a key since the last record
   std::int64_t next_unit = 0;
   std::map<std::int64_t, ColorFacts> in_flight;
   std::optional<std::uint64_t> picture_set;  // the last picture's
@@ -182,6 +481,17 @@ struct RgbdStreamSensor::State {
   std::deque<Waiting> waiting;
   std::deque<Picture> pictures;
   std::deque<sensor::RgbdFrame> ready;
+
+  // `record`'s payload: read from the file, or the live one taken.
+  vkc::Status read_payload(const stream::Record& record,
+                           std::vector<std::uint8_t>* out);
+
+  // The decoder lost a picture, or a unit never reached it: the gate waits
+  // for the next key, which live means the next connection.
+  void lose_picture() noexcept {
+    gate.lose();
+    picture_lost = true;
+  }
 
   // The frame `record` of the depth track gives, or none for a record that
   // fails its CRC, the decode, or the order of the records before it.
@@ -222,22 +532,22 @@ struct RgbdStreamSensor::State {
 
   // Back to the file's first record, the join and the decoder emptied.
   void rewind() noexcept;
+
+  // The sensor of `session` read as `options` say, with no source yet;
+  // refusals named after `where`.
+  static vkc::Result<std::unique_ptr<State>> open(
+      const stream::Session& session, Options options,
+      const std::string& where);
 };
 
-vkc::Result<std::unique_ptr<RgbdStreamSensor>> RgbdStreamSensor::open_file(
-    const std::string& path, Options options) try {
-  constexpr const char* kApi = "RgbdStreamSensor::open_file";
-  vkc::Result<std::unique_ptr<stream::StreamReader>> opened =
-      stream::StreamReader::open(path);
-  if (!opened.ok()) return opened.status().with_context(kApi);
-  std::unique_ptr<stream::StreamReader> reader = std::move(opened).value();
-  const std::string where = std::string(kApi) + ": " + path;
+vkc::Result<std::unique_ptr<RgbdStreamSensor::State>>
+RgbdStreamSensor::State::open(const stream::Session& session, Options options,
+                              const std::string& where) {
   const auto bad = [&](const std::string& why) {
     return vkc::Status::invalid_argument(where + ": " + why);
   };
 
   // The sensor's depth track: the session's only one, or the one named.
-  const stream::Session& session = reader->session();
   std::optional<std::uint16_t> found;
   bool any = false;
   for (std::size_t i = 0; i < session.tracks.size(); ++i) {
@@ -284,7 +594,7 @@ vkc::Result<std::unique_ptr<RgbdStreamSensor>> RgbdStreamSensor::open_file(
     }
     if (reg.session != session.id) {
       return bad("the registration is another session's: " + hex(reg.session) +
-                 ", not the file's " + hex(session.id));
+                 ", not the stream's " + hex(session.id));
     }
     if (reg.world_epoch != 0) {
       return bad("the registration holds for world epoch " +
@@ -346,15 +656,64 @@ vkc::Result<std::unique_ptr<RgbdStreamSensor>> RgbdStreamSensor::open_file(
   // Without the picture track read, the sensor names no colour camera.
   if (!state->picture_track) info.color.reset();
 
-  state->position = reader->begin();
-  state->reader = std::move(reader);
   state->track = *found;
   state->info = std::move(info);
   state->options = std::move(options);
+  return state;
+}
+
+vkc::Result<std::unique_ptr<RgbdStreamSensor>> RgbdStreamSensor::open_file(
+    const std::string& path, Options options) try {
+  constexpr const char* kApi = "RgbdStreamSensor::open_file";
+  vkc::Result<std::unique_ptr<stream::StreamReader>> opened =
+      stream::StreamReader::open(path);
+  if (!opened.ok()) return opened.status().with_context(kApi);
+  std::unique_ptr<stream::StreamReader> reader = std::move(opened).value();
+  VKC_ASSIGN(std::unique_ptr<State> state,
+             State::open(reader->session(), std::move(options),
+                         std::string(kApi) + ": " + path));
+  state->position = reader->begin();
+  state->reader = std::move(reader);
   return std::unique_ptr<RgbdStreamSensor>(
       new RgbdStreamSensor(std::move(state)));
 } catch (const std::bad_alloc&) {
   return vkc::Status::out_of_memory("RgbdStreamSensor::open_file");
+}
+
+vkc::Result<std::unique_ptr<RgbdStreamSensor>> RgbdStreamSensor::listen(
+    const std::string& host, std::uint16_t port, Options options,
+    std::string record_path, std::chrono::milliseconds wait) try {
+  constexpr const char* kApi = "RgbdStreamSensor::listen";
+  const std::string name = host + ":" + std::to_string(port);
+  const std::string where = std::string(kApi) + ": " + name;
+  if (port == 0) {
+    return vkc::Status::invalid_argument(
+        where + ": port 0, which no writer can be told to dial");
+  }
+  if (wait.count() <= 0) {
+    return vkc::Status::invalid_argument(where + ": a wait of " +
+                                         std::to_string(wait.count()) +
+                                         " ms, which must be positive");
+  }
+  vkc::Result<std::unique_ptr<net::Listener>> listening =
+      net::Listener::create(host, port);
+  if (!listening.ok()) return listening.status().with_context(kApi);
+  auto link = std::make_unique<Link>(std::move(listening).value(), name);
+  if (vkc::Status came = link->await_session(after(wait)); !came.ok()) {
+    return came.with_context(kApi);
+  }
+  VKC_ASSIGN(std::unique_ptr<State> state,
+             State::open(link->session(), std::move(options), where));
+  if (!record_path.empty()) {
+    if (vkc::Status made = link->record_to(record_path); !made.ok()) {
+      return made.with_context(where + ": the recording");
+    }
+  }
+  state->link = std::move(link);
+  return std::unique_ptr<RgbdStreamSensor>(
+      new RgbdStreamSensor(std::move(state)));
+} catch (const std::bad_alloc&) {
+  return vkc::Status::out_of_memory("RgbdStreamSensor::listen");
 }
 
 RgbdStreamSensor::RgbdStreamSensor(std::unique_ptr<State> state)
@@ -382,6 +741,12 @@ const std::vector<RgbdStreamSensor::Skipped>& RgbdStreamSensor::skipped_color()
   return state_->skipped_color;
 }
 
+const RgbdStreamSensor::LinkStats& RgbdStreamSensor::link_stats()
+    const noexcept {
+  static const LinkStats kNone;
+  return state_->link ? state_->link->stats() : kNone;
+}
+
 vkc::Status RgbdStreamSensor::set_queue_depth(std::size_t frames) {
   if (frames == 0 || state_->running) {
     return vkc::Status::invalid_argument(
@@ -404,13 +769,15 @@ vkc::Status RgbdStreamSensor::start() {
 void RgbdStreamSensor::stop() noexcept {
   State& s = *state_;
   s.running = false;
+  if (s.link) s.link->let_go();
   s.rewind();
 }
 
 void RgbdStreamSensor::State::rewind() noexcept {
   file_ended = false;
   at_end = false;
-  position = reader->begin();
+  if (reader) position = reader->begin();
+  picture_lost = false;
   taken = false;
   taken_sequence = 0;
   taken_time = 0;
@@ -433,34 +800,56 @@ void RgbdStreamSensor::State::rewind() noexcept {
 FrameResult RgbdStreamSensor::poll() try {
   State& s = *state_;
   if (!s.running || s.at_end) return no_frame();
+  const Clock::time_point deadline = Clock::now() + kPollWait;
   for (;;) {
     if (!s.ready.empty()) return s.hand_out();
     if (s.file_ended) {
       s.finish();
       return no_frame();
     }
-    const stream::Position before = s.position;
     stream::Record record;
-    const vkc::Result<bool> more = s.reader->next(&s.position, &record);
-    if (!more.ok()) {
-      // An error that leaves the reader where it was, such as a read past
-      // the end of a file shortened since it opened, would come again at
-      // every poll: the file ends there.
-      if (s.position.offset <= before.offset) {
-        (void)s.end_file();
-        if (s.ready.empty()) s.finish();
+    if (s.link) {
+      if (s.link->ended()) {
+        const vkc::Status ended = s.end_file();
+        if (!ended.ok()) return ended;
+        continue;
+      }
+      const vkc::Result<bool> more =
+          s.link->next(deadline, &record, &s.live_payload);
+      if (!more.ok()) return more.status();  // the recording's, once
+      if (!more.value()) {
+        if (s.link->ended()) continue;
+        return no_frame();
+      }
+      s.arrival_ns = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::system_clock::now().time_since_epoch())
+              .count());
+    } else {
+      const stream::Position before = s.position;
+      const vkc::Result<bool> more = s.reader->next(&s.position, &record);
+      if (!more.ok()) {
+        // An error that leaves the reader where it was, such as a read past
+        // the end of a file shortened since it opened, would come again at
+        // every poll: the file ends there.
+        if (s.position.offset <= before.offset) {
+          (void)s.end_file();
+          if (s.ready.empty()) s.finish();
+          return more.status();
+        }
+        // Damage, or a record of a later writer, which the reader is now
+        // past: what it held is lost, and the next frame's sequence says so.
+        const Code code = more.status().domain();
+        if (code == Code::InvalidArgument || code == Code::Unsupported) {
+          continue;
+        }
         return more.status();
       }
-      // Damage, or a record of a later writer, which the reader is now past:
-      // what it held is lost, and the next frame's sequence says so.
-      const Code code = more.status().domain();
-      if (code == Code::InvalidArgument || code == Code::Unsupported) continue;
-      return more.status();
-    }
-    if (!more.value()) {
-      const vkc::Status ended = s.end_file();
-      if (!ended.ok()) return ended;
-      continue;
+      if (!more.value()) {
+        const vkc::Status ended = s.end_file();
+        if (!ended.ok()) return ended;
+        continue;
+      }
     }
     vkc::Status taken;
     if (record.info.track == s.track) {
@@ -474,6 +863,10 @@ FrameResult RgbdStreamSensor::poll() try {
       }
     } else if (s.picture_track && record.info.track == *s.picture_track) {
       taken = s.take_color(record);
+      // Live, the writer makes a key only for a reader that joins.
+      if (s.link && std::exchange(s.picture_lost, false) && taken.ok()) {
+        s.link->fail("a picture failed to decode");
+      }
     } else {
       continue;
     }
@@ -484,9 +877,19 @@ FrameResult RgbdStreamSensor::poll() try {
   return vkc::Status::out_of_memory("RgbdStreamSensor::poll");
 }
 
+vkc::Status RgbdStreamSensor::State::read_payload(
+    const stream::Record& record, std::vector<std::uint8_t>* out) {
+  if (link) {
+    out->swap(live_payload);
+    live_payload.clear();
+    return {};
+  }
+  return reader->read(record, out);
+}
+
 FrameResult RgbdStreamSensor::State::take(const stream::Record& record) {
   const stream::RecordInfo& at = record.info;
-  depth.found = std::max(depth.found, at.seq + 1);
+  depth.find(at.seq, link != nullptr);
   if (at.set != stream::kNoSet && (!depth_set || at.set > *depth_set)) {
     depth_set = at.set;
   }
@@ -504,7 +907,7 @@ FrameResult RgbdStreamSensor::State::take(const stream::Record& record) {
   }
   // The frame holds its payload, which its depth and plane point into.
   auto payload = std::make_shared<std::vector<std::uint8_t>>();
-  const vkc::Status read = reader->read(record, payload.get());
+  const vkc::Status read = read_payload(record, payload.get());
   if (!read.ok()) {
     if (read.domain() == Code::InvalidArgument) return no_frame();  // its CRC
     return read;
@@ -518,6 +921,7 @@ FrameResult RgbdStreamSensor::State::take(const stream::Record& record) {
   sensor::RgbdFrame frame = std::move(decoded).value();
   frame.timestamp_ns = at.pts_ns;
   frame.sequence = at.seq;
+  if (link) frame.arrival_ns = arrival_ns;
   if (frame.depth_confidence != nullptr &&
       frame.min_confidence < options.min_confidence) {
     frame.min_confidence = options.min_confidence;
@@ -536,19 +940,19 @@ FrameResult RgbdStreamSensor::State::take(const stream::Record& record) {
 vkc::Status RgbdStreamSensor::State::take_color(const stream::Record& record) {
 #if VR_EXAMPLE_LINK_VIDEO
   const stream::RecordInfo& at = record.info;
-  color.found = std::max(color.found, at.seq + 1);
+  color.find(at.seq, link != nullptr);
   // A unit not decoded leaves the ones after it predicted from a picture the
   // decoder never had: the gate waits for the next key.
   std::vector<std::uint8_t> payload;
-  const vkc::Status read = reader->read(record, &payload);
+  const vkc::Status read = read_payload(record, &payload);
   if (!read.ok()) {
-    gate.lose();
+    lose_picture();
     return read.domain() == Code::InvalidArgument ? vkc::Status{} : read;
   }
   const vkc::Result<wire::ColorRecord> decoded =
       wire::decode_color(info, payload.data(), payload.size());
   if (!decoded.ok()) {
-    gate.lose();
+    lose_picture();
     const bool refused = decoded.status().domain() == Code::InvalidArgument;
     return refused ? vkc::Status{} : decoded.status();
   }
@@ -608,7 +1012,7 @@ vkc::Status RgbdStreamSensor::State::receive_pictures() {
       // A picture that failed to decode: the ones in flight with it are
       // lost, and the gate waits for the next key.
       in_flight.clear();
-      gate.lose();
+      lose_picture();
       return {};
     }
     if (!received.value()) return {};
@@ -634,7 +1038,7 @@ vkc::Status RgbdStreamSensor::State::receive_pictures() {
 
 vkc::Status RgbdStreamSensor::State::send_failed(vkc::Status why) {
   const bool lost = why.domain() == Code::IoError;
-  if (lost) gate.lose();
+  if (lost) lose_picture();
   // The decoder can have moved pictures to ready before failing, which must
   // be taken before anything more is sent; after a refusal, they come out
   // and then the refusal.
@@ -657,6 +1061,7 @@ vkc::Status RgbdStreamSensor::State::end_stream() {
 vkc::Status RgbdStreamSensor::State::decoder_failed(vkc::Status why) {
   in_flight.clear();
   file_ended = true;
+  if (link) link->end();  // live, the stream ends with it
   return std::move(why).with_context("RgbdStreamSensor: decoding sensor " +
                                      info.id + "'s pictures");
 }
@@ -745,9 +1150,12 @@ vkc::Status RgbdStreamSensor::State::end_file() {
 
 void RgbdStreamSensor::State::finish() {
   at_end = true;
-  // A finished file's footer counts each track's records.
+  // A finished file's footer counts each track's records; a link has none.
   const auto written = [&](std::uint16_t t) -> std::uint64_t {
-    if (!reader->recovery().finished || t >= reader->stats().size()) return 0;
+    if (!reader || !reader->recovery().finished ||
+        t >= reader->stats().size()) {
+      return 0;
+    }
     return reader->stats()[t].records;
   };
   depth.end(written(track), &skipped);

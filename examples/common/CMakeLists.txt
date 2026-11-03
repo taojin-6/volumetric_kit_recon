@@ -28,15 +28,20 @@ if(TARGET volumetric_kit::sensor_microphone)
                              INTERFACE VR_EXAMPLE_MICROPHONE=1)
 endif()
 
-# One sensor of a .vrst session read back as a sensor::IRgbdSensor
-# (link/rgbd_stream_sensor.hpp): its depth track's records, in sensor's wire
-# form (sensor_wire), through grid's StreamReader, and its pictures on
-# sensor_video where sensor builds it. The key gate is sensor_video_syntax's,
-# which sensor_wire brings.
+# One sensor of a .vrst session, from a file or a live link its writer dials,
+# read back as a sensor::IRgbdSensor (link/rgbd_stream_sensor.hpp): its depth
+# track's records, in sensor's wire form (sensor_wire), through grid's
+# StreamReader or, live, a core::net::Listener's connections read by grid's
+# StreamClient, and its pictures on sensor_video where sensor builds it. The key
+# gate is sensor_video_syntax's, which sensor_wire brings. session_check's
+# checks (link/session_check.hpp) read the pattern with sensor_prep's
+# PatternReader.
 add_library(vr_example_link STATIC link/rgbd_stream_sensor.cpp)
 target_link_libraries(
-  vr_example_link PUBLIC vr_example_common volumetric_kit::sensor_wire
-                         volumetric_kit::grid_stream)
+  vr_example_link
+  PUBLIC vr_example_common volumetric_kit::sensor_wire
+         volumetric_kit::grid_stream
+  PRIVATE volumetric_kit::grid_networking volumetric_kit::core_net)
 if(TARGET volumetric_kit::sensor_video)
   target_link_libraries(vr_example_link PRIVATE volumetric_kit::sensor_video)
   target_compile_definitions(vr_example_link PRIVATE VR_EXAMPLE_LINK_VIDEO=1)

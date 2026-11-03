@@ -1035,7 +1035,22 @@ only with its own picture, the frame contract's whole-frame rule; the header
 says how the units are admitted after a loss, how a frame finds its picture
 and what a frame without one costs. Without a device it reads the depth
 alone; a build without sensor's video decoders (`sensor_video`: off Apple,
-without `VS_WITH_FFMPEG`) refuses one. A live link comes next.
+without `VS_WITH_FFMPEG`) refuses one.
+
+Live, `RgbdStreamSensor::listen` takes the same records from a writer that
+dials one numeric address of this host (core's `net::Listener`, grid's
+`StreamClient::adopt`), on the polling thread, a poll waiting up to 20 ms.
+Its writer makes a key only for a reader that joins, so after a connection
+drops or a picture fails to decode the reader lets the connection go and
+takes the next one, which starts at a key; three such failures within 10 s
+end the stream. A connection whose session is not the first one's is
+refused, records a writer sends again are skipped, and with a recording path
+every record taken goes through grid's `StreamWriter` into one file across
+the reconnects. `tools/session_check`, built with the tests, prints what
+`link/session_check.hpp` finds of a file or a link: counts, lost spans (and
+those of 100 ms or more, where the tracking lane's windows split), times,
+each frame's pattern index read on the device for its picture and its depth
+(sensor's `PatternReader`), and the frame contract's breach.
 
 Every example reads a scenario with `--config path.json`; `--help` prints
 that entry point. The optional core `config` tier owns the JSON format, typed
