@@ -52,6 +52,10 @@ core::Result<SetSender::Sent> SetSender::send(
     return core::Status::invalid_argument(
         "SetSender: the stream is moved from");
   }
+  // What the prep reads goes with the batch that reads it: let go once a wait
+  // sees the work done, and after a failed wait kept by the device until it
+  // has waited for the work, which may still be running.
+  front.retain(std::move(inputs));
   Sent out;
   const FuseInputs in = fuse_inputs(frames);
   VKC_ASSIGN(const tsdf::PendingFuse fused,
@@ -95,7 +99,6 @@ core::Result<SetSender::Sent> SetSender::send(
     }
     return {};
   }();
-  inputs.reset();  // the prep was the pictures' last reader
   if (!ran.ok()) {
     fuser_->abandon(fused);
     return ran;

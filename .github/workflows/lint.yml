@@ -22,7 +22,7 @@ jobs:
       # No workflow is triggered by an event an outsider can cause, or by a
       # schedule (the core's tools/runners/README.md, "Who can trigger CI").
       # The action is at the core pin in third_party/CMakeLists.txt.
-      - uses: taojin-6/volumetric_kit_core/.github/actions/check-workflow-triggers@2163debc075bd7bfcd3738f8273821096cc6bece
+      - uses: taojin-6/volumetric_kit_core/.github/actions/check-workflow-triggers@f618c63db9d991e6a65473c50952189b6c92209c
       # 3.14, the version the cmake-format hook names: cmakelang 0.6.13 cannot
       # start on 3.15 (.pre-commit-config.yaml).
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0

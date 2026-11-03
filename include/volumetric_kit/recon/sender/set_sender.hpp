@@ -114,8 +114,11 @@ class VR_SENDER_API SetSender {
   ///                here.
   /// @param frames  The prepared frames; the caller keeps them for as long
   ///                as it likes.
-  /// @param inputs  What the prep's commands read (the set's pictures), held
-  ///                until @p front has run, then dropped.
+  /// @param inputs  What the prep's commands read (the set's pictures), which
+  ///                @p front retains (`CommandBatch::retain`): dropped once
+  ///                its wait sees the work done, or with @p front when it is
+  ///                not submitted; after a failed wait the device keeps them
+  ///                until it has waited for the work.
   /// @param index   The set's index in the run: its frame's set, above every
   ///                frame's coded before.
   /// @param pts_ns  Its frame's time, no earlier than the last frame's
