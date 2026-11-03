@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **a recorded sensor plays back with its pictures.** Given a
+  device (`Options::device`), `RgbdStreamSensor` also reads the sensor's
+  `RgbdColor` track, decodes it there with sensor's `HevcDecoder`, and hands
+  out each frame only with its own picture
+  (`examples/common/link/rgbd_stream_sensor.hpp`). CI's NVDEC and
+  VideoToolbox legs set `VS_TEST_HEVC_BACKEND`, so its test fails there
+  rather than skips.
 - `examples`: **a recorded sensor plays back as an `IRgbdSensor`**
   (`examples/common/link/rgbd_stream_sensor.hpp`, `vr_example_link`):
   `RgbdStreamSensor::open_file` reads one sensor of a `.vrst` session from

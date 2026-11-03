@@ -6,11 +6,12 @@
 /// @file examples/common/link/rgbd_stream_sensor.hpp
 /// @brief One sensor of a session in a `.vrst` file, as a
 ///        `sensor::IRgbdSensor`: the frames it handed its writer, rebuilt
-///        from their depth records.
+///        from their depth records and, given a device, their pictures.
 ///
 /// What it is (`info()`): its `RgbdDepth` track's params
 /// (`sensor::wire::decode_sensor`), with the track's sensor id, clock and
-/// rate. It reads the depth track alone, so it names no colour camera.
+/// rate. It names a colour camera only when it reads the sensor's
+/// `RgbdColor` track, which it does given a device to decode on.
 ///
 /// A frame is a depth record's half (`sensor::wire::decode_depth`): its depth
 /// and confidence plane point into the record's payload, which its pixels
@@ -30,17 +31,37 @@
 ///   seq above it with a non-zero pts not above the last one's leaves a gap,
 ///   as any refused record.
 ///
+/// **Its picture.** Reading colour, a frame goes out only with its own
+/// picture: that of the colour record of its set and pts, decoded on the
+/// device by sensor's `HevcDecoder` (VideoToolbox on Apple, NVDEC elsewhere),
+/// with that record's colour camera and exposure
+/// (`sensor::wire::decode_color`). Every access unit goes to the decoder in
+/// order, a frame's that is then let go included, as sensor's `KeyGate` admits
+/// it by the picture track's seq and the unit's own slice type
+/// (`hevc::first_slice_type`): after a record lost on the way, refused, or
+/// failing to decode, it waits for the next key, and restarts the decoder
+/// there, once the pictures held back for display are out. A depth record
+/// whose picture never comes, or comes described other than its record's
+/// colour codes say (`video/frame_color.hpp`) or at another size than its
+/// colour camera, gives no frame: counted failed, a gap in the sequence and a
+/// span as any lost record. A picture with no depth record is let go. The
+/// colour records that never reached the decoder are spans of their own
+/// (@ref RgbdStreamSensor::skipped_color).
+///
 /// A tracked sensor's poses are in its own world, and a registration places
 /// them in the array's: `tracking_to_world * color_to_world`. A fixed
 /// sensor's poses are handed out as written.
 ///
-/// Frames go out as fast as they are polled: each poll reads the next one.
+/// Frames go out as fast as they are polled: each poll reads records until
+/// the next frame is whole, on the polling thread, decoding included.
 ///
 /// @code
 /// link::RgbdStreamSensor::Options options;
 /// VKC_ASSIGN(options.registration,
 ///            sensor::camera::read_tracked_registration(registration_path));
 /// options.min_confidence = 2;  // the phone's high, whatever it fused at
+/// options.device = &device;    // decode the pictures; null reads depth alone
+/// options.allocator = &allocator;
 /// VKC_ASSIGN(auto phone, link::RgbdStreamSensor::open_file(path, options));
 /// VKC_TRY(phone->start());
 /// while (!phone->exhausted()) {
@@ -50,8 +71,7 @@
 /// }
 /// @endcode
 ///
-/// TODO: the pictures, decoded on the device and joined to the depth by set,
-/// and a live link its writer dials.
+/// TODO: a live link its writer dials.
 ///
 /// @warning Not thread-safe: open, start, poll, drain and stop from one
 ///          thread.
@@ -64,6 +84,7 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/fwd.hpp"
 #include "volumetric_kit/sensor/camera/tracked_registration.hpp"
 #include "volumetric_kit/sensor/rgbd_frame.hpp"
 #include "volumetric_kit/sensor/rgbd_sensor.hpp"
@@ -76,7 +97,7 @@ namespace vkc = volumetric_kit::core;
 /// @brief One sensor of a `.vrst` session, read back (above).
 class RgbdStreamSensor final : public sensor::IRgbdSensor {
  public:
-  /// @brief Which sensor, and where its poses go.
+  /// @brief Which sensor, where its poses go, and where its pictures decode.
   struct Options {
     /// The sensor's id (`SensorInfo::id`); empty for a session's only one.
     std::string sensor;
@@ -90,16 +111,27 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
     /// lower: the lab's 2, ARKit's high, whatever floor the phone fused at.
     /// 0 keeps each record's; a record without a plane keeps 0.
     std::uint8_t min_confidence = 0;
+    /// Where the pictures decode, and are handed out (`HevcDecoder::Options`
+    /// device): the sensor's `RgbdColor` track is read only with one, and a
+    /// session without that track reads as depth alone. Null reads the depth
+    /// alone. Borrowed: it must outlive the sensor and every frame.
+    const vkc::Device* device = nullptr;
+    /// What NVDEC's pictures are made through: required with a device off
+    /// Apple. Borrowed, as @ref device.
+    vkc::Allocator* allocator = nullptr;
+    /// The queue families that read the pictures (`HevcDecoder::Options`).
+    std::vector<std::uint32_t> queue_families;
   };
 
-  /// @brief Depth records that gave no frame where the frames' sequences
-  ///        jump over them: lost on the way, or refused (above).
+  /// @brief Records of one track that gave nothing where its numbers jump
+  ///        over them: lost on the way, or refused (above).
   struct Skipped {
     std::uint64_t first = 0;  ///< The first one's seq.
     std::uint64_t count = 0;  ///< How many: 1 or more.
-    /// The latest timestamp handed out before them; 0 for none.
+    /// The last non-zero timestamp of the records that counted before them,
+    /// in seq order; 0 for none.
     std::uint64_t after_ns = 0;
-    /// The timestamp of the frame handed out after them; 0 for none.
+    /// The timestamp of the record that counted after them; 0 for none.
     std::uint64_t before_ns = 0;
   };
 
@@ -109,11 +141,16 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   ///         @ref Options::sensor, none or several of that sensor, a
   ///         registration `validate_tracked_registration` refuses or that is
   ///         not for it (a fixed sensor, another sensor, session or epoch),
-  ///         or params `decode_sensor` refuses; `Status::Code::Unsupported`
-  ///         for a wire version this build does not read;
-  ///         `StreamReader::open`'s errors otherwise, such as
-  ///         `Status::Code::NotFound`. Messages begin
-  ///         `"RgbdStreamSensor::open_file: "`.
+  ///         or params `decode_sensor` refuses; with a device, for several
+  ///         `RgbdColor` tracks of the sensor, or one on another clock than
+  ///         its depth's or for params that name no colour camera;
+  ///         `Status::Code::Unsupported` for a wire version or, with a
+  ///         device, a picture codec this build does not read, or a device in
+  ///         a build without sensor's video decoders; `StreamReader::open`'s
+  ///         errors, such as `Status::Code::NotFound`, and with a picture
+  ///         track `HevcDecoder::create`'s (`Status::Code::Unsupported`
+  ///         where the device has no decoder path) otherwise. Messages
+  ///         begin `"RgbdStreamSensor::open_file: "`.
   static vkc::Result<std::unique_ptr<RgbdStreamSensor>> open_file(
       const std::string& path, Options options);
 
@@ -121,30 +158,34 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   RgbdStreamSensor(RgbdStreamSensor&&) = delete;
   RgbdStreamSensor& operator=(RgbdStreamSensor&&) = delete;
 
-  /// @return The depth track's sensor, with no colour camera.
+  /// @return The depth track's sensor, its colour camera kept only when the
+  ///         picture track is read.
   const sensor::SensorInfo& info() const noexcept override;
 
   /// @brief Accepts any depth of at least 1 before @ref start, and changes
-  ///        nothing: no frame is held between polls, each reading the next.
+  ///        nothing: each poll reads on to the next frame.
   /// @return OK; `Status::Code::InvalidArgument` for 0, or once started.
   vkc::Status set_queue_depth(std::size_t frames) override;
 
-  /// @brief Begin reading at the file's first record, the counters and
-  ///        @ref skipped emptied. Idempotent: starting a running sensor
-  ///        leaves its place alone.
+  /// @brief Begin reading at the file's first record, the counters,
+  ///        @ref skipped and @ref skipped_color emptied. Idempotent:
+  ///        starting a running sensor leaves its place alone.
   vkc::Status start() override;
 
-  /// @brief Stop reading and rewind. Idempotent.
+  /// @brief Stop reading and rewind, the frames and pictures held let go
+  ///        and the decoder reset. Idempotent.
   void stop() noexcept override;
 
-  /// @brief Hand out the next frame of the depth track.
+  /// @brief Hand out the next frame, whole.
   /// @return The frame; an empty optional at the file's end or while not
   ///         started; or the file's read error (`Status::Code::IoError`,
   ///         `Status::Code::OutOfMemory`). After one in a record's payload,
   ///         which costs that record, the next poll reads on; one the
   ///         reader cannot get past (`StreamReader::next`'s, such as a file
-  ///         shortened since it was opened) ends the file there, and
-  ///         @ref exhausted is `true`.
+  ///         shortened since it was opened), or the decoder's other than
+  ///         `Status::Code::IoError` (a stream it refuses, a failed device
+  ///         path), ends the file there, and the polls after it hand out the
+  ///         frames already whole.
   vkc::Result<std::optional<sensor::RgbdFrame>> poll() override;
 
   /// @brief Append what @ref poll would return: the next frame, or nothing.
@@ -152,21 +193,34 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   /// @return OK, or @ref poll 's error.
   vkc::Status drain(std::vector<sensor::RgbdFrame>* out) override;
 
-  /// @return `true` once a poll found the file's end, or an error ended it.
+  /// @return `true` once the file has ended, at its end or by an error, and
+  ///         every frame whole by then is handed out.
   bool exhausted() const noexcept override;
 
   /// @return The counters since the last @ref start: received, the depth
   ///         records found; delivered, the frames handed out; failed, the
-  ///         records found that gave none.
+  ///         records found that gave none, those whose picture failed
+  ///         included.
   sensor::SensorStats stats() const noexcept override;
 
-  /// @return The spans of records skipped since the last @ref start, in
-  ///         order: one before a frame once that frame is handed out, and
-  ///         one after the last frame once the file has ended.
+  /// @return The spans of depth records that gave no frame since the last
+  ///         @ref start, in order: one before a frame once that frame is
+  ///         handed out, and one after the last frame once the file has
+  ///         ended.
   const std::vector<Skipped>& skipped() const noexcept;
 
+  /// @return The spans of colour records whose access unit never reached the
+  ///         decoder since the last @ref start, by the picture track's seq:
+  ///         lost on the way, refused (their CRC, the decode, or a unit the
+  ///         decoder would not take), or let go by the key gate while it
+  ///         waited for a key. Each is found as @ref skipped finds its spans,
+  ///         its times the pts of the units decoded before and after it, in
+  ///         decode order: with B-frames, not the latest pts seen. Empty when
+  ///         the picture track is not read.
+  const std::vector<Skipped>& skipped_color() const noexcept;
+
  private:
-  struct State;  // the file's reader, its place, and what it handed out
+  struct State;  // the file's reader, its place, the decoder, the join
 
   explicit RgbdStreamSensor(std::unique_ptr<State> state);
 

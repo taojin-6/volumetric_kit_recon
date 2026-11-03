@@ -1023,9 +1023,15 @@ gap. A read error the reader cannot get past ends the file. A tracked
 sensor's poses are placed by a
 registration (sensor's `TrackedRegistration`) for the file's session at
 world epoch 0. `Options::min_confidence` raises a record's floor where it
-has a plane (the lab's 2, whatever the phone fused at). It reads the depth
-alone, so its sensor names no colour camera; the pictures and a live link
-come next.
+has a plane (the lab's 2, whatever the phone fused at).
+
+Given a device (`Options::device`), it also reads the sensor's `RgbdColor`
+track, decodes it there with sensor's `HevcDecoder`, and hands out a frame
+only with its own picture, the frame contract's whole-frame rule; the header
+says how the units are admitted after a loss, how a frame finds its picture
+and what a frame without one costs. Without a device it reads the depth
+alone; a build without sensor's video decoders (`sensor_video`: off Apple,
+without `VS_WITH_FFMPEG`) refuses one. A live link comes next.
 
 Every example reads a scenario with `--config path.json`; `--help` prints
 that entry point. The optional core `config` tier owns the JSON format, typed
