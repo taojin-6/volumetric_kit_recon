@@ -79,6 +79,11 @@ jobs:
       # Every leg runs the tests under the Khronos validation layer, and
       # `sync_validation` adds synchronization validation on the NVIDIA legs,
       # as the sanitizer job does on lavapipe.
+      #
+      # `hevc_backend` names the hardware a leg promises sensor's HEVC decoder
+      # on (VS_TEST_HEVC_BACKEND, as sensor's CI sets it): NVDEC on the CUDA
+      # leg, VideoToolbox on macOS, so recon's decoding test fails there
+      # rather than skips. The legs without sensor's decoders promise none.
       matrix:
         include:
           - os: ubuntu-24.04
@@ -94,6 +99,7 @@ jobs:
             ffs: true
             portaudio: true
             sync_validation: true
+            hevc_backend: cuda
           - os: ubuntu-26.04
             runner: vk-linux-gpu
             # ubuntu:26.04
@@ -110,6 +116,7 @@ jobs:
             realsense_sdk: true
             assimp: true
             portaudio: true
+            hevc_backend: videotoolbox
     uses: ./.github/workflows/_build.yml
     with:
       os: ${{ matrix.os }}
@@ -124,6 +131,7 @@ jobs:
       assimp: ${{ matrix.assimp || false }}
       portaudio: ${{ matrix.portaudio || false }}
       sync_validation: ${{ matrix.sync_validation || false }}
+      hevc_backend: ${{ matrix.hevc_backend || '' }}
 
   viewer:
     uses: ./.github/workflows/viewer.yml

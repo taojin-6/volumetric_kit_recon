@@ -1023,9 +1023,29 @@ gap. A read error the reader cannot get past ends the file. A tracked
 sensor's poses are placed by a
 registration (sensor's `TrackedRegistration`) for the file's session at
 world epoch 0. `Options::min_confidence` raises a record's floor where it
-has a plane (the lab's 2, whatever the phone fused at). It reads the depth
-alone, so its sensor names no colour camera; the pictures and a live link
-come next.
+has a plane (the lab's 2, whatever the phone fused at).
+
+Given a device (`Options::device`), it reads the sensor's `RgbdColor` track
+too, and its sensor names the colour camera; without one, or where sensor
+builds no video decoders (`sensor_video`: off Apple, without
+`VS_WITH_FFMPEG`), it reads the depth alone. A frame then goes out only with
+its own picture, the frame contract's whole-frame rule: the colour record of
+its set and pts (`sensor::wire::decode_color`), decoded by sensor's
+`HevcDecoder` on that device (VideoToolbox on Apple, NVDEC elsewhere), with
+the record's colour camera and exposure. Every access unit goes to the
+decoder in order, those of frames let go later included, since the frames
+after them are predicted from them; sensor's `KeyGate` admits each by the
+picture track's seq and its own slice type (`hevc::first_slice_type`), so
+after a record lost, refused or failing to decode, decoding waits for the
+next key and restarts there. Pictures come out in display order, the frames'
+order, which is how a frame learns its picture will not come. A depth record
+whose picture never comes, or comes described other than its record's colour
+codes say (sensor's `video/frame_color.hpp`, the meaning of the codes, not
+their numbers) or at another size than its camera, gives no frame: counted
+failed, a gap and a span as any lost record. A picture with no depth record
+is let go. The colour records that never reached the decoder are spans of
+their own (`skipped_color()`). The decoder's failures other than a picture
+that does not decode end the file. A live link comes next.
 
 Every example reads a scenario with `--config path.json`; `--help` prints
 that entry point. The optional core `config` tier owns the JSON format, typed
