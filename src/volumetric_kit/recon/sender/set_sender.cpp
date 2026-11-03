@@ -5,7 +5,7 @@
 
 #include <utility>
 
-#include "volumetric_kit/recon/sender/fuse_inputs.hpp"
+#include "volumetric_kit/recon/tsdf/fuse_inputs.hpp"
 
 namespace volumetric_kit::recon::sender {
 
@@ -53,7 +53,7 @@ core::Result<SetSender::Sent> SetSender::send(
         "SetSender: the stream is moved from");
   }
   Sent out;
-  const FuseInputs in = fuse_inputs(frames);
+  const tsdf::FuseInputs in = tsdf::fuse_inputs(frames);
   VKC_ASSIGN(const tsdf::PendingFuse fused,
              fuser_->record_fuse(front, *grid_, in.frames, config_.max_weight,
                                  config_.mode, rows));

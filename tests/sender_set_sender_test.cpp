@@ -77,8 +77,8 @@
 #include "volumetric_kit/grid/testing/stage_rows.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/sender/fuse_inputs.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
+#include "volumetric_kit/recon/tsdf/fuse_inputs.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/sensor/array/sensor_array.hpp"
@@ -499,7 +499,7 @@ int code_sets(vkc::test::GpuContext& gpu, const Fusion& fusion,
       // before the sender.
       auto prepared = array.process(*set);
       CHECK(prepared.ok() && prepared->timestamp_ns == set_time(s));
-      const sender::FuseInputs in = sender::fuse_inputs(prepared->frames);
+      const vr::tsdf::FuseInputs in = vr::tsdf::fuse_inputs(prepared->frames);
       CHECK(fuser
                 ->fuse(*grid, in.frames, fusion.max_weight, mode_of(fusion),
                        nullptr)
@@ -793,7 +793,7 @@ int keyed_sets(vkc::test::GpuContext& gpu, const Keyed& run,
     } else {
       auto prepared = array.process(*set);
       CHECK(prepared.ok());
-      const sender::FuseInputs in = sender::fuse_inputs(prepared->frames);
+      const vr::tsdf::FuseInputs in = vr::tsdf::fuse_inputs(prepared->frames);
       CHECK(fuser
                 ->fuse(*grid, in.frames, fusion.max_weight, mode_of(fusion),
                        nullptr)

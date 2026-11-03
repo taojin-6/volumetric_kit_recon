@@ -102,6 +102,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `tsdf`, `sender`: **`fuse_inputs` is tsdf's** (the 2026-10-26 sender
+  decision, amended): `tsdf::fuse_inputs` and `tsdf::FuseInputs`
+  (`tsdf/fuse_inputs.hpp`) in `recon_tsdf`, which already linked
+  `sensor_frame`; `recon_sender` keeps `SetSender` and calls it there. The
+  function and its inputs are unchanged. `fuse_replica`, `fuse_render`,
+  `fuse_viewer`, `rig_viewer` and `recon_example_fuse_keyframe` link
+  `recon_tsdf` in place of `recon_sender`, so a program that fuses without
+  sending links no codec, stream or networking tier; `rig_viewer` names
+  `grid_codec` for `set_log.hpp`. Migration: include
+  `volumetric_kit/recon/tsdf/fuse_inputs.hpp` and name `tsdf::` for
+  `sender::` on those two names; link `recon_tsdf`, or keep `recon_sender`,
+  which links it. Nothing forwards from the old names. Tests:
+  `recon_sender_fuse_inputs` is `recon_tsdf_fuse_inputs`.
+
 - build: **recon pins core 0.43.0** (core #89's merge, `2163deb`; was
   0.39.0), **sensor 0.27.0** (sensor #35's merge, `ed3e40e`; was 0.19.0)
   and **grid 0.12.0** (grid #18's merge, `17d48f3`; was 0.8.0), and CI

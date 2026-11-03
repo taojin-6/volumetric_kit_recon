@@ -6,9 +6,11 @@
 # tsdf/weight attributes via a GLSL compute kernel (classic projective
 # integration first; dynamic follows), the per-camera ChangeDetector that flags
 # pixels whose depth changed for real, the Fuser that takes a set of frames
-# through the grid's growth, allocation and integration, and the grid it starts
-# from. Depends on grid_volume (VoxelBlockGrid, grow_grid, DepthPinhole, the
-# BlockIndex/VoxelGridParams ABI), per the strict left-to-right tier rule.
+# through the grid's growth, allocation and integration, the grid it starts
+# from, and the fuser's inputs for frames prepared on the device (fuse_inputs,
+# from sensor_frame's DeviceFrame). Depends on grid_volume (VoxelBlockGrid,
+# grow_grid, DepthPinhole, the BlockIndex/VoxelGridParams ABI), per the strict
+# left-to-right tier rule.
 include(GenerateExportHeader)
 
 set(_vr_tsdf_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
@@ -16,8 +18,8 @@ set(_vr_tsdf_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_tsdf)
 add_library(volumetric_kit::recon_tsdf ALIAS recon_tsdf)
 
-target_sources(recon_tsdf PRIVATE change_detector.cpp fuser.cpp fusion_grid.cpp
-                                  tsdf_integrator.cpp)
+target_sources(recon_tsdf PRIVATE change_detector.cpp fuse_inputs.cpp fuser.cpp
+                                  fusion_grid.cpp tsdf_integrator.cpp)
 
 # Per-tier export header (VR_TSDF_API / VR_TSDF_STATIC_DEFINE), isolated so the
 # macros never collide with another tier's on one include path.

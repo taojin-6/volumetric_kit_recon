@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// sender::fuse_inputs, the hand-off from prepared frames to the fuser's
+// tsdf::fuse_inputs, the hand-off from prepared frames to the fuser's
 // inputs, field by field: an empty entry is skipped; each frame's slot is its
 // index in the set, its noise its frame's depth_noise as its producer stated
 // it (an unknown one stays unknown, for Dynamic to refuse), its camera the
@@ -20,13 +20,12 @@
 #include "depth_inputs.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
-#include "volumetric_kit/recon/sender/fuse_inputs.hpp"
+#include "volumetric_kit/recon/tsdf/fuse_inputs.hpp"
 #include "volumetric_kit/sensor/frame/depth_noise.hpp"
 #include "volumetric_kit/sensor/frame/device_frame.hpp"
 
 namespace vkc = volumetric_kit::core;
 namespace sensor = volumetric_kit::sensor;
-namespace sender = volumetric_kit::recon::sender;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
 namespace {
@@ -62,7 +61,7 @@ int run() {
   set[2] = frame(12, false, stereo);
   set[3] = frame(14, true, {});
   set[4] = frame(16, true, constant);
-  sender::FuseInputs in = sender::fuse_inputs(set);
+  tsdf::FuseInputs in = tsdf::fuse_inputs(set);
   CHECK(in.frames.size() == 4);
   CHECK(in.colors.size() == 3);
   const std::uint32_t slots[] = {0, 2, 3, 4};
@@ -90,15 +89,15 @@ int run() {
   CHECK(in.frames[3].noise == constant);
 
   // Moved, the colours are still the inputs' own.
-  const sender::FuseInputs moved = std::move(in);
+  const tsdf::FuseInputs moved = std::move(in);
   CHECK(moved.frames[0].color == &moved.colors[0]);
   CHECK(moved.frames[3].color == &moved.colors[2]);
 
   // A set with no frame gives no input.
-  CHECK(sender::fuse_inputs(Frames{}).frames.empty());
-  const sender::FuseInputs none = sender::fuse_inputs(Frames(3));
+  CHECK(tsdf::fuse_inputs(Frames{}).frames.empty());
+  const tsdf::FuseInputs none = tsdf::fuse_inputs(Frames(3));
   CHECK(none.frames.empty() && none.colors.empty());
-  std::puts("recon sender fuse_inputs test passed");
+  std::puts("recon tsdf fuse_inputs test passed");
   return 0;
 }
 

@@ -107,7 +107,8 @@ package includes anything of recon's ([grid's tiers](https://github.com/taojin-6
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic), the
   per-camera `ChangeDetector` that flags pixels whose depth changed for
   real, the `Fuser` that fuses a set of frames (grow, allocate, integrate),
-  and the grid it starts from (`create_fusion_grid`).
+  the grid it starts from (`create_fusion_grid`), and the fuser's inputs for
+  prepared frames (`fuse_inputs`).
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), or with several cameras' coordinates into an atlas of
@@ -116,8 +117,7 @@ package includes anything of recon's ([grid's tiers](https://github.com/taojin-6
   depth map decides too; depth may be on the host or the device.
 - **`sender`** — a sender's set step: a prepared set fused, freed on
   schedule and its frame coded in two batches through the codec stream's
-  halves (`SetSender`), and the fuser's inputs for prepared frames
-  (`fuse_inputs`) (2026-10-26). It prints nothing.
+  halves (`SetSender`) (2026-10-26). It prints nothing.
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Backend strategy: one Vulkan path
@@ -781,8 +781,8 @@ turn as integrating them one at a time does, bit for bit. A frame with no
 pixels fuses nothing, as it allocates nothing (2026-09-30).
 
 **Dynamic: change evicts, conflict averages** (2026-10-29). Each frame
-names its fixed camera's slot (`FrameInput::slot`, distinct in a set; the
-sender's is the camera's index) and noise (`FrameInput::noise`: sensor's
+names its fixed camera's slot (`FrameInput::slot`, distinct in a set;
+`fuse_inputs` gives the camera's index) and noise (`FrameInput::noise`: sensor's
 `DepthNoise`, the frame's `DeviceFrame::depth_noise` as its producer states
 it; 2026-10-30), and the integrator owns a `ChangeDetector` (its config from
 `TsdfIntegrator::create` and `FuserConfig::change`). A Dynamic set is one
@@ -841,6 +841,11 @@ and the packed `color` the fuser writes, at `fusion_buckets`' start --
 16,384 buckets at 1 cm and coarser, scaled by (1 cm / voxel)² up to 4× finer,
 or the caller's count, capped at the ceiling the grid can never grow past on
 the device (a capped caller's count logged as a warning) (2026-10-25).
+`fuse_inputs` (`tsdf/fuse_inputs.hpp`) hands frames prepared on the device
+(sensor's `DeviceFrame`) to the fuser, nothing uploaded: each frame's slot
+is its place in the set and its noise the frame's `depth_noise`, so a frame
+whose producer states none is refused under Dynamic (2026-10-26, amended
+2026-11-03).
 
 `allow_partial` explicitly opts live callers into integrating what fits.
 `fuse_viewer` and `rig_viewer` enable it with a two-grow bound. That mode
@@ -941,11 +946,8 @@ read back in a batch of its own.
 ### sender
 
 `recon_sender` is what a sender does with a prepared set
-(`sender/set_sender.hpp`, the 2026-10-26 entry). `fuse_inputs`
-(`sender/fuse_inputs.hpp`) hands prepared frames to the fuser, nothing
-uploaded: each frame's slot is its place in the set and its noise the
-frame's `depth_noise`, so a frame whose producer states none is refused
-under Dynamic.
+(`sender/set_sender.hpp`, the 2026-10-26 entry); it takes the fuser's
+inputs from tsdf's `fuse_inputs`.
 
 **The set step** (`SetSender`). `send` records the set's fusion
 (`Fuser::record_fuse`), its free pass every `free_after` sets
