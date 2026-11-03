@@ -75,15 +75,15 @@ if(NOT TARGET volumetric_kit::gfx_glfw)
 endif()
 
 # Name only the tiers that are not already pulled in transitively. recon_texture
-# PUBLIC-links grid_mesh, recon_sender (the fuser's inputs, fuse_frame.hpp's)
-# PUBLIC-links recon_tsdf (grid_volume) + sensor_frame, and vr_example_common
-# the sensor package's prep, so listing those again repeats their archives on
-# the link line and Apple's linker warns "ignoring duplicate libraries". Same
-# for gfx_core, which gfx_app / gfx_pipelines / gfx_ui all PUBLIC-link --
-# gfx_camera does not link it, which is why that one is named. Resist re-adding
-# the covered tiers for readability's sake; the warning comes straight back.
-set(_viewer_recon_libs volumetric_kit::recon_sender
-                       volumetric_kit::recon_texture vr_example_common)
+# PUBLIC-links grid_mesh, recon_tsdf (fuse_frame.hpp's fuser and its inputs)
+# PUBLIC-links grid_volume + sensor_frame, and vr_example_common the sensor
+# package's prep, so listing those again repeats their archives on the link line
+# and Apple's linker warns "ignoring duplicate libraries". Same for gfx_core,
+# which gfx_app / gfx_pipelines / gfx_ui all PUBLIC-link -- gfx_camera does not
+# link it, which is why that one is named. Resist re-adding the covered tiers
+# for readability's sake; the warning comes straight back.
+set(_viewer_recon_libs volumetric_kit::recon_tsdf volumetric_kit::recon_texture
+                       vr_example_common)
 set(_viewer_gfx_libs volumetric_kit::gfx_app volumetric_kit::gfx_pipelines
                      volumetric_kit::gfx_camera)
 set(_viewer_common_inc "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -209,12 +209,18 @@ vr_target_warnings(fuse_viewer)
 if(TARGET volumetric_kit::sensor_orbbec)
   add_executable(rig_viewer rig_viewer.cpp)
   # sensor_array ahead of the list, whose vr_example_common links sensor_prep: a
-  # library named before one that links it is named again, as above.
+  # library named before one that links it is named again, as above. grid_codec
+  # for set_log.hpp, whose codec_params.hpp includes the codec's generated
+  # export header, on grid_codec's include path alone.
   target_link_libraries(
     rig_viewer
-    PRIVATE volumetric_kit::sensor_array ${_viewer_recon_libs}
-            volumetric_kit::sensor_orbbec volumetric_kit::gfx_glfw
-            volumetric_kit::gfx_pipelines Vulkan::Vulkan)
+    PRIVATE volumetric_kit::sensor_array
+            ${_viewer_recon_libs}
+            volumetric_kit::grid_codec
+            volumetric_kit::sensor_orbbec
+            volumetric_kit::gfx_glfw
+            volumetric_kit::gfx_pipelines
+            Vulkan::Vulkan)
   target_include_directories(rig_viewer PRIVATE ${_viewer_common_inc})
   vr_target_warnings(rig_viewer)
 endif()

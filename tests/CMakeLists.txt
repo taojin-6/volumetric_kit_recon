@@ -187,6 +187,15 @@ target_link_libraries(
 vr_target_warnings(recon_tsdf_prepared_frame_test)
 add_test(NAME recon_tsdf_prepared_frame COMMAND recon_tsdf_prepared_frame_test)
 
+# tsdf fuse_inputs (tsdf/fuse_inputs.hpp), prepared frames to the fuser's
+# inputs, field by field: an empty entry skipped, each frame's slot its index
+# and its noise its frame's depth_noise, unknown kept unknown. Host only.
+add_executable(recon_tsdf_fuse_inputs_test tsdf_fuse_inputs_test.cpp)
+target_link_libraries(recon_tsdf_fuse_inputs_test
+                      PRIVATE volumetric_kit::recon_tsdf)
+vr_target_warnings(recon_tsdf_fuse_inputs_test)
+add_test(NAME recon_tsdf_fuse_inputs COMMAND recon_tsdf_fuse_inputs_test)
+
 # The viewer's retained keyframe survives preparation and integration errors,
 # and still supplies depth, coverage and atlas pixels for projective texturing;
 # the helper fuses in the integration mode it is given, the one fusion.dynamic
@@ -196,7 +205,7 @@ target_include_directories(recon_example_fuse_keyframe_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
 target_link_libraries(
   recon_example_fuse_keyframe_test
-  PRIVATE volumetric_kit::recon_sender volumetric_kit::recon_texture
+  PRIVATE volumetric_kit::recon_tsdf volumetric_kit::recon_texture
           volumetric_kit::sensor_prep volumetric_kit::core_test_policy)
 vr_target_warnings(recon_example_fuse_keyframe_test)
 add_test(NAME recon_example_fuse_keyframe
@@ -591,15 +600,6 @@ if(TARGET grid_mesh_io_assimp)
   vr_target_warnings(recon_io_textured_mesh_test)
   add_test(NAME recon_io_textured_mesh COMMAND recon_io_textured_mesh_test)
 endif()
-
-# sender tier: fuse_inputs (sender/fuse_inputs.hpp), prepared frames to the
-# fuser's inputs, field by field: an empty entry skipped, each frame's slot its
-# index and its noise its frame's depth_noise, unknown kept unknown. Host only.
-add_executable(recon_sender_fuse_inputs_test sender_fuse_inputs_test.cpp)
-target_link_libraries(recon_sender_fuse_inputs_test
-                      PRIVATE volumetric_kit::recon_sender)
-vr_target_warnings(recon_sender_fuse_inputs_test)
-add_test(NAME recon_sender_fuse_inputs COMMAND recon_sender_fuse_inputs_test)
 
 # sender tier: the set step (sender/set_sender.hpp) with no camera driver: fake
 # cameras read as a sensor array, each set's prep, fusion, free pass and frame

@@ -8,9 +8,9 @@
 ///        `tsdf::Fuser`, into the grid `tsdf::create_fusion_grid` makes.
 ///
 /// Header-only and compiled only into the executables that fuse: it includes
-/// the `sender` tier, which `vr_example_common` deliberately does not link.
+/// the `tsdf` tier, which `vr_example_common` deliberately does not link.
 /// What is left here is the blocking calls the non-sending examples fuse
-/// with, the fuser's inputs taken from `sender::fuse_inputs`, and the lines
+/// with, the fuser's inputs taken from `tsdf::fuse_inputs`, and the lines
 /// the examples print about what a set did to the grid.
 
 #include <cstdint>
@@ -22,7 +22,7 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/sender/fuse_inputs.hpp"
+#include "volumetric_kit/recon/tsdf/fuse_inputs.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
@@ -65,7 +65,7 @@ inline vr::tsdf::IntegrationMode integration_mode(bool dynamic) {
 
 /// @brief Fuse a set of frames already on the device, as
 ///        `sensor::GpuFramePrep` hands them out, through @p fuser
-///        (`sender::fuse_inputs`): one frame is `{frame}`. What the set did
+///        (`tsdf::fuse_inputs`): one frame is `{frame}`. What the set did
 ///        to the grid is printed (@ref print_fuse_report).
 /// @param fuser       The fuser.
 /// @param grid        The volume to fuse into.
@@ -82,7 +82,7 @@ inline vkc::Status fuse_set(
     const std::vector<std::optional<sensor::DeviceFrame>>& frames,
     float max_weight, vr::tsdf::IntegrationMode mode,
     vkc::StageMetrics* metrics) {
-  const vr::sender::FuseInputs in = vr::sender::fuse_inputs(frames);
+  const vr::tsdf::FuseInputs in = vr::tsdf::fuse_inputs(frames);
   VKC_ASSIGN(const vr::tsdf::FuseReport report,
              fuser.fuse(grid, in.frames, max_weight, mode, metrics));
   print_fuse_report(report);

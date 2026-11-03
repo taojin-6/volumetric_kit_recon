@@ -808,6 +808,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   `friend` is needed. The examples keep their reports, built from what the
   calls return. *Amended 2026-10-28:* the stream is a tier of its own,
   `codec_stream`, and the halves are its public calls; `coder()` is gone.
+  *Amended 2026-11-03:* `fuse_inputs` is tsdf's (`tsdf/fuse_inputs.hpp`).
 - [**2026-10-26**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-26--meshexchanges-consumer-may-drop-a-mesh-it-took-a-third-outcome-rather-than-a-deadline-in-the-exchange-and-a-ring-slot-more-for-each-mesh-dropped-before-the-next-commit-amends-the-2026-10-08-meshexchange-entry) —
   `MeshExchange`'s commit may drop a mesh it took (`CommitDecision::kDrop`):
   it never becomes live, the next frame takes the newest mesh, and its slot
@@ -876,7 +877,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   `CodecOutputs` and `SentFrame` leave `recon_sender`, which keeps
   `SetSender` and `fuse_inputs`. The frame in halves is the stream's public
   calls (`record_front`, `front_ran`, `redo`, `finish_frame`), `SetSender`
-  codes through them, and `coder()` is gone.
+  codes through them, and `coder()` is gone. *Amended 2026-11-03:*
+  `fuse_inputs` is tsdf's.
 - [**2026-10-28**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-28--the-voxel-grids-gpu-contract-has-one-home-volume-exports-grid_typesglsl-and-voxel_colorglsl-names-its-shared-attributes-and-keeps-the-hash-entries-internal-amends-the-2026-08-02-color-space-and-2026-10-13-block-list-entries) —
   The voxel grid's GPU contract has one home: `recon_volume` exports
   `grid_types.glsl` (the grid's structs, the in-block index, `vrTickAfter`)
@@ -5277,6 +5279,11 @@ four-camera redos, and the owner's rig run is what decides Q1.
 *Amended 2026-10-28 (below):* `CodecStream`, `CodecOutputs` and
 `SentFrame` are `codec_stream::`, in a tier of their own, and the frame's
 halves are the stream's public calls; `coder()` is gone.
+
+*Amended 2026-11-03:* `fuse_inputs` is `tsdf::fuse_inputs`
+(`tsdf/fuse_inputs.hpp`, in `recon_tsdf`): it needs only `sensor_frame`'s
+`DeviceFrame` and tsdf's own types, so a program that fuses without sending
+links no codec, stream or networking tier.
 
 **The rule.** `SetSender`, `CodecStream`, `CodecOutputs`, `SentFrame` and
 `fuse_inputs` move from `examples/common` (`set_codec.hpp`,

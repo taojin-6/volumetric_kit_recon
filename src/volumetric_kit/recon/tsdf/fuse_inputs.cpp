@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-#include "volumetric_kit/recon/sender/fuse_inputs.hpp"
+#include "volumetric_kit/recon/tsdf/fuse_inputs.hpp"
 
 #include <cstddef>
 #include <cstdint>
 
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 
-namespace volumetric_kit::recon::sender {
+namespace volumetric_kit::recon::tsdf {
 
 namespace {
 
 // How a prepared frame's colour is fused: through its own camera, the
 // coverage read off its high byte. Meaningful only when the frame has colour.
-tsdf::ColorFrame device_color(const sensor::DeviceFrame& frame) {
-  tsdf::ColorFrame color{};
+ColorFrame device_color(const sensor::DeviceFrame& frame) {
+  ColorFrame color{};
   color.buffer = frame.color.get();
   color.cam = frame.color_camera;
   color.encoding = frame.color_encoding;
@@ -32,7 +32,7 @@ FuseInputs fuse_inputs(
   for (std::size_t c = 0; c < frames.size(); ++c) {
     const std::optional<sensor::DeviceFrame>& frame = frames[c];
     if (!frame) continue;
-    const tsdf::ColorFrame* color = nullptr;
+    const ColorFrame* color = nullptr;
     if (frame->has_color()) {
       in.colors.push_back(device_color(*frame));
       color = &in.colors.back();
@@ -47,4 +47,4 @@ FuseInputs fuse_inputs(
   return in;
 }
 
-}  // namespace volumetric_kit::recon::sender
+}  // namespace volumetric_kit::recon::tsdf

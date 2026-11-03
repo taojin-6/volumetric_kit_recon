@@ -120,7 +120,7 @@ struct FrameInput {
   /// reads neither this nor @ref noise.
   std::uint32_t slot = 0;
   /// The camera's depth noise, as its producer states it: a prepared frame's
-  /// `sensor::DeviceFrame::depth_noise`, which `sender::fuse_inputs` copies.
+  /// `sensor::DeviceFrame::depth_noise`, which @ref fuse_inputs copies.
   /// @ref IntegrationMode::Dynamic's change test is floored by it, and
   /// refuses a frame whose noise is unknown (all zero, the default).
   sensor::DepthNoise noise{};

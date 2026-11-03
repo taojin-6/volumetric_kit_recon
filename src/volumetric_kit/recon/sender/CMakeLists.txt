@@ -4,9 +4,9 @@
 # --- recon_sender: a sender's set step ----------------------------------------
 # What a sender does with a set once its prep is recorded: fuse it, free stale
 # blocks on schedule and code its frame in two batches through the codec
-# stream's halves (SetSender), and the fuser's inputs for prepared frames
-# (fuse_inputs). The tier after codec_stream: it links the frame contract
-# (sensor_frame's DeviceFrame), the fuser (recon_tsdf) and the codec stream.
+# stream's halves (SetSender). The tier after codec_stream: it links the frame
+# contract (sensor_frame's DeviceFrame), the fuser and its inputs (recon_tsdf)
+# and the codec stream.
 include(GenerateExportHeader)
 
 set(_vr_sender_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
@@ -14,7 +14,7 @@ set(_vr_sender_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_sender)
 add_library(volumetric_kit::recon_sender ALIAS recon_sender)
 
-target_sources(recon_sender PRIVATE fuse_inputs.cpp set_sender.cpp)
+target_sources(recon_sender PRIVATE set_sender.cpp)
 
 generate_export_header(
   recon_sender
