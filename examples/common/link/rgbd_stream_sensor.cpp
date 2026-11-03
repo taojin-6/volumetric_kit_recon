@@ -3,6 +3,7 @@
 
 #include "link/rgbd_stream_sensor.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -14,6 +15,7 @@
 
 #include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/grid/stream/session.hpp"
+#include "volumetric_kit/grid/stream/stream_reader.hpp"
 #include "volumetric_kit/sensor/wire/rgbd_wire.hpp"
 
 namespace vr_example::link {
@@ -31,7 +33,43 @@ std::uint32_t frames_per_second(stream::Rate rate) noexcept {
                                     rate.den);
 }
 
+// A session id as a registration file writes it: 32 lowercase hex digits,
+// byte 0 first.
+std::string hex(const std::array<std::uint8_t, 16>& id) {
+  constexpr char kDigits[] = "0123456789abcdef";
+  std::string out;
+  for (const std::uint8_t byte : id) {
+    out += kDigits[byte >> 4];
+    out += kDigits[byte & 0xf];
+  }
+  return out;
+}
+
 }  // namespace
+
+struct RgbdStreamSensor::State {
+  std::unique_ptr<stream::StreamReader> reader;
+  std::uint16_t track = 0;  // the depth track's index
+  sensor::SensorInfo info;
+  Options options;
+  bool running = false;
+  bool at_end = false;
+  stream::Position position;  // the next poll's
+  // The last frame handed out since start, once there is one.
+  bool handed_out = false;
+  std::uint64_t last_sequence = 0;
+  std::uint64_t last_time = 0;  // the last non-zero timestamp; 0 before one
+  sensor::SensorStats stats;
+  std::vector<Skipped> skipped;
+
+  // The frame `record` of the depth track gives, or none for a record that
+  // fails its CRC, the decode, or the order of the frames before it.
+  FrameResult take(const stream::Record& record);
+
+  // The file has ended: a finished file's footer counts the records its
+  // writer wrote, so those past the last frame handed out are a span.
+  void end();
+};
 
 vkc::Result<std::unique_ptr<RgbdStreamSensor>> RgbdStreamSensor::open_file(
     const std::string& path, Options options) try {
@@ -94,7 +132,8 @@ vkc::Result<std::unique_ptr<RgbdStreamSensor>> RgbdStreamSensor::open_file(
                  info.id + "'s");
     }
     if (reg.session != session.id) {
-      return bad("the registration is another session's");
+      return bad("the registration is another session's: " + hex(reg.session) +
+                 ", not the file's " + hex(session.id));
     }
     if (reg.world_epoch != 0) {
       return bad("the registration holds for world epoch " +
@@ -103,19 +142,40 @@ vkc::Result<std::unique_ptr<RgbdStreamSensor>> RgbdStreamSensor::open_file(
     }
   }
 
-  std::unique_ptr<RgbdStreamSensor> out(new RgbdStreamSensor());
-  out->position_ = reader->begin();
-  out->reader_ = std::move(reader);
-  out->track_ = *found;
-  out->info_ = std::move(info);
-  out->options_ = std::move(options);
-  return out;
+  auto state = std::make_unique<State>();
+  state->position = reader->begin();
+  state->reader = std::move(reader);
+  state->track = *found;
+  state->info = std::move(info);
+  state->options = std::move(options);
+  return std::unique_ptr<RgbdStreamSensor>(
+      new RgbdStreamSensor(std::move(state)));
 } catch (const std::bad_alloc&) {
   return vkc::Status::out_of_memory("RgbdStreamSensor::open_file");
 }
 
+RgbdStreamSensor::RgbdStreamSensor(std::unique_ptr<State> state)
+    : state_(std::move(state)) {}
+
+RgbdStreamSensor::~RgbdStreamSensor() = default;
+
+const sensor::SensorInfo& RgbdStreamSensor::info() const noexcept {
+  return state_->info;
+}
+
+bool RgbdStreamSensor::exhausted() const noexcept { return state_->at_end; }
+
+sensor::SensorStats RgbdStreamSensor::stats() const noexcept {
+  return state_->stats;
+}
+
+const std::vector<RgbdStreamSensor::Skipped>& RgbdStreamSensor::skipped()
+    const noexcept {
+  return state_->skipped;
+}
+
 vkc::Status RgbdStreamSensor::set_queue_depth(std::size_t frames) {
-  if (frames == 0 || running_) {
+  if (frames == 0 || state_->running) {
     return vkc::Status::invalid_argument(
         "RgbdStreamSensor::set_queue_depth: at least 1, before start");
   }
@@ -123,75 +183,82 @@ vkc::Status RgbdStreamSensor::set_queue_depth(std::size_t frames) {
 }
 
 vkc::Status RgbdStreamSensor::start() {
-  if (!running_) {
-    running_ = true;
-    handed_out_ = false;
-    last_sequence_ = 0;
-    last_time_ = 0;
-    stats_ = {};
-    skipped_.clear();
+  State& s = *state_;
+  if (!s.running) {
+    s.running = true;
+    s.handed_out = false;
+    s.last_sequence = 0;
+    s.last_time = 0;
+    s.stats = {};
+    s.skipped.clear();
   }
   return {};
 }
 
 void RgbdStreamSensor::stop() noexcept {
-  running_ = false;
-  at_end_ = false;
-  position_ = reader_->begin();
+  State& s = *state_;
+  s.running = false;
+  s.at_end = false;
+  s.position = s.reader->begin();
 }
 
 FrameResult RgbdStreamSensor::poll() try {
-  if (!running_ || at_end_) return no_frame();
+  State& s = *state_;
+  if (!s.running || s.at_end) return no_frame();
   for (;;) {
-    const stream::Position before = position_;
+    const stream::Position before = s.position;
     stream::Record record;
-    const vkc::Result<bool> more = reader_->next(&position_, &record);
+    const vkc::Result<bool> more = s.reader->next(&s.position, &record);
     if (!more.ok()) {
+      // An error that leaves the reader where it was, such as a read past
+      // the end of a file shortened since it opened, would come again at
+      // every poll: the file ends there.
+      if (s.position.offset <= before.offset) {
+        s.end();
+        return more.status();
+      }
       // Damage, or a record of a later writer, which the reader is now past:
       // what it held is lost, and the next frame's sequence says so.
       const Code code = more.status().domain();
-      if ((code == Code::InvalidArgument || code == Code::Unsupported) &&
-          position_.offset > before.offset) {
-        continue;
-      }
+      if (code == Code::InvalidArgument || code == Code::Unsupported) continue;
       return more.status();
     }
     if (!more.value()) {
-      at_end_ = true;
+      s.end();
       return no_frame();
     }
-    if (record.info.track != track_) continue;
-    ++stats_.received;
-    FrameResult frame = take(record);
+    if (record.info.track != s.track) continue;
+    ++s.stats.received;
+    FrameResult frame = s.take(record);
     if (!frame.ok() || !frame.value()) {
-      ++stats_.failed;
+      ++s.stats.failed;
       if (!frame.ok()) return frame;
       continue;
     }
-    ++stats_.delivered;
+    ++s.stats.delivered;
     return frame;
   }
 } catch (const std::bad_alloc&) {
   return vkc::Status::out_of_memory("RgbdStreamSensor::poll");
 }
 
-FrameResult RgbdStreamSensor::take(const stream::Record& record) {
+FrameResult RgbdStreamSensor::State::take(const stream::Record& record) {
   const stream::RecordInfo& at = record.info;
   // A record out of order would break the contract's sequence or times.
-  if (handed_out_ &&
-      (at.seq <= last_sequence_ ||
-       (at.pts_ns != 0 && last_time_ != 0 && at.pts_ns <= last_time_))) {
+  if (handed_out &&
+      (at.seq <= last_sequence ||
+       (at.pts_ns != 0 && last_time != 0 && at.pts_ns <= last_time))) {
     return no_frame();
   }
   // The frame holds its payload, which its depth and plane point into.
   auto payload = std::make_shared<std::vector<std::uint8_t>>();
-  const vkc::Status read = reader_->read(record, payload.get());
+  const vkc::Status read = reader->read(record, payload.get());
   if (!read.ok()) {
     if (read.domain() == Code::InvalidArgument) return no_frame();  // its CRC
     return read;
   }
   vkc::Result<sensor::RgbdFrame> decoded =
-      wire::decode_depth(info_, payload->data(), payload->size(), payload);
+      wire::decode_depth(info, payload->data(), payload->size(), payload);
   if (!decoded.ok()) {
     if (decoded.status().domain() == Code::InvalidArgument) return no_frame();
     return decoded.status();
@@ -200,21 +267,33 @@ FrameResult RgbdStreamSensor::take(const stream::Record& record) {
   frame.timestamp_ns = at.pts_ns;
   frame.sequence = at.seq;
   if (frame.depth_confidence != nullptr &&
-      frame.min_confidence < options_.min_confidence) {
-    frame.min_confidence = options_.min_confidence;
+      frame.min_confidence < options.min_confidence) {
+    frame.min_confidence = options.min_confidence;
   }
-  if (options_.registration) {
+  if (options.registration) {
     frame.color_to_world =
-        options_.registration->tracking_to_world * frame.color_to_world;
+        options.registration->tracking_to_world * frame.color_to_world;
   }
-  if (handed_out_ && at.seq > last_sequence_ + 1) {
-    skipped_.push_back({last_sequence_ + 1, at.seq - last_sequence_ - 1,
-                        last_time_, at.pts_ns});
+  // The records missing before it: after the last frame's, or from seq 0,
+  // where the writer starts.
+  const std::uint64_t expected = handed_out ? last_sequence + 1 : 0;
+  if (at.seq > expected) {
+    skipped.push_back({expected, at.seq - expected, last_time, at.pts_ns});
   }
-  handed_out_ = true;
-  last_sequence_ = at.seq;
-  if (at.pts_ns != 0) last_time_ = at.pts_ns;
+  handed_out = true;
+  last_sequence = at.seq;
+  if (at.pts_ns != 0) last_time = at.pts_ns;
   return some_frame(std::move(frame));
+}
+
+void RgbdStreamSensor::State::end() {
+  at_end = true;
+  if (!reader->recovery().finished || track >= reader->stats().size()) return;
+  const std::uint64_t written = reader->stats()[track].records;
+  const std::uint64_t expected = handed_out ? last_sequence + 1 : 0;
+  if (written > expected) {
+    skipped.push_back({expected, written - expected, last_time, 0});
+  }
 }
 
 vkc::Status RgbdStreamSensor::drain(std::vector<sensor::RgbdFrame>* out) {

@@ -16,11 +16,19 @@
 /// and confidence plane point into the record's payload, which its pixels
 /// hold, so nothing is copied; its cameras, pose, units, range and noise are
 /// the record's; its timestamp is the record's pts and its sequence the
-/// record's seq, which the writer counts one up per record. A record lost on
-/// the way, or one that fails its CRC, the decode, or the order of the frames
-/// before it, gives no frame and leaves a gap in the sequence, reported as a
-/// span (@ref RgbdStreamSensor::skipped). So the reader keeps the frame
-/// contract: `testing::rgbd_breach` is empty.
+/// record's seq, which the writer numbers from 0, one up per record. A record
+/// that gives no frame keeps the frame contract (`testing::rgbd_breach` is
+/// empty):
+/// - One lost on the way (cut, or its header damaged), or failing its CRC or
+///   the decode, leaves a gap in the sequence, reported as a span
+///   (@ref RgbdStreamSensor::skipped): between two frames, before the first
+///   (from seq 0), or after the last as a finished file's footer counts the
+///   records. A file without its footer (a killed writer's) says nothing of
+///   records after its last one.
+/// - One out of order with the frames before it is counted failed. A seq not
+///   above the last frame's repeats one, so it leaves no gap and no span; a
+///   seq above it with a non-zero pts not above the last one's leaves a gap,
+///   as any refused record.
 ///
 /// A tracked sensor's poses are in its own world, and a registration places
 /// them in the array's: `tracking_to_world * color_to_world`. A fixed
@@ -56,7 +64,6 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/grid/stream/stream_reader.hpp"
 #include "volumetric_kit/sensor/camera/tracked_registration.hpp"
 #include "volumetric_kit/sensor/rgbd_frame.hpp"
 #include "volumetric_kit/sensor/rgbd_sensor.hpp"
@@ -85,15 +92,14 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
     std::uint8_t min_confidence = 0;
   };
 
-  /// @brief Depth records between two frames handed out that gave none:
-  ///        lost on the way, or refused (above). The frames' sequences
-  ///        jump over them.
+  /// @brief Depth records that gave no frame where the frames' sequences
+  ///        jump over them: lost on the way, or refused (above).
   struct Skipped {
     std::uint64_t first = 0;  ///< The first one's seq.
     std::uint64_t count = 0;  ///< How many: 1 or more.
     /// The latest timestamp handed out before them; 0 for none.
     std::uint64_t after_ns = 0;
-    /// The timestamp of the frame handed out after them.
+    /// The timestamp of the frame handed out after them; 0 for none.
     std::uint64_t before_ns = 0;
   };
 
@@ -111,12 +117,12 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   static vkc::Result<std::unique_ptr<RgbdStreamSensor>> open_file(
       const std::string& path, Options options);
 
-  ~RgbdStreamSensor() override = default;
+  ~RgbdStreamSensor() override;
   RgbdStreamSensor(RgbdStreamSensor&&) = delete;
   RgbdStreamSensor& operator=(RgbdStreamSensor&&) = delete;
 
   /// @return The depth track's sensor, with no colour camera.
-  const sensor::SensorInfo& info() const noexcept override { return info_; }
+  const sensor::SensorInfo& info() const noexcept override;
 
   /// @brief Accepts any depth of at least 1 before @ref start, and changes
   ///        nothing: no frame is held between polls, each reading the next.
@@ -134,8 +140,11 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   /// @brief Hand out the next frame of the depth track.
   /// @return The frame; an empty optional at the file's end or while not
   ///         started; or the file's read error (`Status::Code::IoError`,
-  ///         `Status::Code::OutOfMemory`), after which the next poll reads
-  ///         on.
+  ///         `Status::Code::OutOfMemory`). After one in a record's payload,
+  ///         which costs that record, the next poll reads on; one the
+  ///         reader cannot get past (`StreamReader::next`'s, such as a file
+  ///         shortened since it was opened) ends the file there, and
+  ///         @ref exhausted is `true`.
   vkc::Result<std::optional<sensor::RgbdFrame>> poll() override;
 
   /// @brief Append what @ref poll would return: the next frame, or nothing.
@@ -143,39 +152,25 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   /// @return OK, or @ref poll 's error.
   vkc::Status drain(std::vector<sensor::RgbdFrame>* out) override;
 
-  /// @return `true` once a poll found the file's end.
-  bool exhausted() const noexcept override { return at_end_; }
+  /// @return `true` once a poll found the file's end, or an error ended it.
+  bool exhausted() const noexcept override;
 
   /// @return The counters since the last @ref start: received, the depth
   ///         records found; delivered, the frames handed out; failed, the
   ///         records found that gave none.
-  sensor::SensorStats stats() const noexcept override { return stats_; }
+  sensor::SensorStats stats() const noexcept override;
 
   /// @return The spans of records skipped since the last @ref start, in
-  ///         order.
-  const std::vector<Skipped>& skipped() const noexcept { return skipped_; }
+  ///         order: one before a frame once that frame is handed out, and
+  ///         one after the last frame once the file has ended.
+  const std::vector<Skipped>& skipped() const noexcept;
 
  private:
-  RgbdStreamSensor() = default;
+  struct State;  // the file's reader, its place, and what it handed out
 
-  // The frame `record` of the depth track gives, or none for a record that
-  // fails its CRC, the decode, or the order of the frames before it.
-  vkc::Result<std::optional<sensor::RgbdFrame>> take(
-      const volumetric_kit::grid::stream::Record& record);
+  explicit RgbdStreamSensor(std::unique_ptr<State> state);
 
-  std::unique_ptr<volumetric_kit::grid::stream::StreamReader> reader_;
-  std::uint16_t track_ = 0;  // the depth track's index
-  sensor::SensorInfo info_;
-  Options options_;
-  bool running_ = false;
-  bool at_end_ = false;
-  volumetric_kit::grid::stream::Position position_;  // the next poll's
-  // The last frame handed out since start, once there is one.
-  bool handed_out_ = false;
-  std::uint64_t last_sequence_ = 0;
-  std::uint64_t last_time_ = 0;  // the last non-zero timestamp; 0 before one
-  sensor::SensorStats stats_;
-  std::vector<Skipped> skipped_;
+  std::unique_ptr<State> state_;  // never null
 };
 
 }  // namespace vr_example::link

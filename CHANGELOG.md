@@ -13,8 +13,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `RgbdStreamSensor::open_file` reads one sensor of a `.vrst` session from
   its `RgbdDepth` track in sensor 0.27.0's wire form, each record decoded in
   place, its cameras, pose, units, range and noise the record's. A record
-  lost, damaged or refused is a gap in the sequence and a skipped span
-  (`skipped()`). A tracked sensor's poses are placed by a
+  lost, damaged or refused by the decode is a gap in the sequence and a
+  skipped span (`skipped()`), the first and, from a finished file's footer,
+  the last included. A tracked sensor's poses are placed by a
   `TrackedRegistration` for the file's session at world epoch 0, and
   `Options::min_confidence` raises the floor of records with a confidence
   plane. The depth alone: the sensor names no colour camera. The sensor

@@ -19,8 +19,12 @@
 //   with a plane only.
 // - Damage: a payload byte flipped (its CRC), a header byte flipped and a
 //   record cut from the file each leave a gap and a skipped span, nothing
-//   else; records out of order and records the decode refuses are counted
-//   failed, and the contract holds throughout.
+//   else, the first and last record of a finished file included; a killed
+//   writer's torn tail leaves none. A file shortened after it opened errs
+//   twice, then ends, the rest a span.
+// - Records out of order and records the decode refuses are counted failed;
+//   a seq that repeats or goes back leaves no gap. The contract holds
+//   throughout.
 // - Opening refuses no depth track, a later wire version, short params, and a
 //   missing file.
 
@@ -30,9 +34,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -457,7 +463,9 @@ int test_registration_refusals() {
   options.registration = registration_of("ipad");
   options.registration->session[15] ^= 1;
   CHECK(refused(RgbdStreamSensor::open_file(tracked, options),
-                Code::InvalidArgument, "another session's"));
+                Code::InvalidArgument,
+                "another session's: 8f3c0a7e5b2d4e6f9a1b0c2d3e4f5a6a, not the "
+                "file's 8f3c0a7e5b2d4e6f9a1b0c2d3e4f5a6b"));
   options.registration = registration_of("ipad");
   options.registration->world_epoch = 1;
   CHECK(refused(RgbdStreamSensor::open_file(tracked, options),
@@ -560,7 +568,8 @@ std::vector<Chunk> depth_chunks(const std::string& path) {
 }
 
 // The frames read from `path`, which must be those of `take` but for the
-// one of seq `lost`, a span of it skipped, and `failed` counted.
+// one of seq `lost`, a span of it skipped, with its neighbours' times (0 for
+// none: the first or the last), and `failed` counted.
 int check_one_lost(const std::string& path, const Take& take,
                    std::uint64_t lost, std::uint64_t received,
                    std::uint64_t failed) {
@@ -582,14 +591,18 @@ int check_one_lost(const std::string& path, const Take& take,
         stats.delivered == take.frames.size() - 1);
   CHECK(s.skipped().size() == 1);
   const RgbdStreamSensor::Skipped& span = s.skipped()[0];
-  CHECK(span.first == lost && span.count == 1 &&
-        span.after_ns == take.frames[lost - 1].timestamp_ns &&
-        span.before_ns == take.frames[lost + 1].timestamp_ns);
+  const std::uint64_t after = lost > 0 ? take.frames[lost - 1].timestamp_ns : 0;
+  const std::uint64_t before =
+      lost + 1 < take.frames.size() ? take.frames[lost + 1].timestamp_ns : 0;
+  CHECK(span.first == lost && span.count == 1 && span.after_ns == after &&
+        span.before_ns == before);
   CHECK(testing::rgbd_breach(s.info(), read.value(), stats).empty());
   return 0;
 }
 
-// Damage costs the records it hits, each leaving a gap and a span.
+// Damage costs the records it hits, each leaving a gap and a span: in the
+// middle, first or last of a finished file. A killed writer's file says
+// nothing of what follows its last record.
 int test_damage() {
   const vkc::test::Scratch scratch("recon_link_rgbd_damage_");
   const std::string path = (scratch.path / "whole.vrst").string();
@@ -600,24 +613,31 @@ int test_damage() {
   const std::vector<Chunk> chunks = depth_chunks(path);
   CHECK(chunks.size() == 8);
   constexpr std::uint64_t kRecordHeader = 56;
+  // The file with one byte of `whole` flipped by `mask`.
+  int n = 0;
+  const auto flipped = [&](std::uint64_t at, char mask) {
+    std::string bytes = whole.value();
+    bytes[at] ^= mask;
+    const std::string damaged =
+        (scratch.path / ("damaged" + std::to_string(n++) + ".vrst")).string();
+    return vkc::write_file(damaged, bytes, vkc::WriteMode::CreateNew).ok()
+               ? damaged
+               : std::string();
+  };
+  const auto in_rows = [&](std::size_t record) {
+    return chunks[record].offset + kRecordHeader + wire::kDepthPrefixBytes + 10;
+  };
+  const auto in_header = [&](std::size_t record) {
+    return chunks[record].offset + 24;  // its pts
+  };
 
-  // A flipped byte in record 3's rows fails its CRC: found, and failed.
-  {
-    std::string bytes = whole.value();
-    bytes[chunks[3].offset + kRecordHeader + wire::kDepthPrefixBytes + 10] ^=
-        0x40;
-    const std::string damaged = (scratch.path / "payload.vrst").string();
-    CHECK(vkc::write_file(damaged, bytes, vkc::WriteMode::CreateNew).ok());
-    CHECK(check_one_lost(damaged, take, 3, 8, 1) == 0);
-  }
-  // A flipped byte in record 2's header fails its CRC: never found.
-  {
-    std::string bytes = whole.value();
-    bytes[chunks[2].offset + 24] ^= 0x01;  // its pts
-    const std::string damaged = (scratch.path / "header.vrst").string();
-    CHECK(vkc::write_file(damaged, bytes, vkc::WriteMode::CreateNew).ok());
-    CHECK(check_one_lost(damaged, take, 2, 7, 0) == 0);
-  }
+  // A flipped byte in a record's rows fails its CRC: found, and failed.
+  CHECK(check_one_lost(flipped(in_rows(3), 0x40), take, 3, 8, 1) == 0);
+  CHECK(check_one_lost(flipped(in_rows(7), 0x40), take, 7, 8, 1) == 0);
+  // A flipped byte in a record's header fails its CRC: never found.
+  CHECK(check_one_lost(flipped(in_header(2), 0x01), take, 2, 7, 0) == 0);
+  CHECK(check_one_lost(flipped(in_header(0), 0x01), take, 0, 7, 0) == 0);
+  CHECK(check_one_lost(flipped(in_header(7), 0x01), take, 7, 7, 0) == 0);
   // Record 5 cut from the file: never found.
   {
     std::string bytes = whole.value();
@@ -626,6 +646,75 @@ int test_damage() {
     const std::string cut = (scratch.path / "cut.vrst").string();
     CHECK(vkc::write_file(cut, bytes, vkc::WriteMode::CreateNew).ok());
     CHECK(check_one_lost(cut, take, 5, 7, 0) == 0);
+  }
+  // A killed writer's file, its last record torn and no footer: the frames
+  // before it, and no span.
+  {
+    const std::string torn = (scratch.path / "torn.vrst").string();
+    CHECK(vkc::write_file(torn, whole.value().substr(0, in_rows(7)),
+                          vkc::WriteMode::CreateNew)
+              .ok());
+    vkc::Result<std::unique_ptr<RgbdStreamSensor>> opened =
+        RgbdStreamSensor::open_file(torn, {});
+    CHECK(opened.ok());
+    RgbdStreamSensor& s = *opened.value();
+    const vkc::Result<std::vector<sensor::RgbdFrame>> read = read_all(s);
+    CHECK(read.ok() && read.value().size() == 7);
+    CHECK(read.value().back().sequence == 6 && s.stats().received == 7 &&
+          s.skipped().empty());
+    CHECK(testing::rgbd_breach(s.info(), read.value(), s.stats()).empty());
+  }
+  return 0;
+}
+
+// A file shortened after it opened: the record the cut runs through is an
+// error and a loss, the read past the cut an error that ends the file, and
+// the footer read at open counts the rest lost.
+int test_shortened() {
+  const vkc::test::Scratch scratch("recon_link_rgbd_shortened_");
+  const std::string path = (scratch.path / "shortened.vrst").string();
+  const Take take = make_take(ipad_info(), 6, 2);
+  CHECK(write_session(path, {&take}).ok());
+  const std::vector<Chunk> chunks = depth_chunks(path);
+  CHECK(chunks.size() == 6);
+
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> opened =
+      RgbdStreamSensor::open_file(path, {});
+  CHECK(opened.ok());
+  RgbdStreamSensor& s = *opened.value();
+  CHECK(s.start().ok());
+  std::vector<sensor::RgbdFrame> frames;
+  {
+    vkc::Result<std::optional<sensor::RgbdFrame>> first = s.poll();
+    CHECK(first.ok() && first.value());
+    frames.push_back(std::move(*first.value()));
+  }
+  std::error_code error;
+  std::filesystem::resize_file(path, chunks[2].offset + 100, error);
+  CHECK(!error);
+  std::vector<Code> errors;
+  for (int polls = 0; polls < 20 && !s.exhausted(); ++polls) {
+    vkc::Result<std::optional<sensor::RgbdFrame>> polled = s.poll();
+    if (!polled.ok()) {
+      errors.push_back(polled.status().domain());
+      continue;
+    }
+    if (polled.value()) frames.push_back(std::move(*polled.value()));
+  }
+  CHECK(s.exhausted());
+  CHECK(errors.size() == 2 && errors[0] == Code::IoError &&
+        errors[1] == Code::IoError);
+  CHECK(frames.size() == 2 && frames[1].sequence == 1);
+  const sensor::SensorStats stats = s.stats();
+  CHECK(stats.received == 3 && stats.delivered == 2 && stats.failed == 1);
+  CHECK(s.skipped().size() == 1 && s.skipped()[0].first == 2 &&
+        s.skipped()[0].count == 4 &&
+        s.skipped()[0].after_ns == take.frames[1].timestamp_ns &&
+        s.skipped()[0].before_ns == 0);
+  CHECK(testing::rgbd_breach(s.info(), frames, stats).empty());
+  {
+    const auto after = s.poll();  // ended: nothing more, and no error
+    CHECK(after.ok() && !after.value());
   }
   return 0;
 }
@@ -685,6 +774,89 @@ int test_refused_records() {
   return 0;
 }
 
+// A depth record to frame: its seq, and the frame of the take it holds.
+struct Framed {
+  std::uint64_t seq = 0;
+  std::size_t frame = 0;
+};
+
+// The depth records of `take` framed as `records` lists them, after the
+// session chunk: one encoder a record, so seq need not increase, as
+// StreamWriter's must. No picture records, and no footer.
+std::string framed(const Take& take, const std::vector<Framed>& records) {
+  const stream::Session session = session_of({&take});
+  vkc::Result<stream::ChunkEncoder> first =
+      stream::ChunkEncoder::create(session);
+  if (!first.ok()) return {};
+  std::string out(first.value().session_chunk().begin(),
+                  first.value().session_chunk().end());
+  for (const auto& [seq, i] : records) {
+    vkc::Result<stream::ChunkEncoder> encoder =
+        stream::ChunkEncoder::create(session);
+    const vkc::Result<wire::DepthRecord> d =
+        wire::encode_depth(take.info, take.frames[i]);
+    if (!encoder.ok() || !d.ok()) return {};
+    const stream::RecordPayload payload = stream::RecordPayload::of(
+        d.value().prefix.data(), d.value().prefix.size(), d.value().depth,
+        d.value().depth_bytes, d.value().confidence,
+        d.value().confidence_bytes);
+    stream::RecordInfo info;
+    info.track = 1;
+    info.key = true;
+    info.pts_ns = take.frames[i].timestamp_ns;
+    info.seq = seq;
+    info.set = seq;
+    const vkc::Result<stream::ChunkEncoder::RecordFraming> framing =
+        encoder.value().frame(info, payload);
+    if (!framing.ok()) return {};
+    out.append(framing.value().header.begin(), framing.value().header.end());
+    out.append(reinterpret_cast<const char*>(d.value().prefix.data()),
+               d.value().prefix.size());
+    out.append(reinterpret_cast<const char*>(d.value().depth),
+               d.value().depth_bytes);
+    if (d.value().confidence != nullptr) {
+      out.append(reinterpret_cast<const char*>(d.value().confidence),
+                 d.value().confidence_bytes);
+    }
+    out.append(framing.value().padding, '\0');
+  }
+  return out;
+}
+
+// Records whose seq repeats or goes back, at times that still increase, give
+// no frame and no gap: counted failed, nothing skipped.
+int test_sequence_order() {
+  const vkc::test::Scratch scratch("recon_link_rgbd_order_");
+  const std::string path = (scratch.path / "order.vrst").string();
+  const Take take = make_take(ipad_info(), 6, 2);
+  const std::string bytes =
+      framed(take, {{0, 0}, {1, 1}, {2, 2}, {2, 3}, {1, 4}, {3, 5}});
+  CHECK(!bytes.empty());
+  CHECK(vkc::write_file(path, bytes, vkc::WriteMode::CreateNew).ok());
+
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> opened =
+      RgbdStreamSensor::open_file(path, {});
+  CHECK(opened.ok());
+  RgbdStreamSensor& s = *opened.value();
+  const vkc::Result<std::vector<sensor::RgbdFrame>> read = read_all(s);
+  CHECK(read.ok() && read.value().size() == 4);
+  const std::size_t kept[] = {0, 1, 2, 5};  // the frames, by seq 0 to 3
+  for (std::size_t i = 0; i < 4; ++i) {
+    const sensor::RgbdFrame& f = read.value()[i];
+    CHECK(
+        f.sequence == i &&
+        f.timestamp_ns == take.frames[kept[i]].timestamp_ns &&
+        testing::depth_index(f.depth, f.depth_camera.size.width,
+                             f.depth_camera.size.height) ==
+            std::optional<std::uint32_t>(static_cast<std::uint32_t>(kept[i])));
+  }
+  const sensor::SensorStats stats = s.stats();
+  CHECK(stats.received == 6 && stats.delivered == 4 && stats.failed == 2);
+  CHECK(s.skipped().empty());
+  CHECK(testing::rgbd_breach(s.info(), read.value(), stats).empty());
+  return 0;
+}
+
 // Opening refuses what is not a sensor this build reads.
 int test_open_refusals() {
   const vkc::test::Scratch scratch("recon_link_rgbd_open_");
@@ -725,7 +897,9 @@ int main() {
   if (test_two_sensors() != 0) return 1;
   if (test_floor() != 0) return 1;
   if (test_damage() != 0) return 1;
+  if (test_shortened() != 0) return 1;
   if (test_refused_records() != 0) return 1;
+  if (test_sequence_order() != 0) return 1;
   if (test_open_refusals() != 0) return 1;
   std::printf("rgbd stream sensor tests passed\n");
   return 0;

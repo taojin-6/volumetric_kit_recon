@@ -1015,8 +1015,12 @@ any other's, from its `RgbdDepth` track in sensor's wire form
 Each frame is a record decoded in place: its depth and plane point into
 the payload the frame holds, and its cameras, pose, units, range and noise
 are the record's. Its timestamp is the record's pts and its sequence the
-record's seq. A record lost, damaged or refused by the decode is a gap in
-the sequence and a skipped span. A tracked sensor's poses are placed by a
+record's seq, which its writer numbers from 0. A record lost, damaged or
+refused by the decode is a gap in the sequence and a skipped span, before
+the first frame too, and after the last where a finished file's footer
+counts the records; one whose seq is not above the last frame's leaves no
+gap. A read error the reader cannot get past ends the file. A tracked
+sensor's poses are placed by a
 registration (sensor's `TrackedRegistration`) for the file's session at
 world epoch 0. `Options::min_confidence` raises a record's floor where it
 has a plane (the lab's 2, whatever the phone fused at). It reads the depth
