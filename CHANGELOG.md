@@ -108,9 +108,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with the value its writer sets once it has (`YuvImage::ready`), so
   **`sender::SetSender::send` takes the waits of the set's front batch**
   (`waits`, after `frames`), which records the set's prep: the live
-  examples pass the set's `sensor::ready_points(set.frames)` and
-  codec_replica its frame's, each gathered before the set moves into what
-  the batch holds. Without them the prep may read a picture CUDA has not
+  examples pass the set's `sensor::ready_points(set.frames)`, through the
+  new `examples/common/send_set.hpp`, and codec_replica its frame's, each
+  gathered before the set moves into what the batch holds. The sender test
+  sends its sets through the same helper, so a live set's waits are
+  tested. Without them the prep may read a picture CUDA has not
   written yet. The sensor floor rises to 0.28.0; recon calls nothing of
   0.29.0's (its `HevcEncoder`). The core stays at 0.43.0, above the 0.41.0
   sensor needs, and grid at 0.12.0.

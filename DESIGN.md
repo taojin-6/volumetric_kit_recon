@@ -957,13 +957,14 @@ once, and finishes the fusion; then the frame's back half in a batch of its
 own, its wait, the write, the serve and the decode, as `code` does. A coded
 set is 2 submits, a set not coded 1. A fusion done again
 (`FuseReport::redone`) records the front half again after it, in a batch of
-its own
-(`"wait: redo"`). `sent` runs once the set is published: a coded set's
-frame written and served, before the decode; a set not coded, after its
-fusion. `Sent` holds the fusion's report, a free pass's refusal, which does
-not stop the set, and the frame. The frame goes through the stream's halves;
-a set due a frame of a moved-from stream is refused before anything is
-recorded.
+its own (`"wait: redo"`). `sent` runs once the set is published: a coded
+set's frame written and served, before the decode; a set not coded, after
+its fusion. `Sent` holds the fusion's report, a free pass's refusal, which
+does not stop the set, and the frame. The frame goes through the stream's
+halves; a set due a frame of a moved-from stream is refused before anything
+is recorded. The live examples send a camera set through
+`examples/common/send_set.hpp`, which gathers its waits before the set
+moves into what the batch holds.
 
 ## Examples
 

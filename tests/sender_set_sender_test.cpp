@@ -39,12 +39,13 @@
 // moved-from stream is refused. The cameras state the Femto Mega's depth
 // noise, as its driver does; a Dynamic sender refuses a set with a camera
 // that states none, naming its slot, before coding it, and a Classic one
-// fuses it. A set whose pictures carry ready values (YuvImage::ready) the
-// host sets later is published, its front batch having waited for them on
-// the device, only once all are set. On a grid holding a sphere, with no frames
-// to fuse, a sender's frames are the file CodecStream::code writes, byte for
-// byte, frames the decoder refuses and one out of order included. The device
-// part skips with no device.
+// fuses it. The sets go out as the live examples send them
+// (examples/common/send_set.hpp). A set whose pictures carry ready values
+// (YuvImage::ready) the host sets later is published, its front batch having
+// waited for them on the device, only once all are set. On a grid holding a
+// sphere, with no frames to fuse, a sender's frames are the file
+// CodecStream::code writes, byte for byte, frames the decoder refuses and one
+// out of order included. The device part skips with no device.
 
 #include <algorithm>
 #include <array>
@@ -63,6 +64,7 @@
 #include <vector>
 
 #include "depth_inputs.hpp"
+#include "send_set.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 #include "volumetric_kit/core/testing/scratch_dir.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
@@ -500,12 +502,9 @@ int code_sets(vkc::test::GpuContext& gpu, const Fusion& fusion,
       CHECK(prepared.ok() && prepared->timestamp_ns == set_time(s));
       const std::uint64_t pts_ns =
           std::max(prepared->timestamp_ns, coded ? coded->last_pts_ns() : 0);
-      const std::vector<vkc::TimelinePoint> ready =
-          sensor::ready_points(set->frames);
-      auto done =
-          out->send(front, prepared->frames, ready,
-                    std::make_shared<sensor::FrameSet>(std::move(*set)), s,
-                    pts_ns, &logged.rows, [&logged] { logged.published(); });
+      auto done = vr_example::send_set(*out, front, *prepared, std::move(*set),
+                                       s, pts_ns, &logged.rows,
+                                       [&logged] { logged.published(); });
       if (!done.ok()) {
         std::fprintf(stderr, "set %zu: %s\n", s,
                      done.status().message().c_str());
@@ -804,11 +803,8 @@ int keyed_sets(vkc::test::GpuContext& gpu, const Keyed& run,
       CHECK(prepared.ok());
       const std::uint64_t pts_ns =
           std::max(prepared->timestamp_ns, coded->last_pts_ns());
-      const std::vector<vkc::TimelinePoint> ready =
-          sensor::ready_points(set->frames);
-      auto sent = out->send(front, prepared->frames, ready,
-                            std::make_shared<sensor::FrameSet>(std::move(*set)),
-                            s, pts_ns);
+      auto sent = vr_example::send_set(*out, front, *prepared, std::move(*set),
+                                       s, pts_ns);
       CHECK(sent.ok() && sent->coded.has_value());
       fused_again = sent->fused.redone;
     } else {
@@ -924,11 +920,8 @@ int moved_from(vkc::test::GpuContext& gpu) {
     auto prepared = array.record_process(front, *set, nullptr);
     CHECK(prepared.ok());
     sender::SetSender& out = s == 0 ? *left : *moved;
-    const std::vector<vkc::TimelinePoint> ready =
-        sensor::ready_points(set->frames);
-    auto sent = out.send(front, prepared->frames, ready,
-                         std::make_shared<sensor::FrameSet>(std::move(*set)), s,
-                         prepared->timestamp_ns);
+    auto sent = vr_example::send_set(out, front, *prepared, std::move(*set), s,
+                                     prepared->timestamp_ns);
     if (s == 0) {
       CHECK(sent.status().domain() == vkc::Status::Code::InvalidArgument);
       CHECK(made->coded() == 0 && made->player() == nullptr);
@@ -972,11 +965,8 @@ int unstated_noise(vkc::test::GpuContext& gpu) {
     CHECK(prepared.ok() && prepared->frames.size() == 2);
     CHECK(prepared->frames[0]->depth_noise == vr_test::kFemtoNoise);
     CHECK(prepared->frames[1]->depth_noise == sensor::DepthNoise{});
-    const std::vector<vkc::TimelinePoint> ready =
-        sensor::ready_points(set->frames);
-    auto sent = out->send(front, prepared->frames, ready,
-                          std::make_shared<sensor::FrameSet>(std::move(*set)),
-                          0, prepared->timestamp_ns);
+    auto sent = vr_example::send_set(*out, front, *prepared, std::move(*set), 0,
+                                     prepared->timestamp_ns);
     if (dynamic) {
       CHECK(sent.status().domain() == vkc::Status::Code::InvalidArgument);
       const std::string& why = sent.status().message();
@@ -992,10 +982,11 @@ int unstated_noise(vkc::test::GpuContext& gpu) {
 
 // A set whose pictures are not written yet: each camera's colour carries a
 // ready value (YuvImage::ready) on a timeline of its own, A's at 1 and B's
-// at 2, which the host sets 100 ms and 200 ms on. The sender's front batch,
-// the set's prep in it, submitted with the set's ready_points, starts only
-// once both are reached: the set is published, and send returns, after B's
-// is set, never before A's or B's, and the grid holds the back walls.
+// at 2, which the host sets 100 ms and 200 ms on. Sent as the live examples
+// send a set (examples/common/send_set.hpp), the sender's front batch, the
+// set's prep in it, submitted with the set's ready_points, starts only once
+// both are reached: the set is published, and send returns, after B's is
+// set, never before A's or B's, and the grid holds the back walls.
 int ready_waits(vkc::test::GpuContext& gpu) {
   std::vector<Camera*> cameras;
   auto opened = open_cameras(gpu, 2, 0, &cameras);
@@ -1024,6 +1015,7 @@ int ready_waits(vkc::test::GpuContext& gpu) {
   vkc::CommandBatch front(gpu.device, gpu.allocator);
   auto prepared = array.record_process(front, *set, nullptr);
   CHECK(prepared.ok());
+  // What send_set gathers.
   const std::vector<vkc::TimelinePoint> waits =
       sensor::ready_points(set->frames);
   CHECK(waits.size() == 2 && waits[0].semaphore == ready[0].get() &&
@@ -1044,10 +1036,9 @@ int ready_waits(vkc::test::GpuContext& gpu) {
     before_b = published.load();
     set_b = ready[1]->signal(2).ok();
   });
-  auto sent =
-      out->send(front, prepared->frames, waits,
-                std::make_shared<sensor::FrameSet>(std::move(*set)), 0,
-                set_time(0), nullptr, [&published] { published.store(true); });
+  auto sent = vr_example::send_set(*out, front, *prepared, std::move(*set), 0,
+                                   set_time(0), nullptr,
+                                   [&published] { published.store(true); });
   host.join();
   CHECK(set_a && set_b);
   CHECK(sent.ok() && published.load());

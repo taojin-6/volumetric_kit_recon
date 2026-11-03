@@ -7,9 +7,9 @@
 /// @brief The live examples' run, whichever cameras they open: fuse_orbbec's
 ///        and fuse_realsense's. The cameras are read as a sensor array, each
 ///        set prepared on the device and fused (and coded, where the scenario
-///        says) through a sender, any mic recorded beside them into the
-///        stream (`live_audio.hpp`), and the mesh written to a PLY; with the
-///        array's report (`live_sets.hpp`). Header-only.
+///        says) through a sender (`send_set.hpp`), any mic recorded beside
+///        them into the stream (`live_audio.hpp`), and the mesh written to a
+///        PLY; with the array's report (`live_sets.hpp`). Header-only.
 
 #include <algorithm>
 #include <chrono>
@@ -31,6 +31,7 @@
 #include "interrupt.hpp"
 #include "live_audio.hpp"
 #include "live_sets.hpp"
+#include "send_set.hpp"
 #include "set_dump.hpp"
 #include "set_log.hpp"
 #include "volumetric_kit/core/base/check.hpp"
@@ -39,7 +40,6 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
-#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/grid/codec/encoder.hpp"
 #include "volumetric_kit/grid/codec_stream/codec_stream.hpp"
 #include "volumetric_kit/grid/eval/mesh_distance.hpp"
@@ -53,7 +53,6 @@
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/sensor/array/rig_sets.hpp"
 #include "volumetric_kit/sensor/array/sensor_array.hpp"
-#include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
 #include "volumetric_kit/sensor/prep/picture_readback.hpp"
 
 namespace vr_example {
@@ -274,14 +273,10 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
                    array->record_process(front, set, &s.rows));
         const std::uint64_t pts_ns =
             std::max(prepared.timestamp_ns, stream ? stream->last_pts_ns() : 0);
-        // Gathered before the set moves into what the batch holds.
-        const std::vector<vkc::TimelinePoint> ready =
-            sensor::ready_points(set.frames);
-        VKC_ASSIGN(const sender::SetSender::Sent sent,
-                   out->send(front, prepared.frames, ready,
-                             std::make_shared<sensor::FrameSet>(std::move(set)),
-                             sets.sets() - 1, pts_ns, &s.rows,
-                             [&s] { s.published(); }));
+        VKC_ASSIGN(
+            const sender::SetSender::Sent sent,
+            send_set(*out, front, prepared, std::move(set), sets.sets() - 1,
+                     pts_ns, &s.rows, [&s] { s.published(); }));
         VKC_TRY(report_sent(sent, sets.sets() - 1, program, s,
                             report ? &*report : nullptr));
       } else {

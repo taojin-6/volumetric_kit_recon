@@ -609,11 +609,14 @@ add_test(NAME recon_sender_fuse_inputs COMMAND recon_sender_fuse_inputs_test)
 # and its blocks freed by the free pass due; under Classic its observed blocks
 # kept. A coded set is 2 submits and at most 2 waits, a fused one 1 and 1.
 # Served with keys on demand, a frame is a key when a viewer joined before it,
-# once however many, and otherwise at the intra period. A set whose pictures'
-# ready values the host sets later is published only once they are. With no
-# frames to fuse, a sender's frames are the file CodecStream::code writes. The
-# device part skips with no device.
+# once however many, and otherwise at the intra period. The sets are sent as the
+# live examples send them (examples/common/send_set.hpp), and a set whose
+# pictures' ready values the host sets later is published only once they are.
+# With no frames to fuse, a sender's frames are the file CodecStream::code
+# writes. The device part skips with no device.
 add_executable(recon_sender_set_sender_test sender_set_sender_test.cpp)
+target_include_directories(recon_sender_set_sender_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
 target_link_libraries(
   recon_sender_set_sender_test
   PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_sender
