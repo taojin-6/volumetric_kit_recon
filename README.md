@@ -305,6 +305,35 @@ batches ([the sender contract](DESIGN.md#sender)), then written and served
 by grid's codec stream. The server, the client, `serve_stream` and what they
 print are grid's ([its live streaming](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#live-streaming)).
 
+### Checking a phone's stream: `session_check`
+
+`session_check`, built with the tests, reads a session file, or listens on
+one numeric IPv4 address of this host for a writer to dial (the address and
+port an iPad's screen takes). It decodes the pictures on this machine's GPU,
+joins each to its depth, checks on the device that each frame's picture
+carries its depth's test-pattern index, and prints counts, times and the
+frame contract's breach. It exits 0 when a frame came, the contract holds
+and every frame whose depth carries an index shows its own picture (none
+another's, none unreadable), and writes nothing. A live stream has no end of
+its own, since a writer's finish reads as a drop: give `--frames` or
+`--seconds`, or press Ctrl-C, and the report still prints.
+
+```sh
+"$recon_root/build/tools/session_check/session_check" take.vrst
+"$recon_root/build/tools/session_check/session_check" \
+  --listen 10.8.0.1:9123 --seconds 600   # --frames, --wait, --depth-only
+```
+
+A synthetic writer for it, with no phone: the link's colour test, given
+`VR_TEST_SESSION_CHECK=<ipv4>:<port>` (and `VR_TEST_SESSION_FRAMES`, 300
+unless set), dials that address and streams the test pattern at 10 Hz,
+1920x1440 pictures and 256x192 depth, as an iPad's writer does:
+
+```sh
+VR_TEST_SESSION_CHECK=10.8.0.1:9123 \
+  "$recon_root/build/tests/recon_example_link_listen_color_test"
+```
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

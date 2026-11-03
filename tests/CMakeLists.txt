@@ -345,6 +345,64 @@ if(VR_BUILD_EXAMPLES)
            COMMAND recon_example_link_rgbd_stream_color_test)
 endif()
 
+# The same sensor read live from a writer that dials 127.0.0.1 on a thread of
+# the test (link_dialler.hpp), depth alone: frames equal the file's, the
+# recording reads back, a reconnect, another session refused, three failures end
+# the stream (and the cap's window), the poll's bound, a record the recording
+# refuses, listen's refusals, and session_check's pass. Host only.
+if(VR_BUILD_EXAMPLES)
+  add_executable(recon_example_link_listen_test example_link_listen_test.cpp)
+  target_link_libraries(
+    recon_example_link_listen_test
+    PRIVATE vr_example_link volumetric_kit::grid_networking
+            volumetric_kit::core_net)
+  vr_target_warnings(recon_example_link_listen_test)
+  add_test(NAME recon_example_link_listen
+           COMMAND recon_example_link_listen_test)
+endif()
+
+# Live with its pictures: the test pattern coded in the test by sensor's
+# HevcEncoder, each frame's indices read on the device by session_check's checks
+# (link/session_check.hpp), a picture the decode refuses ending a connection,
+# and the recording read back; the file says what it covers. It skips without
+# hardware coding both ways, unless VS_TEST_HEVC_BACKEND promises it; without
+# sensor_video it checks nothing more.
+if(VR_BUILD_EXAMPLES)
+  add_executable(recon_example_link_listen_color_test
+                 example_link_listen_color_test.cpp)
+  target_link_libraries(
+    recon_example_link_listen_color_test
+    PRIVATE vr_example_link volumetric_kit::grid_networking
+            volumetric_kit::core_net volumetric_kit::core_test_policy)
+  if(TARGET volumetric_kit::sensor_video_testing)
+    target_link_libraries(recon_example_link_listen_color_test
+                          PRIVATE volumetric_kit::sensor_video_testing)
+    target_compile_definitions(recon_example_link_listen_color_test
+                               PRIVATE VR_TEST_LINK_VIDEO=1)
+  endif()
+  vr_target_warnings(recon_example_link_listen_color_test)
+  add_test(NAME recon_example_link_listen_color
+           COMMAND recon_example_link_listen_color_test)
+endif()
+
+# session_check's command line (tools/session_check): usage, for no source and
+# for a live option given a file, and a file that is not there named in its
+# refusal.
+if(VR_BUILD_EXAMPLES)
+  add_test(NAME recon_session_check_usage COMMAND recon_session_check)
+  add_test(NAME recon_session_check_usage_wait COMMAND recon_session_check
+                                                       none.vrst --wait 5)
+  set_tests_properties(
+    recon_session_check_usage recon_session_check_usage_wait
+    PROPERTIES PASS_REGULAR_EXPRESSION "usage: session_check")
+  add_test(NAME recon_session_check_missing
+           COMMAND recon_session_check "${CMAKE_CURRENT_BINARY_DIR}/none.vrst")
+  set_tests_properties(
+    recon_session_check_missing
+    PROPERTIES PASS_REGULAR_EXPRESSION
+               "session_check: RgbdStreamSensor::open_file: .*none.vrst")
+endif()
+
 # fuse_orbbec's dump of its first sets (examples/common/set_dump.hpp): the JPEGs
 # byte for byte, the luma as R = G = B PNGs, and the refusals. Host only.
 add_executable(recon_example_set_dump_test example_set_dump_test.cpp)

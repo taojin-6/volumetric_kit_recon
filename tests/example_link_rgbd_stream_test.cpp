@@ -465,7 +465,7 @@ int test_registration_refusals() {
   CHECK(refused(RgbdStreamSensor::open_file(tracked, options),
                 Code::InvalidArgument,
                 "another session's: 8f3c0a7e5b2d4e6f9a1b0c2d3e4f5a6a, not the "
-                "file's 8f3c0a7e5b2d4e6f9a1b0c2d3e4f5a6b"));
+                "stream's 8f3c0a7e5b2d4e6f9a1b0c2d3e4f5a6b"));
   options.registration = registration_of("ipad");
   options.registration->world_epoch = 1;
   CHECK(refused(RgbdStreamSensor::open_file(tracked, options),

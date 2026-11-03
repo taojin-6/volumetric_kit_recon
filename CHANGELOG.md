@@ -8,6 +8,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`, tools: **a sensor's stream read live, recorded and checked.**
+  `RgbdStreamSensor::listen` (`examples/common/link/rgbd_stream_sensor.hpp`)
+  waits for a writer to dial one numeric IPv4 address of this host and reads
+  its session's records as they come, as a file's are read: after a dropped
+  connection or a picture that fails to decode it takes the writer's next
+  connection, which starts at a key, and three such failures within 10 s
+  end the stream; a session it would not open, or after the first another
+  session, is a connection refused, and the wait goes on; records sent
+  again are skipped. With a recording path, every record taken goes through
+  grid's `StreamWriter` into one file across reconnects, which `open_file`
+  reads back frame for frame. `link_stats()` counts the connections.
+  **`tools/session_check`**, built with the tests, reads a file or listens,
+  checks each frame's test-pattern index on the device for its picture and
+  its depth (`examples/common/link/session_check.hpp`), and prints counts,
+  times and `rgbd_breach`; it writes nothing (README, "Checking a phone's
+  stream"). The sensor floor rises to 0.37.0, whose `PatternReader` it reads
+  with, and the core floor to 0.43.0, whose net tier it listens with.
+
 - `examples`: **a recorded sensor plays back with its pictures.** Given a
   device (`Options::device`), `RgbdStreamSensor` also reads the sensor's
   `RgbdColor` track, decodes it there with sensor's `HevcDecoder`, and hands
@@ -108,6 +126,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server; both floors rise with them.
 
 ### Changed
+
+- build: **recon pins sensor 0.37.0** (sensor #42's merge, `c4038bb`; was
+  0.29.0), and CI takes its actions at the new pin. recon's code builds and
+  passes unchanged on it. The core stays at 0.43.0, above the 0.41.0 sensor
+  needs, and grid at 0.12.0.
 
 - build: **recon pins sensor 0.29.0** (sensor #34's merge, `32be4cc`; was
   0.27.0), and CI takes its actions at the new pin. Since 0.28.0 NVIDIA's

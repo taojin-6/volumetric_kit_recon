@@ -4,9 +4,10 @@
 #pragma once
 
 /// @file examples/common/link/rgbd_stream_sensor.hpp
-/// @brief One sensor of a session in a `.vrst` file, as a
-///        `sensor::IRgbdSensor`: the frames it handed its writer, rebuilt
-///        from their depth records and, given a device, their pictures.
+/// @brief One sensor of a session, from a `.vrst` file or a live link its
+///        writer dials, as a `sensor::IRgbdSensor`: the frames it handed its
+///        writer, rebuilt from their depth records and, given a device,
+///        their pictures.
 ///
 /// What it is (`info()`): its `RgbdDepth` track's params
 /// (`sensor::wire::decode_sensor`), with the track's sensor id, clock and
@@ -52,8 +53,11 @@
 /// them in the array's: `tracking_to_world * color_to_world`. A fixed
 /// sensor's poses are handed out as written.
 ///
-/// Frames go out as fast as they are polled: each poll reads records until
-/// the next frame is whole, on the polling thread, decoding included.
+/// From a file, frames go out as fast as they are polled: each poll reads
+/// records until the next frame is whole, on the polling thread, decoding
+/// included. Live (@ref RgbdStreamSensor::listen), a poll takes the records
+/// that have come, on the same thread, and waits up to
+/// @ref RgbdStreamSensor::kPollWait for more while no frame is whole.
 ///
 /// @code
 /// link::RgbdStreamSensor::Options options;
@@ -71,11 +75,10 @@
 /// }
 /// @endcode
 ///
-/// TODO: a live link its writer dials.
-///
 /// @warning Not thread-safe: open, start, poll, drain and stop from one
 ///          thread.
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -102,7 +105,7 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
     /// The sensor's id (`SensorInfo::id`); empty for a session's only one.
     std::string sensor;
     /// A tracked sensor's world in the array's: its sensor must be the
-    /// track's, its session the file's (`Session::id`), its world epoch 0,
+    /// track's, its session the stream's (`Session::id`), its world epoch 0,
     /// since one session is one world. Empty hands out the poses in the
     /// sensor's own world.
     std::optional<sensor::camera::TrackedRegistration> registration;
@@ -135,6 +138,32 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
     std::uint64_t before_ns = 0;
   };
 
+  /// @brief What a live link has seen since @ref listen.
+  struct LinkStats {
+    /// Connections that brought the session, the first one included.
+    std::uint64_t connections = 0;
+    /// Connections let go before any of their records was taken: before the
+    /// first session, one whose session @ref open_file would refuse; after
+    /// it, another session's; or one whose session did not come within the
+    /// idle limit (10 s). They do not count as failures.
+    std::uint64_t refused = 0;
+    /// Connections of the session lost: closed or reset by the writer, idle
+    /// past 10 s, a chunk that failed its check, or let go after a picture
+    /// failed to decode. A writer that finishes its take is one too, since
+    /// its server sends no end. Three within 10 s end the stream
+    /// (link/failure_cap.hpp).
+    std::uint64_t failures = 0;
+    /// Records a writer sent again on a later connection (a seq not above
+    /// the last one taken on its track), skipped unseen and unrecorded.
+    std::uint64_t repeated = 0;
+    /// Records written to the recording.
+    std::uint64_t recorded = 0;
+    bool connected = false;  ///< A writer of the session is connected now.
+  };
+
+  /// The longest a live @ref poll waits for records while no frame is whole.
+  static constexpr std::chrono::milliseconds kPollWait{20};
+
   /// @brief Read the sensor of the session at @p path.
   /// @return The sensor, not started; `Status::Code::InvalidArgument` for a
   ///         session with no `RgbdDepth` track, several and no
@@ -154,6 +183,64 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   static vkc::Result<std::unique_ptr<RgbdStreamSensor>> open_file(
       const std::string& path, Options options);
 
+  /// @brief Wait for a writer to dial @p host : @p port, one numeric IPv4
+  ///        address of this host, never the wildcard, and return once its
+  ///        session has come.
+  ///
+  /// The writer serves with no listener of its own (grid's
+  /// `ServerOptions::listen` false) and dials this address
+  /// (`core::net::dial`); each connection is read as grid's
+  /// `StreamClient::adopt` reads one. Each session that comes is checked as
+  /// @ref open_file checks a file's, and the first it takes is the stream's:
+  /// one it refuses as `Status::Code::InvalidArgument` (no depth track of
+  /// the sensor, a registration for another session) is a connection
+  /// refused, and the wait goes on, so a stray writer never closes the
+  /// listener. After the connection drops, or a picture fails to decode (the
+  /// key gate would wait for a key that the writer makes only for a reader
+  /// that joins), the connection is let go and the next one taken, which
+  /// starts at a key. Three such failures within 10 s end the stream
+  /// (link/failure_cap.hpp). A connection whose session differs from the
+  /// first one's in any field is refused, and does not count. A record a
+  /// writer sends again is skipped; one lost between connections is a gap,
+  /// as in a file. The spans of a start count from the first record found
+  /// after it, not from seq 0: a start takes the records that come from then
+  /// on.
+  ///
+  /// A live stream has no end of its own: the writer's server sends none,
+  /// so a writer that finishes its take reads as a connection dropped, and
+  /// the next one is waited for. The caller ends the stream: it stops, or
+  /// destroys the sensor.
+  ///
+  /// With @p record_path, every record that comes, on any track, goes into a
+  /// new session file there through grid's `StreamWriter`, one record at a
+  /// time, under the first session's header: one valid file across every
+  /// reconnect, finished when the stream ends or the sensor is destroyed,
+  /// which @ref open_file reads back frame for frame. A write that fails is
+  /// returned once by @ref poll and ends the recording, finished as far as
+  /// it was written; the stream goes on.
+  ///
+  /// Each frame's `arrival_ns` is when a poll took its depth record off the
+  /// link: records that waited in the socket, as while the caller set up
+  /// after this returned, carry the time they were read.
+  /// @param wait  The longest to wait for the first session; positive.
+  /// @return The sensor, not started; `Status::Code::InvalidArgument`, before
+  ///         listening, for an empty, wildcard or non-numeric host, port 0,
+  ///         a @p wait of 0 or less, a registration that holds for no
+  ///         session (`validate_tracked_registration` refuses it, or its
+  ///         world epoch is not 0), or anything already at @p record_path,
+  ///         and once the session has come for a recording
+  ///         `StreamWriter::create` refuses; `Status::Code::IoError` for an
+  ///         address that cannot be bound, or when no session has come
+  ///         within @p wait, naming the last one refused; and at once,
+  ///         @ref open_file's other errors for a session, such as
+  ///         `Status::Code::Unsupported` for one this build or device cannot
+  ///         read (its wire version or picture codec, no decoder path).
+  ///         Messages begin `"RgbdStreamSensor::listen: "`.
+  static vkc::Result<std::unique_ptr<RgbdStreamSensor>> listen(
+      const std::string& host, std::uint16_t port, Options options,
+      std::string record_path = {},
+      std::chrono::milliseconds wait = std::chrono::minutes(5));
+
   ~RgbdStreamSensor() override;
   RgbdStreamSensor(RgbdStreamSensor&&) = delete;
   RgbdStreamSensor& operator=(RgbdStreamSensor&&) = delete;
@@ -167,25 +254,31 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   /// @return OK; `Status::Code::InvalidArgument` for 0, or once started.
   vkc::Status set_queue_depth(std::size_t frames) override;
 
-  /// @brief Begin reading at the file's first record, the counters,
-  ///        @ref skipped and @ref skipped_color emptied. Idempotent:
-  ///        starting a running sensor leaves its place alone.
+  /// @brief Begin reading at the file's first record, or live at the
+  ///        records that come from now on, the counters, @ref skipped and
+  ///        @ref skipped_color emptied. Idempotent: starting a running
+  ///        sensor leaves its place alone.
   vkc::Status start() override;
 
   /// @brief Stop reading and rewind, the frames and pictures held let go
-  ///        and the decoder reset. Idempotent.
+  ///        and the decoder reset. Live, the connection is let go too, not
+  ///        as a failure, and the next start takes the writer's next one;
+  ///        the recording goes on. Idempotent.
   void stop() noexcept override;
 
   /// @brief Hand out the next frame, whole.
-  /// @return The frame; an empty optional at the file's end or while not
-  ///         started; or the file's read error (`Status::Code::IoError`,
+  /// @return The frame; an empty optional at the file's end, live when none
+  ///         is whole within @ref kPollWait, or while not started; or the
+  ///         file's read error (`Status::Code::IoError`,
   ///         `Status::Code::OutOfMemory`). After one in a record's payload,
   ///         which costs that record, the next poll reads on; one the
   ///         reader cannot get past (`StreamReader::next`'s, such as a file
   ///         shortened since it was opened), or the decoder's other than
   ///         `Status::Code::IoError` (a stream it refuses, a failed device
   ///         path), ends the file there, and the polls after it hand out the
-  ///         frames already whole.
+  ///         frames already whole. Live, the stream ends so too, and a
+  ///         connection's failure is never returned; the recording's write
+  ///         error is, once.
   vkc::Result<std::optional<sensor::RgbdFrame>> poll() override;
 
   /// @brief Append what @ref poll would return: the next frame, or nothing.
@@ -193,8 +286,11 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   /// @return OK, or @ref poll 's error.
   vkc::Status drain(std::vector<sensor::RgbdFrame>* out) override;
 
-  /// @return `true` once the file has ended, at its end or by an error, and
-  ///         every frame whole by then is handed out.
+  /// @return `true` once the file has ended, at its end or by an error, or
+  ///         the live stream has (three failures within 10 s, or the
+  ///         decoder's), and every frame whole by then is handed out. A
+  ///         writer that finishes never ends a live stream alone
+  ///         (@ref listen).
   bool exhausted() const noexcept override;
 
   /// @return The counters since the last @ref start: received, the depth
@@ -219,8 +315,11 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   ///         the picture track is not read.
   const std::vector<Skipped>& skipped_color() const noexcept;
 
+  /// @return The live link's counts since @ref listen; all 0 for a file.
+  const LinkStats& link_stats() const noexcept;
+
  private:
-  struct State;  // the file's reader, its place, the decoder, the join
+  struct State;  // the records' source, its place, the decoder, the join
 
   explicit RgbdStreamSensor(std::unique_ptr<State> state);
 

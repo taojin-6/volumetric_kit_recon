@@ -75,23 +75,26 @@ find_package(Vulkan REQUIRED)
 # Pinned dependencies: volumetric_kit_core, volumetric_kit_sensor and
 # volumetric_kit_grid, linked PUBLIC. The oldest core recon's libraries build
 # with is checked in the core that arrives (third_party/, which also checks the
-# config tier the examples and tests need): 0.42.0, whose source.mobile and
-# diagnostics.track_log fuse_orbbec refuses; 0.39.0 brought the FuseDecklink
-# profile fuse_decklink loads, 0.34.0 the source.audio that names the input the
-# live examples record, 0.33.0 FuseRealsense's source.depth, 0.31.0 the
-# FuseRealsense profile, 0.30.0 the output.max_viewers fuse_orbbec serves by,
-# 0.29.0 the vulkan/fwd.hpp the public headers include, and 0.28.0 the test
-# support the tests run on. The oldest sensor is 0.28.0, whose ready_points (a
-# picture's ready value, YuvImage::ready) the examples pass to SetSender::send,
-# the waits of a set's front batch, which records the set's prep; 0.27.0 brought
-# the wire form (sensor_wire) RgbdStreamSensor reads a session's depth records
-# in, 0.19.0 brought the DecklinkStereo fuse_decklink opens (0.17.0 the
-# stereo_calibration it pairs the calibration file's two cameras with, and
-# 0.16.0 the V210 pictures they capture); 0.13.0's frame prep drops depth
-# outliers by default, 0.12.0 brought the filter, 0.11.0 the IAudioSensor the
-# live examples record through, 0.10.0 the frames' depth noise
-# (DeviceFrame::depth_noise), which Dynamic's change test reads, and 0.9.0 the
-# frame prep's crop of a frame with colour to what both its cameras see. The
+# config tier the examples and tests need): 0.43.0, whose net tier (core_net's
+# Listener and dial, testing/net_loopback.hpp) RgbdStreamSensor::listen and the
+# link tests use; 0.42.0 brought the source.mobile and diagnostics.track_log
+# fuse_orbbec refuses, 0.39.0 the FuseDecklink profile fuse_decklink loads,
+# 0.34.0 the source.audio that names the input the live examples record, 0.33.0
+# FuseRealsense's source.depth, 0.31.0 the FuseRealsense profile, 0.30.0 the
+# output.max_viewers fuse_orbbec serves by, 0.29.0 the vulkan/fwd.hpp the public
+# headers include, and 0.28.0 the test support the tests run on. The oldest
+# sensor is 0.37.0, whose PatternReader (testing/pattern_reader.hpp)
+# session_check and the link tests read each frame's pattern index with on the
+# device; 0.28.0 brought the ready_points (a picture's ready value,
+# YuvImage::ready) the examples pass to SetSender::send, the waits of a set's
+# front batch, which records the set's prep, 0.27.0 the wire form (sensor_wire)
+# RgbdStreamSensor reads a session's depth records in, 0.19.0 the DecklinkStereo
+# fuse_decklink opens (0.17.0 the stereo_calibration it pairs the calibration
+# file's two cameras with, and 0.16.0 the V210 pictures they capture); 0.13.0's
+# frame prep drops depth outliers by default, 0.12.0 brought the filter, 0.11.0
+# the IAudioSensor the live examples record through, 0.10.0 the frames' depth
+# noise (DeviceFrame::depth_noise), which Dynamic's change test reads, and 0.9.0
+# the frame prep's crop of a frame with colour to what both its cameras see. The
 # live examples rely on the crop and the filter with no option of their own
 # (fuse_realsense builds only with sensor_realsense, and even without FFS with
 # its RealSenseStereo, which 0.7.0 brought; it runs FFS only with sensor_ffs,
@@ -101,8 +104,8 @@ find_package(Vulkan REQUIRED)
 # track with the frames, 0.5.0 CodecStream writing it (TrackKind::Audio, 0.4.0)
 # muxed by pts, and 0.3.0 codec_outputs passing output.max_viewers to the
 # server.
-set(VR_CORE_MIN_VERSION 0.42.0)
-set(VR_SENSOR_MIN_VERSION 0.28.0)
+set(VR_CORE_MIN_VERSION 0.43.0)
+set(VR_SENSOR_MIN_VERSION 0.37.0)
 set(VR_GRID_MIN_VERSION 0.12.0)
 add_subdirectory(third_party)
 
@@ -116,4 +119,9 @@ endif()
 if(VR_BUILD_EXAMPLES AND EXISTS
                          "${CMAKE_CURRENT_SOURCE_DIR}/examples/CMakeLists.txt")
   add_subdirectory(examples)
+  # session_check, a session checked by hand on the examples' link, built with
+  # the tests (tools/session_check).
+  if(VR_BUILD_TESTS)
+    add_subdirectory(tools/session_check)
+  endif()
 endif()

@@ -1035,7 +1035,15 @@ only with its own picture, the frame contract's whole-frame rule; the header
 says how the units are admitted after a loss, how a frame finds its picture
 and what a frame without one costs. Without a device it reads the depth
 alone; a build without sensor's video decoders (`sensor_video`: off Apple,
-without `VS_WITH_FFMPEG`) refuses one. A live link comes next.
+without `VS_WITH_FFMPEG`) refuses one.
+
+Live, `RgbdStreamSensor::listen` takes the same records from a writer that
+dials one numeric address of this host (core's `net::Listener`, grid's
+`StreamClient::adopt`), on the polling thread; its header holds the link's
+rules (refusals, reconnects, repeats, the failure cap and the recording).
+`tools/session_check`, built with the tests, prints what
+`link/session_check.hpp` finds of a file or a link (README, "Checking a
+phone's stream").
 
 Every example reads a scenario with `--config path.json`; `--help` prints
 that entry point. The optional core `config` tier owns the JSON format, typed
