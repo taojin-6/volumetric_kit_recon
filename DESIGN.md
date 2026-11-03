@@ -950,11 +950,14 @@ under Dynamic.
 **The set step** (`SetSender`). `send` records the set's fusion
 (`Fuser::record_fuse`), its free pass every `free_after` sets
 (`record_free_stale`) and, for a set `code_due`, its frame's front half
-into the set's front batch after its prep, submits it and waits once, and
-finishes the fusion; then the frame's back half in a batch of its own, its
-wait, the write, the serve and the decode, as `code` does. A coded set is 2
-submits, a set not coded 1. A fusion done again (`FuseReport::redone`)
-records the front half again after it, in a batch of its own
+into the set's front batch after its prep, submits it, to start once the
+caller's waits are reached (the set's pictures' ready values,
+`sensor::ready_points`, which an NVIDIA decoder's picture carries), waits
+once, and finishes the fusion; then the frame's back half in a batch of its
+own, its wait, the write, the serve and the decode, as `code` does. A coded
+set is 2 submits, a set not coded 1. A fusion done again
+(`FuseReport::redone`) records the front half again after it, in a batch of
+its own
 (`"wait: redo"`). `sent` runs once the set is published: a coded set's
 frame written and served, before the decode; a set not coded, after its
 fusion. `Sent` holds the fusion's report, a free pass's refusal, which does

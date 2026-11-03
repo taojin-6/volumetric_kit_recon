@@ -19,6 +19,7 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/fwd.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/grid/codec_stream/codec_stream.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/sender/export.hpp"
@@ -45,6 +46,11 @@ namespace volumetric_kit::recon::sender {
 /// grid without it, again after it (`"wait: redo"`). The frames are the ones
 /// `vgrid::codec_stream::CodecStream::code` makes of the same grids.
 ///
+/// The prep reads the set's pictures when the front batch runs, so the batch
+/// waits on the device for the values their decoders set once they are
+/// written (`sensor::ready_points`, `YuvImage::ready`), which the caller
+/// gathers before the set moves into what the batch holds.
+///
 /// @code
 /// VKC_ASSIGN(sender::SetSender out,
 ///            sender::SetSender::create(device, fuser, grid, &stream, {}));
@@ -52,9 +58,12 @@ namespace volumetric_kit::recon::sender {
 /// front.time(out.timer());
 /// VKC_ASSIGN(const sensor::DeviceFrameSet prepared,
 ///            array.record_process(front, set, &rows));
+/// const std::vector<core::TimelinePoint> ready =
+///     sensor::ready_points(set.frames);
 /// VKC_ASSIGN(const sender::SetSender::Sent sent,
-///            out.send(front, prepared.frames, std::move(pictures), index,
-///                     pts_ns, &rows));
+///            out.send(front, prepared.frames, ready,
+///                     std::make_shared<sensor::FrameSet>(std::move(set)),
+///                     index, pts_ns, &rows));
 /// @endcode
 class VR_SENDER_API SetSender {
  public:
@@ -103,17 +112,22 @@ class VR_SENDER_API SetSender {
   bool code_due(std::size_t index) const noexcept;
 
   /// @brief Record the set's fusion, its free pass when due and its frame's
-  ///        front half into @p front after its prep, submit it and wait once
-  ///        (`"wait: front"`), and finish the fusion; then, for a coded set,
-  ///        finish its frame: the back half in a batch of its own and its
-  ///        wait (`"wait: frame"`), the write and the serve, and the decode
-  ///        back, as `vgrid::codec_stream::CodecStream::code` does. The
-  ///        frame is a key when a viewer waits for one, its fusion done again
-  ///        or not.
+  ///        front half into @p front after its prep, submit it to start once
+  ///        @p waits are reached, wait once (`"wait: front"`), and finish
+  ///        the fusion; then, for a coded set, finish its frame: the back
+  ///        half in a batch of its own and its wait (`"wait: frame"`), the
+  ///        write and the serve, and the decode back, as
+  ///        `vgrid::codec_stream::CodecStream::code` does. The frame is a key
+  ///        when a viewer waits for one, its fusion done again or not.
   /// @param front   Holds the set's prep, timed in @ref timer; submitted
   ///                here.
   /// @param frames  The prepared frames; the caller keeps them for as long
   ///                as it likes.
+  /// @param waits   The values @p front waits for on the device before it
+  ///                starts: the prep's pictures' ready values, the set's
+  ///                `sensor::ready_points(set.frames)` or a frame's
+  ///                `sensor::ready_points(frame)`, which @p inputs keep
+  ///                alive; empty when every writer has finished.
   /// @param inputs  What the prep's commands read (the set's pictures), held
   ///                until @p front has run, then dropped.
   /// @param index   The set's index in the run: its frame's set, above every
@@ -130,10 +144,12 @@ class VR_SENDER_API SetSender {
   /// @return What the set did; `Status::Code::InvalidArgument`, before
   ///         anything is recorded, for a set due a frame of a moved-from
   ///         stream; or the first failure of a call it makes, the fusion's
-  ///         and the frame's tokens dropped.
+  ///         and the frame's tokens dropped (`CommandBatch::submit_async`'s
+  ///         refusal of @p waits among them).
   core::Result<Sent> send(
       core::CommandBatch& front,
       const std::vector<std::optional<sensor::DeviceFrame>>& frames,
+      const std::vector<core::TimelinePoint>& waits,
       std::shared_ptr<const void> inputs, std::size_t index,
       std::uint64_t pts_ns, core::StageMetrics* rows = nullptr,
       const std::function<void()>& sent = {});

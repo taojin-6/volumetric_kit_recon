@@ -20,6 +20,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "codec_config.hpp"
 #include "codec_report.hpp"
@@ -34,6 +35,7 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/grid/codec_stream/codec_stream.hpp"
 #include "volumetric_kit/grid/eval/mesh_distance.hpp"
 #include "volumetric_kit/grid/mesh/marching_cubes.hpp"
@@ -135,9 +137,12 @@ vkc::Status run(const Options& opt) {
     front.time(out.timer());
     VKC_ASSIGN(const sensor::DeviceFrame prepared,
                prep.record(front, *frame, &s.rows));
+    // None for a dataset's frame, but gathered as any frame's are: before the
+    // frame moves into what the batch holds.
+    const std::vector<vkc::TimelinePoint> ready = sensor::ready_points(*frame);
     VKC_ASSIGN(
         const sender::SetSender::Sent sent,
-        out.send(front, {prepared},
+        out.send(front, {prepared}, ready,
                  std::make_shared<sensor::RgbdFrame>(std::move(*frame)), fused,
                  vgrid_example::frame_pts_ns(fused, vgrid_example::kNominalFps),
                  &s.rows, [&s] { s.published(); }));

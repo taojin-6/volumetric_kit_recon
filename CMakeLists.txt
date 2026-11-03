@@ -81,25 +81,28 @@ find_package(Vulkan REQUIRED)
 # live examples record, 0.33.0 FuseRealsense's source.depth, 0.31.0 the
 # FuseRealsense profile, 0.30.0 the output.max_viewers fuse_orbbec serves by,
 # 0.29.0 the vulkan/fwd.hpp the public headers include, and 0.28.0 the test
-# support the tests run on. The oldest sensor is 0.27.0, whose wire form
-# (sensor_wire) RgbdStreamSensor reads a session's depth records in; 0.19.0
-# brought the DecklinkStereo fuse_decklink opens (0.17.0 the stereo_calibration
-# it pairs the calibration file's two cameras with, and 0.16.0 the V210 pictures
-# they capture); 0.13.0's frame prep drops depth outliers by default, 0.12.0
-# brought the filter, 0.11.0 the IAudioSensor the live examples record through,
-# 0.10.0 the frames' depth noise (DeviceFrame::depth_noise), which Dynamic's
-# change test reads, and 0.9.0 the frame prep's crop of a frame with colour to
-# what both its cameras see. The live examples rely on the crop and the filter
-# with no option of their own (fuse_realsense builds only with sensor_realsense,
-# and even without FFS with its RealSenseStereo, which 0.7.0 brought; it runs
-# FFS only with sensor_ffs, which 0.8.0 brought); the oldest grid is
-# VR_GRID_MIN_VERSION: 0.12.0, whose TrackKind::RgbdDepth RgbdStreamSensor reads
-# and whose three-run payloads its tests write; 0.6.0 brought the StreamServer
-# serving the live examples' Audio track with the frames, 0.5.0 CodecStream
-# writing it (TrackKind::Audio, 0.4.0) muxed by pts, and 0.3.0 codec_outputs
-# passing output.max_viewers to the server.
+# support the tests run on. The oldest sensor is 0.28.0, whose ready_points (a
+# picture's ready value, YuvImage::ready) the examples pass to SetSender::send,
+# the waits of a set's front batch, which records the set's prep; 0.27.0 brought
+# the wire form (sensor_wire) RgbdStreamSensor reads a session's depth records
+# in, 0.19.0 brought the DecklinkStereo fuse_decklink opens (0.17.0 the
+# stereo_calibration it pairs the calibration file's two cameras with, and
+# 0.16.0 the V210 pictures they capture); 0.13.0's frame prep drops depth
+# outliers by default, 0.12.0 brought the filter, 0.11.0 the IAudioSensor the
+# live examples record through, 0.10.0 the frames' depth noise
+# (DeviceFrame::depth_noise), which Dynamic's change test reads, and 0.9.0 the
+# frame prep's crop of a frame with colour to what both its cameras see. The
+# live examples rely on the crop and the filter with no option of their own
+# (fuse_realsense builds only with sensor_realsense, and even without FFS with
+# its RealSenseStereo, which 0.7.0 brought; it runs FFS only with sensor_ffs,
+# which 0.8.0 brought); the oldest grid is VR_GRID_MIN_VERSION: 0.12.0, whose
+# TrackKind::RgbdDepth RgbdStreamSensor reads and whose three-run payloads its
+# tests write; 0.6.0 brought the StreamServer serving the live examples' Audio
+# track with the frames, 0.5.0 CodecStream writing it (TrackKind::Audio, 0.4.0)
+# muxed by pts, and 0.3.0 codec_outputs passing output.max_viewers to the
+# server.
 set(VR_CORE_MIN_VERSION 0.42.0)
-set(VR_SENSOR_MIN_VERSION 0.27.0)
+set(VR_SENSOR_MIN_VERSION 0.28.0)
 set(VR_GRID_MIN_VERSION 0.12.0)
 add_subdirectory(third_party)
 

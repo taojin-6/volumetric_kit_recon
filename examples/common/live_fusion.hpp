@@ -39,6 +39,7 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/grid/codec/encoder.hpp"
 #include "volumetric_kit/grid/codec_stream/codec_stream.hpp"
 #include "volumetric_kit/grid/eval/mesh_distance.hpp"
@@ -52,6 +53,7 @@
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/sensor/array/rig_sets.hpp"
 #include "volumetric_kit/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
 #include "volumetric_kit/sensor/prep/picture_readback.hpp"
 
 namespace vr_example {
@@ -260,19 +262,23 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
       VKC_TRY(dump.write(set, ids, readback ? &luma : nullptr));
       if (out) {
         // One row for the prep: the cameras prepare together, into the
-        // set's front batch, whose commands read the set's pictures. A set
-        // stamped before the last frame recorded, as a clock stepping back
-        // stamps it, is coded at that frame's time rather than refused. The
-        // set is published once its frame is written and served, before any
-        // decode back, or after its fusion when it is not coded.
+        // set's front batch, whose commands read the set's pictures once
+        // their decoders' ready values are reached. A set stamped before the
+        // last frame recorded, as a clock stepping back stamps it, is coded
+        // at that frame's time rather than refused. The set is published
+        // once its frame is written and served, before any decode back, or
+        // after its fusion when it is not coded.
         vkc::CommandBatch front(device, allocator);
         front.time(out->timer());
         VKC_ASSIGN(const sensor::DeviceFrameSet prepared,
                    array->record_process(front, set, &s.rows));
         const std::uint64_t pts_ns =
             std::max(prepared.timestamp_ns, stream ? stream->last_pts_ns() : 0);
+        // Gathered before the set moves into what the batch holds.
+        const std::vector<vkc::TimelinePoint> ready =
+            sensor::ready_points(set.frames);
         VKC_ASSIGN(const sender::SetSender::Sent sent,
-                   out->send(front, prepared.frames,
+                   out->send(front, prepared.frames, ready,
                              std::make_shared<sensor::FrameSet>(std::move(set)),
                              sets.sets() - 1, pts_ns, &s.rows,
                              [&s] { s.published(); }));
