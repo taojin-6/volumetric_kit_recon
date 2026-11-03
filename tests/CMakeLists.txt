@@ -323,13 +323,10 @@ if(VR_BUILD_EXAMPLES)
            COMMAND recon_example_link_rgbd_stream_test)
 endif()
 
-# The same sensor with its pictures, decoded on this machine's hardware
-# (sensor's HevcDecoder: VideoToolbox, NVDEC) from sessions whose colour records
-# are sensor's committed H.265 clips (VS_TEST_DATA_DIR): every frame with its
-# own picture, B-frames joined, a lost picture costing the frames to the next
-# key, a lost depth record its picture alone, a colour description other than
-# the record's refused. It skips without a device path, unless
-# VS_TEST_HEVC_BACKEND promises one; without sensor_video, a device is refused.
+# The same sensor with its pictures, decoded on this machine's hardware from
+# sessions of sensor's committed H.265 clips (VS_TEST_DATA_DIR); the file says
+# what it covers. It skips without a device path, unless VS_TEST_HEVC_BACKEND
+# promises one; without sensor_video, a device is refused.
 if(VR_BUILD_EXAMPLES)
   add_executable(recon_example_link_rgbd_stream_color_test
                  example_link_rgbd_stream_color_test.cpp)

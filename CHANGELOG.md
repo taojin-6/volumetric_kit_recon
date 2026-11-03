@@ -8,23 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `examples`: **a recorded sensor plays back with its pictures.**
-  `RgbdStreamSensor` (`vr_example_link`), given a device
-  (`Options::device`, `allocator`, `queue_families`), reads the sensor's
-  `RgbdColor` track too: each colour record decoded in place
-  (`sensor::wire::decode_color`), its access unit decoded on the device by
-  sensor's `HevcDecoder` (VideoToolbox on Apple, NVDEC elsewhere), every
-  unit in order, as sensor's `KeyGate` and `hevc::first_slice_type` admit
-  it. A frame goes out only with its own picture, the colour record of its
-  set and pts, with that record's colour camera and exposure; its sensor
-  names the colour camera. A frame whose picture is lost, fails to decode,
-  or is described other than its record's colour codes say is dropped,
-  counted failed and left as a gap and a span; a picture with no depth
-  record is let go. Colour records that never reached the decoder are
-  `skipped_color()` spans. Without sensor's video decoders (off Apple,
-  without `VS_WITH_FFMPEG`) a device is refused as `Unsupported`. CI's
-  NVDEC and VideoToolbox legs promise a decoder (`VS_TEST_HEVC_BACKEND`), so
-  its test fails there rather than skips.
+- `examples`: **a recorded sensor plays back with its pictures.** Given a
+  device (`Options::device`), `RgbdStreamSensor` also reads the sensor's
+  `RgbdColor` track, decodes it there with sensor's `HevcDecoder`, and hands
+  out each frame only with its own picture
+  (`examples/common/link/rgbd_stream_sensor.hpp`). CI's NVDEC and
+  VideoToolbox legs set `VS_TEST_HEVC_BACKEND`, so its test fails there
+  rather than skips.
 - `examples`: **a recorded sensor plays back as an `IRgbdSensor`**
   (`examples/common/link/rgbd_stream_sensor.hpp`, `vr_example_link`):
   `RgbdStreamSensor::open_file` reads one sensor of a `.vrst` session from

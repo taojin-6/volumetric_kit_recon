@@ -195,6 +195,14 @@ struct RgbdStreamSensor::State {
   // Every picture the decoder has ready.
   vkc::Status receive_pictures();
 
+  // A send failed: the pictures ready are taken, an IoError costs the units
+  // up to the next key, and any other error ends the file.
+  vkc::Status send_failed(vkc::Status why);
+
+  // The stream ends, so the pictures the decoder holds back for display come
+  // out. The decoder's error other than IoError.
+  vkc::Status end_stream();
+
   // The decoder has failed for good: the file ends here.
   vkc::Status decoder_failed(vkc::Status why);
 
@@ -553,8 +561,10 @@ vkc::Status RgbdStreamSensor::State::take_color(const stream::Record& record) {
     case sensor::KeyGate::Admission::Skip:
       return {};
     case sensor::KeyGate::Admission::Restart:
-      // What the decoder holds is from before the loss: reset, so it drops
-      // it, and skips the leading pictures of a CRA.
+      // The pictures held back for display were decoded before the loss:
+      // out with them, then a reset, so the decoder takes the key as the
+      // stream's first and skips the leading pictures of a CRA.
+      VKC_TRY(end_stream());
       in_flight.clear();
       if (vkc::Status reset = decoder->reset(); !reset.ok()) {
         return decoder_failed(std::move(reset));
@@ -569,9 +579,7 @@ vkc::Status RgbdStreamSensor::State::take_color(const stream::Record& record) {
   if (vkc::Status sent = decoder->send(r.picture, r.picture_bytes, unit);
       !sent.ok()) {
     in_flight.erase(unit);
-    if (sent.domain() != Code::IoError) return decoder_failed(std::move(sent));
-    gate.lose();
-    return {};
+    return send_failed(std::move(sent));
   }
   color.take(at.seq, at.pts_ns, &skipped_color);
   VKC_TRY(receive_pictures());
@@ -619,6 +627,28 @@ vkc::Status RgbdStreamSensor::State::receive_pictures() {
     picture_set = facts.set;
     pictures.push_back({facts, std::move(decoded)});
   }
+#else
+  return {};
+#endif
+}
+
+vkc::Status RgbdStreamSensor::State::send_failed(vkc::Status why) {
+  const bool lost = why.domain() == Code::IoError;
+  if (lost) gate.lose();
+  // The decoder can have moved pictures to ready before failing, which must
+  // be taken before anything more is sent; after a refusal, they come out
+  // and then the refusal.
+  VKC_TRY(receive_pictures());
+  return lost ? vkc::Status{} : decoder_failed(std::move(why));
+}
+
+vkc::Status RgbdStreamSensor::State::end_stream() {
+#if VR_EXAMPLE_LINK_VIDEO
+  if (!decoder || in_flight.empty()) return {};
+  if (vkc::Status ended = decoder->send(nullptr, 0, 0); !ended.ok()) {
+    return send_failed(std::move(ended));
+  }
+  return receive_pictures();
 #else
   return {};
 #endif
@@ -707,19 +737,7 @@ FrameResult RgbdStreamSensor::State::hand_out() {
 
 vkc::Status RgbdStreamSensor::State::end_file() {
   file_ended = true;
-  vkc::Status failure;
-#if VR_EXAMPLE_LINK_VIDEO
-  // The pictures the decoder holds back for display come out at its end.
-  if (decoder && !in_flight.empty()) {
-    vkc::Status ended = decoder->send(nullptr, 0, 0);
-    if (ended.ok()) {
-      ended = receive_pictures();
-    } else if (ended.domain() != Code::IoError) {
-      ended = decoder_failed(std::move(ended));
-    }
-    if (!ended.ok()) failure = std::move(ended);
-  }
-#endif
+  vkc::Status failure = end_stream();
   in_flight.clear();
   join();
   return failure;

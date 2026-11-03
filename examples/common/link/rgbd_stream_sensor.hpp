@@ -40,12 +40,13 @@
 /// it by the picture track's seq and the unit's own slice type
 /// (`hevc::first_slice_type`): after a record lost on the way, refused, or
 /// failing to decode, it waits for the next key, and restarts the decoder
-/// there. A depth record whose picture never comes, or comes described other
-/// than its record's colour codes say (`video/frame_color.hpp`) or at another
-/// size than its colour camera, gives no frame: counted failed, a gap in the
-/// sequence and a span as any lost record. A picture with no depth record is
-/// let go. The colour records that never reached the decoder are spans of
-/// their own (@ref RgbdStreamSensor::skipped_color).
+/// there, once the pictures held back for display are out. A depth record
+/// whose picture never comes, or comes described other than its record's
+/// colour codes say (`video/frame_color.hpp`) or at another size than its
+/// colour camera, gives no frame: counted failed, a gap in the sequence and a
+/// span as any lost record. A picture with no depth record is let go. The
+/// colour records that never reached the decoder are spans of their own
+/// (@ref RgbdStreamSensor::skipped_color).
 ///
 /// A tracked sensor's poses are in its own world, and a registration places
 /// them in the array's: `tracking_to_world * color_to_world`. A fixed
@@ -127,9 +128,10 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   struct Skipped {
     std::uint64_t first = 0;  ///< The first one's seq.
     std::uint64_t count = 0;  ///< How many: 1 or more.
-    /// The latest timestamp before them; 0 for none.
+    /// The last non-zero timestamp of the records that counted before them,
+    /// in seq order; 0 for none.
     std::uint64_t after_ns = 0;
-    /// The timestamp after them; 0 for none.
+    /// The timestamp of the record that counted after them; 0 for none.
     std::uint64_t before_ns = 0;
   };
 
@@ -212,8 +214,9 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   ///         lost on the way, refused (their CRC, the decode, or a unit the
   ///         decoder would not take), or let go by the key gate while it
   ///         waited for a key. Each is found as @ref skipped finds its spans,
-  ///         its times the pts of the units decoded before and after it.
-  ///         Empty when the picture track is not read.
+  ///         its times the pts of the units decoded before and after it, in
+  ///         decode order: with B-frames, not the latest pts seen. Empty when
+  ///         the picture track is not read.
   const std::vector<Skipped>& skipped_color() const noexcept;
 
  private:

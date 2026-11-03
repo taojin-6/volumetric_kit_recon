@@ -30,11 +30,9 @@ endif()
 
 # One sensor of a .vrst session read back as a sensor::IRgbdSensor
 # (link/rgbd_stream_sensor.hpp): its depth track's records, in sensor's wire
-# form (sensor_wire), through grid's StreamReader, and its picture track's
-# pictures on sensor's HEVC decoder where sensor builds it (sensor_video: on
-# Apple, and elsewhere with VS_WITH_FFMPEG); elsewhere a device to decode on is
-# refused as Unsupported. The key gate is sensor_video_syntax's, which
-# sensor_wire brings.
+# form (sensor_wire), through grid's StreamReader, and its pictures on
+# sensor_video where sensor builds it. The key gate is sensor_video_syntax's,
+# which sensor_wire brings.
 add_library(vr_example_link STATIC link/rgbd_stream_sensor.cpp)
 target_link_libraries(
   vr_example_link PUBLIC vr_example_common volumetric_kit::sensor_wire

@@ -15,6 +15,11 @@
 //   decodes it all again. Without a device the picture track is not read.
 // - B-frames: pictures that come out in another order than their units went
 //   in join their own depth records.
+// - The decoder's refusal: the pictures it hands out before it keep their
+//   frames, one poll returns it, and the file ends there.
+// - Open GOPs, and a loss before a CRA: the pictures held for display come
+//   out before the decoder restarts, and the CRA's leading pictures are
+//   skipped.
 // - A colour record lost on the way, or failing its CRC, costs the frames up
 //   to the next key: counted failed, a gap and a span each, and a span of
 //   the picture track. Decoding restarts at the key.
@@ -362,6 +367,9 @@ constexpr const char* kPatches = VR_HEVC_DATA "/patches_256x144.h265";
 constexpr const char* kUnlabelled = VR_HEVC_DATA "/unlabelled_256x144.h265";
 // The patch frames with B-frames, then two of 4:0:0 grey.
 constexpr const char* kBFrames = VR_HEVC_DATA "/refused_256x144.h265";
+// 16 patch frames in open GOPs: a CRA every 6, the two B-frames shown before
+// each sent after it as its leading (RASL) pictures, predicted across it.
+constexpr const char* kOpenGop = VR_HEVC_DATA "/open_gop_256x144.h265";
 
 Units units_of(const char* clip) { return testing::access_units_of_file(clip); }
 
@@ -373,33 +381,60 @@ Units patches16() {
   return units;
 }
 
-// The frame each of `units` shows: its picture's place in display order.
-std::vector<std::size_t> display_order(const Gpu& gpu, const Units& units) {
+// What the decoder makes of `units`, each sent with its index for its pts
+// and its pictures taken, then the end, up to the first failure: the units
+// whose pictures it hands out, in that order, those ready at a failed send
+// included; how many units it took; and the failure.
+struct Decoding {
+  std::vector<std::size_t> shown;
+  std::size_t taken = 0;
+  vkc::Status failure;
+};
+
+Decoding decode_units(const Gpu& gpu, const Units& units) {
+  Decoding out;
   sensor::HevcDecoder::Options options;
   options.device = &gpu.device;
   options.allocator = &gpu.allocator;
   auto decoder = sensor::HevcDecoder::create(options);
-  if (!decoder) return {};
-  std::vector<std::size_t> shows(units.size(), units.size());
-  std::size_t shown = 0;
-  const auto drain = [&] {
+  if (!decoder) {
+    out.failure = decoder.status();
+    return out;
+  }
+  const auto drain = [&]() -> vkc::Status {
     for (;;) {
-      auto picture = decoder->receive();
-      if (!picture.ok() || !picture.value()) return picture.ok();
-      const auto k = static_cast<std::size_t>(picture.value()->pts);
-      if (k >= shows.size()) return false;
-      shows[k] = shown++;
+      VKC_ASSIGN(const std::optional<sensor::DecodedPicture> picture,
+                 decoder->receive());
+      if (!picture) return {};
+      out.shown.push_back(static_cast<std::size_t>(picture->pts));
     }
   };
-  for (std::size_t i = 0; i < units.size(); ++i) {
-    if (!decoder->send(units[i].data(), units[i].size(),
-                       static_cast<std::int64_t>(i)) ||
-        !drain()) {
-      return {};
-    }
+  for (std::size_t i = 0; i <= units.size(); ++i) {
+    const bool end = i == units.size();
+    const vkc::Status sent =
+        decoder->send(end ? nullptr : units[i].data(),
+                      end ? 0 : units[i].size(), static_cast<std::int64_t>(i));
+    const vkc::Status drained = drain();
+    out.failure = sent.ok() ? drained : sent;
+    if (!sent.ok()) break;
+    if (!end) ++out.taken;
+    if (!drained.ok()) break;
   }
-  if (!decoder->send(nullptr, 0, 0) || !drain() || shown != units.size()) {
+  return out;
+}
+
+// The frame each of `units` shows: its picture's place in display order.
+// Empty unless the decoder hands out every unit's picture.
+std::vector<std::size_t> display_order(const Gpu& gpu, const Units& units) {
+  const Decoding decoding = decode_units(gpu, units);
+  if (!decoding.failure.ok() || decoding.shown.size() != units.size()) {
     return {};
+  }
+  std::vector<std::size_t> shows(units.size(), units.size());
+  for (std::size_t place = 0; place < units.size(); ++place) {
+    const std::size_t k = decoding.shown[place];
+    if (k >= units.size() || shows[k] != units.size()) return {};
+    shows[k] = place;
   }
   return shows;
 }
@@ -476,6 +511,22 @@ std::vector<std::size_t> all_but(std::size_t count,
     if (!among(gone, i)) kept.push_back(i);
   }
   return kept;
+}
+
+// The spans of `count` depth records once the file has ended, the frames
+// `kept` (in order) handed out.
+std::vector<RgbdStreamSensor::Skipped> spans_around(
+    const std::vector<std::size_t>& kept, std::size_t count) {
+  std::vector<RgbdStreamSensor::Skipped> spans;
+  std::size_t next = 0;
+  std::uint64_t after = 0;
+  for (const std::size_t k : kept) {
+    if (k > next) spans.push_back({next, k - next, after, time_of(k)});
+    next = k + 1;
+    after = time_of(k);
+  }
+  if (count > next) spans.push_back({next, count - next, after, 0});
+  return spans;
 }
 
 // Every frame with its own picture, the colour camera named, the contract
@@ -558,6 +609,119 @@ int test_b_frames(const Gpu& gpu, sensor::PictureReadback& readback) {
     if (check_kept(readback, read.value(), take, kept) != 0) return 1;
     CHECK(s.stats().failed == 5);
     CHECK(same_spans(s.skipped_color(), {{3, 5, time_of(take.shows[2]), 0}}));
+  }
+  return 0;
+}
+
+// The whole refused clip: the decoder refuses the stream at unit 8, the
+// first grey one, with pictures still held for display. The pictures it
+// hands out before the refusal keep their frames (VideoToolbox's: all 8),
+// one poll returns the refusal, and the file ends there.
+int test_refused(const Gpu& gpu, sensor::PictureReadback& readback) {
+  const vkc::test::Scratch scratch("recon_link_rgbd_color_refused_");
+  const std::string path = (scratch.path / "refused.vrst").string();
+  const Units units = units_of(kBFrames);
+  CHECK(units.size() == 10);
+  std::vector<std::size_t> shows =
+      display_order(gpu, Units(units.begin(), units.begin() + 8));
+  CHECK(shows.size() == 8);
+  shows.push_back(8);
+  shows.push_back(9);
+  const Decoding decoding = decode_units(gpu, units);
+  CHECK(decoding.failure.domain() == Code::Unsupported && decoding.taken == 8);
+  std::vector<std::size_t> kept;
+  for (const std::size_t unit : decoding.shown) kept.push_back(shows[unit]);
+  std::sort(kept.begin(), kept.end());
+  CHECK(!kept.empty());
+  const Take take = make_take(units, shows, bt709());
+  CHECK(write_session(path, take).ok());
+
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> opened =
+      RgbdStreamSensor::open_file(path, on_device(gpu));
+  CHECK(opened.ok());
+  RgbdStreamSensor& s = *opened.value();
+  CHECK(s.start().ok());
+  std::vector<sensor::RgbdFrame> frames;
+  std::vector<vkc::Status> errors;
+  for (int polls = 0; !s.exhausted(); ++polls) {
+    CHECK(polls < 100);
+    vkc::Result<std::optional<sensor::RgbdFrame>> polled = s.poll();
+    if (!polled.ok()) {
+      errors.push_back(polled.status());
+    } else if (polled.value()) {
+      frames.push_back(std::move(*polled.value()));
+    }
+  }
+  CHECK(errors.size() == 1 && errors[0].domain() == Code::Unsupported &&
+        errors[0].message().find("decoding sensor ipad's pictures") !=
+            std::string::npos);
+  if (check_kept(readback, frames, take, kept) != 0) return 1;
+  const sensor::SensorStats stats = s.stats();
+  CHECK(stats.received == 8 && stats.delivered == kept.size() &&
+        stats.failed == 8 - kept.size());
+  CHECK(same_spans(s.skipped(), spans_around(kept, 10)));
+  CHECK(same_spans(s.skipped_color(), {{8, 2, time_of(shows[7]), 0}}));
+  CHECK(testing::rgbd_breach(s.info(), frames, stats).empty());
+  return 0;
+}
+
+// Open GOPs: every frame keeps its picture. Then the unit before the last
+// CRA lost on the way: its frame goes; the pictures held back for display,
+// decoded before the loss, come out before the decoder restarts at the CRA;
+// and the CRA's leading pictures, predicted from the lost one, are skipped,
+// their frames gone, with no picture of another frame's.
+int test_open_gop(const Gpu& gpu, sensor::PictureReadback& readback) {
+  const vkc::test::Scratch scratch("recon_link_rgbd_color_gop_");
+  const Units units = units_of(kOpenGop);
+  std::vector<std::size_t> shows = display_order(gpu, units);
+  CHECK(units.size() == 16 && shows.size() == 16);
+  const auto type_of = [&](std::size_t k) {
+    return hevc::first_slice_type(units[k].data(), units[k].size())
+        .value_or(-1);
+  };
+  std::size_t cra = 0;
+  for (std::size_t k = 0; k < units.size(); ++k) {
+    if (type_of(k) == hevc::kCraNut) cra = k;
+  }
+  CHECK(cra >= 2);
+  const std::size_t lost = cra - 1;
+  // Units before the lost one show frames after its: held back at the loss.
+  CHECK(std::any_of(shows.begin(),
+                    shows.begin() + static_cast<std::ptrdiff_t>(lost),
+                    [&](std::size_t f) { return f > shows[lost]; }));
+  std::vector<std::size_t> gone = {shows[lost]};
+  for (std::size_t k = cra + 1; k < units.size() && hevc::is_rasl(type_of(k));
+       ++k) {
+    gone.push_back(shows[k]);
+  }
+  CHECK(gone.size() == 3);
+  const Take take = make_take(units, shows, bt709());
+  for (const bool lose : {false, true}) {
+    const std::string path =
+        (scratch.path / (lose ? "lost.vrst" : "whole.vrst")).string();
+    CHECK(write_session(path, take,
+                        {lose ? std::vector<std::size_t>{lost}
+                              : std::vector<std::size_t>{},
+                         {}})
+              .ok());
+    vkc::Result<std::unique_ptr<RgbdStreamSensor>> opened =
+        RgbdStreamSensor::open_file(path, on_device(gpu));
+    CHECK(opened.ok());
+    RgbdStreamSensor& s = *opened.value();
+    const vkc::Result<std::vector<sensor::RgbdFrame>> read = read_all(s);
+    CHECK(read.ok());
+    CHECK(testing::rgbd_breach(s.info(), read.value(), s.stats()).empty());
+    CHECK(s.stats().received == 16);
+    const std::vector<std::size_t> kept =
+        lose ? all_but(16, gone) : in_order(16);
+    if (check_kept(readback, read.value(), take, kept) != 0) return 1;
+    CHECK(same_spans(s.skipped(), spans_around(kept, 16)));
+    if (!lose) {
+      CHECK(s.skipped_color().empty());
+      continue;
+    }
+    CHECK(same_spans(s.skipped_color(), {{lost, 1, time_of(shows[lost - 1]),
+                                          time_of(shows[cra])}}));
   }
   return 0;
 }
@@ -755,6 +919,8 @@ int gpu_main(Gpu& gpu) {
   sensor::PictureReadback& rb = *readback.value();
   if (test_round_trip(gpu, rb) != 0) return 1;
   if (test_b_frames(gpu, rb) != 0) return 1;
+  if (test_refused(gpu, rb) != 0) return 1;
+  if (test_open_gop(gpu, rb) != 0) return 1;
   if (test_lost_picture(gpu, rb) != 0) return 1;
   if (test_lost_depth(gpu, rb) != 0) return 1;
   if (test_description(gpu, rb) != 0) return 1;
