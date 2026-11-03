@@ -64,7 +64,7 @@ the device:
 
 | batch | code | records | read back |
 |---|---|---|---|
-| front | `SetSender::send`, `sender/set_sender.hpp` | prep (`record_process`), the allocation round and the fuse (`record_fuse`), the free pass when due (`record_free_stale`), the frame's front half (`record_front`) | the round's, the free pass's and the front's results, in ring slots |
+| front | `SetSender::send`, `sender/set_sender.hpp`; it starts once the set's pictures' ready values are reached (`sensor::ready_points`, set by an NVIDIA decoder), so `"wait: front"` includes that device wait | prep (`record_process`), the allocation round and the fuse (`record_fuse`), the free pass when due (`record_free_stale`), the frame's front half (`record_front`) | the round's, the free pass's and the front's results, in ring slots |
 | back | `SetSender::send`'s frame, `CodecStream::finish_frame`, `codec_stream/codec_stream.cpp` | the tables inline, rANS and the gather (`record_back`) | the back's results and the payload, in ring slots |
 
 A set fused again adds its blocking fuse and a front half of its own; a

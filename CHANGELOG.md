@@ -109,6 +109,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **recon pins sensor 0.29.0** (sensor #34's merge, `32be4cc`; was
+  0.27.0), and CI takes its actions at the new pin. Since 0.28.0 NVIDIA's
+  decoders (NVDEC, nvJPEG) hand a picture over before its copy has run,
+  with the value its writer sets once it has (`YuvImage::ready`), so
+  **`sender::SetSender::send` takes the waits of the set's front batch**
+  (`waits`, after `frames`), which records the set's prep: the live
+  examples pass the set's `sensor::ready_points(set.frames)`, through the
+  new `examples/common/send_set.hpp`, and codec_replica its frame's, each
+  gathered before the set moves into what the batch holds. The sender test
+  sends its sets through the same helper, so a live set's waits are
+  tested. Without them the prep may read a picture CUDA has not
+  written yet. The sensor floor rises to 0.28.0; recon calls nothing of
+  0.29.0's (its `HevcEncoder`). The core stays at 0.43.0, above the 0.41.0
+  sensor needs, and grid at 0.12.0.
+
 - build: **recon pins core 0.43.0** (core #89's merge, `2163deb`; was
   0.39.0), **sensor 0.27.0** (sensor #35's merge, `ed3e40e`; was 0.19.0)
   and **grid 0.12.0** (grid #18's merge, `17d48f3`; was 0.8.0), and CI

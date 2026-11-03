@@ -78,13 +78,14 @@ endif()
 # sensor, so its tests and -Werror stay off in this build; recon's examples take
 # its test fixtures (VS_TEST_DATA_DIR, which it sets).
 #
-# The pin is sensor 0.27.0 (ed3e40e, sensor #35's merge: the RGB-D wire form, on
-# 0.26.0's frame contract), as are its Orbbec SDK and librealsense actions in
-# .github/workflows (the sibling-actions-at-pins hook).
+# The pin is sensor 0.29.0 (32be4cc, sensor #34's merge: the HEVC encoder, on
+# 0.28.0's GPU hand-over of NVIDIA's decoded pictures), as are its Orbbec SDK
+# and librealsense actions in .github/workflows (the sibling-actions-at-pins
+# hook).
 FetchContent_Declare(
   volumetric_kit_sensor
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
-  GIT_TAG ed3e40ee6ccaa53ec0e682040735c9ea1128deb0)
+  GIT_TAG 32be4cc19fffbf6c1484df7e3aea0e75a94cee9b)
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)

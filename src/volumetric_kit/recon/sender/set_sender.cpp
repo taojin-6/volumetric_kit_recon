@@ -43,6 +43,7 @@ bool SetSender::code_due(std::size_t index) const noexcept {
 core::Result<SetSender::Sent> SetSender::send(
     core::CommandBatch& front,
     const std::vector<std::optional<sensor::DeviceFrame>>& frames,
+    const std::vector<core::TimelinePoint>& waits,
     std::shared_ptr<const void> inputs, std::size_t index, std::uint64_t pts_ns,
     core::StageMetrics* rows, const std::function<void()>& sent) {
   // A coded set's frame goes through the stream in halves.
@@ -80,9 +81,10 @@ core::Result<SetSender::Sent> SetSender::send(
     }
     coded = std::move(recorded).value();
   }
-  // Prep, fusion, free pass and the frame's front half: one submit.
+  // Prep, fusion, free pass and the frame's front half: one submit, which
+  // starts once the prep's pictures are written.
   const core::Status ran = [&]() -> core::Status {
-    VKC_ASSIGN(core::PendingBatch done, front.submit_async({}, {}));
+    VKC_ASSIGN(core::PendingBatch done, front.submit_async(waits, {}));
     {
       // Its counts feed the frame's tables on the host.
       const core::WaitScope wait(rows, "wait: front");
