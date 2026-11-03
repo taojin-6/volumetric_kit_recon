@@ -7,9 +7,11 @@
 // (link/rgbd_stream_sensor.hpp), checks on the device that each frame's
 // picture carries its depth's pattern index, and prints counts, times and
 // rgbd_breach (link/session_check.hpp). A poll's error is printed and the run
-// goes on. Exit 0 when the frame contract holds, no frame shows another's
-// picture and no poll failed; 2 for a command line it does not take. It
-// writes nothing.
+// goes on. A live stream has no end of its own (a writer's finish reads as a
+// drop): --frames, --seconds or Ctrl-C ends it, and the report still prints.
+// Exit 0 when SessionReport::ok() (a frame came, the frame contract holds,
+// every frame whose depth names an index shows its own picture) and no poll
+// failed; 2 for a command line it does not take. It writes nothing.
 //
 //   session_check <session.vrst> [--sensor <id>] [--depth-only]
 //   session_check --listen <ipv4>:<port> [--wait <s>] [--frames <n>]
@@ -43,8 +45,8 @@ struct Args {
   std::string sensor;
   bool depth_only = false;
   std::optional<long> wait_s;  // --listen only: 300 unless set
-  long frames = 0;             // --listen only; 0: until the stream ends
-  long seconds = 0;            // --listen only; 0: as frames
+  long frames = 0;   // --listen only; 0: until the stream ends or Ctrl-C
+  long seconds = 0;  // --listen only; 0: as frames
 };
 
 int usage() {

@@ -312,13 +312,16 @@ one numeric IPv4 address of this host for a writer to dial (the address and
 port an iPad's screen takes). It decodes the pictures on this machine's GPU,
 joins each to its depth, checks on the device that each frame's picture
 carries its depth's test-pattern index, and prints counts, times and the
-frame contract's breach. It exits 0 when the contract holds and no frame
-shows another's picture, and writes nothing.
+frame contract's breach. It exits 0 when a frame came, the contract holds
+and every frame whose depth carries an index shows its own picture (none
+another's, none unreadable), and writes nothing. A live stream has no end of
+its own, since a writer's finish reads as a drop: give `--frames` or
+`--seconds`, or press Ctrl-C, and the report still prints.
 
 ```sh
 "$recon_root/build/tools/session_check/session_check" take.vrst
 "$recon_root/build/tools/session_check/session_check" \
-  --listen 10.8.0.1:9123 --frames 300   # --seconds, --wait, --depth-only
+  --listen 10.8.0.1:9123 --seconds 600   # --frames, --wait, --depth-only
 ```
 
 A synthetic writer for it, with no phone: the link's colour test, given

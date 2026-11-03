@@ -348,7 +348,8 @@ endif()
 # The same sensor read live from a writer that dials 127.0.0.1 on a thread of
 # the test (link_dialler.hpp), depth alone: frames equal the file's, the
 # recording reads back, a reconnect, another session refused, three failures end
-# the stream, and listen's refusals. Host only.
+# the stream (and the cap's window), the poll's bound, a record the recording
+# refuses, listen's refusals, and session_check's pass. Host only.
 if(VR_BUILD_EXAMPLES)
   add_executable(recon_example_link_listen_test example_link_listen_test.cpp)
   target_link_libraries(

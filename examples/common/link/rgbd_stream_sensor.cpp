@@ -9,6 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -16,10 +18,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
 
+#include "link/failure_cap.hpp"
 #include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/log.hpp"
 #include "volumetric_kit/core/base/unique_fd.hpp"
@@ -54,9 +58,6 @@ using Code = vkc::Status::Code;
 using FrameResult = vkc::Result<std::optional<sensor::RgbdFrame>>;
 using Clock = std::chrono::steady_clock;
 
-// A live stream ends at its third failure within kFailureWindow.
-constexpr std::size_t kMaxFailures = 3;
-constexpr std::chrono::seconds kFailureWindow{10};
 // How long listen's wait for the first session reads at a time.
 constexpr std::chrono::milliseconds kSessionSlice{10};
 // How long a failed accept waits before the next.
@@ -204,6 +205,21 @@ void warn(const std::string& message) {
   vkc::log_message(vkc::LogLevel::Warning, "vr", message);
 }
 
+// What a registration says alone, before any session: it is valid, and for
+// world epoch 0, since a session is one world. Refusals named after `where`.
+vkc::Status check_registration(const sensor::camera::TrackedRegistration& reg,
+                               const std::string& where) {
+  const vkc::Status valid = sensor::camera::validate_tracked_registration(reg);
+  if (!valid.ok()) return valid.with_context(where + ": the registration");
+  if (reg.world_epoch != 0) {
+    return vkc::Status::invalid_argument(
+        where + ": the registration holds for world epoch " +
+        std::to_string(reg.world_epoch) +
+        ", and a session is one world, epoch 0");
+  }
+  return {};
+}
+
 // One session's records over a live link, across its writer's connections:
 // the listener, the connection, the session the first one brought, the
 // records taken on each track, the recording and the failure cap.
@@ -216,15 +232,25 @@ class Link {
   Link(const Link&) = delete;
   Link& operator=(const Link&) = delete;
 
-  // Takes connections until one brings a session by `deadline`; it is the
-  // session from then on.
-  vkc::Status await_session(Clock::time_point deadline) {
+  // Takes connections until one brings a session that `check` takes by
+  // `deadline`; it is the session from then on. A session `check` refuses
+  // as `InvalidArgument` is a connection refused, and the wait goes on;
+  // its other errors end it.
+  vkc::Status await_session(
+      Clock::time_point deadline,
+      const std::function<vkc::Status(const stream::Session&)>& check) {
+    std::string refused;  // the last refusal's reason
+    const auto none = [&] {
+      return vkc::Status::io_error(
+          name_ + ": no session within the wait" +
+          (refused.empty() ? std::string() : "; the last refused: " + refused));
+    };
     while (!session_) {
       if (!client_) {
         VKC_TRY(accept(deadline));
         if (!client_) {
           if (Clock::now() < deadline) continue;
-          return vkc::Status::io_error(name_ + ": no session within the wait");
+          return none();
         }
       }
       // In slices: a read returns at a record, not at the session, which a
@@ -234,17 +260,27 @@ class Link {
       const vkc::Result<bool> read = client_->next(
           std::min(left(deadline), kSessionSlice), &record, &payload);
       if (!read.ok()) {
-        refuse(read.status().message());
+        refused = read.status().message();
+        refuse(refused);
         continue;
       }
       if (client_->session() != nullptr) {
+        const vkc::Status taken = check(*client_->session());
+        if (!taken.ok()) {
+          if (taken.domain() != Code::InvalidArgument) {
+            return taken.with_context(name_);
+          }
+          refused = taken.message();
+          refuse(refused);
+          continue;
+        }
         session_ = *client_->session();
         VKC_ASSIGN(session_bytes_, session_bytes(*session_));
         last_.assign(session_->tracks.size(), std::nullopt);
         join();
         if (read.value()) pending_ = Pending{record, std::move(payload)};
       } else if (Clock::now() >= deadline) {
-        return vkc::Status::io_error(name_ + ": no session within the wait");
+        return none();
       }
     }
     return {};
@@ -303,23 +339,22 @@ class Link {
         join();
       }
       if (read.value() && accepted_ && take(*record, *payload)) return true;
-      if (!read.value() && Clock::now() >= deadline) return false;
+      // A record sent again is skipped against the deadline too, so a
+      // replayed GOP never holds the poll past it.
+      if (Clock::now() >= deadline) return false;
     }
   }
 
   // The connection failed, or its stream did: let it go and take the
-  // writer's next; the third within kFailureWindow ends the stream.
+  // writer's next; kLinkFailures within kLinkFailureWindow end the stream.
   void fail(const std::string& why) {
     warn("RgbdStreamSensor: " + name_ + ": the writer's connection failed (" +
          why + "); waiting for its next");
     let_go();
     ++stats_.failures;
-    const Clock::time_point now = Clock::now();
-    failures_.push_back(now);
-    while (now - failures_.front() >= kFailureWindow) failures_.pop_front();
-    if (failures_.size() >= kMaxFailures) {
-      warn("RgbdStreamSensor: " + name_ + ": " + std::to_string(kMaxFailures) +
-           " failures within " + std::to_string(kFailureWindow.count()) +
+    if (cap_.fail(Clock::now())) {
+      warn("RgbdStreamSensor: " + name_ + ": " + std::to_string(kLinkFailures) +
+           " failures within " + std::to_string(kLinkFailureWindow.count()) +
            " s: the stream ends");
       end();
     }
@@ -413,7 +448,11 @@ class Link {
       if (written.ok()) {
         ++stats_.recorded;
       } else {
-        recording_.reset();  // a file that may end inside the record
+        // A refused record leaves nothing written, so the file is finished
+        // as it stands; after an I/O failure the finish returns that
+        // failure, and the file reads as a killed writer's.
+        (void)recording_->finish();
+        recording_.reset();
         error_ = std::move(written).with_context(
             "RgbdStreamSensor: recording " + name_ + "'s session");
       }
@@ -430,7 +469,7 @@ class Link {
   std::optional<Pending> pending_;  // a record that came with the session
   std::vector<std::optional<std::uint64_t>> last_;  // per track
   std::unique_ptr<stream::StreamWriter> recording_;
-  std::deque<Clock::time_point> failures_;  // within the window
+  FailureCap cap_;
   bool ended_ = false;
   vkc::Status error_;  // the recording's, returned once
   RgbdStreamSensor::LinkStats stats_;
@@ -581,9 +620,7 @@ RgbdStreamSensor::State::open(const stream::Session& session, Options options,
 
   if (options.registration) {
     const sensor::camera::TrackedRegistration& reg = *options.registration;
-    const vkc::Status valid =
-        sensor::camera::validate_tracked_registration(reg);
-    if (!valid.ok()) return valid.with_context(where + ": the registration");
+    VKC_TRY(check_registration(reg, where));
     if (info.pose != sensor::PoseSource::Tracked) {
       return bad("a registration for sensor " + info.id +
                  ", which is fixed: its poses are its calibration's");
@@ -595,11 +632,6 @@ RgbdStreamSensor::State::open(const stream::Session& session, Options options,
     if (reg.session != session.id) {
       return bad("the registration is another session's: " + hex(reg.session) +
                  ", not the stream's " + hex(session.id));
-    }
-    if (reg.world_epoch != 0) {
-      return bad("the registration holds for world epoch " +
-                 std::to_string(reg.world_epoch) +
-                 ", and a session is one world, epoch 0");
     }
   }
 
@@ -695,15 +727,35 @@ vkc::Result<std::unique_ptr<RgbdStreamSensor>> RgbdStreamSensor::listen(
                                          std::to_string(wait.count()) +
                                          " ms, which must be positive");
   }
+  // What no session can mend is refused before any writer dials.
+  if (options.registration) {
+    VKC_TRY(check_registration(*options.registration, where));
+  }
+  if (!record_path.empty()) {
+    std::error_code ignored;
+    if (std::filesystem::exists(
+            std::filesystem::symlink_status(record_path, ignored))) {
+      return vkc::Status::invalid_argument(
+          where + ": the recording: something is already at " + record_path);
+    }
+  }
   vkc::Result<std::unique_ptr<net::Listener>> listening =
       net::Listener::create(host, port);
   if (!listening.ok()) return listening.status().with_context(kApi);
   auto link = std::make_unique<Link>(std::move(listening).value(), name);
-  if (vkc::Status came = link->await_session(after(wait)); !came.ok()) {
+  // Each session that comes is opened as a file's; one refused is a
+  // connection refused, and the next is waited for.
+  std::unique_ptr<State> state;
+  const auto open = [&](const stream::Session& session) -> vkc::Status {
+    vkc::Result<std::unique_ptr<State>> opened =
+        State::open(session, options, "its session");
+    if (!opened.ok()) return opened.status();
+    state = std::move(opened).value();
+    return {};
+  };
+  if (vkc::Status came = link->await_session(after(wait), open); !came.ok()) {
     return came.with_context(kApi);
   }
-  VKC_ASSIGN(std::unique_ptr<State> state,
-             State::open(link->session(), std::move(options), where));
   if (!record_path.empty()) {
     if (vkc::Status made = link->record_to(record_path); !made.ok()) {
       return made.with_context(where + ": the recording");

@@ -14,7 +14,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its session's records as they come, as a file's are read: after a dropped
   connection or a picture that fails to decode it takes the writer's next
   connection, which starts at a key, and three such failures within 10 s
-  end the stream; another session's connection is refused, and records sent
+  end the stream; a session it would not open, or after the first another
+  session, is a connection refused, and the wait goes on; records sent
   again are skipped. With a recording path, every record taken goes through
   grid's `StreamWriter` into one file across reconnects, which `open_file`
   reads back frame for frame. `link_stats()` counts the connections.
@@ -23,7 +24,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its depth (`examples/common/link/session_check.hpp`), and prints counts,
   times and `rgbd_breach`; it writes nothing (README, "Checking a phone's
   stream"). The sensor floor rises to 0.37.0, whose `PatternReader` it reads
-  with.
+  with, and the core floor to 0.43.0, whose net tier it listens with.
 
 - `examples`: **a recorded sensor plays back with its pictures.** Given a
   device (`Options::device`), `RgbdStreamSensor` also reads the sensor's

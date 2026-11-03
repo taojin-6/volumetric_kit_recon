@@ -14,13 +14,21 @@
 //   is one valid file of every record taken, which reads back as the live
 //   frames with the same span.
 // - Three failures within 10 s end the stream: exhausted, the listener
-//   closed.
+//   closed. The window itself (link/failure_cap.hpp): a failure 10 s or more
+//   before the last no longer counts.
 // - A start counts its spans from the first record found after it: a writer
 //   already at frame 3, and again after a stop (which lets the connection
 //   go, not as a failure) at frame 8, leaves none.
+// - A poll with nothing to take, the writer silent or none connected, comes
+//   back empty within its bound.
+// - A record the recording refuses leaves it finished, with the records
+//   before it, and poll returns the refusal once.
 // - Refusals: a wildcard, empty or named host, port 0, a wait of 0, no
-//   session within the wait, a recording already there, and a first session
-//   with no depth track.
+//   session within the wait, and a recording already there, before
+//   listening. A session open_file would refuse is a connection refused:
+//   the right writer after it is taken, and alone it is named when the wait
+//   ends.
+// - session_check's pass (link/session_check.hpp, SessionReport::ok).
 
 #include <atomic>
 #include <chrono>
@@ -34,7 +42,9 @@
 #include <utility>
 #include <vector>
 
+#include "link/failure_cap.hpp"
 #include "link/rgbd_stream_sensor.hpp"
+#include "link/session_check.hpp"
 #include "link_dialler.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/net/dial.hpp"
@@ -102,6 +112,24 @@ Frames poll_frames(RgbdStreamSensor& s, std::size_t count,
     }
   }
   return frames;
+}
+
+// One poll of `s` with nothing to take: empty, and back within ten times
+// kPollWait, the bound a lane that polls beside other work relies on.
+bool empty_poll(RgbdStreamSensor& s) {
+  const auto start = vr_test::Clock::now();
+  const vkc::Result<std::optional<sensor::RgbdFrame>> frame = s.poll();
+  const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(
+      vr_test::Clock::now() - start);
+  if (frame.ok() && !frame.value() && took < 10 * RgbdStreamSensor::kPollWait) {
+    return true;
+  }
+  std::fprintf(stderr, "a poll with nothing to take: %s after %lld ms\n",
+               !frame.ok()     ? frame.status().message().c_str()
+               : frame.value() ? "a frame"
+                               : "empty",
+               static_cast<long long>(took.count()));
+  return false;
 }
 
 // Every frame of the file at `path`.
@@ -217,9 +245,10 @@ int test_loopback(const vkc::test::Scratch& scratch) {
   RgbdStreamSensor& s = *live.value();
   CHECK(s.start().ok());
   const Frames frames = poll_frames(s, 8);
+  const bool quick = empty_poll(s);  // the writer connected and silent
   done = true;
   writer.join();
-  CHECK(sent);
+  CHECK(sent && quick);
   CHECK(frames.size() == 8);
   for (const sensor::RgbdFrame& f : frames) CHECK(f.arrival_ns != 0);
   CHECK(own_depth(frames));
@@ -349,6 +378,69 @@ int test_failure_cap() {
   return 0;
 }
 
+// The cap's window, at the times given: three failures end a stream only
+// within 10 s, so drops spread over a take never add up.
+int test_failure_window() {
+  using std::chrono::milliseconds;
+  using std::chrono::seconds;
+  const vr_example::link::FailureCap::Clock::time_point t0{};
+  vr_example::link::FailureCap cap;  // kLinkFailures within kLinkFailureWindow
+  CHECK(!cap.fail(t0));
+  CHECK(!cap.fail(t0 + seconds(1)));
+  CHECK(!cap.fail(t0 + seconds(10)));          // the first is 10 s before: out
+  CHECK(cap.fail(t0 + milliseconds(10'500)));  // 1, 10 and 10.5 s: within
+  return 0;
+}
+
+// A record the recording refuses: frame 1, a drop, then frame 2's record at
+// frame 0's time, a key below the last key's. The file is finished with
+// frame 1's record as it stood, and poll returns the refusal once.
+int test_recording_refused(const vkc::test::Scratch& scratch) {
+  const PatternFrames p = vr_test::pattern_frames(vr_test::phone_info(), 3);
+  const std::string recording = (scratch.path / "refused.vrst").string();
+  const std::uint16_t port = vkc::test::closed_port();
+  std::atomic<std::size_t> taken{0};
+  std::atomic<bool> done{false};
+  bool sent = false;
+  std::thread writer([&] {
+    {
+      auto d = Dialler::dial(vr_test::session_of(p.info), port);
+      if (!d.ok() || !publish(**d, p, 1).ok()) return;
+      if (!vr_test::wait_for([&] { return taken.load() >= 1; })) return;
+    }
+    auto d = Dialler::dial(vr_test::session_of(p.info), port);
+    if (!d.ok()) return;
+    sensor::RgbdFrame early = p.frames[2];
+    early.timestamp_ns = p.frames[0].timestamp_ns;
+    Record r;
+    if (!vr_test::depth_record(p.info, early, 0, 2, &r).ok() ||
+        !(*d)->publish(r).ok()) {
+      return;
+    }
+    sent = vr_test::wait_for([&] { return done.load(); });
+  });
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> live = listen(port, recording);
+  bool refusal = false;
+  std::uint64_t recorded = 0;
+  if (live.ok() && live.value()->start().ok() &&
+      poll_frames(*live.value(), 1, &taken).size() == 1) {
+    const auto end = vr_test::Clock::now() + kWait;
+    while (!refusal && vr_test::Clock::now() < end) {
+      const vkc::Result<std::optional<sensor::RgbdFrame>> polled =
+          live.value()->poll();
+      refusal =
+          !polled.ok() && polled.status().domain() == Code::InvalidArgument &&
+          polled.status().message().find("recording") != std::string::npos;
+    }
+    recorded = live.value()->link_stats().recorded;
+  }
+  done = true;
+  writer.join();
+  CHECK(live.ok() && sent && refusal && recorded == 1);
+  CHECK(finished_with(recording, 1));  // finished with the sensor still open
+  return 0;
+}
+
 // A writer already at frame 3 when the reader listens, and at frame 8 when
 // it starts again: each start counts its spans from the first record found
 // after it, so none is reported, and the stop lets the connection go.
@@ -386,11 +478,12 @@ int test_start_mid_session() {
   s.stop();
   CHECK(!s.link_stats().connected && s.link_stats().failures == 0);
   CHECK(s.start().ok());
+  const bool quick = empty_poll(s);  // no writer connected
   restarted = true;
   const Frames second = poll_frames(s, 2);
   done = true;
   writer.join();
-  CHECK(sent);
+  CHECK(sent && quick);
   CHECK((sequences(second) == std::vector<std::uint64_t>{8, 9}));
   CHECK(s.skipped().empty());
   CHECK(testing::rgbd_breach(s.info(), second, s.stats()).empty());
@@ -411,7 +504,7 @@ bool refused(const vkc::Result<std::unique_ptr<RgbdStreamSensor>>& opened,
   return true;
 }
 
-// The listen's refusals, each before or at the first session.
+// The listen's refusals: before listening, and of the sessions that come.
 int test_refusals(const vkc::test::Scratch& scratch) {
   const std::uint16_t port = vkc::test::closed_port();
   CHECK(refused(RgbdStreamSensor::listen("0.0.0.0", port, {}),
@@ -428,27 +521,72 @@ int test_refusals(const vkc::test::Scratch& scratch) {
                 "no session within the wait"));
 
   const PatternFrames p = vr_test::pattern_frames(vr_test::phone_info(), 1);
-  // A writer whose session the reader refuses, let go at the refusal.
-  const auto refuse = [&](const stream::Session& session,
-                          const std::string& record_path, Code code,
-                          const std::string& says) {
-    bool let_go = false;
-    std::thread writer([&] {
-      auto d = Dialler::dial(session, port);
-      if (d.ok()) let_go = (*d)->let_go();
-    });
-    const bool ok = refused(listen(port, record_path), code, says);
-    writer.join();
-    return ok && let_go;
-  };
+  // Something at the recording path, before any writer dials.
   const std::string there = (scratch.path / "there.vrst").string();
   CHECK(write_file(there, p).ok());
-  CHECK(refuse(vr_test::session_of(p.info), there, Code::InvalidArgument,
-               "the recording"));
+  CHECK(refused(listen(port, there), Code::InvalidArgument, "the recording"));
+
+  // A session open_file would refuse dials first: that connection is
+  // refused, and the right writer, which dials after it, is taken.
   stream::Session no_depth = vr_test::session_of(p.info);
   no_depth.tracks[0].kind = stream::TrackKind::Geometry;
   no_depth.tracks[0].params.clear();
-  CHECK(refuse(no_depth, {}, Code::InvalidArgument, "no RgbdDepth track"));
+  std::atomic<bool> done{false};
+  bool let_go = false;
+  bool sent = false;
+  std::thread writers([&] {
+    {
+      auto d = Dialler::dial(no_depth, port);
+      if (!d.ok() || !(let_go = (*d)->let_go())) return;
+    }
+    auto d = Dialler::dial(vr_test::session_of(p.info), port);
+    if (!d.ok() || !publish(**d, p, 0).ok()) return;
+    sent = vr_test::wait_for([&] { return done.load(); });
+  });
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> live = listen(port);
+  if (!live.ok()) std::fprintf(stderr, "%s\n", live.status().message().c_str());
+  bool taken = false;
+  if (live.ok()) {
+    RgbdStreamSensor& s = *live.value();
+    const RgbdStreamSensor::LinkStats link = s.link_stats();
+    taken = link.refused == 1 && link.connections == 1 && s.start().ok() &&
+            sequences(poll_frames(s, 1)) == std::vector<std::uint64_t>{0};
+  }
+  done = true;
+  writers.join();
+  CHECK(live.ok() && taken && let_go && sent);
+  live.value().reset();
+
+  // Alone, it is refused, and the wait ends naming why.
+  bool alone_let_go = false;
+  std::thread alone([&] {
+    auto d = Dialler::dial(no_depth, port);
+    if (d.ok()) alone_let_go = (*d)->let_go();
+  });
+  const bool named = refused(listen(port, {}, std::chrono::milliseconds(300)),
+                             Code::IoError, "no RgbdDepth track");
+  alone.join();
+  CHECK(named && alone_let_go);
+  return 0;
+}
+
+// session_check's pass: a frame came, the contract held, and every frame
+// whose depth names an index showed its own picture.
+int test_report_ok() {
+  vr_example::link::SessionReport r;
+  CHECK(!r.ok());  // no frame
+  r.frames = 2;
+  r.own_picture = 1;
+  r.no_depth_index = 1;  // a real depth, which nothing is checked against
+  CHECK(r.ok());
+  r.no_picture_index = 1;  // a picture blended, damaged or not the pattern's
+  CHECK(!r.ok());
+  r.no_picture_index = 0;
+  r.wrong = 1;
+  CHECK(!r.ok());
+  r.wrong = 0;
+  r.breach = "a breach";
+  CHECK(!r.ok());
   return 0;
 }
 
@@ -460,8 +598,11 @@ int main() {
   if (test_loopback(scratch) != 0) return 1;
   if (test_reconnect(scratch) != 0) return 1;
   if (test_failure_cap() != 0) return 1;
+  if (test_failure_window() != 0) return 1;
   if (test_start_mid_session() != 0) return 1;
+  if (test_recording_refused(scratch) != 0) return 1;
   if (test_refusals(scratch) != 0) return 1;
+  if (test_report_ok() != 0) return 1;
   std::printf("rgbd stream sensor listen tests passed\n");
   return 0;
 }

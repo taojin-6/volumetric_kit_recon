@@ -66,7 +66,9 @@ struct SessionReport {
   std::uint64_t own_picture = 0;
   /// Frames whose picture names another index than its depth's.
   std::uint64_t wrong = 0;
-  /// Frames whose picture names no index, with a colour camera.
+  /// Frames whose depth names an index and whose picture, with a colour
+  /// camera, names none: a picture blended from two frames, damaged, or not
+  /// the pattern's.
   std::uint64_t no_picture_index = 0;
   std::uint64_t no_depth_index = 0;  ///< Frames whose depth names none.
   std::uint64_t depth_spans = 0;     ///< `skipped()`: spans,
@@ -87,9 +89,12 @@ struct SessionReport {
   /// every rule holds.
   std::string breach;
 
-  /// @return Whether the contract holds and no frame shows another's
-  ///         picture.
-  bool ok() const noexcept { return breach.empty() && wrong == 0; }
+  /// @return Whether a frame came, the contract holds, and every frame whose
+  ///         depth names an index shows its own picture: none another's
+  ///         (@ref wrong), none unread (@ref no_picture_index).
+  bool ok() const noexcept {
+    return frames != 0 && breach.empty() && wrong == 0 && no_picture_index == 0;
+  }
 };
 
 /// @brief Checks a session's frames one at a time (above).
@@ -121,11 +126,12 @@ class SessionCheck {
     contract_.take(frame);
     VKC_ASSIGN(const sensor::testing::FrameIndex index, reader_->read(frame));
     ++frames_;
-    if (!index.depth) ++no_depth_index_;
-    if (info_.color) {
+    if (!index.depth) {
+      ++no_depth_index_;
+    } else if (info_.color) {
       if (!index.picture) {
         ++no_picture_index_;
-      } else if (index.depth) {
+      } else {
         ++(*index.picture == *index.depth ? own_picture_ : wrong_);
       }
     }
