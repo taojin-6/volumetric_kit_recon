@@ -26,17 +26,16 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.39.0 (6cfef9d, core #83's merge, whose FuseDecklink profile
-# fuse_decklink loads, on #82's 0.38.0, whose imported host pages the DeckLink
-# driver captures into), as are the Homebrew key action in
-# .github/workflows/_build.yml and the workflow-trigger check in
-# .github/workflows/lint.yml; the vkc_require_core checks below say which core
-# each part needs. The tests are main()s of their own on the core's test
-# support.
+# The pin is core 0.43.0 (2163deb, core #89's merge: the net tier, which grid
+# 0.11.0 and later network on, on 0.42.0's source.mobile, which fuse_orbbec
+# refuses), as are the Homebrew key action in .github/workflows/_build.yml and
+# the workflow-trigger check in .github/workflows/lint.yml; the vkc_require_core
+# checks below say which core each part needs. The tests are main()s of their
+# own on the core's test support.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 6cfef9de354a8eca2e9f79e630af38884528827f)
+  GIT_TAG 2163debc075bd7bfcd3738f8273821096cc6bece)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
@@ -79,14 +78,13 @@ endif()
 # sensor, so its tests and -Werror stay off in this build; recon's examples take
 # its test fixtures (VS_TEST_DATA_DIR, which it sets).
 #
-# The pin is sensor 0.19.0 (1d68b11, sensor #23's merge: the DeckLink driver, on
-# 0.16.0's V210 pictures, 0.17.0's stereo_calibration and 0.18.0's FFS near
-# gate), as are its Orbbec SDK and librealsense actions in .github/workflows
-# (the sibling-actions-at-pins hook).
+# The pin is sensor 0.27.0 (ed3e40e, sensor #35's merge: the RGB-D wire form, on
+# 0.26.0's frame contract), as are its Orbbec SDK and librealsense actions in
+# .github/workflows (the sibling-actions-at-pins hook).
 FetchContent_Declare(
   volumetric_kit_sensor
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
-  GIT_TAG 1d68b11167aa057aa604e8110ca5a6722d75f607)
+  GIT_TAG ed3e40ee6ccaa53ec0e682040735c9ea1128deb0)
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)
@@ -102,11 +100,12 @@ vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
 # turn on grid's test support, and recon's examples and tests its example
 # helpers (grid_example_common), which grid builds with its examples.
 #
-# The pin is grid 0.8.0 (20bd1c1, grid #15's merge).
+# The pin is grid 0.12.0 (17d48f3, grid #18's merge: the RGB-D track kinds, on
+# 0.11.0's networking on the core's net tier, which needs core 0.43.0).
 FetchContent_Declare(
   volumetric_kit_grid
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
-  GIT_TAG 20bd1c13f07215ad1feffbe4d0ecc06bc9ff9583)
+  GIT_TAG 17d48f30b3058a7ac9e2548ce2f11b95f659deab)
 set(VGRID_BUILD_TEST_SUPPORT ${VR_BUILD_TESTS})
 if(VR_BUILD_EXAMPLES OR VR_BUILD_TESTS)
   set(VGRID_BUILD_EXAMPLES ON)
