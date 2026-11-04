@@ -570,7 +570,7 @@ int code_sets(vkc::test::GpuContext& gpu, const Fusion& fusion,
     } else if (fusion.dynamic && s >= kClearedFreedSet) {
       // Rule 2 of DECISIONS.md's 2026-10-29 outline entry (a departure takes
       // what it left beside it) leaves the near blocks no weighted voxel to
-      // keep them: that rule's one check in the suite.
+      // keep them (that entry's Tests paragraph lists the rule's checks).
       CHECK(walls.near_blocks.empty());
     } else {
       CHECK(!walls.near_blocks.empty() &&

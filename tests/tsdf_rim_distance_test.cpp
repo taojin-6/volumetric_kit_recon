@@ -19,16 +19,14 @@
 // - the rod meshes along its whole length, which Dynamic's projective
 //   field leaves empty.
 //
-// Dynamic, one camera, the plate (unturned) moving sideways 3 cm a set and
-// stopping: in a set it moves, no voxel beside its side outlines holds
-// weight -- an outline that moved takes no distance, so the fresh samples of
-// the moving surface are fused alone, and the distances it held beside it
-// before it moved go with it -- and in the first set it is still again, its
-// side outlines take their distances.
-//
-// The entry's rule 2, a departure takes what it left beside it, is
-// recon_sender_set_sender's to check: under Dynamic the near walls' blocks
-// are all freed once the walls have left.
+// Dynamic, one camera, the plate (unturned) moving sideways 3 cm a set,
+// stopping and leaving: in a set it moves, no voxel beside its side outlines
+// holds weight -- an outline that moved takes no distance, so the fresh
+// samples of the moving surface are fused alone, and the distances it held
+// beside it before it moved go with it -- in the first set it is still
+// again, its side outlines take their distances, and in the set it leaves
+// and the next, no voxel off the wall's band holds weight (rule 2: a
+// departure takes what it left beside it).
 // Skips (exit 0) where no device is present.
 
 #include <algorithm>
@@ -381,14 +379,16 @@ int still_scene(vkc::test::GpuContext& gpu, tsdf::IntegrationMode mode) {
 }
 
 // The moving plate: one camera, Dynamic, the plate unturned, still for sets
-// 0-9, 3 cm further along x each set 10-14, still again from 15. Its sides
-// lie 4.5 and 5.5 mm inside a voxel column, so a voxel beside each is within
-// its footprint of it.
+// 0-9, 3 cm further along x each set 10-14, still again for 15-16, and gone
+// from 17, out of view. Its sides lie 4.5 and 5.5 mm inside a voxel column,
+// so a voxel beside each is within its footprint of it.
 constexpr int kPlateMoves = 10;
 constexpr int kPlateStops = 15;
-constexpr int kPlateSets = 17;
+constexpr int kPlateGoes = 17;
+constexpr int kPlateSets = 19;
 
 Plate plate_at(int s) {
+  if (s >= kPlateGoes) return Plate{{10.0f, 0.0f}, 0.0f};
   const int k = std::clamp(s - kPlateMoves + 1, 0, kPlateStops - kPlateMoves);
   return Plate{{-0.1545f + 0.03f * float(k), 0.0f}, 0.0f};
 }
@@ -415,6 +415,21 @@ int moving_plate(vkc::test::GpuContext& gpu) {
     if (s < kPlateMoves - 1) continue;
     auto f = field_of(gpu, grid);
     CHECK(f.ok());
+    if (s >= kPlateGoes) {
+      // Gone: no weighted voxel off the wall's band, beside where it was
+      // included.
+      std::size_t held = 0;
+      for (const Voxel& x : f->voxels) {
+        held +=
+            (x.world.z < kWall - 0.05f && f->weight[x.index] > 0.0f) ? 1 : 0;
+      }
+      std::printf(
+          "moving plate, set %d (gone): %zu weighted voxels off the "
+          "wall\n",
+          s, held);
+      CHECK(held == 0);
+      continue;
+    }
     // Its two side outlines, across the motion: within 3 cm, where the
     // plate's last set left distances too.
     const Beside b = beside(*f, plate, 0.03f, 3);
