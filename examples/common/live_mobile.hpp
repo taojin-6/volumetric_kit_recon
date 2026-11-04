@@ -209,6 +209,8 @@ class MobileLane {
   ///        let go, the tracker flushed (held frames decided, placed or
   ///        dropped, and logged, not fused), the log closed and its summary
   ///        printed. Idempotent.
+  /// @return OK; the tracker's or the log's error; or the watch's device or
+  ///         copy error, once the rest of the close has run.
   vkc::Status close();
 
   /// @return What the lane did so far.

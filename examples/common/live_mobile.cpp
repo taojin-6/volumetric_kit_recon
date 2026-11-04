@@ -614,20 +614,21 @@ vkc::Status MobileLane::close() {
   State& s = *state_;
   if (!s.phone || s.closed) return {};
   s.closed = true;
+  // The watch's last news, then the watch let go before the phone stops; its
+  // error comes back after the rest of the close, which still runs.
   vkc::Status tagged;
-  if (s.tags) {  // its last news, then let go before the phone stops
+  if (s.tags) {
     vkc::Result<TagNews> news = s.tags->take();
     tagged = news.ok() ? s.apply(std::move(news).value()) : news.status();
     s.tags.reset();
   }
-  VKC_TRY(tagged);
   VKC_TRY(s.end());  // placed, not fused: the run is over
   s.phone->stop();
   VKC_TRY(s.log->close());
   VKC_ASSIGN(const std::string table,
              summarize(s.log->run(), s.log->directory()));
   std::fputs(table.c_str(), stdout);
-  return {};
+  return tagged;
 }
 
 const MobileLane::Counts& MobileLane::counts() const noexcept {

@@ -25,7 +25,8 @@
 //   counted unregistered and never tracked; after it they are tracked at the
 //   registration's placement; run.csv names registration.json, which reads
 //   back, tags.csv holds each hold; a second run into the same directory is
-//   refused before any wait.
+//   refused before any wait. A loss in the phone's records splits the
+//   watch: no hold spans it.
 
 #include <chrono>
 #include <cstdint>
@@ -390,11 +391,16 @@ constexpr std::uint32_t kDepthW = 32;
 constexpr std::uint32_t kDepthH = 24;
 
 // A recorded phone above the tag, steady, at 10 Hz from 1 s: depth and the
-// tag's picture, its poses in its own world.
+// tag's picture, its poses in its own world; the records from `lost_from`
+// for `lost` of them are lost on the way.
 class TagPhone final : public sensor::IRgbdSensor {
  public:
-  TagPhone(std::size_t count, sensor::YuvImage picture)
-      : count_(count), picture_(std::move(picture)) {
+  TagPhone(std::size_t count, sensor::YuvImage picture,
+           std::size_t lost_from = 0, std::size_t lost = 0)
+      : count_(count),
+        lost_from_(lost_from),
+        lost_(lost),
+        picture_(std::move(picture)) {
     info_.id = "phone";
     info_.clock = sensor::ClockDomain::Host;
     info_.fps = 10;
@@ -404,6 +410,7 @@ class TagPhone final : public sensor::IRgbdSensor {
   vkc::Status start() override { return {}; }
   void stop() noexcept override {}
   vkc::Result<std::optional<sensor::RgbdFrame>> poll() override {
+    if (lost_ > 0 && next_ == lost_from_) next_ += lost_;
     if (next_ >= count_) return std::optional<sensor::RgbdFrame>{};
     struct Pixels {
       std::vector<std::uint16_t> depth;
@@ -438,6 +445,8 @@ class TagPhone final : public sensor::IRgbdSensor {
 
  private:
   std::size_t count_;
+  std::size_t lost_from_;
+  std::size_t lost_;
   std::size_t next_ = 0;
   sensor::YuvImage picture_;
   sensor::SensorInfo info_;
@@ -450,46 +459,65 @@ std::vector<std::string> lines(const std::filesystem::path& path) {
   return out;
 }
 
-int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
-              const std::filesystem::path& dir) {
-  auto grid =
-      tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64);
-  CHECK(grid.ok());
+// The lane over `phone` registered by a watch in see() (so the run repeats),
+// on scripted fitters, the rig's anchoring every fit: 200 sets, then closed.
+struct LaneRun {
+  std::unique_ptr<vr_example::MobileLane> lane;
+  std::shared_ptr<const std::vector<vr_test::ScriptedRecord>> rig_fits;
+  std::size_t fillers = 0;
+  std::string report;
+};
+
+vkc::Result<LaneRun> run_lane(vkc::test::GpuContext& gpu,
+                              std::unique_ptr<TagPhone> phone,
+                              const std::string& dir) {
+  VKC_ASSIGN(
+      vol::VoxelBlockGrid grid,
+      tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64));
+  LaneRun run;
   auto rig = std::make_unique<vr_test::ScriptedFitter>(
       vr_test::anchors_when([](std::uint64_t) { return true; }, Mat4f(1.0f)));
-  auto rig_log = rig->log();
+  run.rig_fits = rig->log();
   std::vector<std::unique_ptr<track::IFitter>> fitters;
   fitters.push_back(std::move(rig));
   fitters.push_back(std::make_unique<vr_test::ScriptedFitter>(
       vr_test::anchors_when([](std::uint64_t) { return false; }, Mat4f(1.0f))));
   fitters.emplace_back();  // arkit
-  auto tracker =
-      track::Tracker::create(vr_example::lane_tracking(), std::move(fitters));
-  CHECK(tracker.ok());
+  VKC_ASSIGN(
+      std::unique_ptr<track::Tracker> tracker,
+      track::Tracker::create(vr_example::lane_tracking(), std::move(fitters)));
   vr_example::RunSource source;
   source.registration = "tag";
-  auto log = vr_example::TrackLog::open(dir.string(), **tracker, source);
-  CHECK(log.ok());
-  auto tags = watch(gpu, false);  // in see(): the replay repeats
-  CHECK(tags.ok());
-  auto lane = vr_example::MobileLane::create(
-      gpu.device, gpu.allocator, std::make_unique<TagPhone>(60, pics.tag),
-      std::move(*tracker), std::move(*log), std::move(*tags));
-  CHECK(lane.ok());
-  std::size_t fillers = 0;
+  VKC_ASSIGN(std::unique_ptr<vr_example::TrackLog> log,
+             vr_example::TrackLog::open(dir, *tracker, source));
+  VKC_ASSIGN(std::unique_ptr<TagWatch> tags, watch(gpu, false));
+  VKC_ASSIGN(run.lane,
+             vr_example::MobileLane::create(
+                 gpu.device, gpu.allocator, std::move(phone),
+                 std::move(tracker), std::move(log), std::move(tags)));
   for (std::size_t i = 0; i < 200; ++i) {
-    auto sent = (*lane)->next(*grid, kS + (i + 1) * 40 * kMs);
-    CHECK(sent.ok());
-    fillers += sent->size();
+    VKC_ASSIGN(const std::vector<volumetric_kit::recon::sender::Filler> sent,
+               run.lane->next(grid, kS + (i + 1) * 40 * kMs));
+    run.fillers += sent.size();
   }
-  CHECK((*lane)->close().ok());
-  const std::string report = (*lane)->report();
-  std::fputs(report.c_str(), stdout);
+  VKC_TRY(run.lane->close());
+  run.report = run.lane->report();
+  std::fputs(run.report.c_str(), stdout);
+  return run;
+}
+
+int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
+              const std::filesystem::path& dir) {
+  auto ran =
+      run_lane(gpu, std::make_unique<TagPhone>(60, pics.tag), dir.string());
+  CHECK(ran.ok());
+  const std::unique_ptr<vr_example::MobileLane>& lane = ran->lane;
+  const std::string& report = ran->report;
   // Frames 0-30 came before the registration (the hold of 2.0-3.0 s, taken
   // in the gap after frame 30's): never tracked.
-  const vr_example::MobileLane::Counts& c = (*lane)->counts();
-  CHECK(c.unregistered == 31 && c.paired == 29 && fillers > 0);
-  for (const vr_test::ScriptedRecord& r : *rig_log) {
+  const vr_example::MobileLane::Counts& c = lane->counts();
+  CHECK(c.unregistered == 31 && c.paired == 29 && ran->fillers > 0);
+  for (const vr_test::ScriptedRecord& r : *ran->rig_fits) {
     CHECK(r.pts.front() >= pts(31));
   }
   // Candidates every 200 ms from 2.0 s: holds at 2.0-3.0, 3.2-4.2 and
@@ -502,7 +530,7 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
   const std::filesystem::path written = dir / "registration.json";
   auto reg = camera::read_tracked_registration(written.string());
   CHECK(reg.ok() && reg->sensor == "phone" && reg->session == kSession);
-  const vr_example::TrackRun& run = (*lane)->log()->run();
+  const vr_example::TrackRun& run = lane->log()->run();
   CHECK(run.source.registration == written.string());
   const Mat4f a = Mat4f(glm::inverse(truth()) * above(0.0, 0.0));
   std::size_t tracked = 0;
@@ -545,6 +573,20 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
   return 0;
 }
 
+// Records 25 and 26 lost (300 ms, a loss): the lane splits the watch, so the
+// stills of 2.0-2.4 s are let go, frame 27 has nothing to be steady against,
+// and the hold is 2.8-3.8 s, registered at 3.8 s (across the loss it would
+// have been 2.0-3.1 s, at 3.1 s).
+int test_lane_loss(vkc::test::GpuContext& gpu, const Pictures& pics) {
+  auto ran = run_lane(gpu, std::make_unique<TagPhone>(45, pics.tag, 25, 2), "");
+  CHECK(ran.ok());
+  CHECK(ran->report.find("tag: 12 searched, 12 stills, 1 holds (0 refused)") !=
+        std::string::npos);
+  CHECK(ran->report.find("registered at 3.8 s, 37 frames before it") !=
+        std::string::npos);
+  return 0;
+}
+
 int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::test::Scratch scratch("recon_example_live_tag_");
   auto tag = on_device(gpu, tag_picture({{280, 200}}));
@@ -558,6 +600,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_background(gpu) == 0);
   CHECK(test_refusals(gpu) == 0);
   CHECK(test_lane(gpu, pics, scratch.path / "lane") == 0);
+  CHECK(test_lane_loss(gpu, pics) == 0);
   std::puts("recon_example_live_tag: OK");
   return 0;
 }
