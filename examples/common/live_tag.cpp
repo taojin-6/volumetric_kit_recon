@@ -164,10 +164,18 @@ struct TagWatch::State {
     return hold;
   }
 
-  // One candidate searched, and a hold solved when it completes one. Only a
+  // One candidate searched, counted once its news is in.
+  vkc::Status search(Candidate c) {
+    vkc::Status searched = search_one(std::move(c));
+    std::lock_guard<std::mutex> lock(mutex);
+    ++counts.candidates;
+    return searched;
+  }
+
+  // One candidate's search, and a hold solved when it completes one. Only a
   // device's or memory's error returns: calib's, OpenCV's and a picture the
   // copy refuses are failures, counted.
-  vkc::Status search(Candidate c) {
+  vkc::Status search_one(Candidate c) {
     if (c.epoch != stills_epoch) {
       stills.clear();  // a loss since the stills gathered
       stills_epoch = c.epoch;
@@ -175,10 +183,6 @@ struct TagWatch::State {
     vkc::Result<sensor::PictureView> view =
         readback->read(c.picture, sensor::PictureReadback::Planes::Luma);
     c.picture = {};  // the view is the readback's own memory
-    {
-      std::lock_guard<std::mutex> lock(mutex);
-      ++counts.candidates;
-    }
     if (!view.ok()) {
       const vkc::Status::Code code = view.status().domain();
       if (code != vkc::Status::Code::InvalidArgument &&
