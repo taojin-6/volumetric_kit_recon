@@ -78,8 +78,8 @@ endif()
 # sensor, so its tests and -Werror stay off in this build; recon's examples take
 # its test fixtures (VS_TEST_DATA_DIR, which it sets).
 #
-# The pin is sensor 0.43.0 (1c5dd48, sensor #51's merge: on 0.40.0's depth noise
-# that may fall with depth, which ARKit's states and the phone lane's tracker
+# The pin is sensor 0.43.0 (1c5dd48, sensor #51's merge: on 0.40.0's
+# DepthNoise::known taking ARKit's stated noise, which the phone lane's tracker
 # needs known; 0.37.0's PatternReader, 0.36.0's HEVC encoder on NVENC and
 # 0.28.0's GPU hand-over of NVIDIA's decoded pictures), as are its Orbbec SDK
 # and librealsense actions in .github/workflows (the sibling-actions-at-pins

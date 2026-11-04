@@ -117,11 +117,11 @@ and its counters at the end. It needs a build with sensor's microphone driver
 `.vrst`, or `tcp://ADDRESS:PORT`, one of this host's addresses, which the
 phone dials (the run waits for it before the cameras open). Its tracked world
 is placed by `source.mobile_registration` (beside a file, `<file>.registration.json`
-unless given). Its depth, high confidence only, is tracked against the rig's
-model in 2 s windows and fused as fill where the rig's cameras do not see,
-2 to 7 s after capture, in a fixed tint of how it was placed (teal: by the
-rig alone; orange: with fill's help or between fits). It needs Dynamic fusion
-(the default) and is not run beside FFS depth. `diagnostics.track_log` names
+unless given). Its depth is tracked against the rig's model and fused as
+fill where the rig's cameras do not see, seconds after capture, teal where
+the rig alone placed it and orange elsewhere (`examples/common/live_mobile.hpp`
+has the rules). It needs Dynamic fusion (the default) and is not run beside
+FFS depth. `diagnostics.track_log` names
 a directory for its tracking log (`examples/common/track_log.hpp`); its
 summary prints at the end either way.
 

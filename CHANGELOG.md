@@ -9,18 +9,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `examples`: **a phone's frames fill the rig's model in the live runs**
-  (`source.mobile`, `examples/common/live_mobile.hpp`, `vr_example_mobile`).
-  After each set's send, `MobileLane::next` takes the phone record due by
-  the next set's predicted time (a recorded session's, or a phone dialling
-  `tcp://ADDRESS:PORT`, polled on a thread of its own), prepares it and runs
-  every fit due at it on `lane_tracking()` (2 s windows every 0.5 s on the
-  rig-only and the fill-assisted chain, ARKit beside them) in one batch,
-  and hands the next send up to 3 placed frames as fillers: Anchored fill
-  when the rig-only chain anchored it, else Unanchored. A frame waits up to
-  5 s for an Anchored fit after it and is dropped otherwise; a loss of
-  100 ms or more starts the windows again. Fill fuses in a fixed tint of its
-  tier, the phone's picture never read. `check_mobile` refuses the phone
-  under Classic fusion or beside FFS depth before anything opens. Replaces
+  (`source.mobile`, `examples/common/live_mobile.hpp`, `vr_example_mobile`):
+  a recorded session, or a phone dialling `tcp://ADDRESS:PORT`, tracked on
+  `lane_tracking()` in the gap after each set's send and fused in the next
+  as fill, in a fixed tint of its tier. `check_mobile` refuses it under
+  Classic fusion or beside FFS depth before anything opens. Replaces
   `fuse_orbbec`'s refusal of `source.mobile`.
 - `examples`: **a tracking run's log and its one summary**
   (`examples/common/track_log.hpp`): `TrackLog` keeps a `Tracker`'s steps
@@ -192,10 +185,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - build: **recon pins sensor 0.43.0** (sensor #51's merge, `1c5dd48`; was
   0.37.0), and CI takes its actions at the new pin. Its `DepthNoise::known`
-  (0.40.0) takes ARKit's noise, which falls with depth near the camera, so
-  the floor rises to 0.40.0: the lane's tracker refuses a frame whose noise
-  is unknown. The core stays at 0.43.0, above the 0.41.0 sensor needs, and
-  grid at 0.12.0.
+  (0.40.0) takes the noise ARKit's driver states, so the floor rises to
+  0.40.0: the lane's tracker refuses a frame whose noise is unknown. The
+  core stays at 0.43.0, above the 0.41.0 sensor needs, and grid at 0.12.0.
 - `track`: **`Tracker::flush` may be followed by more frames**: the chains
   keep their judges and hops, and a frame after it is fitted and placed by
   fits after it alone. The lane splits so at a loss.

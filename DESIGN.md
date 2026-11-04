@@ -1163,27 +1163,14 @@ rules (refusals, reconnects, repeats, the failure cap and the recording).
 phone's stream").
 
 **The phone lane** (`examples/common/live_mobile.hpp`, `vr_example_mobile`)
-puts such a sensor beside a live run's cameras (`source.mobile`, the
-2026-11-04 entry): opened depth alone at confidence 2 and started at the
-first gap, its frames drained in order from a queue of 64, a live link
-polled on a thread of its own (`polled_in_background`, which keeps the
-interface's queue) so a set never waits on the phone; an error it returns
-is counted and the lane goes on. After each set's send, `MobileLane::next` takes the record due
-by the next set's predicted time (the first record taken pins the phone's
-clock to the rig's; the older of two due is passed by), prepares it, and
-records every fit due at it on `lane_tracking()` in one batch, waited on
-in the gap; it then hands the next send at most `kDrainCap` (3) of the
-frames the `Tracker` placed, as fillers of their tier (Anchored only when
-the rig-only chain anchored them), each in its tier's fixed tint
-(`kAnchoredFillTint`, `kUnanchoredFillTint`). A frame the prep or the
-tracker refuses is passed over; a loss of 100 ms or more flushes the
-tracker first (a split). The run's end flushes it and closes its log;
-the phone's end flushes it and what it placed still drains. Its log
-(`track_log.hpp`) is a `Tracker`'s steps, kept in memory and written to
-`diagnostics.track_log` as CSVs and a TUM pose file a chain, which
-`read_track_log` reads back; `summarize` computes every metric of a run,
-once, `arkit_raw` (the device's own poses, from its removed map steps)
-included, and the lane prints it at the end.
+puts such a sensor beside a live run's cameras (`source.mobile`): after each
+set's send, `MobileLane::next` tracks the phone's record due by the next set
+on `lane_tracking()` in one batch, waited on in the gap, and hands the next
+send the frames the `Tracker` placed as fillers of their tier. Its rules
+(pairing, the drain cap, splits, the tint) are the header's; why, the
+2026-11-04 entry. Its log (`track_log.hpp`) is a `Tracker`'s steps as CSVs
+and a TUM pose file a chain, which `read_track_log` reads back and
+`summarize` turns into every metric of a run, once.
 
 Every example reads a scenario with `--config path.json`; `--help` prints
 that entry point. The optional core `config` tier owns the JSON format, typed
@@ -1446,12 +1433,11 @@ reference check against 0b ran once from a harness (the 2026-11-04
 entry); the live phone lane's minute on the rig (its gap, its fill
 surviving people); the Partial step restricted in each iteration, as 0b's
 reference does (the solve's `TODO:`). The hop's batch (two window fits)
-must fit the gap after a set's send: on a 4090 a 20-frame window costs
-2.5 ms at 1 pass in a synthetic room, but on 0b's real room, on a shared
-5090, 8 ms a chain (p50; the casts 5-6 ms of it), which puts 2% of sets
-past 40 ms (the 2026-11-04 entry). Next: the fill chain one step behind the
-rig's, and the casts no farther than fill reaches, each measured on a quiet
-GPU; 3 passes only once the bench shows they matter and the gap holds them.
+must fit the gap after a set's send: on a nearly idle 5090 it does, beside
+other jobs' load not always (the 2026-11-04 entry). Should the live rig
+share its GPU so, next are the fill chain one step behind the rig's and the
+casts no farther than fill reaches; 3 passes only once the bench shows they
+matter and the gap holds them.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an
