@@ -3,7 +3,7 @@
 
 // The fitter's shared device state (point_to_plane.cpp mirrors every struct
 // here byte for byte, scalar layout). A fit of K frames: view i is frame i,
-// whose pyramid sits in slot views[i].slot of the fitter's stacked levels and
+// whose pyramid sits in entry views[i].entry of the fitter's stacked levels and
 // whose model view is view i of the ray caster's stack.
 //
 // Twists are (v, w) about the frames' mean camera centre o, in world axes: a
@@ -28,7 +28,7 @@ struct FitView {
   mat4 cam_to_world;  // the frame's own pose: the device's
   vec4 k;             // level-0 fx, fy, cx, cy
   vec3 noise;         // its DepthNoise a, b, c
-  uint slot;          // where its pyramid is
+  uint entry;         // where its pyramid is
   float min_depth;
   float max_depth;
   uint pad0;

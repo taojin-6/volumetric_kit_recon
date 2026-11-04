@@ -1,6 +1,6 @@
 #version 450
 
-// A slot's vertex and normal maps at one level, in the camera's frame. A
+// An entry's vertex and normal maps at one level, in the camera's frame. A
 // pixel is kept only when it returned, is off the image border, has no depth
 // edge within `edge` pixels, and faces its ray within the grazing angle. An
 // edge is a 4-neighbour pair one of which has no return, or whose depths
@@ -21,7 +21,7 @@ layout(set = 0, binding = 2, scalar) writeonly buffer Nrm { vec4 nrm[]; };
 layout(push_constant, scalar) uniform Push {
   uint width;
   uint height;
-  uint offset;  // the slot's first element
+  uint offset;  // the entry's first element
   int edge;     // the band dropped beside an edge (pixels)
   vec4 k;       // the level's fx, fy, cx, cy
   float cos_graze;

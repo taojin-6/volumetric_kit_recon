@@ -6081,10 +6081,10 @@ frame prep states every frame's `DepthNoise`.
   proposes a pose from nothing (a localizer) is not a fitter: it will
   reseed a chain.
 - *`PointToPlane` keeps every descriptor set fixed.* Core refuses a batch
-  whose set was rewritten after it was recorded, so frames live in slots
-  (stacked per level, grown to the largest window, reached by push
+  whose set was rewritten after it was recorded, so frames' pyramids live in
+  entries (stacked per level, grown to the largest window, reached by push
   constant), the K views cast in one dispatch, and each iteration reduces
-  every view in one dispatch. Slots commit at `finish`; an abandon or a
+  every view in one dispatch. Entries commit at `finish`; an abandon or a
   failed record empties them, so a fit never reads a pyramid its batch did
   not build.
 - *0b's reference, on the device.* Its pyramid, gates, Huber weight, eigen

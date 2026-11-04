@@ -774,11 +774,11 @@ vr_target_warnings(recon_track_tracker_test)
 add_test(NAME recon_track_tracker COMMAND recon_track_tracker_test)
 
 # track fitter conformance: every kind of kFitKinds against analytic rooms whose
-# tsdf the test writes: the record contract, slots' rollback and reuse, the fit
-# and its eigensystem, the model filter, windows, zero iterations, passes,
-# determinism and independence, the see-through counters. VR_TRACK_TIMING=1 adds
-# the timing cases (K = 1 / 20, passes 1 / 3), which print and assert nothing.
-# Skips with no device.
+# tsdf the test writes: the record contract, pyramid entries' rollback and
+# reuse, the fit and its eigensystem, the model filter, windows, zero
+# iterations, passes, determinism and independence, the see-through counters.
+# VR_TRACK_TIMING=1 adds the timing cases (K = 1 / 20, passes 1 / 3), which
+# print and assert nothing. Skips with no device.
 add_executable(recon_track_fitter_conformance_test
                track_fitter_conformance_test.cpp)
 target_link_libraries(

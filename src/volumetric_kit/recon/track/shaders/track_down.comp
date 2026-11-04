@@ -1,6 +1,6 @@
 #version 450
 
-// A slot's next level: each 2x2 block's returns averaged where they span
+// An entry's next level: each 2x2 block's returns averaged where they span
 // under 3 cm, else no return (KinectFusion's block average, which drops a
 // discontinuity rather than blending it). A trailing odd row or column is left out.
 
@@ -18,7 +18,7 @@ layout(push_constant, scalar) uniform Push {
   uint h_in;
   uint w_out;
   uint h_out;
-  uint in_offset;   // the slot's first element at the finer level
+  uint in_offset;   // the entry's first element at the finer level
   uint out_offset;  // and at this one
 } pc;
 

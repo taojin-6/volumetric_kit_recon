@@ -16,7 +16,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and returns a `TrackFit`, the world correction and the data's H as its
   eigensystem. `FitKind::PointToPlane`, the one kind (`kFitKinds`,
   `create_fitter`), is projective point-to-plane ICP over grid's
-  `RayCaster`: each frame's pyramid kept in a slot, the frames cast in one
+  `RayCaster`: each frame's pyramid kept in an entry, the frames cast in one
   dispatch and reduced in one an iteration, the eigen guard and a prior on
   data rescaled to `IcpConfig::prior_n_eff` points a frame, and passes
   that recast on the device. `track::Tracker` (`track/tracker.hpp`) runs

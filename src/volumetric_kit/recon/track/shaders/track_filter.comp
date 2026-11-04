@@ -1,6 +1,6 @@
 #version 450
 
-// A slot's level-0 depth, in place: a sample outside the frame's
+// An entry's level-0 depth, in place: a sample outside the frame's
 // [min_depth, max_depth], or not finite, is no return (0).
 
 #extension GL_GOOGLE_include_directive : require
@@ -13,7 +13,7 @@ layout(set = 0, binding = 0, scalar) buffer Depth { float depth[]; };
 // Mirrors FilterPush.
 layout(push_constant, scalar) uniform Push {
   uint pixels;  // the level's width * height
-  uint offset;  // the slot's first element
+  uint offset;  // the entry's first element
   float min_depth;
   float max_depth;
 } pc;

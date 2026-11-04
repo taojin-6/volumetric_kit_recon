@@ -3,7 +3,7 @@
 // One point-to-plane iteration's linear system over every view of a fit,
 // reduced per workgroup (track_reduce_common.glsl). Workgroup g serves view
 // g / groups_per_view, its threads striding over that view's pixels. A
-// frame point p (its slot's vertex map) goes to the world at the estimate,
+// frame point p (its entry's vertex map) goes to the world at the estimate,
 // C * A_i, and projects into view i's cast camera; the nearest model pixel
 // that hit gives the surface point q and normal n_q. It is an inlier when
 // its normal lies within the normal gate of n_q and |p - q| within the
@@ -35,7 +35,7 @@ layout(set = 0, binding = 7, scalar) writeonly buffer Partial {
 
 // Mirrors ReducePush.
 layout(push_constant, scalar) uniform Push {
-  uint pixels;           // the level's width * height: a slot's elements
+  uint pixels;           // the level's width * height: an entry's elements
   uint groups_per_view;
   uint model_width;      // the cast's (level 0's) size
   uint model_height;
@@ -50,7 +50,7 @@ layout(push_constant, scalar) uniform Push {
 
 void main() {
   uint lid = gl_LocalInvocationID.x;
-  // Uniform across the dispatch: no workgroup reaches the fold's barriers
+  // Uniform across the dispatch: no workgroup reaches the sum's barriers
   // while another skips them.
   if (st.stop != 0u || st.diverged != 0u) {
     return;
@@ -66,7 +66,7 @@ void main() {
   mat3 rot = mat3(pose);
   vec4 mk = vec4(cam.fx, cam.fy, cam.cx, cam.cy);
   uvec2 msize = uvec2(pc.model_width, pc.model_height);
-  uint base = fv.slot * pc.pixels;
+  uint base = fv.entry * pc.pixels;
   uint mbase = view * pc.model_width * pc.model_height;
   for (uint px = first; px < pc.pixels; px += stride) {
     vec4 lv = vtx[base + px];
@@ -118,7 +118,7 @@ void main() {
                           jw.x, jw.y, jw.z);
     vr_track_add(j, r, huber / (sigma * sigma));
   }
-  vr_track_fold(lid);
+  vr_track_sum(lid);
   if (lid < kPartial) {
     partial[group * kPartial + lid] = g_shared[lid * kReduceLocal];
   }

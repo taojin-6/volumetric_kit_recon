@@ -989,14 +989,15 @@ the `held` directions), on twists about the frames' mean camera centre with
 translation over the points' median distance. `FitKind` is closed;
 `kFitKinds` lists it for the conformance test and a bench, and a new kind is
 one PR. `PointToPlane` is the one kind:
-- *Slots.* A fitter keeps each frame's 3-level pyramid (depth, vertex and
-  normal maps) in a slot, stacked by slot in one buffer a level, grown to its
-  largest window. A frame comes back to its slot when its timestamp and
-  depth buffer (weakly held) match; a new one is copied in and gets its
-  pyramid (6 dispatches). Slots a record fills count once its `finish`
-  returns; an abandon or a failed record empties them. Every descriptor set
-  but the ray caster's ring is written once, when the slots grow, so a
-  record rewrites none (core refuses a batch whose set was rewritten).
+- *Pyramid entries.* A fitter keeps each frame's 3-level pyramid (depth,
+  vertex and normal maps) in an entry, stacked by entry in one buffer a
+  level, grown to its largest window. A frame comes back to its entry when
+  its timestamp and depth buffer (weakly held) match; a new one is copied in
+  and gets its pyramid (6 dispatches). Entries a record fills count once its
+  `finish` returns; an abandon or a failed record empties them. Every
+  descriptor set but the ray caster's ring is written once, when the
+  entries grow, so a record rewrites none (core refuses a batch whose set
+  was rewritten).
 - *The pyramid* follows 0b's reference: the frame's range, a 2x2 block
   average under a 3 cm span, a vertex dropped beside a 3 cm + 1 % edge or a
   hole (`edge_px` at level 0, 1 above), on the border, or grazing past 75
@@ -1012,7 +1013,7 @@ one PR. `PointToPlane` is the one kind:
   degrees, Huber at 2 sigma, sigma the frame's `DepthNoise` in quadrature
   with 5 mm for the model. It counts attempts, hits (the model answered) and
   inliers, and with `see_through_m` hits in front of and behind the
-  surface. Workgroups are per view, folded in fixed trees, with no float
+  surface. Workgroups are per view, summed in fixed trees, with no float
   atomics, so a fit repeats bit for bit and is the same beside another.
 - *The solve* (one workgroup) takes the data H's eigensystem by cyclic
   Jacobi and steps along the directions at or above tau (1e-3) only, with

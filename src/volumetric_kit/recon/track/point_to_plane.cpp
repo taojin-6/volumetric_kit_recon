@@ -4,21 +4,22 @@
 // FitKind::PointToPlane: projective point-to-plane ICP of K frames against
 // one stacked ray-cast view of a grid, in the caller's batch.
 //
-// Layout. The fitter owns slots, grown to the largest window it has
-// recorded: each holds one frame's 3-level pyramid (depth, vertex and normal
-// maps), stacked by slot in one buffer per level, as a ModelView stacks
-// views. Every descriptor set but the ray caster's ring is written once, at
-// create or when the slots grow, when no batch of this fitter is pending; a
-// kernel reaches a slot through its push constants, so a record rewrites no
-// set (core refuses a batch whose set was rewritten after it was recorded).
+// Layout. The fitter owns pyramid entries, grown to the largest window it
+// has recorded: each holds one frame's 3-level pyramid (depth, vertex and
+// normal maps), stacked by entry in one buffer per level, as a ModelView
+// stacks views. Every descriptor set but the ray caster's ring is written
+// once, at create or when the entries grow, when no batch of this fitter is
+// pending; a kernel reaches an entry through its push constants, so a record
+// rewrites no set (core refuses a batch whose set was rewritten after it was
+// recorded).
 //
-// A record: for each frame without a committed slot, a copy of its depth
-// into a free slot and its pyramid (6 dispatches); the scale (2); then each
+// A record: for each frame without a committed entry, a copy of its depth
+// into a free entry and its pyramid (6 dispatches); the scale (2); then each
 // pass: the cast cameras moved to the estimate (after the first), one
 // stacked cast of the K views, and for each level, coarse to fine, each
 // iteration one reduce over all K views and one solve. One readback of the
-// state. Slots a record fills count once its finish returns; an abandon or a
-// failed record empties them.
+// state. Entries a record fills count once its finish returns; an abandon or
+// a failed record empties them.
 
 #include "point_to_plane.hpp"
 
@@ -90,14 +91,14 @@ struct FitView {
   Mat4f cam_to_world{1.0f};
   Vec4f k{0.0f};
   Vec3f noise{0.0f};
-  std::uint32_t slot = 0;
+  std::uint32_t entry = 0;
   float min_depth = 0.0f;
   float max_depth = 0.0f;
   std::uint32_t pad0 = 0;
   std::uint32_t pad1 = 0;
 };
 static_assert(sizeof(FitView) == 112, "FitView layout drift");
-static_assert(offsetof(FitView, slot) == 92, "FitView layout drift");
+static_assert(offsetof(FitView, entry) == 92, "FitView layout drift");
 
 // Mirrors FitState in track_common.glsl.
 struct FitState {
@@ -182,8 +183,8 @@ VkPushConstantRange push_range(std::uint32_t bytes) {
   return r;
 }
 
-// A slot's frame: what it holds, and whether that counts yet.
-struct Slot {
+// A pyramid entry's frame: what it holds, and whether that counts yet.
+struct Entry {
   enum class State : std::uint8_t { Empty, Pending, Committed };
   State state = State::Empty;
   std::weak_ptr<const core::Buffer> depth;  // the frame's depth, weakly
@@ -210,8 +211,8 @@ class PointToPlane final : public IFitter {
  private:
   struct Outstanding {
     std::uint64_t serial = 0;
-    std::vector<std::uint32_t> filled;   // slots the record fills
-    std::vector<std::uint32_t> slot_of;  // each frame's slot
+    std::vector<std::uint32_t> filled;    // entries the record fills
+    std::vector<std::uint32_t> entry_of;  // each frame's entry
     std::vector<sensor::DeviceFrame> frames;
     PosePrior prior;
     Vec3f origin{0.0f};
@@ -220,8 +221,8 @@ class PointToPlane final : public IFitter {
   core::Status check(const vol::VoxelBlockGrid& model,
                      const std::vector<sensor::DeviceFrame>& frames,
                      const PosePrior& prior) const;
-  // Hold `views` slots of width x height, every set written; a new size
-  // drops every slot.
+  // Hold `views` entries of width x height, every set written; a new size
+  // drops every entry.
   core::Status ensure(std::uint32_t width, std::uint32_t height,
                       std::uint32_t views);
   void write_sets();
@@ -255,7 +256,7 @@ class PointToPlane final : public IFitter {
   // Sized by ensure.
   std::uint32_t w_[kLevels] = {};
   std::uint32_t h_[kLevels] = {};
-  std::uint32_t capacity_ = 0;  // slots, and views of each buffer below
+  std::uint32_t capacity_ = 0;  // entries, and views of each buffer below
   core::Buffer depth_[kLevels];
   core::Buffer vtx_[kLevels];
   core::Buffer nrm_[kLevels];
@@ -267,7 +268,7 @@ class PointToPlane final : public IFitter {
   core::Buffer partials_;
   core::Buffer bins_;
 
-  std::vector<Slot> slots_;
+  std::vector<Entry> entries_;
   std::optional<Outstanding> outstanding_;
   FitState readback_{};
   std::uint64_t next_serial_ = 1;
@@ -332,7 +333,7 @@ core::Status PointToPlane::ensure(std::uint32_t width, std::uint32_t height,
   views_ = {};
   cams_ = {};
   view_ = {};
-  slots_.assign(capacity, Slot{});
+  entries_.assign(capacity, Entry{});
   capacity_ = 0;
   w_[0] = width;
   h_[0] = height;
@@ -482,53 +483,53 @@ core::Result<PendingFit> PointToPlane::record(
   out.serial = next_serial_++;
   out.frames = frames;
   out.prior = prior;
-  // Slots: a committed one holding the same frame (its timestamp and its
+  // Entries: a committed one holding the same frame (its timestamp and its
   // depth buffer), else a free one, emptiest first, then the longest unused.
-  std::vector<bool> taken(slots_.size(), false);
-  out.slot_of.assign(k, UINT32_MAX);
+  std::vector<bool> taken(entries_.size(), false);
+  out.entry_of.assign(k, UINT32_MAX);
   for (std::uint32_t i = 0; i < k; ++i) {
     const sensor::DeviceFrame& f = frames[i];
-    for (std::uint32_t s = 0; s < slots_.size(); ++s) {
-      const Slot& slot = slots_[s];
-      if (slot.state != Slot::State::Committed || taken[s] ||
-          slot.pts != f.timestamp_ns) {
+    for (std::uint32_t s = 0; s < entries_.size(); ++s) {
+      const Entry& entry = entries_[s];
+      if (entry.state != Entry::State::Committed || taken[s] ||
+          entry.pts != f.timestamp_ns) {
         continue;
       }
-      const std::shared_ptr<const core::Buffer> held = slot.depth.lock();
+      const std::shared_ptr<const core::Buffer> held = entry.depth.lock();
       if (held && held.get() == f.depth.get()) {
-        out.slot_of[i] = s;
+        out.entry_of[i] = s;
         taken[s] = true;
         break;
       }
     }
   }
   for (std::uint32_t i = 0; i < k; ++i) {
-    if (out.slot_of[i] != UINT32_MAX) continue;
+    if (out.entry_of[i] != UINT32_MAX) continue;
     std::optional<std::uint32_t> best;
-    for (std::uint32_t s = 0; s < slots_.size(); ++s) {
+    for (std::uint32_t s = 0; s < entries_.size(); ++s) {
       if (taken[s]) continue;
       if (!best) {
         best = s;
         continue;
       }
-      const Slot& a = slots_[s];
-      const Slot& b = slots_[*best];
-      const bool a_empty = a.state != Slot::State::Committed;
-      const bool b_empty = b.state != Slot::State::Committed;
+      const Entry& a = entries_[s];
+      const Entry& b = entries_[*best];
+      const bool a_empty = a.state != Entry::State::Committed;
+      const bool b_empty = b.state != Entry::State::Committed;
       if ((a_empty && !b_empty) || (a_empty == b_empty && a.used < b.used)) {
         best = s;
       }
     }
-    out.slot_of[i] = *best;  // capacity_ >= k: one is always free
+    out.entry_of[i] = *best;  // capacity_ >= k: one is always free
     taken[*best] = true;
     out.filled.push_back(*best);
   }
   for (const std::uint32_t s : out.filled) {
-    slots_[s].state = Slot::State::Pending;
-    slots_[s].depth.reset();
+    entries_[s].state = Entry::State::Pending;
+    entries_[s].depth.reset();
   }
   for (std::uint32_t i = 0; i < k; ++i)
-    slots_[out.slot_of[i]].used = out.serial;
+    entries_[out.entry_of[i]].used = out.serial;
   // The frames' mean camera centre at the prior: the twists' origin.
   Vec3d o(0.0);
   for (const sensor::DeviceFrame& f : frames) {
@@ -578,7 +579,7 @@ core::Status PointToPlane::record_commands(core::CommandBatch& batch,
     v.cam_to_world = c.cam_to_world;
     v.k = Vec4f(c.fx, c.fy, c.cx, c.cy);
     v.noise = Vec3f(f.depth_noise.a, f.depth_noise.b, f.depth_noise.c);
-    v.slot = out.slot_of[i];
+    v.entry = out.entry_of[i];
     v.min_depth = c.min_depth;
     v.max_depth = c.max_depth;
     vol::DepthPinhole& p = cams[i];
@@ -614,7 +615,7 @@ core::Status PointToPlane::record_commands(core::CommandBatch& batch,
     core::GpuStageScope stage(part_rows, timer_, rows.pyramid);
     for (const std::uint32_t s : out.filled) {
       std::uint32_t i = 0;
-      while (out.slot_of[i] != s) ++i;
+      while (out.entry_of[i] != s) ++i;
       const sensor::DeviceFrame& f = out.frames[i];
       const VkDeviceSize px0 = VkDeviceSize(w_[0]) * h_[0];
       VKC_TRY(batch.copy(*f.depth, 0, depth_[0], px0 * 4 * s, px0 * 4, &stage));
@@ -724,9 +725,9 @@ core::Status PointToPlane::record_commands(core::CommandBatch& batch,
 
 void PointToPlane::empty_filled(const Outstanding& out) noexcept {
   for (const std::uint32_t s : out.filled) {
-    if (s < slots_.size()) {
-      slots_[s].state = Slot::State::Empty;
-      slots_[s].depth.reset();
+    if (s < entries_.size()) {
+      entries_[s].state = Entry::State::Empty;
+      entries_[s].depth.reset();
     }
   }
 }
@@ -749,10 +750,10 @@ core::Result<TrackFit> PointToPlane::finish(const PendingFit& pending) {
   outstanding_.reset();
   for (const std::uint32_t s : out.filled) {
     std::uint32_t i = 0;
-    while (out.slot_of[i] != s) ++i;
-    slots_[s].state = Slot::State::Committed;
-    slots_[s].depth = out.frames[i].depth;
-    slots_[s].pts = out.frames[i].timestamp_ns;
+    while (out.entry_of[i] != s) ++i;
+    entries_[s].state = Entry::State::Committed;
+    entries_[s].depth = out.frames[i].depth;
+    entries_[s].pts = out.frames[i].timestamp_ns;
   }
   const FitState& r = readback_;
   TrackFit fit;

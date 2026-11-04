@@ -12,7 +12,7 @@
 //   finish before its batch ran, 0 or 33 frames, mixed sizes, timestamps not
 //   ascending, a prior not rigid or with a negative sigma) leaves the fitter
 //   as it was; a record after an abandon works; record, abandon and record
-//   the same frames gives a fresh fitter's fit bit for bit (the slots roll
+//   the same frames gives a fresh fitter's fit bit for bit (the entries roll
 //   back); the same timestamps with new depth buffers are rebuilt.
 // - The fit: at the truth the correction stays within 0.1 mm / 0.01 deg;
 //   from 2 cm / 1 deg it converges; the floor holds x, y and yaw; an empty
@@ -465,11 +465,11 @@ int test_contract(const vkc::test::Gpu& gpu, track::FitKind kind,
     CHECK(!fitter->finish(p).ok());  // never ran
     fitter->abandon(p);
   }
-  // Abandoned, the frames' slots are empty again: recorded once more, the
+  // Abandoned, the frames' entries are empty again: recorded once more, the
   // fit is a fresh fitter's, bit for bit.
   ASSIGN_OR_FAIL(const Fit again, fit_once(gpu, *fitter, m.room, frames));
   CHECK(same_fit(again.fit, reference.fit));
-  // Committed now: the same frames reuse their slots and give the same fit.
+  // Committed now: the same frames reuse their entries and give the same fit.
   ASSIGN_OR_FAIL(const Fit reused, fit_once(gpu, *fitter, m.room, frames));
   CHECK(same_fit(reused.fit, reference.fit));
   // The same timestamps over new depth (another view) are rebuilt.
@@ -677,7 +677,7 @@ int test_windows(const vkc::test::Gpu& gpu, track::FitKind kind,
   for (int i = 0; i < 20; ++i) {
     const float yaw = (-20.0f + 2.0f * float(i)) * float(kPi / 180.0);
     const Vec3f eye(2.0f + 0.01f * float(i), 0.6f, 1.2f);
-    // Pitched 30 deg down, so the floor fills a third of the view.
+    // Tilted 30 deg down, so the floor fills a third of the view.
     turning.push_back(
         look_at(eye, eye + Vec3f(std::sin(yaw), std::cos(yaw), -0.58f)));
   }
@@ -723,7 +723,7 @@ int test_windows(const vkc::test::Gpu& gpu, track::FitKind kind,
   ASSIGN_OR_FAIL(auto fresh,
                  track::create_fitter(gpu.device, gpu.allocator, three));
   ASSIGN_OR_FAIL(const Fit w2_fresh, fit_once(gpu, *fresh, m.room, second));
-  CHECK(same_fit(w2.fit, w2_fresh.fit));  // reused slots give a fresh fit
+  CHECK(same_fit(w2.fit, w2_fresh.fit));  // reused entries give a fresh fit
   return 0;
 }
 

@@ -2,10 +2,10 @@
 // Copyright (c) 2026 Tao Jin
 
 // What every residual's reduce shares: a thread's running sums of one
-// iteration's linear system (track_common.glsl's partial layout), folded per
+// iteration's linear system (track_common.glsl's partial layout), summed per
 // workgroup in a fixed tree, so a fit's sums are the same on every run.
 // A residual's .comp includes this, calls vr_track_add for each inlier and
-// vr_track_fold at the end, and writes thread 0's column (g_shared[i *
+// vr_track_sum at the end, and writes thread 0's column (g_shared[i *
 // kReduceLocal]) as its group's partial. Its workgroup is 64 threads: 33 x 64
 // floats of shared memory, inside the 16 KiB every device has.
 
@@ -41,8 +41,8 @@ void vr_track_add(float j[6], float r, float w) {
 
 shared float g_shared[kPartial * kReduceLocal];
 
-// Fold the workgroup's sums and write them to partial[group * kPartial ..].
-void vr_track_fold(uint lid) {
+// Sum the workgroup's threads into g_shared's first column.
+void vr_track_sum(uint lid) {
   for (uint i = 0u; i < kPartial; ++i) {
     g_shared[i * kReduceLocal + lid] = g_acc[i];
   }

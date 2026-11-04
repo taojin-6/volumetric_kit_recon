@@ -20,7 +20,7 @@ layout(set = 0, binding = 3, scalar) buffer Bins { uint bins[]; };
 // Mirrors ScalePush.
 layout(push_constant, scalar) uniform Push {
   uint mode;
-  uint pixels;  // level 0's width * height: a slot's elements
+  uint pixels;  // level 0's width * height: an entry's elements
   uint views;
   uint bins;    // kScaleBins
   float bin_m;  // a bin's width
@@ -56,7 +56,7 @@ void main() {
   }
   uint view = gid / pc.pixels;
   uint px = gid % pc.pixels;
-  vec4 v = vtx[views[view].slot * pc.pixels + px];
+  vec4 v = vtx[views[view].entry * pc.pixels + px];
   if (v.w == 0.0) {
     return;
   }
