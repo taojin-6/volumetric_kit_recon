@@ -394,6 +394,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `track`: **a fit repeats on NVIDIA and agrees across devices.** At a
+  pass's first iteration a coarser level's point lands exactly between two
+  model pixels, and the reduce's nearest-pixel pick was left to the last
+  bit of the device's arithmetic, which changed between dispatches on the
+  RTX 4090 and 5090. The coarser levels now pick a quarter pixel past the
+  point (the finest still picks the nearest pixel), and the solve writes
+  the largest relative eigenvalue as 1 exactly, which an RTX 4090's x / x
+  was not. `recon_track_reduce_tie` dispatches the reduce alone.
+
 - `examples`: **a live stream's geometry names the host's clock.** The
   Geometry track of a `fuse_orbbec` rig's stream, or a camera's with
   `source.host_clock`, said clock domain 1 while its pts were the host's

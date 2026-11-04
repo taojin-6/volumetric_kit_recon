@@ -233,7 +233,10 @@ void main() {
       uint held = solved ? 0u : 0x3fu;
       st.lambda_max = solved ? top * trace : 0.0;
       for (uint i = 0u; i < 6u; ++i) {
-        float rel = solved ? max(lam[order[i]] / top, 0.0) : 0.0;
+        // The largest is 1 exactly: a device's x / x need not be (an RTX
+        // 4090's was not, at the conformance test's fit at the truth).
+        float rel = !solved ? 0.0
+                            : (i == 5u ? 1.0 : max(lam[order[i]] / top, 0.0));
         st.rel[i] = rel;
         if (solved && rel < pc.tau) held |= 1u << i;
       }

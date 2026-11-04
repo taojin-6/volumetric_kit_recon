@@ -1057,6 +1057,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   contradicts it, and never write a rim distance into it; a
   `FrameRole::Filler` fills only where no fixed camera holds weight and none
   of its set vetoes, capped at half `max_weight`, to 3 m.
+- [**2026-11-04**](#2026-11-04--the-reduces-coarser-levels-pick-a-quarter-pixel-past-the-point-so-a-fit-repeats-on-nvidia-amends-the-2026-11-03-track-tier-entry) —
+  The reduce's coarser levels pick the model pixel a quarter pixel past the
+  point, off the rounding tie a pass's first iteration puts every point on,
+  so a fit repeats bit for bit on NVIDIA and devices pick alike; the finest
+  level keeps the nearest pixel, and the largest relative eigenvalue is 1
+  exactly.
 
 ## Decision record
 
@@ -6244,6 +6250,69 @@ max weight 20), on the lab's RTX 5090, Release:
   against 2.83 ms in those sets. The restart's cap changes that run's grid
   from set 129 on (Anchored turns over fill the rig raised), with the
   same fill count, I1 and cost.
+
+### 2026-11-04 — The reduce's coarser levels pick a quarter pixel past the point, so a fit repeats on NVIDIA (amends the 2026-11-03 track-tier entry).
+
+**Context.** The 2026-11-03 fit sums in fixed trees with no float atomics,
+to repeat bit for bit. In the phone lane's replays of 0b on the lab's RTX
+5090 it did not: in 2 of 5 replays one window fit differed in its 7th digit
+from the same grid, frames and prior, and one such early difference moved
+the rig chain from 225 to 165 anchored frames (at a basin edge 110 fits
+later; no judge gate was near its threshold). The sums were not the cause.
+At a pass's first iteration the estimate is the cast's pose, so a level-2
+point projects to u = 4x + 1.5 in the cast exactly (level 1: 2x + 0.5),
+halfway between two model pixels, and `floor(u + 0.5)` was decided by the
+last bit of the pose and projection. On an RTX 4090 and 5090 that bit
+changed between dispatches, in runs (the same dispatch on bit-identical
+inputs gave one of two results; the reduce alone began to change after
+tens of thousands of dispatches); a Mac never changed, but broke the ties
+its own way, and its summed H differed from the 4090's by up to 21% on the
+same inputs.
+
+**Decision.**
+- *The coarser levels pick a quarter pixel past the point,*
+  `floor(u + 0.75)` and the same in v, so the first iteration's points sit
+  a quarter pixel from a rounding edge, a margin no last bit crosses (an
+  ulp at u = 250 is 1.5e-5 px). The finest level keeps the nearest pixel:
+  there u = x, half a pixel from a tie, and an offset would bias every
+  finest pick. A half pixel would hold the same margin but lag a moving
+  point by twice as much.
+- *The largest relative eigenvalue is written as 1,* not computed as
+  lambda_max / lambda_max: once the picks moved, an RTX 4090's x / x was not
+  1 at the conformance test's fit at the truth.
+
+**Evidence.** `recon_track_reduce_tie` dispatches the reduce alone on a
+plane whose cast answers only at odd pixels, so a pick shows in the hits:
+the counts equal the host's and H is within 1.1e-7 of the host's on the M5
+Max, an RTX 4090, an RTX 5090 and lavapipe; at the ties offset 0 hits 2016
+(M5 Max), 2199 (4090), 2198 (5090) and 1737 (lavapipe) of 3072 points, and
+offset 0, a quarter pixel at the finest level too and a half pixel each
+fail on the M5 Max, the 4090 and the 5090. Repeats, offset 0 against this
+rule:
+- that test's points, 300k dispatches (`VR_TRACK_TIE_SOAK=1`): 32,600 and
+  11,100 change on the 4090 and the 5090, none with the rule; in one run
+  each the 4090 changed within 50k dispatches and the 5090 between 50k and
+  100k, so the test's default 1000 does not show it;
+- a window dumped from the lane on the 4090, the reduce alone, 5500
+  batches of 100: 250 and 855 batches off the majority on the 4090, 225 and
+  397 on the 5090; 5500 of 5500 alike with the rule, twice on each;
+- 800 fits a configuration through the fitter, on the conformance scenes:
+  none change even at offset 0 (the conformance test's repeats do not
+  reach the flip).
+
+With the rule, on that dumped window the M5 Max and the 4090 agree to
+7.5e-7 in H and g, against 21% before; the reduce costs the same (5090
+-1.4 µs a coarse dispatch, noise; 4090 56.95 against 57.10 µs, M5 Max 30.2
+against 30.5 µs). On 0b, U2's parity settings (0b's 112 windows from their
+own seeds, against its torch reference), on the M5 Max: at the 19
+reference-anchored windows 0.83 mm / 0.02 deg median, worst 4.54 mm (0.82
+and 4.41 before); at the 18 reference-Partial ones 53.3 mm median, worst
+108 mm (41.7 and 87.4 before). So the pick moves a Partial fit along its
+weak direction but does not close its gap to the reference; that gap is
+the per-iteration step restriction the 2026-11-03 entry leaves to the
+bench. On the lab's RTX 5090 the same: 0.83 / 4.54 mm and 53.4 mm, two runs
+identical, its fits 0.005 mm from the M5 Max's window by window (median;
+p95 0.76 mm).
 
 ## Measured lessons
 
