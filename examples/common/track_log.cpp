@@ -101,7 +101,8 @@ std::string num(double v) {
 }
 std::string num(std::uint64_t v) { return std::to_string(v); }
 
-std::string mat(const Mat4f& m) {
+template <typename Mat>
+std::string mat(const Mat& m) {
   std::string s;
   for (int c = 0; c < 4; ++c) {
     for (int r = 0; r < 4; ++r) {
@@ -222,6 +223,20 @@ std::string row_line(const RowSample& r) {
          num(r.gpu_ms) + "\n";
 }
 
+std::string tag_header() {
+  return "first_pts_ns,last_pts_ns,stills,use,miss,rms_px,worst_px,range_m,"
+         "off_normal_deg," +
+         mat_header("tracking_to_world") + ",reason\n";
+}
+
+std::string tag_line(const TagHold& h) {
+  return num(h.first_pts_ns) + "," + num(h.last_pts_ns) + "," +
+         std::to_string(h.stills) + "," + to_string(h.use) + "," +
+         one_line(h.miss) + "," + num(h.rms_px) + "," + num(h.worst_px) + "," +
+         num(h.range_m) + "," + num(h.off_normal_deg) + "," +
+         mat(h.tracking_to_world) + "," + one_line(h.reason) + "\n";
+}
+
 // --- Poses ------------------------------------------------------------------
 
 using Mat3d = glm::dmat3;
@@ -317,7 +332,8 @@ struct TrackLog::State {
   TrackRun run;
   vkc::StageMetrics rows;
   std::uint64_t step = 0;
-  std::ofstream frames, fits, fill, rowsf;
+  std::ofstream frames, fits, fill, rowsf, tags;
+  bool registered = false;  // by registered(), once
   bool closed = false;
 
   vkc::Status append(std::ofstream& file, const std::string& line,
@@ -379,7 +395,8 @@ vkc::Result<std::unique_ptr<TrackLog>> TrackLog::open(
                                        mat_header("device_pose") + "\n"}},
                    {&s->fits, {"fits.csv", fit_header()}},
                    {&s->fill, {"fill.csv", "pts_ns,placement,driver\n"}},
-                   {&s->rowsf, {"rows.csv", "step,name,cpu_ms,gpu_ms\n"}}};
+                   {&s->rowsf, {"rows.csv", "step,name,cpu_ms,gpu_ms\n"}},
+                   {&s->tags, {"tags.csv", tag_header()}}};
     for (const auto& [file, what] : files) {
       file->open(s->dir / what.first, std::ios::binary | std::ios::trunc);
       *file << what.second;
@@ -459,12 +476,48 @@ vkc::Status TrackLog::write(const track::TrackStep& step) try {
   return vkc::Status::out_of_memory("TrackLog::write");
 }
 
+vkc::Status TrackLog::write(const TagHold& hold) try {
+  State& s = *state_;
+  if (s.closed) return vkc::Status::invalid_argument("TrackLog: closed");
+  return s.append(s.tags, tag_line(hold), "tags.csv");
+} catch (const std::bad_alloc&) {
+  return vkc::Status::out_of_memory("TrackLog::write");
+}
+
+vkc::Status TrackLog::registered(std::string registration,
+                                 const Mat4f& tracking_to_world) try {
+  State& s = *state_;
+  if (s.closed) return vkc::Status::invalid_argument("TrackLog: closed");
+  if (s.registered) {
+    return vkc::Status::invalid_argument(
+        "TrackLog::registered: the run is registered already");
+  }
+  if (!s.run.frames.empty()) {
+    return vkc::Status::invalid_argument(
+        "TrackLog::registered: after a step with frames, whose poses the "
+        "registration did not place");
+  }
+  s.run.source.registration = std::move(registration);
+  s.run.source.tracking_to_world = tracking_to_world;
+  s.registered = true;
+  if (s.dir.empty()) return {};
+  return write_text(s.dir / "run.csv", run_csv(s.run));
+} catch (const std::bad_alloc&) {
+  return vkc::Status::out_of_memory("TrackLog::registered");
+}
+
+std::pair<double, double> pose_gap(const Mat4f& a, const Mat4f& b) {
+  const double mm = glm::length(centre_of(a) - centre_of(b)) * 1e3;
+  const double deg = angle_deg(rot_of(a) * glm::transpose(rot_of(b)));
+  return {mm, deg};
+}
+
 vkc::Status TrackLog::close() try {
   State& s = *state_;
   if (s.closed) return {};
   s.closed = true;
   if (s.dir.empty()) return {};
-  for (std::ofstream* f : {&s.frames, &s.fits, &s.fill, &s.rowsf}) {
+  for (std::ofstream* f : {&s.frames, &s.fits, &s.fill, &s.rowsf, &s.tags}) {
     f->close();
     if (!*f) return vkc::Status::io_error("TrackLog::close: a write failed");
   }
@@ -783,14 +836,6 @@ std::string cell(double v, const char* fmt = "%.1f") {
   return buf;
 }
 
-// How far pose a is from pose b: their camera centres (mm) and rotations
-// (deg).
-std::pair<double, double> gap(const Mat4f& a, const Mat4f& b) {
-  const double mm = glm::length(centre_of(a) - centre_of(b)) * 1e3;
-  const double deg = angle_deg(rot_of(a) * glm::transpose(rot_of(b)));
-  return {mm, deg};
-}
-
 struct Distances {
   std::vector<double> mm, deg;
 };
@@ -837,7 +882,8 @@ vkc::Result<std::string> summarize(const TrackRun& run,
       if (arkit && c != *arkit) {
         const auto a = by_chain[*arkit].find(pts);
         if (a != by_chain[*arkit].end()) {
-          const auto [mm, deg] = gap(world_pose(*f), world_pose(*a->second));
+          const auto [mm, deg] =
+              pose_gap(world_pose(*f), world_pose(*a->second));
           row.from_arkit.mm.push_back(mm);
           row.from_arkit.deg.push_back(deg);
         }
@@ -847,7 +893,7 @@ vkc::Result<std::string> summarize(const TrackRun& run,
           // The change of the correction, at this frame's camera.
           const Mat4f now = world_pose(*f);
           const Mat4f then = last_anchored->pose.correction * f->device_pose;
-          const auto [mm, deg] = gap(now, then);
+          const auto [mm, deg] = pose_gap(now, then);
           step_mm.push_back(mm * mm);
           step_deg.push_back(deg * deg);
         }
@@ -884,7 +930,7 @@ vkc::Result<std::string> summarize(const TrackRun& run,
       const Mat4f a = world_pose(*f);
       const Mat4f raw = raw_pose(run.source, pts, a);
       raw_poses.emplace_back(pts, raw);
-      const auto [mm, deg] = gap(raw, a);
+      const auto [mm, deg] = pose_gap(raw, a);
       row.from_arkit.mm.push_back(mm);
       row.from_arkit.deg.push_back(deg);
       ++row.decided;

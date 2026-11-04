@@ -26,9 +26,10 @@
 // frame's age checks; a rig is always on it. Each camera's counters at the
 // end count its `lost` frames too (vr_example::orbbec_counters). A phone
 // (source.mobile, a recorded session or tcp://ADDRESS:PORT it dials, placed by
-// source.mobile_registration) is tracked against the rig's model and fused as
-// fill where the rig does not see (vr_example::MobileLane);
-// diagnostics.track_log writes its tracking log.
+// source.mobile_registration, or without one by the origin tag in its
+// pictures, in a build with VR_WITH_CALIB) is tracked against the rig's model
+// and fused as fill where the rig does not see (vr_example::MobileLane);
+// diagnostics.track_log writes its tracking log, and records a live phone.
 
 #include <cstdio>
 

@@ -76,6 +76,12 @@ jobs:
       # job builds without it, and its tests check that source.audio is
       # refused there.
       #
+      # `calib` builds the phone lane's registration by the origin tag
+      # (VR_WITH_CALIB: calib fetched, on OpenCV 5) on 24.04, the NVIDIA leg
+      # whose NVDEC pictures the lab's lane reads, and on macOS
+      # (VideoToolbox); 26.04 and the sanitizer job build without it, and
+      # their tests check that a phone with no registration is refused.
+      #
       # Every leg runs the tests under the Khronos validation layer, and
       # `sync_validation` adds synchronization validation on the NVIDIA legs,
       # as the sanitizer job does on lavapipe.
@@ -98,6 +104,7 @@ jobs:
             cuda: true
             ffs: true
             portaudio: true
+            calib: true
             sync_validation: true
             hevc_backend: cuda
           - os: ubuntu-26.04
@@ -116,6 +123,7 @@ jobs:
             realsense_sdk: true
             assimp: true
             portaudio: true
+            calib: true
             hevc_backend: videotoolbox
     uses: ./.github/workflows/_build.yml
     with:
@@ -130,6 +138,7 @@ jobs:
       ffs: ${{ matrix.ffs || false }}
       assimp: ${{ matrix.assimp || false }}
       portaudio: ${{ matrix.portaudio || false }}
+      calib: ${{ matrix.calib || false }}
       sync_validation: ${{ matrix.sync_validation || false }}
       hevc_backend: ${{ matrix.hevc_backend || '' }}
 
