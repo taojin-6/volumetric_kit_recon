@@ -815,9 +815,11 @@ add_test(NAME recon_track_fitter_conformance
 
 # track reduce tie: the point-to-plane reduce's model pick, the kernel alone
 # (its source embedded here, its ABI the fitter's internal fit_abi.hpp): a
-# coarser level's point on a rounding tie picks a quarter pixel past it, the
-# same bit for bit over 1000 dispatches, and the finest level picks the nearest
-# pixel; the counts and H against the host's. Skips with no device.
+# coarser level's point on a rounding tie picks a quarter pixel past it, and the
+# finest level picks the nearest pixel; the counts and H against the host's,
+# which fail without the rule on every device. NVIDIA's run-to-run change shows
+# only in VR_TRACK_TIE_SOAK=1's 300k dispatches (17-19 s), not in the default
+# 40. Skips with no device.
 add_executable(recon_track_reduce_tie_test track_reduce_tie_test.cpp)
 target_include_directories(
   recon_track_reduce_tie_test

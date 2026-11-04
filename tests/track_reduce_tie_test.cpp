@@ -14,15 +14,15 @@
 // cast answering only at odd columns and rows, so each pick shows in the
 // hits. The host predicts every pick from the rule in double, each at least
 // 0.1 px from a rounding edge, and the kernel's attempts, hits and inliers
-// must be the host's, its H the host's within 1e-4:
+// must be the host's, its H the host's within 1e-6 (devices: about 1e-7).
+// Each case's 40 dispatches give the same partials bit for bit:
 // - Level 1 at the cast's pose, every point on a tie: each picks
 //   (2x + 1, 2y + 1) and hits. A tie left to the device picks an even pixel
 //   for a share of the points on every device, so this fails without the
-//   quarter pixel everywhere. Dispatched 40 times in each of 25 batches, the
-//   partials are the same bit for bit. That repeat is short of what NVIDIA
-//   took to change its result without the quarter pixel (an RTX 4090 within
-//   50k dispatches, a 5090 between 50k and 100k), and a Mac never did, so it
-//   passes there either way; VR_TRACK_TIE_SOAK=1 runs 3000 batches of 100.
+//   quarter pixel everywhere. The 40 dispatches fall far short of what
+//   NVIDIA took to change its result without the quarter pixel (an RTX 4090
+//   within 50k dispatches, a 5090 between 50k and 100k; a Mac never did);
+//   only VR_TRACK_TIE_SOAK=1, 3000 batches of 100, shows that.
 // - Level 1, the estimate 0.6 px along the image's x: u = 2x + 1.1 still
 //   picks 2x + 1 (half a pixel would pick 2x + 2).
 // - Level 0, points at odd pixels, the estimate 0.3 px along x: the nearest
@@ -100,9 +100,9 @@ constexpr float kZ = 2.0f;  // the plane, along the camera's +Z
 constexpr float kCoarseGate = 0.05f;
 constexpr std::uint32_t kLocal = 64;
 
-// How often the ties' case runs: batches, and dispatches a batch.
+// How often a case runs: batches, and dispatches a batch.
 struct Repeat {
-  std::uint32_t batches = 25;
+  std::uint32_t batches = 1;
   std::uint32_t dispatches = 40;
 };
 
@@ -351,7 +351,7 @@ int run_case(const vkc::test::Gpu& gpu, vkc::ComputeKernel& kernel,
   CHECK(got[detail::kPartialAttempts] == want.attempts);
   CHECK(got[detail::kPartialHits] == want.hits);
   CHECK(got[detail::kPartialInliers] == want.inliers);
-  CHECK(worst < 1e-4);
+  CHECK(worst < 1e-6);
   return 0;
 }
 
@@ -376,8 +376,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
                         {"level 1, 0.6 px on", false, 0.6},
                         {"level 0, 0.3 px on", true, 0.3}};
   CHECK(run_case(gpu, kernel, cases[0], ties, max_groups) == 0);
-  CHECK(run_case(gpu, kernel, cases[1], {1, 40}, max_groups) == 0);
-  CHECK(run_case(gpu, kernel, cases[2], {1, 40}, max_groups) == 0);
+  CHECK(run_case(gpu, kernel, cases[1], Repeat{}, max_groups) == 0);
+  CHECK(run_case(gpu, kernel, cases[2], Repeat{}, max_groups) == 0);
   return 0;
 }
 

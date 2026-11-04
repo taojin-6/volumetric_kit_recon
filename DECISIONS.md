@@ -1062,7 +1062,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   point, off the rounding tie a pass's first iteration puts every point on,
   so a fit repeats bit for bit on NVIDIA and devices pick alike; the finest
   level keeps the nearest pixel, and the largest relative eigenvalue is 1
-  exactly.
+  exactly, the others at most 1.
 
 ## Decision record
 
@@ -6275,11 +6275,16 @@ same inputs.
   a quarter pixel from a rounding edge, a margin no last bit crosses (an
   ulp at u = 250 is 1.5e-5 px). The finest level keeps the nearest pixel:
   there u = x, half a pixel from a tie, and an offset would bias every
-  finest pick. A half pixel would hold the same margin but lag a moving
-  point by twice as much.
+  finest pick. A half pixel would double both the margin and the lag
+  behind a moving point; a quarter pixel is already over 20 times the worst
+  float error a float32 emulation of the kernels found (1e-2 px, a camera
+  100 m from the origin).
 - *The largest relative eigenvalue is written as 1,* not computed as
-  lambda_max / lambda_max: once the picks moved, an RTX 4090's x / x was not
-  1 at the conformance test's fit at the truth.
+  lambda_max / lambda_max, and the others are clamped to [0, 1]: once the
+  picks moved, an RTX 4090's x / x was not 1 at the conformance test's fit
+  at the truth, and over every float32 x in a binade that GPU's x / x is
+  above 1 for 2.7% of them, so a second eigenvalue equal to the top would
+  break "at most 1, ascending".
 
 **Evidence.** `recon_track_reduce_tie` dispatches the reduce alone on a
 plane whose cast answers only at odd pixels, so a pick shows in the hits:
@@ -6292,7 +6297,7 @@ rule:
 - that test's points, 300k dispatches (`VR_TRACK_TIE_SOAK=1`): 32,600 and
   11,100 change on the 4090 and the 5090, none with the rule; in one run
   each the 4090 changed within 50k dispatches and the 5090 between 50k and
-  100k, so the test's default 1000 does not show it;
+  100k, so the test's default 40 does not show it;
 - a window dumped from the lane on the 4090, the reduce alone, 5500
   batches of 100: 250 and 855 batches off the majority on the 4090, 225 and
   397 on the 5090; 5500 of 5500 alike with the rule, twice on each;
@@ -6308,11 +6313,19 @@ own seeds, against its torch reference), on the M5 Max: at the 19
 reference-anchored windows 0.83 mm / 0.02 deg median, worst 4.54 mm (0.82
 and 4.41 before); at the 18 reference-Partial ones 53.3 mm median, worst
 108 mm (41.7 and 87.4 before). So the pick moves a Partial fit along its
-weak direction but does not close its gap to the reference; that gap is
-the per-iteration step restriction the 2026-11-03 entry leaves to the
-bench. On the lab's RTX 5090 the same: 0.83 / 4.54 mm and 53.4 mm, two runs
-identical, its fits 0.005 mm from the M5 Max's window by window (median;
-p95 0.76 mm).
+weak direction but does not close its gap to the reference. That gap is
+not yet attributed: the reference casts at the same pose with the same
+coarser intrinsics and picks with `torch.round` in fp32, so its points sit
+on the same ties and it breaks them its own way (half to even; in a
+float32 emulation of its arithmetic it picks this rule's pixel for 2-7% of
+the level-1 points and about 60% of the level-2 ones), and the comparison
+still holds that mismatch. The per-iteration step restriction the
+2026-11-03 entry leaves to the bench is the leading candidate. On the
+lab's RTX 5090 the same: 0.83 / 4.54 mm and 53.4 mm, two runs identical.
+Window by window its fits lie within 0.76 mm of the M5 Max's at the
+windows the reference anchored or left Partial (median 0.005 and
+0.02 mm); at the ones it refused they can lie further apart (one refused
+for coverage: 15 and 50 mm from the reference).
 
 ## Measured lessons
 
