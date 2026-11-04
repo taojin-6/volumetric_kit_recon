@@ -1376,6 +1376,15 @@ benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.
 
+**On `track`**, in order: the bench (`tools/track_eval`, the log and its
+one summary), whose first job is to hold a window fit to 0b's reference
+within its seed agreement before any comparison is quoted; then the phone
+lane in `fuse_orbbec` on the `Tracker`. The hop's batch (two window fits)
+must fit the gap after a set's send: on a 4090 a 20-frame window costs
+2.5 ms at 1 pass, three fifths of it the stacked cast, so the lane takes 1
+pass, and 3 only once the bench shows they matter and the gap holds them
+(else the fill chain fits one step behind the rig's).
+
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an
 `ExtractTimings` breakdown that pointed somewhere else entirely — see
