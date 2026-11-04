@@ -93,8 +93,8 @@ int host_checks(const vkc::test::LogCapture& log) {
 }
 
 // The grid: block_grid_params' layout at the caller's start, carrying the
-// fuser's three attributes; and the cap is the ceiling it grows to on this
-// device.
+// fuser's three attributes and the source byte; and the cap is the ceiling
+// it grows to on this device.
 int gpu_main(vkc::test::GpuContext& gpu) {
   auto grid =
       tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.02f, 0.08f, 1);
@@ -107,7 +107,9 @@ int gpu_main(vkc::test::GpuContext& gpu) {
         got.voxels_per_block == want.voxels_per_block);
   CHECK(got.bucket_size == want.bucket_size &&
         got.num_blocks == want.num_blocks && got.max_chain == want.max_chain);
-  CHECK(grid->attribute_count() == 3);
+  CHECK(grid->attribute_count() == 4);
+  CHECK(grid->attribute(tsdf::kSourceAttribute).ok() &&
+        grid->attribute(tsdf::kSourceAttribute)->element_size == 1);
   CHECK(grid->attribute(vol::kTsdfAttribute).ok() &&
         grid->attribute(vol::kTsdfAttribute)->element_size == sizeof(float));
   CHECK(grid->attribute(vol::kWeightAttribute).ok() &&

@@ -24,6 +24,7 @@
 #include "volumetric_kit/grid/volume/voxel_hash_map.hpp"
 #include "volumetric_kit/recon/tsdf/change_detector.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
+#include "volumetric_kit/recon/tsdf/source.hpp"
 #include "volumetric_kit/sensor/frame/camera_params.hpp"
 #include "volumetric_kit/sensor/frame/color_space.hpp"
 #include "volumetric_kit/sensor/frame/depth_noise.hpp"
@@ -95,6 +96,59 @@ struct ColorFrame {
   bool coverage_in_alpha = false;
 };
 
+/// @brief What a frame of a set is to the others: a fixed camera, or a moving
+///        one that only fills where no fixed camera sees.
+enum class FrameRole : std::uint32_t {
+  /// A fixed camera: under @ref IntegrationMode::Dynamic, its change history
+  /// is kept under its slot. On a grid with @ref kSourceAttribute, a sample
+  /// of it that starts a voxel (weight 0) writes @ref fixed_source of its
+  /// slot. On fill (@ref kMobileBit) it writes no rim distance, and under
+  /// Dynamic resets fill only on a pixel its change test flagged Nearer or
+  /// Farther, where its new reading contradicts the voxel: the reading lies
+  /// more than the band behind a voxel whose tsdf is 0 or less, or the
+  /// change is Nearer and the voxel lies in its band. A Vanished pixel and
+  /// the reset beside a departure never touch fill. Its other samples
+  /// average into fill and keep the byte.
+  Fixed = 0,
+  /// A moving camera that only fills (a phone): it takes no slot of the
+  /// change detector, tests no change and resets nothing. It fuses after
+  /// every fixed frame of the set, in the list's order, and needs
+  /// @ref IntegrationMode::Dynamic and a grid with @ref kSourceAttribute.
+  /// It writes a voxel only where
+  /// - the voxel holds no fixed camera's weight: weight 0, or fill;
+  /// - its tier may: an @ref FillTier::Unanchored frame never writes
+  ///   anchored fill;
+  /// - no fixed frame of the set vetoes it. A fixed frame whose return at
+  ///   the voxel's nearest pixel puts the voxel inside its band vetoes every
+  ///   write; one whose return lies more than the band behind the voxel (it
+  ///   sees past it) vetoes a sample of 0 or less, so the filler's surface
+  ///   keeps its free side there. A fixed frame with no return there, or
+  ///   that sees the voxel's place occluded or not at all, vetoes nothing.
+  ///
+  /// Its band sample into a voxel at weight 0 starts fill:
+  /// @ref mobile_source of its slot and tier. An Anchored band sample into
+  /// unanchored fill whose weight fillers alone could have built (no more
+  /// than the cap below) restarts the voxel, as anchored fill. Any other
+  /// sample averages in and keeps the byte, raising the weight to at most
+  /// @ref FillRule::cap_fraction times the call's `max_weight` and never
+  /// lowering it. Its free space
+  /// past the band goes in at a sample's weight, only into fill holding
+  /// weight. It fuses no rim distance, and returns past
+  /// @ref FillRule::max_depth_m are no return.
+  Filler = 1,
+};
+
+/// @brief How a @ref FrameRole::Filler frame fills; fixed frames read none of
+///        it.
+struct FillRule {
+  /// Its running average's cap, a share of the call's `max_weight`, in
+  /// (0, 1]: phone fill stays below what the rig's cameras reach.
+  float cap_fraction = 0.5f;
+  /// Returns farther than this (metres, positive) are no return: a noisy
+  /// far return biases fill along the band's back ramp.
+  float max_depth_m = 3.0f;
+};
+
 /// @brief One camera's frame, for @ref TsdfIntegrator::integrate over several
 ///        cameras at once: the depth frame its band was allocated from, plus
 ///        its colour.
@@ -102,7 +156,8 @@ struct ColorFrame {
 /// Its depth and camera, the camera through @ref to_depth_pinhole, are the
 /// `vgrid::volume::DepthInput`
 /// `vgrid::volume::VoxelHashMap::allocate_from_depth` allocates the frame's
-/// band from.
+/// band from; a filler's camera with its depth range ending at
+/// @ref FillRule::max_depth_m, as @ref Fuser allocates it.
 struct FrameInput {
   /// Row-major depth in **metres**, `camera.width * camera.height` samples:
   /// a host array, staged in the call's batch, or a storage buffer, bound in
@@ -116,14 +171,24 @@ struct FrameInput {
   /// The fixed camera the frame comes from, a slot below
   /// @ref ChangeDetector::kMaxCameras: @ref IntegrationMode::Dynamic keeps
   /// each camera's change history under its slot, so a slot names the same
-  /// camera every set, and a set's frames have slots of their own. Classic
-  /// reads neither this nor @ref noise.
+  /// camera every set, and a set's fixed frames have slots of their own.
+  /// Classic's change test reads neither this nor @ref noise. On a grid with
+  /// @ref kSourceAttribute it is also the camera's index in the source byte,
+  /// so below @ref kMaxSourcesPerClass in either mode. A filler's names it
+  /// among the mobile sensors, below @ref kMaxSourcesPerClass too.
   std::uint32_t slot = 0;
   /// The camera's depth noise, as its producer states it: a prepared frame's
   /// `sensor::DeviceFrame::depth_noise`, which `sender::fuse_inputs` copies.
   /// @ref IntegrationMode::Dynamic's change test is floored by it, and
-  /// refuses a frame whose noise is unknown (all zero, the default).
+  /// refuses a fixed frame whose noise is unknown (all zero, the default).
+  /// A filler's is not read.
   sensor::DepthNoise noise{};
+  /// A fixed camera, or a filler.
+  FrameRole role = FrameRole::Fixed;
+  /// How a filler's frame was posed; fixed frames read none of it.
+  FillTier tier = FillTier::Unanchored;
+  /// How a filler fills; fixed frames read none of it.
+  FillRule fill{};
 };
 
 /// @brief @p camera as the voxel layer's depth camera, for
@@ -171,6 +236,19 @@ VR_TSDF_API volumetric_kit::grid::volume::DepthPinhole to_depth_pinhole(
 /// band or changed, whoever fused it: a rim distance the departed surface
 /// left, or the front of another camera's band, which that camera fuses
 /// again the same set at one sample's weight.
+///
+/// On a grid that carries @ref kSourceAttribute (every @ref create_fusion_grid
+/// grid), the integrator keeps each voxel's source byte (`tsdf/source.hpp`):
+/// a fixed sample that starts a voxel writes its camera's, every reset writes
+/// 0, and a set's @ref FrameRole::Filler frames fill only where its fixed
+/// cameras neither see nor hold weight. A voxel no filler wrote is the same,
+/// bit for bit, as in the same fixed frames' run without fillers -- the fixed
+/// cameras' rules read the byte only on fill -- in every block no fixed
+/// sample reached before the fixed frames' own bands allocated it. A fixed
+/// sample (an outline's rim distance, say) can land in a block only a
+/// filler's band allocated, which a run without fillers does not hold; the
+/// voxels it wrote differ from then on, even once the fixed frames allocate
+/// that block too.
 ///
 /// @warning The `Device` and `Allocator` passed to @ref create must
 ///          outlive this object; it stores references to them.
@@ -281,11 +359,16 @@ class VR_TSDF_API TsdfIntegrator {
   ///         non-finite intrinsic, depth bound or pose entry, @p grid lacks a
   ///         `float` `tsdf`/`weight` attribute, or @p color is set but empty
   ///         or @p grid lacks a `uint32` `color` attribute; under Dynamic, also
-  ///         for a single frame (this overload's), a frame's slot past
-  ///         @ref ChangeDetector::kMaxCameras, two frames of a set with one
-  ///         slot, or a noise model @ref ChangeDetector::record_detect
-  ///         refuses (an unknown one included); otherwise a buffer or
-  ///         dispatch failure.
+  ///         for a single frame (this overload's), a fixed frame's slot past
+  ///         @ref ChangeDetector::kMaxCameras, two fixed frames of a set with
+  ///         one slot, or a noise model @ref ChangeDetector::record_detect
+  ///         refuses (an unknown one included); in either mode, a role that
+  ///         is neither @ref FrameRole, a filler under Classic or on a grid
+  ///         without a one-byte @ref kSourceAttribute, a filler's
+  ///         @ref FillRule out of range, a
+  ///         grid whose `source` attribute is not one byte, or on a grid with
+  ///         it a slot of @ref kMaxSourcesPerClass or more; otherwise a
+  ///         buffer or dispatch failure.
   core::Status integrate(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
                          const float* depth,
                          const sensor::DepthCameraParams& cam,
@@ -332,7 +415,8 @@ class VR_TSDF_API TsdfIntegrator {
   /// (`vgrid::volume::VoxelHashMap::allocate_from_depth` takes them together
   /// too); a block first allocated for a later frame is then fused from the
   /// earlier ones as well. The call is one tick, so a rig's set ages as one
-  /// fuse.
+  /// fuse. Its @ref FrameRole::Filler frames fuse after every fixed frame, in
+  /// the list's order, each vetoed by every fixed frame of the set.
   /// @param grid        As @ref integrate.
   /// @param frames      The frames, each checked as @ref integrate checks one
   ///                    before any work. One with no pixels fuses nothing, as
@@ -342,8 +426,8 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param mode        As @ref integrate, for every frame.
   /// @param metrics     As @ref integrate: one `"integrate"` row, a device span
   ///                    per dispatch, over one `"  ..active set"` sub-row,
-  ///                    and under Dynamic `"  ..detect"` and `"  ..reset"`
-  ///                    sub-rows.
+  ///                    under Dynamic `"  ..detect"` and `"  ..reset"`
+  ///                    sub-rows, and with a filler a `"  ..fill"` sub-row.
   /// @return As @ref integrate.
   core::Status integrate(volumetric_kit::grid::volume::VoxelBlockGrid& grid,
                          const std::vector<FrameInput>& frames,
@@ -377,9 +461,10 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    size fits the device's storage-buffer binding limit.
   /// @param stage       Optional: the caller's scope, whose tile every pass
   ///                    counts to; the compaction is its `"  ..active set"`
-  ///                    breakdown, and under Dynamic the change tests and
+  ///                    breakdown, under Dynamic the change tests and
   ///                    their reach its `"  ..detect"` and the resets its
-  ///                    `"  ..reset"`, the device half alone, from
+  ///                    `"  ..reset"`, and the fillers' veto and passes its
+  ///                    `"  ..fill"`, the device half alone, from
   ///                    `PendingBatch::device_rows`.
   /// @param metrics     Optional: @p stage's own rows, in which the
   ///                    breakdown's rows are placed now, after the stage's
@@ -455,6 +540,11 @@ class VR_TSDF_API TsdfIntegrator {
   // KernelSetBuilder at create().
   core::ComputeKernel kernel_;
   core::ComputeKernel reset_kernel_;
+  // A filler's fuse (the same body built as VR_TSDF_FILL), after every fixed
+  // frame's; and the gather of a set's fixed depths into veto_depth_, which
+  // it vetoes by.
+  core::ComputeKernel fill_kernel_;
+  core::ComputeKernel veto_kernel_;
   // Dynamic's change reach kernel: the pixels within the rim distance's
   // search of a camera's change this set.
   core::ComputeKernel reach_kernel_;
@@ -476,6 +566,13 @@ class VR_TSDF_API TsdfIntegrator {
   core::KernelSets reset_sets_;
   core::KernelSets reach_sets_;
   core::KernelSets rim_sets_;
+  core::KernelSets fill_sets_;
+  core::KernelSets veto_sets_;
+  // A set with a filler: its fixed frames' depths, one after another, and
+  // each one's camera and first element (VetoCamera), grown to the most a
+  // call has had.
+  core::Buffer veto_depth_;
+  core::Buffer veto_cams_;
   // Each frame of a call's rim map, a uint32 a pixel, and its return range,
   // two floats a pixel, grown to the most frames and the largest frame a
   // call has had.

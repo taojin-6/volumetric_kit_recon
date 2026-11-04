@@ -17,6 +17,7 @@
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
+#include "volumetric_kit/recon/tsdf/source.hpp"
 
 namespace volumetric_kit::recon::tsdf {
 
@@ -44,11 +45,12 @@ VR_TSDF_API std::int32_t fusion_buckets(
     std::optional<std::int32_t> num_buckets = std::nullopt);
 
 /// @brief A grid to fuse into: `vgrid::volume::block_grid_params`' layout,
-///        carrying float `tsdf` and `weight` and the `uint32` packed `color`
-///        @ref Fuser writes.
+///        carrying float `tsdf` and `weight`, the `uint32` packed `color`
+///        and the one-byte @ref kSourceAttribute @ref Fuser writes.
 ///
-/// The fuser grows the table, so @p num_buckets sets where it starts, not
-/// what it holds.
+/// 13 bytes a voxel, the source byte one of them (`tsdf/source.hpp`). The
+/// fuser grows the table, so @p num_buckets sets where it starts, not what
+/// it holds.
 ///
 /// @code
 /// VKC_ASSIGN(vgrid::volume::VoxelBlockGrid grid,

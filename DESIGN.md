@@ -819,6 +819,23 @@ changed, so what a rim distance left beside an object leaves with it, while
 an outline that stayed keeps its own (2026-10-29). It clears such a voxel
 whoever fused it: the front of another camera's band there is fused again
 by that camera the same set, at one sample's weight.
+
+**The source byte and fillers** (2026-11-03). A grid that carries
+`kSourceAttribute` (`tsdf/source.hpp`, one byte a voxel, four to a
+`uint32` word, written `atomicAnd` then `atomicOr` from the voxel's one
+thread) records which sensor wrote each voxel (the value table is in that
+header). The rules each role follows on it are `FrameRole`'s
+(`tsdf_integrator.hpp`), with the exception to the rig's bit-identity
+stated on `TsdfIntegrator`; why, and the measurements, are DECISIONS.md's
+2026-11-03 entry. How they run: a fixed camera reads the byte only where
+the shipped rules would reset a voxel or write a rim distance, so the rig's
+own voxels cost one load there, and writes it only into a voxel at weight
+0. A set's `FrameRole::Filler` frames fuse after every fixed frame (the
+fill kernel, the integrate body built as `VR_TSDF_FILL`); their veto reads
+each fixed depth at the voxel's nearest pixel, from one buffer a gather
+kernel stacks for the set, so a set with no filler records none of it.
+`rig_cast()` and `tracking_cast()` filter grid's `RayCaster` on the byte.
+
 `Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). A set
 records into a caller's batch (`record_fuse`, 2026-10-25): the fuse's checks
 (`check_frames`), a grow ahead past `kGrowThreshold`, blocking, then one
@@ -836,8 +853,9 @@ band returns an error before integration; a failed call may already have
 resized or allocated zeroed blocks. An unsuccessful grow-ahead can still be
 followed by successful allocation into the existing grid.
 `create_fusion_grid` (`tsdf/fusion_grid.hpp`) makes the grid a fusing caller
-starts from: `block_grid_params`' layout carrying float `tsdf` and `weight`
-and the packed `color` the fuser writes, at `fusion_buckets`' start --
+starts from: `block_grid_params`' layout carrying float `tsdf` and `weight`,
+the packed `color` and the source byte the fuser writes, 13 bytes a voxel,
+at `fusion_buckets`' start --
 16,384 buckets at 1 cm and coarser, scaled by (1 cm / voxel)² up to 4× finer,
 or the caller's count, capped at the ceiling the grid can never grow past on
 the device (a capped caller's count logged as a warning) (2026-10-25).

@@ -566,6 +566,30 @@ target_link_libraries(
 vr_target_warnings(recon_tsdf_dynamic_change_test)
 add_test(NAME recon_tsdf_dynamic_change COMMAND recon_tsdf_dynamic_change_test)
 
+# tsdf source byte: the value table and the cast filters; a rig fused with and
+# without the byte is the same grid; seeded fill under one fixed camera stays
+# bit for bit where the camera has no standing (holes and an outline, beside a
+# departure, Vanished, occluded), loses only what a change contradicts, and
+# stays extractable under noise and false alarms. Skips (exit 0) where no device
+# is present.
+add_executable(recon_tsdf_source_test tsdf_source_test.cpp)
+target_link_libraries(
+  recon_tsdf_source_test
+  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_tsdf
+          volumetric_kit::grid_mesh)
+vr_target_warnings(recon_tsdf_source_test)
+add_test(NAME recon_tsdf_source COMMAND recon_tsdf_source_test)
+
+# tsdf filler: a filler's tiers in every order, its cap and range, each veto by
+# a fixed frame of its set, the rig unchanged bit for bit beside it (I1), and
+# the refusals. Skips (exit 0) where no device is present.
+add_executable(recon_tsdf_filler_test tsdf_filler_test.cpp)
+target_link_libraries(
+  recon_tsdf_filler_test PRIVATE volumetric_kit::core_test_policy
+                                 volumetric_kit::recon_tsdf)
+vr_target_warnings(recon_tsdf_filler_test)
+add_test(NAME recon_tsdf_filler COMMAND recon_tsdf_filler_test)
+
 # tsdf rim distance: one camera's plate outline at its true edge in either mode,
 # the voxels beside it at their Euclidean distance, a thin rod solid; a plate
 # moving past one Dynamic camera with nothing beside its moving outline; and a

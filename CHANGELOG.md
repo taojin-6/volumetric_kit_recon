@@ -8,6 +8,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `tsdf`: **a source byte in every fusion grid, and fillers.**
+  `create_fusion_grid` grids carry `tsdf::kSourceAttribute`, one byte a
+  voxel (`tsdf/source.hpp`): 0 for no sensor, which every reset writes; a
+  fixed camera's slot + 1 where its sample started the voxel; fill as
+  `kMobileBit` with the sensor's index, and `kUnanchoredBit` from a frame
+  no rig-only fit anchored (`FillTier`). A `FrameInput` with
+  `role = FrameRole::Filler` (Dynamic only) fills only where no fixed camera
+  holds weight and none of its set vetoes, up to `FillRule::cap_fraction`
+  of `max_weight` and out to `FillRule::max_depth_m`; on fill, fixed
+  cameras write no rim distance and reset only where their own change
+  contradicts it, so a voxel no filler wrote is the same as without
+  fillers (the rules and their one exception: `FrameRole` and
+  `TsdfIntegrator`). `tsdf::rig_cast()` and `tsdf::tracking_cast()` filter
+  grid's `RayCaster` to the rig, or the rig and anchored fill. Each fusion
+  voxel takes 13 bytes, one more; a slot of 63 or more is refused on a grid
+  with the byte.
+
 - `examples`, tools: **a sensor's stream read live, recorded and checked.**
   `RgbdStreamSensor::listen` (`examples/common/link/rgbd_stream_sensor.hpp`)
   waits for a writer to dial one numeric IPv4 address of this host and reads

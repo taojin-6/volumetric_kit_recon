@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <string>
@@ -12,15 +14,36 @@
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/grid/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/core/log.hpp"
+#include "volumetric_kit/recon/tsdf/source.hpp"
 
 namespace volumetric_kit::recon::tsdf {
 namespace {
 
-// What every fusion grid carries: the attributes Fuser writes.
+// What every fusion grid carries: the attributes Fuser writes, the source
+// byte (tsdf/source.hpp) last.
 constexpr volumetric_kit::grid::volume::AttributeSpec kFusionAttributes[] = {
     {volumetric_kit::grid::volume::kTsdfAttribute, sizeof(float)},
     {volumetric_kit::grid::volume::kWeightAttribute, sizeof(float)},
-    {volumetric_kit::grid::volume::kColorAttribute, sizeof(std::uint32_t)}};
+    {volumetric_kit::grid::volume::kColorAttribute, sizeof(std::uint32_t)},
+    {kSourceAttribute, sizeof(std::uint8_t)}};
+
+// A filter on the source byte at `min_weight` that lets every sensor of each
+// listed class answer: the bytes `base | (index + 1)`, for each class's base
+// byte (0 for the fixed cameras, kMobileBit for anchored fill).
+volumetric_kit::grid::volume::CastFilter source_filter(
+    float min_weight, std::initializer_list<std::uint8_t> classes) {
+  volumetric_kit::grid::volume::CastFilter filter;
+  filter.min_weight = min_weight;
+  filter.attribute = kSourceAttribute;
+  filter.allow.fill(0u);
+  for (const std::uint8_t base : classes) {
+    for (std::uint32_t index = 0; index < kMaxSourcesPerClass; ++index) {
+      const std::uint32_t v = base | (index + 1u);
+      filter.allow[v >> 5] |= 1u << (v & 31u);
+    }
+  }
+  return filter;
+}
 
 // The warning for a caller's start capped to the device; a host allocation
 // failure loses the warning alone.
@@ -73,6 +96,14 @@ core::Result<volumetric_kit::grid::volume::VoxelBlockGrid> create_fusion_grid(
           fusion_buckets(voxel_size, core::max_storage_buffer_range(device),
                          num_buckets)),
       kFusionAttributes, std::size(kFusionAttributes));
+}
+
+volumetric_kit::grid::volume::CastFilter rig_cast(float min_weight) {
+  return source_filter(min_weight, {0u});
+}
+
+volumetric_kit::grid::volume::CastFilter tracking_cast(float min_weight) {
+  return source_filter(min_weight, {0u, kMobileBit});
 }
 
 }  // namespace volumetric_kit::recon::tsdf
