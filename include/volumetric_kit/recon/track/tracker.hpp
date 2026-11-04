@@ -272,8 +272,15 @@ class VR_TRACK_API Tracker {
   /// @pre The batch is no longer in flight (it may read the frames this
   ///      frees).
   void abandon(const PendingStep& pending) noexcept;
-  /// @brief No more frames: every held frame is decided and released, or
-  ///        dropped, with the fits there are.
+  /// @brief No more frames, or none that may share a window with those
+  ///        before: every held frame is decided and released, or dropped,
+  ///        with the fits there are. Recording may go on after it: the
+  ///        chains keep their judges and hops stay on the frames' clock,
+  ///        but a fit holds only frames recorded since, and a frame
+  ///        recorded since is placed by fits since alone (no interpolation
+  ///        bridges it). A caller splits so where its frames may hold a
+  ///        device map step: a loss span the device's step removal never
+  ///        saw.
   /// @pre No step is outstanding; with one, nothing changes and the step is
   ///      empty.
   TrackStep flush();
