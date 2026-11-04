@@ -1,0 +1,10 @@
+#version 450
+
+// The fill kernel: a filler's frame (tsdf::FrameRole::Filler) fused after
+// every fixed frame of the set, where the fixed frames neither hold weight
+// nor see. The body is tsdf_integrate.glsl, shared with tsdf_integrate.comp
+// and tsdf_reset.comp.
+
+#extension GL_GOOGLE_include_directive : require
+#define VR_TSDF_FILL
+#include "tsdf_integrate.glsl"

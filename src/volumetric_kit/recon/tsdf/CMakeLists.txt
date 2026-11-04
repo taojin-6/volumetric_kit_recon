@@ -69,6 +69,8 @@ vr_embed_shaders(
   SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_reset.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_fill.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_veto_depth.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_change_detect.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_change_reach.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_rim_map.comp")

@@ -38,6 +38,13 @@
 // band, which the new surface occludes; a Vanished ray, with no new sample,
 // resets up to the band of the surface that left, the set after it left
 // (DECISIONS.md, 2026-10-29).
+//
+// VR_TSDF_FILL builds the filler's fuse (tsdf_fill.comp): a moving camera
+// that writes only where the set's fixed cameras hold no weight and do not
+// see, after every fixed frame's fuse. On a grid with the source byte
+// (binding 14, tsdf/source.hpp) a fixed camera writes no rim distance into
+// fill and resets fill only where its change contradicts it, and every reset
+// writes the byte 0 (DECISIONS.md, 2026-11-03).
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_basic : require
@@ -144,6 +151,49 @@ layout(set = 0, binding = 12, scalar) readonly buffer RimMap {
 layout(set = 0, binding = 13, scalar) readonly buffer RimRange {
   vec2 rim_range[];
 };
+// The grid's source byte (tsdf::kSourceAttribute), voxel i's byte in bits
+// 8 * (i & 3) of word i >> 2, when pc.has_source; a 1-word dummy otherwise,
+// which nothing reads. A voxel's byte is written only by the voxel's one
+// thread, but the word's other bytes by their own threads at the same time,
+// so every access is atomic.
+layout(set = 0, binding = 14, scalar) buffer Source { uint source_words[]; };
+
+// The byte's bits (tsdf/source.hpp).
+const uint kUnanchoredBit = 0x40u;
+const uint kMobileBit = 0x80u;
+
+// Voxel idx's source byte.
+uint read_source(uint idx) {
+  uint word = atomicLoad(source_words[idx >> 2], gl_ScopeDevice,
+                         gl_StorageSemanticsNone, gl_SemanticsRelaxed);
+  return (word >> (8u * (idx & 3u))) & 0xFFu;
+}
+
+// Write voxel idx's source byte: clear it, then set it, leaving the word's
+// other three bytes as their threads write them.
+void write_source(uint idx, uint value) {
+  uint shift = 8u * (idx & 3u);
+  atomicAnd(source_words[idx >> 2], ~(0xFFu << shift));
+  if (value != 0u) {
+    atomicOr(source_words[idx >> 2], value << shift);
+  }
+}
+
+#ifdef VR_TSDF_FILL
+// The set's fixed frames, which veto a filler: their depths one after
+// another (binding 15), and each one's camera and its first element there
+// (binding 16, tsdf_integrator.cpp's VetoCamera); pc.veto_count of them.
+layout(set = 0, binding = 15, scalar) readonly buffer VetoDepth {
+  float veto_depth[];
+};
+struct VetoCamera {
+  DepthCameraParams cam;
+  uint first;
+};
+layout(set = 0, binding = 16, scalar) readonly buffer VetoCameras {
+  VetoCamera veto_cams[];
+};
+#endif
 
 // A return the kernel fuses: positive and inside the camera's depth range.
 // The negated compares drop NaN and infinity too, matching
@@ -335,6 +385,40 @@ int rim_distance(vec2 px, float zc, out float sdf, out float behind) {
 }
 #endif
 
+#ifdef VR_TSDF_FILL
+// Whether a fixed frame of the set vetoes a filler's sample `sdf` at `world`.
+// A fixed frame has a say only where its return at the voxel's nearest pixel
+// reaches the voxel's band or passes it: inside its band it vetoes every
+// write; seeing past the voxel by more than the band, it vetoes a sample on
+// or behind the filler's surface (sdf <= 0), so the filler's free side, which
+// agrees with it, still lands. A hole, a voxel more than a band behind the
+// return (occluded) or outside the frame says nothing.
+bool vetoed(vec3 world, float sdf) {
+  float t = pc.grid.trunc_dist;
+  for (uint j = 0u; j < pc.veto_count; ++j) {
+    DepthCameraParams c = veto_cams[j].cam;
+    vec2 px;
+    float zc;
+    if (!project_to_image(c, world, px, zc)) {
+      continue;
+    }
+    uvec2 n = nearest_pixel(px, c.width, c.height);
+    float d = veto_depth[veto_cams[j].first + n.y * c.width + n.x];
+    if (!(d > 0.0 && d >= c.min_depth && d <= c.max_depth)) {
+      continue;  // no return: no say
+    }
+    float s = d - zc;
+    if (s < -t) {
+      continue;  // occluded
+    }
+    if (s <= t || !(sdf > 0.0)) {
+      return true;
+    }
+  }
+  return false;
+}
+#endif
+
 void main() {
   // item_base is a whole number of workgroups, so a workgroup still lies in
   // one block wherever the dispatch starts (stamp_changed).
@@ -418,12 +502,34 @@ void main() {
   // pixel returned anything in its camera's warm-up, or where it returned
   // for under three samples, so nothing resets it; a decay gated by
   // visibility is the rule to try (DECISIONS.md, 2026-10-29).
+  // Fill, which a filler wrote: across sources a camera removes evidence only
+  // on its own change and only what its new reading contradicts -- a reading
+  // more than a band behind a voxel on or inside a surface (tsdf <= 0), or an
+  // arrival's band. Beside a departure (rule 2) and on a Vanished ray it says
+  // nothing of the voxel, and a free side in front of its reading agrees
+  // with it (DECISIONS.md, 2026-11-03). The byte is read only here, where
+  // the shipped rule resets, so the rig's own voxels cost one load.
+  uint source = pc.has_source != 0u ? read_source(idx) : 0u;
+  if ((source & kMobileBit) != 0u) {
+    if (kind == kChangeNone || kind == kChangeVanished) {
+      return;
+    }
+    float ahead = depth[pixel] - zc;
+    bool contradicted = (ahead > trunc_dist && !(tsdf[idx] > 0.0)) ||
+                        (kind == kChangeNearer && ahead <= trunc_dist);
+    if (!contradicted) {
+      return;
+    }
+  }
   // The weight > 0.0 test above is the "did anything change" test: a voxel
-  // at weight 0 is in the state the reset writes.
+  // at weight 0 is in the state the reset writes, its source byte 0.
   tsdf[idx] = 0.0;
   weight[idx] = 0.0;
   if (pc.has_color_attr != 0u) {
     color_attr[idx] = kVoxelColorUnobserved;
+  }
+  if (source != 0u) {
+    write_source(idx, 0u);
   }
   stamp_changed(block_slot);
 #else
@@ -443,6 +549,7 @@ void main() {
   // averaged with distances to where it is going or has been.
   int rim = kRimNone;
   float rim_behind = 0.0;
+#ifndef VR_TSDF_FILL
   bool moved = false;
   if (pc.mode == kModeDynamic) {
     uvec2 n = nearest_pixel(px, cam.width, cam.height);
@@ -452,9 +559,16 @@ void main() {
     float rim_sdf;
     rim = rim_distance(px, zc, rim_sdf, rim_behind);
     if (rim != kRimNone) {
+      // A rim distance is no reading of the voxel itself, so it never writes
+      // fill (DECISIONS.md, 2026-11-03); a voxel at weight 0 is not fill.
+      if (pc.has_source != 0u && weight[idx] > 0.0 &&
+          (read_source(idx) & kMobileBit) != 0u) {
+        return;
+      }
       sdf = rim_sdf;
     }
   }
+#endif
   if (rim == kRimNone) {
     // Reject zero holes and out-of-range depth (returned).
     if (!returned(d)) {
@@ -471,16 +585,43 @@ void main() {
   // The weight is read here and again below; both are the same load. A rim
   // distance lies inside the band, so it is never free space.
   bool free_space = sdf > trunc_dist;
+#ifdef VR_TSDF_FILL
+  // A filler writes no fixed camera's voxel, and its free space only into
+  // fill holding weight, of its own tier or below: an Unanchored frame
+  // never writes anchored fill. Its Anchored band sample restarts unanchored
+  // fill as anchored where the weight is no more than a filler's cap, which
+  // fillers alone may have built; above it fixed samples raised the voxel, so
+  // the sample averages in. Then the set's fixed frames may veto it (vetoed).
+  float held_weight = weight[idx];
+  bool held = held_weight > 0.0;
+  uint held_source = held ? read_source(idx) : 0u;
+  bool frame_unanchored = (pc.source & kUnanchoredBit) != 0u;
+  bool voxel_unanchored = (held_source & kUnanchoredBit) != 0u;
+  if ((held && (held_source & kMobileBit) == 0u) || (free_space && !held) ||
+      (held && frame_unanchored && !voxel_unanchored)) {
+    return;
+  }
+  if (vetoed(world, sdf)) {
+    return;
+  }
+  bool restart = held && voxel_unanchored && !frame_unanchored &&
+                 !free_space && held_weight <= pc.fill_cap;
+#else
   if (free_space && pc.mode == kModeDynamic && !(weight[idx] > 0.0)) {
     return;
   }
+#endif
   sdf = clamp(sdf, -trunc_dist, trunc_dist);
 
   // Inverse-square observation weight with a linear behind-surface dropoff.
+  // A filler's free space goes in at a sample's weight, as it goes only into
+  // fill: it clears the filler's own ghosts in a few frames.
   float w_obs = (zc > 0.01) ? (1.0 / (zc * zc)) : 1.0;
+#ifndef VR_TSDF_FILL
   if (free_space && pc.mode == kModeDynamic) {
     w_obs *= kFreeSpaceWeight;
   }
+#endif
   // How far behind its own pixel's surface the voxel lies: a rim voxel's from
   // rim_distance (0 in front or beside), else the projective sample's.
   float behind = rim == kRimNone ? zc - d : rim_behind;
@@ -501,16 +642,41 @@ void main() {
   // Weighted running average, capped at max_weight.
   float w_old = weight[idx];
   float s_old = tsdf[idx];
+#ifdef VR_TSDF_FILL
+  // A restart starts the voxel again from this sample, its colour too; the
+  // voxel held weight, so the restart is itself a change.
+  bool changed = restart;
+  if (restart) {
+    w_old = 0.0;
+    s_old = 0.0;
+    if (pc.has_color_attr != 0u) {
+      color_attr[idx] = kVoxelColorUnobserved;
+    }
+  }
+#endif
   float w_sum = w_old + w_obs;
   float s_new = clamp((s_old * w_old + sdf * w_obs) / max(w_sum, 1e-6),
                       -trunc_dist, trunc_dist);
+#ifdef VR_TSDF_FILL
+  // A filler raises the weight to its cap at most, and never lowers one a
+  // fixed camera's samples raised past it.
+  float w_new = min(w_sum, max(w_old, pc.fill_cap));
+  changed = changed || (s_new != s_old) || (w_new != w_old);
+#else
   float w_new = min(w_sum, pc.max_weight);
   // Whether this fuse MOVED the field, accumulated across the geometry and
   // colour stores and marked once at the end. Compared before the stores, since
   // afterwards the old value is gone.
   bool changed = (s_new != s_old) || (w_new != w_old);
+#endif
   tsdf[idx] = s_new;
   weight[idx] = w_new;
+  // A sample that starts a voxel writes the frame's source byte: a fixed
+  // camera's into a voxel at weight 0, a filler's also into one it
+  // restarted. Later samples average in and keep the byte.
+  if (pc.has_source != 0u && !(w_old > 0.0)) {
+    write_source(idx, pc.source);
+  }
 
   // Fuse color, if a frame was supplied this call, through the separate color
   // camera. Project the voxel into the color camera, sample the packed RGB at

@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "fused_camera.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
@@ -33,14 +34,15 @@ std::uint64_t next_serial() noexcept {
   return counter.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
-// The frames' depth, as allocation takes it. Throws std::bad_alloc, which the
-// callers' entry points turn into a status.
+// The frames' depth, as allocation takes it: a filler's band only as far as
+// it fills. Throws std::bad_alloc, which the callers' entry points turn into
+// a status.
 std::vector<volumetric_kit::grid::volume::DepthInput> depth_inputs(
     const std::vector<FrameInput>& frames) {
   std::vector<volumetric_kit::grid::volume::DepthInput> out;
   out.reserve(frames.size());
   for (const FrameInput& f : frames) {
-    out.push_back({f.depth, to_depth_pinhole(f.camera)});
+    out.push_back({f.depth, to_depth_pinhole(detail::fused_camera(f))});
   }
   return out;
 }
