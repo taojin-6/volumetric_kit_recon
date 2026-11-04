@@ -26,16 +26,17 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.43.0 (2163deb, core #89's merge: the net tier, which grid
-# 0.11.0 and later network on, on 0.42.0's source.mobile, which fuse_orbbec
-# refuses), as are the Homebrew key action in .github/workflows/_build.yml and
-# the workflow-trigger check in .github/workflows/lint.yml; the vkc_require_core
-# checks below say which core each part needs. The tests are main()s of their
-# own on the core's test support.
+# The pin is core 0.49.0 (947fe19, core #99's merge: source.mobile_registration
+# optional and never defaulted, on 0.43.0's net tier, which grid 0.11.0 and
+# later network on), as are the Homebrew key action in
+# .github/workflows/_build.yml and the workflow-trigger check in
+# .github/workflows/lint.yml; the vkc_require_core checks below say which core
+# each part needs. The tests are main()s of their own on the core's test
+# support.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 2163debc075bd7bfcd3738f8273821096cc6bece)
+  GIT_TAG 947fe197290299d723dadf92a008ea06a40e87b7)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)
@@ -78,14 +79,16 @@ endif()
 # sensor, so its tests and -Werror stay off in this build; recon's examples take
 # its test fixtures (VS_TEST_DATA_DIR, which it sets).
 #
-# The pin is sensor 0.37.0 (c4038bb, sensor #42's merge: the PatternReader, on
-# 0.36.0's HEVC encoder on NVENC and 0.28.0's GPU hand-over of NVIDIA's decoded
-# pictures), as are its Orbbec SDK and librealsense actions in .github/workflows
-# (the sibling-actions-at-pins hook).
+# The pin is sensor 0.43.0 (1c5dd48, sensor #51's merge: on 0.40.0's
+# DepthNoise::known taking ARKit's stated noise, which the phone lane's tracker
+# needs known; 0.37.0's PatternReader, 0.36.0's HEVC encoder on NVENC and
+# 0.28.0's GPU hand-over of NVIDIA's decoded pictures), as are its Orbbec SDK
+# and librealsense actions in .github/workflows (the sibling-actions-at-pins
+# hook).
 FetchContent_Declare(
   volumetric_kit_sensor
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
-  GIT_TAG c4038bb7379e431cbd654a7ac691746145494895)
+  GIT_TAG 1c5dd4855995c5168477ffc7322f0ad6dad81e2d)
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)
@@ -126,4 +129,43 @@ if((VR_BUILD_EXAMPLES OR VR_BUILD_TESTS) AND NOT TARGET grid_example_common)
       "recon's examples and their tests need volumetric_kit_grid's example "
       "helpers: set VGRID_BUILD_EXAMPLES ON before the "
       "first FetchContent_MakeAvailable of grid")
+endif()
+
+# --- volumetric_kit_calib: the origin tag's detector and solve ---------------
+# With VR_WITH_CALIB (the root CMakeLists, which finds OpenCV 5 first), for the
+# phone lane's registration by the tag (examples/common/live_tag.hpp): calib's
+# calib_detect (detect_tag) and calib_solve (tracked_world_from_tag,
+# register_tracked). Declared after the core and sensor, so their pins above are
+# the ones built and calib's own declarations of them yield, one core and one
+# sensor in the build. As a subproject calib builds no examples, tests or apps
+# and leaves its rig tiers off (VC_WITH_RIG); EXCLUDE_FROM_ALL builds only what
+# the examples link. Pinned by commit, never main, as are the OpenCV action CI
+# runs from calib (.github/workflows/_build.yml); an application that also
+# fetches calib declares it first, and FetchContent keeps that declaration. Work
+# on both checkouts at once with
+# -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CALIB=<calib checkout>.
+#
+# The pin is calib 0.12.0 (58a6dd6, calib #75's merge: its OpenCV action runs
+# the script beside it, so recon's CI can call it; register_tracked since 0.9.0,
+# on sensor 0.43.0, recon's pin).
+if(VR_WITH_CALIB AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
+  FetchContent_Declare(
+    volumetric_kit_calib
+    GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_calib.git
+    GIT_TAG 58a6dd6a043e8b055d1e067c33bcd294012f6214
+    EXCLUDE_FROM_ALL)
+  FetchContent_MakeAvailable(volumetric_kit_calib)
+  # calib sets no VKC_PACKAGE_VERSION on its umbrella: its project's version.
+  get_directory_property(
+    _vr_calib_version DIRECTORY "${volumetric_kit_calib_SOURCE_DIR}" DEFINITION
+                                PROJECT_VERSION)
+  if(NOT (TARGET volumetric_kit::calib_detect AND TARGET
+                                                  volumetric_kit::calib_solve)
+     OR _vr_calib_version VERSION_LESS 0.9.0)
+    message(
+      FATAL_ERROR
+        "VR_WITH_CALIB needs volumetric_kit_calib 0.9.0 or newer with "
+        "calib_detect and calib_solve, but the calib at "
+        "${volumetric_kit_calib_SOURCE_DIR} is ${_vr_calib_version}")
+  endif()
 endif()

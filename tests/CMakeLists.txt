@@ -385,6 +385,49 @@ if(VR_BUILD_EXAMPLES)
            COMMAND recon_example_link_listen_color_test)
 endif()
 
+# The live runs' phone lane (live_mobile.hpp) on a fake phone, its frames
+# prepared on the device and tracked by scripted fitters: tiers, one generation,
+# the wait and the drop, replays, the drain cap, the log, splits, pairing,
+# check_mobile and the background poll. And the tracking log (track_log.hpp):
+# its files read back, its summary by hand, and a window of real fitters
+# recovering what single frames leave held.
+if(VR_BUILD_EXAMPLES)
+  add_executable(recon_example_live_mobile_test example_live_mobile_test.cpp)
+  target_link_libraries(
+    recon_example_live_mobile_test PRIVATE vr_example_mobile
+                                           volumetric_kit::core_test_policy)
+  # Whether the lane registers a phone by the origin tag, which check_mobile
+  # refuses in a build without it.
+  if(VR_WITH_CALIB)
+    target_compile_definitions(recon_example_live_mobile_test
+                               PRIVATE VR_TEST_WITH_CALIB=1)
+  endif()
+  vr_target_warnings(recon_example_live_mobile_test)
+  add_test(NAME recon_example_live_mobile
+           COMMAND recon_example_live_mobile_test)
+  # The origin tag's watch (live_tag.hpp), with VR_WITH_CALIB: OpenCV's markers
+  # pasted face-on into NV12 pictures on the device (sensor's nv12_picture.hpp),
+  # searched, gated and solved by calib; the lane registered by it, on scripted
+  # fitters; and open_mobile_lane on a session of sensor's committed H.265 clips
+  # (VS_TEST_DATA_DIR), decoded on this machine's hardware.
+  if(VR_WITH_CALIB)
+    add_executable(recon_example_live_tag_test example_live_tag_test.cpp)
+    target_link_libraries(
+      recon_example_live_tag_test PRIVATE vr_example_mobile opencv_objdetect
+                                          volumetric_kit::core_test_policy)
+    target_compile_definitions(recon_example_live_tag_test
+                               PRIVATE VR_HEVC_DATA="${VS_TEST_DATA_DIR}/hevc")
+    vr_target_warnings(recon_example_live_tag_test)
+    add_test(NAME recon_example_live_tag COMMAND recon_example_live_tag_test)
+  endif()
+  add_executable(recon_example_track_log_test example_track_log_test.cpp)
+  target_link_libraries(
+    recon_example_track_log_test PRIVATE vr_example_mobile
+                                         volumetric_kit::core_test_policy)
+  vr_target_warnings(recon_example_track_log_test)
+  add_test(NAME recon_example_track_log COMMAND recon_example_track_log_test)
+endif()
+
 # session_check's command line (tools/session_check): usage, for no source and
 # for a live option given a file, and a file that is not there named in its
 # refusal.

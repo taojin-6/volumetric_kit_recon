@@ -8,6 +8,47 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **a live phone registered by the origin tag**
+  (`examples/common/live_tag.hpp`, in a build with `-DVR_WITH_CALIB=ON`): a
+  phone given with no `source.mobile_registration` is read with its
+  pictures, and a `TagWatch` finds the calibration world's tag in steady
+  frames (at most 5 Hz, on its own thread, OpenCV's pool set to one thread:
+  the luma copied by sensor's `PictureReadback`, searched and solved by
+  calib's `detect_tag`, `tracked_world_from_tag` and `register_tracked`, at
+  the tag's printed edge; each hold handed over with its registration). A
+  file read so decodes its pictures on the set loop (about 1 ms at p95 a gap
+  on an RTX 5090); a live phone's decode on its poll thread. The lane tracks
+  nothing until the first hold of six stills that
+  passes registers the session (`MobileLane::Counts::unregistered`), then
+  places each frame by it; later holds are printed and logged with their gap
+  from the rig chain, never applied. `diagnostics.track_log` records a live
+  phone (`phone.vrst`) and writes the registration (`registration.json`)
+  and each hold (`tags.csv`); `TrackLog::registered`, `pose_gap` and
+  `RgbdStreamSensor::session_id` are new. `VR_WITH_CALIB` fetches calib
+  pinned (`58a6dd6`, calib 0.12.0) on OpenCV 5, an installed prerequisite,
+  and CMake 3.28, and configure refuses it without sensor's video decoders;
+  off, the default, `TagWatch` refuses (`Unsupported`). CI builds it on the
+  ubuntu-24.04 (NVIDIA) and macos-26 legs.
+- `examples`: **a phone's frames fill the rig's model in the live runs**
+  (`source.mobile`, `examples/common/live_mobile.hpp`, `vr_example_mobile`):
+  a recorded session, or a phone dialling `tcp://ADDRESS:PORT`, tracked on
+  `lane_tracking()` in the gap after each set's send and fused in the next
+  as fill, in a fixed tint of its tier. `check_mobile` refuses it under
+  Classic fusion or beside FFS depth before anything opens. Replaces
+  `fuse_orbbec`'s refusal of `source.mobile`.
+- `examples`: **a tracking run's log and its one summary**
+  (`examples/common/track_log.hpp`): `TrackLog` keeps a `Tracker`'s steps
+  in memory and writes them to `diagnostics.track_log` (CSVs and a TUM pose
+  file a chain), `read_track_log` reads them back, and `summarize` computes
+  every metric once: decisions by kind, lock share, latency, distance from
+  `arkit` (and from `arkit_raw`, the device's own poses rebuilt from its
+  removed map steps), jitter, fits by verdict, fill by placement, the stage
+  rows.
+- `sender`: **`SetSender::send` and `fuse_inputs` take fillers**
+  (`sender::Filler`: a frame, its `FillTier` and its mobile index), fused
+  after the set's fixed frames in the same integrate; the calls without
+  them are those with none, bit for bit.
+
 - `track`: **a new tier, `recon_track`: a self-posed camera's frames
   fitted to a model on the device** (`volumetric_kit::recon_track`, in the
   umbrella; on grid's `volume` and `sensor_frame`, not `tsdf`). The one
@@ -162,6 +203,36 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server; both floors rise with them.
 
 ### Changed
+
+- build: **recon pins core 0.49.0** (core #99's merge, `947fe19`; was
+  0.43.0), and CI takes the core's actions at the new pin. 0.44.0-0.48.0
+  change nothing recon calls but `source.mobile`'s address reasons, the net
+  tier's stricter `resolve` (recon listens on a numeric address alone) and
+  two Vulkan fixes (an acquire after a wait, an exported timeline's host
+  wait). 0.49.0 leaves `source.mobile_registration` empty when it is not
+  given, for a recorded session too (it was `<file>.registration.json`): a
+  phone without one is registered by the origin tag (above), and
+  **`check_mobile` refuses it in a build without `VR_WITH_CALIB`**
+  (`Unsupported`), or with a calibration whose world is not the origin tag
+  the watch finds, calib's `kOriginTag`, alone (`InvalidArgument`), before
+  anything opens (`open_mobile_lane` checks
+  again before any wait); the core floor rises to 0.49.0.
+- build: **recon pins sensor 0.43.0** (sensor #51's merge, `1c5dd48`; was
+  0.37.0), and CI takes its actions at the new pin. Its `DepthNoise::known`
+  (0.40.0) takes the noise ARKit's driver states, so the floor rises to
+  0.40.0: the lane's tracker refuses a frame whose noise is unknown. The
+  core stays at 0.43.0, above the 0.41.0 sensor needs, and grid at 0.12.0.
+- `track`: **`Tracker::flush` may be followed by more frames**: the chains
+  keep their judges and hops, and a frame after it is fitted and placed by
+  fits after it alone. The lane splits so at a loss.
+- `examples`: `fuse_orbbec` no longer refuses `source.mobile` and
+  `diagnostics.track_log` (`check_orbbec_phone` is gone): it runs the phone.
+- `examples`: **`RgbdStreamSensor` hands out a float device's pose rigid**:
+  a homogeneous row within 1e-6 of [0, 0, 0, 1] made exact (ARKit's own
+  transforms read up to 3 ulp off 1 there) and a rotation within 1e-4 of
+  orthonormal made the nearest rotation (the device's map-step removal
+  drifts it), which frame prep refused as not rigid; a pose further off is
+  handed on as written.
 
 - build: **recon pins sensor 0.37.0** (sensor #42's merge, `c4038bb`; was
   0.29.0), and CI takes its actions at the new pin. recon's code builds and

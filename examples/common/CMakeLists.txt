@@ -47,3 +47,24 @@ if(TARGET volumetric_kit::sensor_video)
   target_compile_definitions(vr_example_link PRIVATE VR_EXAMPLE_LINK_VIDEO=1)
 endif()
 vr_target_warnings(vr_example_link)
+
+# The live runs' phone lane (live_mobile.hpp) and the tracking log it writes
+# (track_log.hpp): the phone's session read back (vr_example_link), prepared
+# (sensor_prep), tracked (recon_track) and handed to the sender as fill
+# (recon_sender).
+add_library(vr_example_mobile STATIC live_mobile.cpp track_log.cpp)
+target_link_libraries(
+  vr_example_mobile PUBLIC vr_example_link volumetric_kit::recon_track
+                           volumetric_kit::recon_sender)
+# The origin tag's watch (live_tag.hpp): on calib's detector and solve and
+# sensor's picture readback with VR_WITH_CALIB, a refusal without. OpenCV's core
+# for the one call that keeps the detector on the watch's thread.
+if(VR_WITH_CALIB)
+  target_sources(vr_example_mobile PRIVATE live_tag.cpp)
+  target_link_libraries(
+    vr_example_mobile PRIVATE volumetric_kit::calib_detect
+                              volumetric_kit::calib_solve opencv_core)
+else()
+  target_sources(vr_example_mobile PRIVATE live_tag_off.cpp)
+endif()
+vr_target_warnings(vr_example_mobile)

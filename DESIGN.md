@@ -973,7 +973,9 @@ under Dynamic.
 **The set step** (`SetSender`). `send` records the set's fusion
 (`Fuser::record_fuse`), its free pass every `free_after` sets
 (`record_free_stale`) and, for a set `code_due`, its frame's front half
-into the set's front batch after its prep, submits it, to start once the
+into the set's front batch after its prep (with any fillers, a phone's
+placed frames, `sender::Filler`, after the set's frames in the same
+integrate), submits it, to start once the
 caller's waits are reached (the set's pictures' ready values,
 `sensor::ready_points`, which an NVIDIA decoder's picture carries), waits
 once, and finishes the fusion; then the frame's back half in a batch of its
@@ -1075,8 +1077,10 @@ the driver chains alone, and a ring that holds a frame until it is placed
 and decided. Shadows record after the driver, and a shadow's refusal is its
 own chain's, so they change nothing the driver does
 (`recon_track_tracker`). A refused finish drops its step from that fit on,
-so no fitter is left holding a record. The bench (`track_eval`) and the
-phone lane are next work.
+so no fitter is left holding a record. A flush may be followed by more
+frames (a split): the judges go on, and frames after it are fitted and
+placed by fits after it alone. The phone lane runs it (Examples); the bench
+(`track_eval`) is next work.
 
 **Memory** (computed, 256x192): an entry is 2.2 MiB (the three levels'
 depth, vertex and normal maps), so a 20-frame window fitter holds 44 MiB of
@@ -1161,6 +1165,16 @@ rules (refusals, reconnects, repeats, the failure cap and the recording).
 `tools/session_check`, built with the tests, prints what
 `link/session_check.hpp` finds of a file or a link (README, "Checking a
 phone's stream").
+
+**The phone lane** (`examples/common/live_mobile.hpp`, `vr_example_mobile`)
+puts such a sensor beside a live run's cameras (`source.mobile`): after each
+set's send, `MobileLane::next` tracks the phone's record due by the next set
+on `lane_tracking()` in one batch, waited on in the gap, and hands the next
+send the frames the `Tracker` placed as fillers of their tier. Its rules
+(pairing, the drain cap, splits, the tint) are the header's; why, the
+2026-11-04 entry. Its log (`track_log.hpp`) is a `Tracker`'s steps as CSVs
+and a TUM pose file a chain, which `read_track_log` reads back and
+`summarize` turns into every metric of a run, once.
 
 Every example reads a scenario with `--config path.json`; `--help` prints
 that entry point. The optional core `config` tier owns the JSON format, typed
@@ -1416,14 +1430,18 @@ benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.
 
-**On `track`**, in order: the bench (`tools/track_eval`, the log and its
-one summary), whose first job is to hold a window fit to 0b's reference
-within its seed agreement before any comparison is quoted; then the phone
-lane in `fuse_orbbec` on the `Tracker`. The hop's batch (two window fits)
-must fit the gap after a set's send: on a 4090 a 20-frame window costs
-2.5 ms at 1 pass, three fifths of it the stacked cast, so the lane takes 1
-pass, and 3 only once the bench shows they matter and the gap holds them
-(else the fill chain fits one step behind the rig's).
+**On `track`**, in order: the bench (`tools/track_eval` on the log and its
+summary: the shipped `lane_tracking()` with its keys, a rig model read
+from a file, the tag-hold and twin judges, per-chain meshes), whose
+reference check against 0b ran once from a harness (the 2026-11-04
+entry); the live phone lane's minute on the rig (its gap, its fill
+surviving people); the Partial step restricted in each iteration, as 0b's
+reference does (the solve's `TODO:`). The hop's batch (two window fits)
+must fit the gap after a set's send: on a nearly idle 5090 it does, beside
+other jobs' load not always (the 2026-11-04 entry). Should the live rig
+share its GPU so, next are the fill chain one step behind the rig's and the
+casts no farther than fill reaches; 3 passes only once the bench shows they
+matter and the gap holds them.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

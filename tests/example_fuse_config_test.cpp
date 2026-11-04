@@ -5,7 +5,7 @@
 // template loads and maps into the codec's runtime options (grid's
 // codec_config.hpp), core-validated settings reach the sender's config, the
 // Replica sensor's options and, where each driver is built, the Orbbec streams
-// (and fuse_orbbec's refusal of the phone) and the RealSense camera's options
+// and the RealSense camera's options
 // (and, with sensor_ffs, FFS depth's), and the DeckLink stereo camera's (its
 // cameras always; the driver's and FFS depth's where built) unchanged, and the
 // live templates hold what they document. The codec's side is grid's
@@ -241,45 +241,6 @@ int main() {
           mapped.fps == driver.fps);
     CHECK(!mapped.color_controls);
   }
-
-  // fuse_orbbec runs a scenario without the phone, every template among
-  // them, and refuses one with it -- a recorded or a live session, with or
-  // without its tracking log -- naming both keys, rather than fuse the rig
-  // alone.
-  CHECK(vr_example::check_orbbec_phone(live.value()).ok());
-  for (const char* file : {"fuse_orbbec", "codec_orbbec", "serve_orbbec",
-                           "stream_orbbec", "readback_orbbec", "dump_orbbec"}) {
-    const auto loaded =
-        cfg::load(std::string(VR_CONFIG_FIXTURES) + "/" + file + ".json",
-                  cfg::Application::FuseOrbbec);
-    CHECK(loaded && vr_example::check_orbbec_phone(loaded.value()).ok());
-  }
-  for (const char* phone : {
-           R"("mobile": "phone.vrst")",
-           R"("mobile": "tcp://10.8.0.1:7101",
-               "mobile_registration": "phone.registration.json")",
-           R"("mobile": "phone.vrst"}, "diagnostics": {"track_log": "lane")",
-       }) {
-    const auto with_phone =
-        cfg::parse(std::string(R"({"version": 1, "operation": "fuse",
-          "source": {"kind": "live", "sync_config": "sync.json",
-                     "calibration": "poses.json", )") +
-                       phone + "}}",
-                   cfg::Application::FuseOrbbec);
-    if (!with_phone)
-      std::fprintf(stderr, "%s\n", with_phone.status().message().c_str());
-    CHECK(with_phone && with_phone->source.mobile);
-    const vkc::Status refused =
-        vr_example::check_orbbec_phone(with_phone.value());
-    CHECK(refused.domain() == vkc::Status::Code::Unsupported);
-    CHECK(refused.message().find("source.mobile") != std::string::npos);
-    CHECK(refused.message().find("diagnostics.track_log") != std::string::npos);
-  }
-  // The log alone, which the core refuses without the phone, is refused too.
-  cfg::Config log_alone = live.value();
-  log_alone.diagnostics.track_log = "/runs/lane";
-  CHECK(vr_example::check_orbbec_phone(log_alone).domain() ==
-        vkc::Status::Code::Unsupported);
 #endif
 #ifdef VR_TEST_REALSENSE_CONFIG
   // fuse_realsense's template opens the only camera attached at the driver's

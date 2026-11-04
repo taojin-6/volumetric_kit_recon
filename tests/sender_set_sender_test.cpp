@@ -39,8 +39,11 @@
 // moved-from stream is refused. The cameras state the Femto Mega's depth
 // noise, as its driver does; a Dynamic sender refuses a set with a camera
 // that states none, naming its slot, before coding it, and a Classic one
-// fuses it. The sets go out as the live examples send them
-// (examples/common/send_set.hpp). A set whose pictures carry ready values
+// fuses it. A filler where no camera sees fills there alone, every other
+// voxel as the call without fillers writes it, and a Classic sender refuses
+// it. The sets go out as the live examples send them
+// (examples/common/send_set.hpp), through the call with no fillers, which the
+// call without them is. A set whose pictures carry ready values
 // (YuvImage::ready) the host sets later is published, its front batch having
 // waited for them on the device, only once all are set. On a grid holding a
 // sphere, with no frames to fuse, a sender's frames are the file
@@ -54,8 +57,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <initializer_list>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -980,6 +985,125 @@ int unstated_noise(vkc::test::GpuContext& gpu) {
   return 0;
 }
 
+// Fillers through send (sender/fuse_inputs.hpp's Filler): camera A's
+// prepared frame moved 10 m along x, where no camera sees, as an Anchored
+// filler of mobile sensor 2 fills there (its byte kMobileBit | 3) and leaves
+// every voxel the set's cameras wrote as the call without fillers writes
+// them, bit for bit; a Classic sender refuses the set with its filler before
+// coding it. The call with no fillers is the one without them: every other
+// case here sends through it (send_set.hpp).
+int fillers_case(vkc::test::GpuContext& gpu) {
+  namespace tsdf = vr::tsdf;
+  namespace vol = vgrid::volume;
+  struct Grids {
+    std::map<vgrid_test::BlockCoord, std::int32_t> blocks;
+    std::vector<float> tsdf, weight;
+    std::vector<std::uint8_t> source;
+  };
+  // The set alone, or with the filler, then refused by a Classic sender.
+  const auto run = [&gpu](bool filler,
+                          vkc::Status* classic) -> std::optional<Grids> {
+    std::vector<Camera*> cameras;
+    auto opened = open_cameras(gpu, 2, 0, &cameras);
+    if (!opened.ok()) return std::nullopt;
+    sensor::SensorArray array = std::move(opened).value();
+    auto grid =
+        tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.02f, 0.08f, 1024);
+    auto fuser = make_fuser(gpu);
+    if (!grid.ok() || !fuser.ok()) return std::nullopt;
+    sender::SetSender::Config sending;
+    sending.max_weight = kMaxWeight;
+    sending.mode = tsdf::IntegrationMode::Dynamic;
+    auto out =
+        sender::SetSender::create(gpu.device, *fuser, *grid, nullptr, sending);
+    std::optional<sensor::FrameSet> set = next_set(array, cameras, 0);
+    if (!out.ok() || !set) return std::nullopt;
+    vkc::CommandBatch front(gpu.device, gpu.allocator);
+    auto prepared = array.record_process(front, *set, nullptr);
+    if (!prepared.ok()) return std::nullopt;
+    std::vector<sender::Filler> fill;
+    if (filler) {
+      sender::Filler f;
+      f.frame = *prepared->frames[0];
+      f.frame.color = nullptr;
+      f.frame.depth_camera.cam_to_world[3][0] += 10.0f;
+      f.tier = tsdf::FillTier::Anchored;
+      f.index = 2;
+      fill.push_back(std::move(f));
+    }
+    const std::vector<vkc::TimelinePoint> ready =
+        sensor::ready_points(set->frames);
+    auto inputs = std::make_shared<sensor::FrameSet>(std::move(*set));
+    auto sent = filler ? out->send(front, prepared->frames, fill, ready, inputs,
+                                   0, prepared->timestamp_ns)
+                       : out->send(front, prepared->frames, ready, inputs, 0,
+                                   prepared->timestamp_ns);
+    if (!sent.ok()) return std::nullopt;
+    Grids g;
+    auto blocks = vgrid_test::blocks_of(*grid);
+    if (!blocks.ok()) return std::nullopt;
+    g.blocks = std::move(*blocks);
+    auto t = vgrid_test::read_attribute<float>(gpu.device, gpu.allocator, *grid,
+                                               vol::kTsdfAttribute);
+    auto w = vgrid_test::read_attribute<float>(gpu.device, gpu.allocator, *grid,
+                                               vol::kWeightAttribute);
+    auto s = vgrid_test::read_attribute<std::uint8_t>(
+        gpu.device, gpu.allocator, *grid, tsdf::kSourceAttribute);
+    if (!t.ok() || !w.ok() || !s.ok()) return std::nullopt;
+    g.tsdf = std::move(*t);
+    g.weight = std::move(*w);
+    g.source = std::move(*s);
+    if (classic != nullptr) {
+      sending.mode = tsdf::IntegrationMode::Classic;
+      auto strict = sender::SetSender::create(gpu.device, *fuser, *grid,
+                                              nullptr, sending);
+      if (!strict.ok()) return std::nullopt;
+      vkc::CommandBatch again(gpu.device, gpu.allocator);
+      *classic = strict
+                     ->send(again, prepared->frames, fill, {}, nullptr, 0,
+                            prepared->timestamp_ns)
+                     .status();
+    }
+    return g;
+  };
+  const std::optional<Grids> old = run(false, nullptr);
+  vkc::Status refused;
+  const std::optional<Grids> filled = run(true, &refused);
+  CHECK(old && filled);
+  CHECK(refused.domain() == vkc::Status::Code::InvalidArgument);
+  // By block coordinate (the slots a block takes are the GPU's to pick):
+  // every voxel the set wrote reads the same beside the filler, and every
+  // voxel the filler wrote is its fill, in blocks the set alone never held.
+  constexpr std::size_t kVoxels = 512;
+  CHECK(!old->blocks.empty());
+  for (const auto& entry : old->blocks) {
+    CHECK(filled->blocks.count(entry.first) == 1);
+  }
+  std::size_t fill = 0;
+  for (const auto& [coord, ptr] : filled->blocks) {
+    const auto alone = old->blocks.find(coord);
+    for (std::size_t k = 0; k < kVoxels; ++k) {
+      const std::size_t i = std::size_t(ptr) + k;
+      const std::uint8_t b = filled->source[i];
+      if ((b & tsdf::kMobileBit) != 0) {
+        CHECK(b == tsdf::mobile_source(2, tsdf::FillTier::Anchored));
+        CHECK(alone == old->blocks.end());
+        ++fill;
+        continue;
+      }
+      if (alone == old->blocks.end()) {
+        CHECK(filled->weight[i] == 0.0f);
+        continue;
+      }
+      const std::size_t j = std::size_t(alone->second) + k;
+      CHECK(b == old->source[j] && filled->weight[i] == old->weight[j] &&
+            std::memcmp(&filled->tsdf[i], &old->tsdf[j], sizeof(float)) == 0);
+    }
+  }
+  CHECK(fill > 0);
+  return 0;
+}
+
 // A set whose pictures are not written yet: each camera's colour carries a
 // ready value (YuvImage::ready) on a timeline of its own, A's at 1 and B's
 // at 2, which the host sets 100 ms and 200 ms on. Sent as the live examples
@@ -1198,6 +1322,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(keys_case(gpu, scratch) == 0);
   CHECK(moved_from(gpu) == 0);
   CHECK(unstated_noise(gpu) == 0);
+  CHECK(fillers_case(gpu) == 0);
   CHECK(ready_waits(gpu) == 0);
   // A sphere's grid, and one at twice its voxel size, which the player of a
   // stream begun on the first refuses.

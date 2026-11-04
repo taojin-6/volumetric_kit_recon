@@ -17,7 +17,12 @@
 /// A frame is a depth record's half (`sensor::wire::decode_depth`): its depth
 /// and confidence plane point into the record's payload, which its pixels
 /// hold, so nothing is copied; its cameras, pose, units, range and noise are
-/// the record's; its timestamp is the record's pts and its sequence the
+/// the record's, a pose made in float on its device made rigid again where
+/// float left it off (its homogeneous row within 1e-6 of [0, 0, 0, 1], as
+/// ARKit's own transforms read, made exact; its rotation within 1e-4 of
+/// orthonormal, as the device's map-step removal drifts, the nearest
+/// rotation), which frame prep would refuse as not rigid; its
+/// timestamp is the record's pts and its sequence the
 /// record's seq, which the writer numbers from 0, one up per record. A record
 /// that gives no frame keeps the frame contract (`testing::rgbd_breach` is
 /// empty):
@@ -78,6 +83,7 @@
 /// @warning Not thread-safe: open, start, poll, drain and stop from one
 ///          thread.
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -317,6 +323,10 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
 
   /// @return The live link's counts since @ref listen; all 0 for a file.
   const LinkStats& link_stats() const noexcept;
+
+  /// @return The session's id (grid's `Session::id`): the file's, or the
+  ///         first live session's, which every later connection must match.
+  const std::array<std::uint8_t, 16>& session_id() const noexcept;
 
  private:
   struct State;  // the records' source, its place, the decoder, the join

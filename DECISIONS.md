@@ -1063,6 +1063,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   so a fit repeats bit for bit on NVIDIA and devices pick alike; the finest
   level keeps the nearest pixel, and the largest relative eigenvalue is 1
   exactly, the others at most 1.
+- [**2026-11-04**](#2026-11-04--the-phone-lane-a-phones-frames-tracked-in-the-gap-after-each-set-and-fused-as-fill-in-the-next) —
+  The phone lane in the live runs: one blocking batch in the gap after each
+  set's send (prep and every fit due on `lane_tracking()`), the record due by
+  the next set's predicted time, at most 3 fillers a send, a split at a loss
+  of 100 ms or more, fill in a fixed tint of its tier. Its log and one
+  summary in `examples/common`; the bench waits for a rig model it can read.
 
 ## Decision record
 
@@ -6326,6 +6332,90 @@ Window by window its fits lie within 0.76 mm of the M5 Max's at the
 windows the reference anchored or left Partial (median 0.005 and
 0.02 mm); at the ones it refused they can lie further apart (one refused
 for coverage: 15 and 50 mm from the reference).
+
+### 2026-11-04 — The phone lane: a phone's frames tracked in the gap after each set, and fused as fill in the next.
+
+**Context.** The track tier places a phone's frames against the rig's model
+and the source byte lets them fill only where the rig does not see (both
+2026-11-03). `source.mobile` names a recorded session or a phone that dials
+the lab; `fuse_orbbec` refused it until something ran it.
+
+**Decision.** The rules are `live_mobile.hpp`'s; here, why.
+- *One queue, in the gap* (owner E): each fit is one blocking batch after
+  its set's send, never inside a set's batches, and a send takes at most 3
+  placed frames, so a burst of placements spreads over the sets after it.
+- *Pairing by the phone's own clock, pinned once for a file.* A replay must
+  repeat exactly, so a file's records pair at their own times on an offset
+  the first take pins. A live link's records arrive only after capture, so
+  the freshest one that has come is the best pair for the next set: the
+  first take pins at its newest (what waited in the link while the cameras
+  opened is passed by), and a live take that is fresher moves the pin on.
+  Pinned at the first record alone, a phone that dialled during a 3 s setup
+  was tracked 3 s late for the whole run (the review's probe). The live
+  link is polled on a thread of its own, so no set waits on its 20 ms poll.
+- *Anchored fill only from the rig-only chain* (fill's one generation, D3);
+  a frame no fit placed within the Tracker's hold is dropped, never fused
+  at a guessed pose.
+- *A split at a loss of 100 ms or more* (owner, 2026-11-03: a map step may
+  hide in it), so `Tracker::flush` may now be followed by more frames.
+- *Fill's colour* (owner item L, pending): a fixed tint of its tier; the
+  phone's picture is never read.
+- *A float device's pose made rigid where float left it off.* ARKit's own
+  transforms read up to 3 ulp off 1 in the homogeneous corner (1358 of 0b's
+  3668 frames) and the device's map-step removal drifts the rotation 1e-5 off
+  orthonormal after six steps; frame prep refused both, which would have
+  passed over a third of the phone's frames. `RgbdStreamSensor` makes a pose
+  within 1e-6 (row) and 1e-4 (rotation) rigid and hands anything further on
+  as written, for the prep to refuse. The producer's fix is the device's.
+- *Refused beside FFS depth* (owner E, "for now") and under Classic fusion,
+  before anything opens; nothing else in the lane ties it to the Orbbec rig.
+- *The log and its one summary* (`track_log.hpp`) are CSVs and TUM files, not
+  JSON: recon carries no JSON parser, and one CSV reader reads every file
+  back. The bench (`tools/track_eval`) waits for a rig model it can read; the
+  reference check below ran from a harness that links this log.
+
+**Evidence** (lab RTX 5090, Release; the GPU shared with other sessions'
+jobs at 88-100%, so device times are an upper bound; raw logs in the PR).
+- *The rig unchanged.* take1 (300 sets, 1 cm, Dynamic, max weight 20)
+  through the live set step with the lane compiled in and no phone: every
+  set's grid digest equals main's, 300/300 in three alternated runs each;
+  send 11.0 against 11.0 ms p50, the allocator 949 MB both.
+- *0b's reference.* Each of 0b's torch window fits redone from its own seed:
+  where the reference anchored, the parity settings (its noise curve, 4 mm
+  model sigma, 3 passes, no outlier filter) land 0.82 mm / 0.02 deg from it
+  (median; worst 4.4 mm / 0.13 deg) on the session's own frames, inside the
+  bar of 1 mm / 0.05 deg and 16 mm; the lane's settings 1.8 mm / 0.05 deg
+  (worst 5.9 mm). Point counts agree to 1-2%. On the reference's Partial
+  windows the fits differ by 45 mm (median): 0b restricts each iteration's
+  step once a direction falls under the guard, here only the judge's last
+  projection does (the solve's `TODO:`). A Partial verdict moves its
+  chain's correction, which seeds the windows after it, so the difference
+  may reach anchored fits too; refitting each window from the reference's
+  own seed cannot show that. The lane's rig chain over the whole session,
+  seeded only by the start tag, lies 13.9 mm / 0.32 deg (median; p95
+  41 mm / 1.07 deg) from the start-seeded reference at the frames both
+  hold, and made 23 Partial fits of 123: that gap is not explained yet.
+- *0b replayed through the lane* (the rig's 1482 sets, the phone's 481
+  records from the start tag's registration), five times: the rig chain
+  anchors 47% of the frames (34% in one replay), the fill-assisted one 58%;
+  330 placed (225 Anchored; 165 in that one), 150 dropped; 4.9 M fill
+  voxels beside the rig's 4.5 M, on the walls and partitions the ceiling rig
+  does not see. The replays are not all bit for bit the same: in two of the
+  five, one window fit came out different in its 7th digit from the same
+  grid (its digest), frames and prior, and the earlier of the two (fit 39
+  of 192) moved the rig chain's later decisions. The reduce sums in a fixed
+  tree; the cause is not found yet. The pairing was the same in all five.
+- *Its cost.* On the 5090 at 88-100% load from other jobs, the hop's batch
+  costs 7.9 and 8.5 ms of device time a chain (p50; the casts 5.0 and
+  6.4 ms of it), so a set's send and gap together read 14 ms p50, 27 ms
+  p95, 43 ms p99: 28 of 1472 sets past 40 ms against 1 without the phone.
+  In a replay that found it nearly idle (8% busy at the start; a set's
+  fusion 3.8 against 10.9 ms under load), a chain's fit costs 2.9 ms and
+  the set 4.3 / 13.6 / 17.7 ms (p50 / p95 / p99) against 4.1 / 13.0 /
+  15.6 ms without the phone: 1 set past 40 ms against 2. So the load, not
+  the room, sets it, as on a quiet M5 Max, where 0b's room costs 1.13
+  times the synthetic one (9.31 against 8.26 ms a fit). The allocator grows
+  by 149 MB.
 
 ## Measured lessons
 
