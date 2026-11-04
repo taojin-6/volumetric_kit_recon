@@ -1,17 +1,18 @@
 #version 450
 
 // One iteration's solve, one workgroup: sum the reduce's partials in a fixed
-// tree, take the data H's eigensystem (cyclic Jacobi, on H over its trace),
-// and step the estimate along its kept directions only (the eigen guard:
-// relative eigenvalue at least tau), with the prior term:
-//   M = P (s H + L + damp I) P + (I - P),  M x = -P (s g + L delta),
-// P the kept directions' projector, L the prior's information on the
-// scaled twist, delta the estimate's twist from the prior, s the data's
-// rescale to n_eff points a frame with hits. At the finest level it also
-// keeps the evaluation for the readback: the counts and the eigensystem.
-// Mode 1 evaluates and does not step. A step is taken only with 6 inliers
-// and a quarter of the hits; one longer than max_step (metres or radians)
-// marks the fit diverged and is not taken.
+// tree, take the data H's eigensystem (parallel cyclic Jacobi on H over its
+// trace, three disjoint rotations a step), and step the estimate along its
+// kept directions only (the eigen guard: relative eigenvalue at least tau),
+// with the prior term. In the kept eigenvectors U:
+//   (U^T (s H + L + damp I) U) y = -U^T (s g + L delta),  x = U y,
+// L the prior's information on the scaled twist, delta the estimate's twist
+// from the prior, s the data's rescale to n_eff points a frame with hits. At
+// the finest level it also keeps the evaluation for the readback: the counts
+// and the eigensystem. Mode 1 evaluates and does not step. A step is taken
+// only with 6 inliers and a quarter of the hits; one longer than max_step
+// (metres or radians) marks the fit diverged and is not taken. Every branch
+// that holds a barrier is uniform: it reads push constants or shared memory.
 
 #extension GL_GOOGLE_include_directive : require
 #include "track_common.glsl"
@@ -41,67 +42,31 @@ const uint kLocal = 64u;
 
 shared float sh[kPartial * kLocal];
 shared uint view_hits[32];
+shared float sa[36];     // H / trace, rotated toward diagonal
+shared float svec[36];   // its eigenvectors, as columns (row-major)
+shared float scs[6];     // a step's three rotations: c, s
+shared uint sflag;       // 1: Jacobi converged
+shared uint sstep;       // 1: this iteration steps
+shared float slam[6];    // eigenvalues of H, ascending
+shared float sdir[36];   // their unit vectors: direction i is 6i..6i+5
+shared float sb[36];     // the reduced system, in the eigenbasis
+shared float sc[6];      // its right-hand side
+shared float sprior[4];  // s, damp, L_v, L_w
+shared float sdelta[6];  // the estimate's scaled twist from the prior
 
-// The symmetric a's eigenvalues (its diagonal, after) and eigenvectors (the
-// columns of vec, row-major), by cyclic Jacobi.
-void jacobi(inout float a[36], out float vec[36]) {
-  for (uint i = 0u; i < 36u; ++i) {
-    vec[i] = (i % 7u) == 0u ? 1.0 : 0.0;
-  }
-  for (uint sweep = 0u; sweep < 16u; ++sweep) {
-    float off = 0.0;
-    for (uint p = 0u; p < 5u; ++p) {
-      for (uint q = p + 1u; q < 6u; ++q) {
-        off += a[p * 6u + q] * a[p * 6u + q];
-      }
-    }
-    if (off < 1e-24) {
-      break;
-    }
-    for (uint p = 0u; p < 5u; ++p) {
-      for (uint q = p + 1u; q < 6u; ++q) {
-        float apq = a[p * 6u + q];
-        if (abs(apq) < 1e-30) {
-          continue;
-        }
-        float theta = (a[q * 7u] - a[p * 7u]) / (2.0 * apq);
-        float t;
-        if (abs(theta) > 1e15) {
-          t = 0.5 / theta;
-        } else {
-          t = (theta >= 0.0 ? 1.0 : -1.0) /
-              (abs(theta) + sqrt(theta * theta + 1.0));
-        }
-        float c = 1.0 / sqrt(t * t + 1.0);
-        float s = t * c;
-        for (uint k = 0u; k < 6u; ++k) {
-          float akp = a[k * 6u + p];
-          float akq = a[k * 6u + q];
-          a[k * 6u + p] = c * akp - s * akq;
-          a[k * 6u + q] = s * akp + c * akq;
-        }
-        for (uint k = 0u; k < 6u; ++k) {
-          float apk = a[p * 6u + k];
-          float aqk = a[q * 6u + k];
-          a[p * 6u + k] = c * apk - s * aqk;
-          a[q * 6u + k] = s * apk + c * aqk;
-        }
-        for (uint k = 0u; k < 6u; ++k) {
-          float vkp = vec[k * 6u + p];
-          float vkq = vec[k * 6u + q];
-          vec[k * 6u + p] = c * vkp - s * vkq;
-          vec[k * 6u + q] = s * vkp + c * vkq;
-        }
-      }
-    }
-  }
-}
+// Round r of a 6-player round robin: pair m is (kPairs[r][m][0], [1]).
+const uint kPairs[30] = uint[30](0u, 5u, 1u, 4u, 2u, 3u,  //
+                                 0u, 4u, 5u, 3u, 1u, 2u,  //
+                                 0u, 3u, 4u, 2u, 5u, 1u,  //
+                                 0u, 2u, 3u, 1u, 4u, 5u,  //
+                                 0u, 1u, 2u, 5u, 3u, 4u);
 
 void main() {
   uint lid = gl_LocalInvocationID.x;
   if (st.stop != 0u || st.diverged != 0u) {
-    return;  // uniform
+    return;  // uniform: the state is the dispatch's
   }
+  // The partials, in a fixed tree; each view's hits.
   float acc[kPartial];
   for (uint i = 0u; i < kPartial; ++i) {
     acc[i] = 0.0;
@@ -130,167 +95,228 @@ void main() {
     }
     barrier();
   }
-  if (lid != 0u) {
-    return;
+  // H over its trace into sa; the eigenvectors start as I.
+  float trace = sh[(kH + 0u) * kLocal] + sh[(kH + 6u) * kLocal] +
+                sh[(kH + 11u) * kLocal] + sh[(kH + 15u) * kLocal] +
+                sh[(kH + 18u) * kLocal] + sh[(kH + 20u) * kLocal];
+  bool usable = trace > 0.0 && !isinf(trace) && !isnan(trace);
+  if (lid < 36u) {
+    uint r = lid / 6u;
+    uint c = lid % 6u;
+    uint a = min(r, c);
+    uint b = max(r, c);
+    // Row a of the upper triangle starts at a * 6 - a * (a - 1) / 2.
+    uint k = a * 6u - (a * (a - 1u)) / 2u + (b - a);
+    if (a == 0u) k = b;
+    sa[lid] = usable ? sh[(kH + k) * kLocal] / trace : 0.0;
+    svec[lid] = r == c ? 1.0 : 0.0;
   }
-
-  float v[kPartial];
-  for (uint i = 0u; i < kPartial; ++i) {
-    v[i] = sh[i * kLocal];
-  }
-  float h[36];
-  uint k = 0u;
-  for (uint a = 0u; a < 6u; ++a) {
-    for (uint b = a; b < 6u; ++b) {
-      h[a * 6u + b] = v[kH + k];
-      h[b * 6u + a] = v[kH + k];
-      ++k;
+  barrier();
+  if (usable) {
+    for (uint sweep = 0u; sweep < 10u; ++sweep) {
+      if (lid == 0u) {
+        float off = 0.0;
+        for (uint p = 0u; p < 5u; ++p) {
+          for (uint q = p + 1u; q < 6u; ++q) {
+            off += sa[p * 6u + q] * sa[p * 6u + q];
+          }
+        }
+        // a's entries are at most 1: off-diagonals under 1e-6 leave every
+        // eigenvalue within 1e-6 of a's, far below tau.
+        sflag = off < 1e-12 ? 1u : 0u;
+      }
+      barrier();
+      if (sflag != 0u) {
+        break;  // uniform: shared
+      }
+      for (uint round = 0u; round < 5u; ++round) {
+        if (lid < 3u) {
+          uint p = kPairs[round * 6u + 2u * lid];
+          uint q = kPairs[round * 6u + 2u * lid + 1u];
+          float apq = sa[p * 6u + q];
+          float c = 1.0;
+          float s = 0.0;
+          if (abs(apq) >= 1e-9) {
+            float theta = (sa[q * 7u] - sa[p * 7u]) / (2.0 * apq);
+            float t = abs(theta) > 1e15
+                          ? 0.5 / theta
+                          : (theta >= 0.0 ? 1.0 : -1.0) /
+                                (abs(theta) + sqrt(theta * theta + 1.0));
+            c = 1.0 / sqrt(t * t + 1.0);
+            s = t * c;
+          }
+          scs[2u * lid] = c;
+          scs[2u * lid + 1u] = s;
+        }
+        barrier();
+        uint m = lid / 6u;
+        uint k = lid % 6u;
+        uint p = 0u;
+        uint q = 0u;
+        float c = 1.0;
+        float s = 0.0;
+        if (lid < 18u) {
+          p = kPairs[round * 6u + 2u * m];
+          q = kPairs[round * 6u + 2u * m + 1u];
+          c = scs[2u * m];
+          s = scs[2u * m + 1u];
+          // A J: columns p and q.
+          float akp = sa[k * 6u + p];
+          float akq = sa[k * 6u + q];
+          sa[k * 6u + p] = c * akp - s * akq;
+          sa[k * 6u + q] = s * akp + c * akq;
+          // V J: the eigenvectors' columns.
+          float vkp = svec[k * 6u + p];
+          float vkq = svec[k * 6u + q];
+          svec[k * 6u + p] = c * vkp - s * vkq;
+          svec[k * 6u + q] = s * vkp + c * vkq;
+        }
+        barrier();
+        if (lid < 18u) {
+          // J^T (A J): rows p and q.
+          float apk = sa[p * 6u + k];
+          float aqk = sa[q * 6u + k];
+          sa[p * 6u + k] = c * apk - s * aqk;
+          sa[q * 6u + k] = s * apk + c * aqk;
+        }
+        barrier();
+      }
     }
   }
-  float trace = h[0] + h[7] + h[14] + h[21] + h[28] + h[35];
-  float inliers = v[kInliers];
-  float hits = v[kHits];
-
-  // The eigensystem, ascending, each vector's largest component positive.
-  float lam[6];
-  float dir[36];
-  float lambda_max = 0.0;
-  bool solved = trace > 0.0 && !isinf(trace) && !isnan(trace);
-  if (solved) {
-    float a[36];
-    for (uint i = 0u; i < 36u; ++i) {
-      a[i] = h[i] / trace;
-    }
-    float vec[36];
-    jacobi(a, vec);
+  // Thread 0: the eigensystem, ascending, each vector's largest component
+  // positive; the counts; the evaluation's readback; whether to step.
+  if (lid == 0u) {
+    float inliers = sh[kInliers * kLocal];
+    float hits = sh[kHits * kLocal];
+    float lam[6];
     uint order[6] = uint[6](0u, 1u, 2u, 3u, 4u, 5u);
     for (uint i = 0u; i < 6u; ++i) {
+      lam[i] = sa[i * 7u];
+    }
+    for (uint i = 0u; i < 6u; ++i) {
       for (uint j = i + 1u; j < 6u; ++j) {
-        if (a[order[j] * 7u] < a[order[i] * 7u]) {
+        if (lam[order[j]] < lam[order[i]]) {
           uint t = order[i];
           order[i] = order[j];
           order[j] = t;
         }
       }
     }
+    bool solved = usable && lam[order[5]] > 0.0;
+    float top = solved ? lam[order[5]] : 1.0;
     for (uint i = 0u; i < 6u; ++i) {
       uint c = order[i];
-      lam[i] = a[c * 7u];
+      slam[i] = solved ? lam[c] * trace : 0.0;
       float big = 0.0;
       for (uint r = 0u; r < 6u; ++r) {
-        float x = vec[r * 6u + c];
+        float x = svec[r * 6u + c];
         if (abs(x) > abs(big)) big = x;
       }
       float flip = big < 0.0 ? -1.0 : 1.0;
       for (uint r = 0u; r < 6u; ++r) {
-        dir[i * 6u + r] = flip * vec[r * 6u + c];
+        sdir[i * 6u + r] = solved ? flip * svec[r * 6u + c]
+                                  : (r == i ? 1.0 : 0.0);
       }
     }
-    lambda_max = lam[5] * trace;
-    solved = lam[5] > 0.0;
-  }
-  if (pc.finest != 0u) {
-    st.attempts = v[kAttempts];
-    st.hits = hits;
-    st.inliers = inliers;
-    st.in_front = v[kInFront];
-    st.behind = v[kBehind];
-    st.raw2 = v[kRaw2];
-    st.evaluated = 1u;
-    uint held = 0u;
-    if (solved) {
-      st.lambda_max = lambda_max;
+    if (pc.finest != 0u) {
+      st.attempts = sh[kAttempts * kLocal];
+      st.hits = hits;
+      st.inliers = inliers;
+      st.in_front = sh[kInFront * kLocal];
+      st.behind = sh[kBehind * kLocal];
+      st.raw2 = sh[kRaw2 * kLocal];
+      st.evaluated = 1u;
+      uint held = solved ? 0u : 0x3fu;
+      st.lambda_max = solved ? top * trace : 0.0;
       for (uint i = 0u; i < 6u; ++i) {
-        float rel = max(lam[i] / lam[5], 0.0);
+        float rel = solved ? max(lam[order[i]] / top, 0.0) : 0.0;
         st.rel[i] = rel;
-        if (rel < pc.tau) held |= 1u << i;
+        if (solved && rel < pc.tau) held |= 1u << i;
       }
       for (uint i = 0u; i < 36u; ++i) {
-        st.dirs[i] = dir[i];
+        st.dirs[i] = sdir[i];
       }
-    } else {
-      st.lambda_max = 0.0;
-      for (uint i = 0u; i < 6u; ++i) {
-        st.rel[i] = 0.0;
-      }
-      for (uint i = 0u; i < 36u; ++i) {
-        st.dirs[i] = (i % 7u) == 0u ? 1.0 : 0.0;
-      }
-      held = 0x3fu;
+      st.held = held;
     }
-    st.held = held;
+    bool step = pc.mode == 0u && solved &&
+                inliers >= float(pc.min_inliers) && hits > 0.0 &&
+                inliers / hits >= pc.min_ratio;
+    sstep = step ? 1u : 0u;
+    // The prior: the data rescaled to n_eff points a frame with hits.
+    float s = 1.0;
+    float lv = 0.0;
+    float lw = 0.0;
+    vec3 dv = vec3(0.0);
+    vec3 dw = vec3(0.0);
+    if (step && (st.info.x > 0.0 || st.info.y > 0.0)) {
+      uint frames_hit = 0u;
+      for (uint i = 0u; i < pc.views; ++i) {
+        frames_hit += view_hits[i];
+      }
+      s = min(1.0, st.n_eff * float(frames_hit) / inliers);
+      lv = st.info.x * st.scale * st.scale;
+      lw = st.info.y;
+      vr_track_between(st.prior, st.correction, st.origin, dv, dw);
+      dv /= st.scale;
+    }
+    sprior[0] = s;
+    sprior[1] = pc.damping * s * trace / 6.0;
+    sprior[2] = lv;
+    sprior[3] = lw;
+    sdelta[0] = dv.x;
+    sdelta[1] = dv.y;
+    sdelta[2] = dv.z;
+    sdelta[3] = dw.x;
+    sdelta[4] = dw.y;
+    sdelta[5] = dw.z;
   }
-  if (pc.mode != 0u || !solved || inliers < float(pc.min_inliers) ||
-      !(hits > 0.0) || inliers / hits < pc.min_ratio) {
+  barrier();
+  if (sstep == 0u) {
+    return;  // uniform: shared
+  }
+  // The reduced system in the eigenbasis: B_ij = s lam_i delta_ij + damp
+  // delta_ij + d_i^T L d_j; c_i = -d_i^T (s g + L delta).
+  float s = sprior[0];
+  float damp = sprior[1];
+  if (lid < 36u) {
+    uint i = lid / 6u;
+    uint j = lid % 6u;
+    float x = i == j ? s * slam[i] + damp : 0.0;
+    for (uint r = 0u; r < 6u; ++r) {
+      float l = r < 3u ? sprior[2] : sprior[3];
+      x += sdir[i * 6u + r] * l * sdir[j * 6u + r];
+    }
+    sb[lid] = x;
+  } else if (lid < 42u) {
+    uint i = lid - 36u;
+    float x = 0.0;
+    for (uint r = 0u; r < 6u; ++r) {
+      float l = r < 3u ? sprior[2] : sprior[3];
+      x += sdir[i * 6u + r] * (s * sh[(kG + r) * kLocal] + l * sdelta[r]);
+    }
+    sc[i] = -x;
+  }
+  barrier();
+  if (lid != 0u) {
     return;
   }
-
-  // The prior: the data rescaled to n_eff points a frame with hits.
-  float s = 1.0;
-  float lv = 0.0;
-  float lw = 0.0;
-  float delta[6] = float[6](0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
-  if (st.info.x > 0.0 || st.info.y > 0.0) {
-    uint frames_hit = 0u;
-    for (uint i = 0u; i < pc.views; ++i) {
-      frames_hit += view_hits[i];
-    }
-    s = min(1.0, st.n_eff * float(frames_hit) / inliers);
-    lv = st.info.x * st.scale * st.scale;
-    lw = st.info.y;
-    vec3 dv;
-    vec3 dw;
-    vr_track_between(st.prior, st.correction, st.origin, dv, dw);
-    delta = float[6](dv.x / st.scale, dv.y / st.scale, dv.z / st.scale, dw.x,
-                     dw.y, dw.z);
-  }
-  float damp = pc.damping * s * trace / 6.0;
-  float lprior[6] = float[6](lv, lv, lv, lw, lw, lw);
-  // The kept directions' projector.
-  float proj[36];
-  for (uint i = 0u; i < 36u; ++i) {
-    proj[i] = 0.0;
-  }
+  // Cholesky of the kept block (relative eigenvalue at least tau), in place.
+  float top = slam[5];
+  uint kept[6];
+  uint n = 0u;
   for (uint i = 0u; i < 6u; ++i) {
-    if (!(lam[i] / lam[5] >= pc.tau)) continue;
-    for (uint r = 0u; r < 6u; ++r) {
-      for (uint c = 0u; c < 6u; ++c) {
-        proj[r * 6u + c] += dir[i * 6u + r] * dir[i * 6u + c];
-      }
-    }
-  }
-  float am[36];
-  float b[6];
-  for (uint r = 0u; r < 6u; ++r) {
-    for (uint c = 0u; c < 6u; ++c) {
-      am[r * 6u + c] = s * h[r * 6u + c];
-    }
-    am[r * 7u] += lprior[r] + damp;
-    b[r] = -(s * v[kG + r] + lprior[r] * delta[r]);
-  }
-  // M = P A P + (I - P); rhs = P b.
-  float pa[36];
-  for (uint r = 0u; r < 6u; ++r) {
-    for (uint c = 0u; c < 6u; ++c) {
-      float x = 0.0;
-      for (uint j = 0u; j < 6u; ++j) x += proj[r * 6u + j] * am[j * 6u + c];
-      pa[r * 6u + c] = x;
+    if (slam[i] >= pc.tau * top) {
+      kept[n] = i;
+      ++n;
     }
   }
   float m[36];
-  float rhs[6];
-  for (uint r = 0u; r < 6u; ++r) {
-    for (uint c = 0u; c < 6u; ++c) {
-      float x = 0.0;
-      for (uint j = 0u; j < 6u; ++j) x += pa[r * 6u + j] * proj[j * 6u + c];
-      m[r * 6u + c] = x - proj[r * 6u + c] + (r == c ? 1.0 : 0.0);
+  for (uint a = 0u; a < n; ++a) {
+    for (uint b = 0u; b < n; ++b) {
+      m[a * 6u + b] = sb[kept[a] * 6u + kept[b]];
     }
-    float y = 0.0;
-    for (uint j = 0u; j < 6u; ++j) y += proj[r * 6u + j] * b[j];
-    rhs[r] = y;
   }
-  // Cholesky M = L L^T, in place, lower.
-  for (uint j = 0u; j < 6u; ++j) {
+  for (uint j = 0u; j < n; ++j) {
     float d = m[j * 7u];
     for (uint q = 0u; q < j; ++q) d -= m[j * 6u + q] * m[j * 6u + q];
     if (!(d > 0.0)) {
@@ -298,23 +324,29 @@ void main() {
     }
     float ljj = sqrt(d);
     m[j * 7u] = ljj;
-    for (uint i = j + 1u; i < 6u; ++i) {
+    for (uint i = j + 1u; i < n; ++i) {
       float t = m[i * 6u + j];
       for (uint q = 0u; q < j; ++q) t -= m[i * 6u + q] * m[j * 6u + q];
       m[i * 6u + j] = t / ljj;
     }
   }
   float fwd[6];
-  for (uint i = 0u; i < 6u; ++i) {
-    float t = rhs[i];
+  for (uint i = 0u; i < n; ++i) {
+    float t = sc[kept[i]];
     for (uint q = 0u; q < i; ++q) t -= m[i * 6u + q] * fwd[q];
     fwd[i] = t / m[i * 7u];
   }
-  float step[6];
-  for (int i = 5; i >= 0; --i) {
+  float y[6];
+  for (int i = int(n) - 1; i >= 0; --i) {
     float t = fwd[i];
-    for (int q = i + 1; q < 6; ++q) t -= m[q * 6 + i] * step[q];
-    step[i] = t / m[i * 7];
+    for (int q = i + 1; q < int(n); ++q) t -= m[q * 6 + i] * y[q];
+    y[i] = t / m[i * 7];
+  }
+  float step[6] = float[6](0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+  for (uint a = 0u; a < n; ++a) {
+    for (uint r = 0u; r < 6u; ++r) {
+      step[r] += y[a] * sdir[kept[a] * 6u + r];
+    }
   }
   vec3 dv = vec3(step[0], step[1], step[2]) * st.scale;
   vec3 dw = vec3(step[3], step[4], step[5]);
