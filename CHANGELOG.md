@@ -163,6 +163,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `tests`: **two tests within the test budget, every planted bug still
+  caught.** `recon_tsdf_rim_distance` no longer runs its three-camera
+  moving sphere, 87% of the test's time under ASan: each bug planted in the
+  outline rules that it caught fails another test too, rule 2's
+  `recon_sender_set_sender` (DECISIONS.md, 2026-10-29, keeps its figures
+  as measured). `recon_example_link_rgbd_stream_color` holds the GPU's
+  primary CUDA context for its cases on NVIDIA, as sensor's decoder tests
+  do, so no decoder makes it again.
+
 - build: **recon pins sensor 0.37.0** (sensor #42's merge, `c4038bb`; was
   0.29.0), and CI takes its actions at the new pin. recon's code builds and
   passes unchanged on it. The core stays at 0.43.0, above the 0.41.0 sensor

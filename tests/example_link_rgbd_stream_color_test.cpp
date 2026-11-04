@@ -8,7 +8,8 @@
 // 8 x 2 patches that shift one a frame, so a picture's luma names its frame),
 // each depth record pattern depth carrying its frame's index. The pictures
 // decode on this machine's hardware (VideoToolbox, NVDEC) onto the device,
-// and are read back to the host.
+// and are read back to the host. On NVIDIA the test holds the GPU's primary
+// CUDA context for its cases, so no decoder makes it again.
 // - Every frame goes out with its own picture: its luma names its depth's
 //   index, its colour camera and exposure are its colour record's, and
 //   info() names the colour camera. rgbd_breach is empty, and a restart
@@ -72,6 +73,9 @@
 #include "volumetric_kit/sensor/prep/picture_readback.hpp"
 #include "volumetric_kit/sensor/testing/hevc_clip.hpp"
 #include "volumetric_kit/sensor/video/hevc_decoder.hpp"
+#if !defined(__APPLE__)
+#include "volumetric_kit/sensor/video/cuda_interop.hpp"
+#endif
 #endif
 
 namespace {
@@ -896,6 +900,19 @@ int test_open_refusals(const Gpu& gpu) {
 }
 
 int gpu_main(Gpu& gpu) {
+#if !defined(__APPLE__)
+  // The GPU's primary CUDA context, held for the run, the probe's decoder
+  // included, as sensor's decoder tests hold it: each decoder retains it,
+  // and one let go by its last holder is made again by the next, which took
+  // most of the test's time. Where CUDA does not reach the device, the
+  // probe below says whether that skips or fails.
+  vkc::Result<std::unique_ptr<sensor::CudaContext>> held =
+      sensor::CudaContext::open(gpu.device);
+  if (!held.ok() && held.status().domain() != Code::Unsupported) {
+    std::fprintf(stderr, "FAIL: %s\n", held.status().message().c_str());
+    return 1;
+  }
+#endif
   {
     sensor::HevcDecoder::Options options;
     options.device = &gpu.device;
