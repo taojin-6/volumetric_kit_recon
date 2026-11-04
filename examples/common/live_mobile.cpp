@@ -227,7 +227,8 @@ struct MobileLane::State {
   std::deque<sender::Filler> queue;
   // The records taken from the phone, oldest first, not yet due.
   std::deque<sensor::RgbdFrame> held;
-  // The phone's time less the rig's, pinned by the first record taken.
+  // The phone's time less the rig's: pinned by the first take's newest
+  // record, moved on by a live take's (take_records).
   std::optional<std::int64_t> offset;
   // The last record taken, for the loss test.
   std::optional<std::uint64_t> last_seq;
@@ -264,12 +265,25 @@ struct MobileLane::State {
     return {};
   }
 
-  // The records the phone holds, taken in order; a loss is noted for its
-  // split. An error the phone returns is counted, and the lane goes on.
-  bool take_records() {
+  // The records the phone holds, taken in order for the set at `next_set`; a
+  // loss is noted for its split. An error the phone returns is counted, and
+  // the lane goes on. The first take pins the offset at its newest record,
+  // so what waited in a live link while the cameras opened is passed by. A
+  // live record (one with an arrival time) is due once it has come, so a
+  // take whose newest is fresher than the offset says moves it on, never
+  // back: a backlog that comes over several gaps does not leave the lane
+  // behind. A recording's records are there whenever read, so only its
+  // first take pins, and a replay pairs exactly.
+  bool take_records(std::uint64_t next_set) {
     std::vector<sensor::RgbdFrame> got;
     const vkc::Status st = phone->drain(&got);
     if (!st.ok() && counts.errors++ == 0) first_error = st.message();
+    if (!got.empty()) {
+      const sensor::RgbdFrame& newest = got.back();
+      const std::int64_t pin =
+          std::int64_t(newest.timestamp_ns) - std::int64_t(next_set);
+      if (!offset || (newest.arrival_ns != 0 && pin > *offset)) offset = pin;
+    }
     for (sensor::RgbdFrame& f : got) {
       ++counts.polled;
       if (last_seq && f.sequence > *last_seq + 1 &&
@@ -288,11 +302,7 @@ struct MobileLane::State {
   std::optional<sensor::RgbdFrame> pair(std::uint64_t next_set) {
     std::optional<sensor::RgbdFrame> due;
     for (;;) {
-      if (held.empty() && !take_records()) break;
-      if (!offset) {
-        offset =
-            std::int64_t(held.front().timestamp_ns) - std::int64_t(next_set);
-      }
+      if (held.empty() && !take_records(next_set)) break;
       if (std::int64_t(held.front().timestamp_ns) >
           std::int64_t(next_set) + *offset) {
         break;
@@ -440,7 +450,8 @@ vkc::Result<std::vector<sender::Filler>> MobileLane::next(
   std::vector<sender::Filler> out;
   if (!s.phone || s.closed) return out;
   if (!s.started) {
-    // At the first gap, so nothing sent while the cameras opened waits.
+    // At the first gap: what the link held while the cameras opened comes
+    // in the first takes, passed by but for each take's newest.
     VKC_TRY(s.phone->set_queue_depth(kPhoneQueue));
     VKC_TRY(s.phone->start());
     s.started = true;

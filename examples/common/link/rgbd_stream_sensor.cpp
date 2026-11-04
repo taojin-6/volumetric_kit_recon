@@ -78,10 +78,6 @@ void exact_rigid(sensor::camera::Mat4d& m) noexcept {
         std::fabs(m[3][3] - 1.0) <= kFloatRowRounding)) {
     return;
   }
-  m[0][3] = 0.0;
-  m[1][3] = 0.0;
-  m[2][3] = 0.0;
-  m[3][3] = 1.0;
   glm::dmat3 r(m);
   const glm::dmat3 gram = glm::transpose(r) * r;
   double drift = 0.0;
@@ -90,8 +86,13 @@ void exact_rigid(sensor::camera::Mat4d& m) noexcept {
       drift = std::max(drift, std::fabs(gram[c][k] - (c == k ? 1.0 : 0.0)));
     }
   }
+  if (!(drift <= kFloatRotationDrift)) return;  // further off: as written
+  m[0][3] = 0.0;
+  m[1][3] = 0.0;
+  m[2][3] = 0.0;
+  m[3][3] = 1.0;
   // Orthonormal to double's rounding already (a calibration's): as written.
-  if (!(drift <= kFloatRotationDrift) || drift <= 1e-12) return;
+  if (drift <= 1e-12) return;
   // The polar factor by Newton's iteration, which squares the drift a step.
   for (int i = 0; i < 4; ++i) r = 0.5 * (r + glm::inverse(glm::transpose(r)));
   for (int c = 0; c < 3; ++c) {

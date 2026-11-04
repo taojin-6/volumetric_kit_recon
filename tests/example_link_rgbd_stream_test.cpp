@@ -908,6 +908,7 @@ int test_rounded_pose_row() {
   // A rotation 1e-5 off orthonormal (one axis stretched), and one 1e-3 off.
   for (int k = 0; k < 3; ++k) take.frames[4].color_to_world[0][k] *= 1.00001;
   for (int k = 0; k < 3; ++k) take.frames[5].color_to_world[0][k] *= 1.001;
+  take.frames[5].color_to_world[3][3] = double(1.00000024f);  // its row too
   CHECK(write_session(path, {&take}).ok());
   vkc::Result<std::unique_ptr<RgbdStreamSensor>> opened =
       RgbdStreamSensor::open_file(path, {});
@@ -937,8 +938,8 @@ int test_rounded_pose_row() {
   }
   CHECK(drifted[3] == take.frames[4].color_to_world[3]);
   CHECK(!camera::check_rigid(take.frames[4].color_to_world).ok());
-  const camera::Mat4d& far = read.value()[5].color_to_world;
-  CHECK(far[0] == take.frames[5].color_to_world[0]);
+  // One further off comes back as written, its rounded row included.
+  CHECK(read.value()[5].color_to_world == take.frames[5].color_to_world);
   return 0;
 }
 

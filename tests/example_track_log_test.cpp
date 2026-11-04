@@ -11,7 +11,7 @@
 //   jitter between consecutive Anchored frames, fits by verdict, the fill by
 //   placement and the drops, and arkit_raw rebuilt from a device step, its
 //   poses written beside the table.
-// - A window recovers what single frames leave held (real fitters, on the
+// - A window recovers an offset single frames cannot (real fitters, on the
 //   device): frames of a room whose model holds only one corner -- a floor and
 //   two walls -- each frame seeing a wall and the floor with a third of its
 //   view on the model, registered 5 cm / 1 deg off. The `window` driver
@@ -378,7 +378,7 @@ int summary_by_hand(const std::filesystem::path& dir) {
   return 0;
 }
 
-// --- 3. A window recovers what single frames leave held ---------------------
+// --- 3. A window recovers an offset single frames cannot --------------------
 
 int window_recovers(vkc::test::GpuContext& gpu) {
   // The room, 6 x 6 x 3 m; the model holds its corner alone: the floor and

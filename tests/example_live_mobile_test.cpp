@@ -22,7 +22,9 @@
 //   both sides, a frame alone between two losses included. An error the
 //   phone returns is counted and the lane goes on.
 // - Pairing: one record a set at 25 Hz sets, the older of two passed by at
-//   5 Hz sets.
+//   5 Hz sets. A live link's backlog from the cameras' setup, taken at once
+//   or over several gaps, is passed by but for each take's newest, and the
+//   records after it are tracked in the first gap after they came.
 // - check_mobile: no phone, or a phone under Dynamic, runs; Classic and FFS
 //   depth are refused. The empty lane does nothing.
 // - polled_in_background: a poll never waits on the inner sensor's; it keeps
@@ -180,6 +182,48 @@ class FakePhone final : public sensor::IRgbdSensor {
   sensor::SensorInfo info_;
 };
 
+// How long after its capture a live phone's record comes.
+constexpr std::uint64_t kLatency = 50 * kMs;
+
+// The script's records as a live link hands them out: each comes kLatency
+// after its capture, and a drain takes those come by `*now`, oldest first,
+// at most `per_drain` (the rest wait in the link), each stamped with its
+// arrival.
+class LivePhone final : public sensor::IRgbdSensor {
+ public:
+  LivePhone(const std::vector<PhoneFrame>& script, const std::uint64_t* now,
+            std::size_t per_drain)
+      : inner_(script), script_(script), now_(now), per_drain_(per_drain) {}
+  const sensor::SensorInfo& info() const noexcept override {
+    return inner_.info();
+  }
+  vkc::Status set_queue_depth(std::size_t) override { return {}; }
+  vkc::Status start() override { return inner_.start(); }
+  void stop() noexcept override { inner_.stop(); }
+  vkc::Result<std::optional<sensor::RgbdFrame>> poll() override {
+    return std::optional<sensor::RgbdFrame>{};
+  }
+  vkc::Status drain(std::vector<sensor::RgbdFrame>* out) override {
+    for (std::size_t n = 0; n < per_drain_ && next_ < script_.size() &&
+                            script_[next_].pts + kLatency <= *now_;
+         ++n, ++next_) {
+      VKC_ASSIGN(std::optional<sensor::RgbdFrame> f, inner_.poll());
+      f->arrival_ns = *now_;
+      out->push_back(std::move(*f));
+    }
+    return {};
+  }
+  bool exhausted() const noexcept override { return inner_.exhausted(); }
+  sensor::SensorStats stats() const noexcept override { return inner_.stats(); }
+
+ private:
+  FakePhone inner_;
+  std::vector<PhoneFrame> script_;
+  const std::uint64_t* now_;
+  std::size_t per_drain_;
+  std::size_t next_ = 0;
+};
+
 // --- Scripts ----------------------------------------------------------------
 
 track::TrackFit anchored_fit(const Mat4f& correction) {
@@ -222,7 +266,9 @@ struct Lane {
   FakePhone* phone = nullptr;  // the lane's
 };
 
-vkc::Result<Lane> make_lane(const Env& env, std::vector<PhoneFrame> phone,
+// The lane on `phone`, tracked by the two scripts.
+vkc::Result<Lane> make_lane(const Env& env,
+                            std::unique_ptr<sensor::IRgbdSensor> phone,
                             ScriptedFitter::Script rig,
                             ScriptedFitter::Script track_script,
                             const std::string& dir = {}) {
@@ -240,11 +286,22 @@ vkc::Result<Lane> make_lane(const Env& env, std::vector<PhoneFrame> phone,
       track::Tracker::create(vr_example::lane_tracking(), std::move(fitters)));
   VKC_ASSIGN(std::unique_ptr<vr_example::TrackLog> log,
              vr_example::TrackLog::open(dir, *tracker, {}));
-  auto fake = std::make_unique<FakePhone>(std::move(phone));
-  out.phone = fake.get();
   VKC_ASSIGN(out.lane, MobileLane::create(env.gpu.device, env.gpu.allocator,
-                                          std::move(fake), std::move(tracker),
+                                          std::move(phone), std::move(tracker),
                                           std::move(log)));
+  return out;
+}
+
+// The lane on a fake phone of `script`.
+vkc::Result<Lane> make_lane(const Env& env, std::vector<PhoneFrame> script,
+                            ScriptedFitter::Script rig,
+                            ScriptedFitter::Script track_script,
+                            const std::string& dir = {}) {
+  auto fake = std::make_unique<FakePhone>(std::move(script));
+  FakePhone* phone = fake.get();
+  VKC_ASSIGN(Lane out, make_lane(env, std::move(fake), std::move(rig),
+                                 std::move(track_script), dir));
+  out.phone = phone;
   return out;
 }
 
@@ -503,14 +560,23 @@ int test_split(const Env& env) {
   return 0;
 }
 
-// Pairing: one record a 25 Hz set; at 5 Hz the older of two is passed by.
+// Pairing: one record a 25 Hz set, at the phone's own pace (the first, at
+// 1.0 s, pairs with the set at 1.04 s, so the last, at 2.9 s, with the one
+// at 2.94 s); at 5 Hz the older of two is passed by.
 int test_pairing(const Env& env) {
   auto fast =
       make_lane(env, ten_hz(20),
                 anchors_when([](std::uint64_t) { return true; }, Mat4f(1.0f)),
                 anchors_when(never, Mat4f(1.0f)));
-  CHECK(fast.ok() && run(env, *fast->lane, 60).ok());
-  CHECK(fast->lane->counts().paired == 20 && fast->lane->counts().skipped == 0);
+  CHECK(fast.ok());
+  for (std::size_t i = 0; i < 60; ++i) {
+    const std::uint64_t next_set = kS + (i + 1) * 40 * kMs;
+    CHECK(fast->lane->next(env.grid, next_set).ok());
+    // Record k is due by the set at 1.04 s + k * 0.1 s.
+    CHECK(fast->lane->counts().paired ==
+          std::min<std::size_t>(20, 2 * i / 5 + 1));
+  }
+  CHECK(fast->lane->counts().skipped == 0);
   CHECK(fast->lane->close().ok());
   auto slow =
       make_lane(env, ten_hz(20),
@@ -521,6 +587,51 @@ int test_pairing(const Env& env) {
   // by), the last alone.
   CHECK(slow->lane->counts().paired == 11 && slow->lane->counts().skipped == 9);
   CHECK(slow->lane->close().ok());
+  return 0;
+}
+
+// A live link's backlog: records at 10 Hz from 1 s, each coming 50 ms after
+// capture, the lane's first gap at 1 s (none) or at 4 s (3 s of setup), the
+// backlog taken at once or 8 records a gap. Every record is tracked or
+// passed by, none split; of the backlog only a take's newest is tracked; and
+// every record captured from half a second after the first gap on is
+// tracked in the first gap after it came.
+int test_live_backlog(const Env& env) {
+  struct Case {
+    std::uint64_t first_gap;
+    std::size_t per_drain;
+  };
+  for (const Case c : {Case{kS, 1000}, Case{4 * kS, 1000}, Case{4 * kS, 8}}) {
+    std::uint64_t now = 0;
+    const std::vector<PhoneFrame> script = ten_hz(60);  // the last at 6.9 s
+    auto made =
+        make_lane(env, std::make_unique<LivePhone>(script, &now, c.per_drain),
+                  anchors_when([](std::uint64_t) { return true; }, Mat4f(1.0f)),
+                  anchors_when(never, Mat4f(1.0f)));
+    CHECK(made.ok());
+    const auto& frames = made->lane->log()->run().frames;
+    std::size_t seen = 0;
+    std::size_t fresh = 0;
+    std::size_t backlog = 0;
+    for (now = c.first_gap; now <= 7 * kS; now += 40 * kMs) {
+      CHECK(made->lane->next(env.grid, now + 40 * kMs).ok());
+      for (; seen < frames.size(); ++seen) {
+        if (frames[seen].chain != 2) continue;  // arkit: decided as recorded
+        const std::uint64_t pts = frames[seen].pts_ns;
+        if (pts < c.first_gap) ++backlog;
+        if (pts < c.first_gap + 500 * kMs) continue;
+        CHECK(now >= pts + kLatency && now < pts + kLatency + 40 * kMs);
+        ++fresh;
+      }
+    }
+    const MobileLane::Counts& n = made->lane->counts();
+    CHECK(n.polled == 60 && n.paired + n.skipped == 60);
+    CHECK(n.passed_over == 0 && n.splits == 0);
+    CHECK(fresh == std::size_t(60 - (c.first_gap - kS) / (100 * kMs) - 5));
+    const std::size_t takes = c.first_gap == kS ? 0 : 30 / c.per_drain + 1;
+    CHECK(backlog <= takes);
+    CHECK(made->lane->close().ok());
+  }
   return 0;
 }
 
@@ -726,6 +837,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_log_and_close(env, scratch.path / "lane") == 0);
   CHECK(test_split(env) == 0);
   CHECK(test_pairing(env) == 0);
+  CHECK(test_live_backlog(env) == 0);
   CHECK(test_check_and_empty(env) == 0);
   CHECK(test_background() == 0);
   std::puts("recon_example_live_mobile: OK");

@@ -39,10 +39,11 @@
 // moved-from stream is refused. The cameras state the Femto Mega's depth
 // noise, as its driver does; a Dynamic sender refuses a set with a camera
 // that states none, naming its slot, before coding it, and a Classic one
-// fuses it. A set sent with no fillers is the call without them, bit for bit;
-// a filler where no camera sees fills there alone, and a Classic sender
-// refuses it. The sets go out as the live examples send them
-// (examples/common/send_set.hpp). A set whose pictures carry ready values
+// fuses it. A filler where no camera sees fills there alone, every other
+// voxel as the call without fillers writes it, and a Classic sender refuses
+// it. The sets go out as the live examples send them
+// (examples/common/send_set.hpp), through the call with no fillers, which the
+// call without them is. A set whose pictures carry ready values
 // (YuvImage::ready) the host sets later is published, its front batch having
 // waited for them on the device, only once all are set. On a grid holding a
 // sphere, with no frames to fuse, a sender's frames are the file
@@ -984,12 +985,13 @@ int unstated_noise(vkc::test::GpuContext& gpu) {
   return 0;
 }
 
-// Fillers through send (sender/fuse_inputs.hpp's Filler): one set sent by the
-// call without fillers and by the call with none gives the same grid, bit for
-// bit; camera A's prepared frame moved 10 m along x, where no camera sees, as
-// an Anchored filler of mobile sensor 2 fills there (its byte kMobileBit | 3)
-// and leaves every voxel the set's cameras wrote as the set alone wrote it; a
-// Classic sender refuses a set with a filler before coding it.
+// Fillers through send (sender/fuse_inputs.hpp's Filler): camera A's
+// prepared frame moved 10 m along x, where no camera sees, as an Anchored
+// filler of mobile sensor 2 fills there (its byte kMobileBit | 3) and leaves
+// every voxel the set's cameras wrote as the call without fillers writes
+// them, bit for bit; a Classic sender refuses the set with its filler before
+// coding it. The call with no fillers is the one without them: every other
+// case here sends through it (send_set.hpp).
 int fillers_case(vkc::test::GpuContext& gpu) {
   namespace tsdf = vr::tsdf;
   namespace vol = vgrid::volume;
@@ -998,9 +1000,9 @@ int fillers_case(vkc::test::GpuContext& gpu) {
     std::vector<float> tsdf, weight;
     std::vector<std::uint8_t> source;
   };
-  enum class Call { Old, NoFillers, Filler };
-  const auto run = [&gpu](Call call, bool dynamic,
-                          vkc::Status* refused) -> std::optional<Grids> {
+  // The set alone, or with the filler, then refused by a Classic sender.
+  const auto run = [&gpu](bool filler,
+                          vkc::Status* classic) -> std::optional<Grids> {
     std::vector<Camera*> cameras;
     auto opened = open_cameras(gpu, 2, 0, &cameras);
     if (!opened.ok()) return std::nullopt;
@@ -1011,8 +1013,7 @@ int fillers_case(vkc::test::GpuContext& gpu) {
     if (!grid.ok() || !fuser.ok()) return std::nullopt;
     sender::SetSender::Config sending;
     sending.max_weight = kMaxWeight;
-    sending.mode = dynamic ? tsdf::IntegrationMode::Dynamic
-                           : tsdf::IntegrationMode::Classic;
+    sending.mode = tsdf::IntegrationMode::Dynamic;
     auto out =
         sender::SetSender::create(gpu.device, *fuser, *grid, nullptr, sending);
     std::optional<sensor::FrameSet> set = next_set(array, cameras, 0);
@@ -1021,7 +1022,7 @@ int fillers_case(vkc::test::GpuContext& gpu) {
     auto prepared = array.record_process(front, *set, nullptr);
     if (!prepared.ok()) return std::nullopt;
     std::vector<sender::Filler> fill;
-    if (call == Call::Filler) {
+    if (filler) {
       sender::Filler f;
       f.frame = *prepared->frames[0];
       f.frame.color = nullptr;
@@ -1033,15 +1034,11 @@ int fillers_case(vkc::test::GpuContext& gpu) {
     const std::vector<vkc::TimelinePoint> ready =
         sensor::ready_points(set->frames);
     auto inputs = std::make_shared<sensor::FrameSet>(std::move(*set));
-    auto sent = call == Call::Old
-                    ? out->send(front, prepared->frames, ready, inputs, 0,
-                                prepared->timestamp_ns)
-                    : out->send(front, prepared->frames, fill, ready, inputs, 0,
-                                prepared->timestamp_ns);
-    if (!sent.ok()) {
-      if (refused != nullptr) *refused = sent.status();
-      return std::nullopt;
-    }
+    auto sent = filler ? out->send(front, prepared->frames, fill, ready, inputs,
+                                   0, prepared->timestamp_ns)
+                       : out->send(front, prepared->frames, ready, inputs, 0,
+                                   prepared->timestamp_ns);
+    if (!sent.ok()) return std::nullopt;
     Grids g;
     auto blocks = vgrid_test::blocks_of(*grid);
     if (!blocks.ok()) return std::nullopt;
@@ -1056,27 +1053,29 @@ int fillers_case(vkc::test::GpuContext& gpu) {
     g.tsdf = std::move(*t);
     g.weight = std::move(*w);
     g.source = std::move(*s);
+    if (classic != nullptr) {
+      sending.mode = tsdf::IntegrationMode::Classic;
+      auto strict = sender::SetSender::create(gpu.device, *fuser, *grid,
+                                              nullptr, sending);
+      if (!strict.ok()) return std::nullopt;
+      vkc::CommandBatch again(gpu.device, gpu.allocator);
+      *classic = strict
+                     ->send(again, prepared->frames, fill, {}, nullptr, 0,
+                            prepared->timestamp_ns)
+                     .status();
+    }
     return g;
   };
-  const std::optional<Grids> old = run(Call::Old, true, nullptr);
-  const std::optional<Grids> none = run(Call::NoFillers, true, nullptr);
-  const std::optional<Grids> filled = run(Call::Filler, true, nullptr);
-  CHECK(old && none && filled);
-  // By block coordinate (the slots a block takes are the GPU's to pick): the
-  // two calls hold the same blocks and the same bits in each.
-  constexpr std::size_t kVoxels = 512;
-  CHECK(!old->blocks.empty() && old->blocks.size() == none->blocks.size());
-  for (const auto& [coord, ptr] : old->blocks) {
-    const auto other = none->blocks.find(coord);
-    CHECK(other != none->blocks.end());
-    const std::size_t i = std::size_t(ptr);
-    const std::size_t j = std::size_t(other->second);
-    CHECK(std::memcmp(&old->tsdf[i], &none->tsdf[j], kVoxels * 4) == 0);
-    CHECK(std::memcmp(&old->weight[i], &none->weight[j], kVoxels * 4) == 0);
-    CHECK(std::memcmp(&old->source[i], &none->source[j], kVoxels) == 0);
-  }
-  // Every voxel the set wrote reads the same beside the filler, and every
+  const std::optional<Grids> old = run(false, nullptr);
+  vkc::Status refused;
+  const std::optional<Grids> filled = run(true, &refused);
+  CHECK(old && filled);
+  CHECK(refused.domain() == vkc::Status::Code::InvalidArgument);
+  // By block coordinate (the slots a block takes are the GPU's to pick):
+  // every voxel the set wrote reads the same beside the filler, and every
   // voxel the filler wrote is its fill, in blocks the set alone never held.
+  constexpr std::size_t kVoxels = 512;
+  CHECK(!old->blocks.empty());
   for (const auto& entry : old->blocks) {
     CHECK(filled->blocks.count(entry.first) == 1);
   }
@@ -1102,9 +1101,6 @@ int fillers_case(vkc::test::GpuContext& gpu) {
     }
   }
   CHECK(fill > 0);
-  vkc::Status refused;
-  CHECK(!run(Call::Filler, false, &refused));
-  CHECK(refused.domain() == vkc::Status::Code::InvalidArgument);
   return 0;
 }
 

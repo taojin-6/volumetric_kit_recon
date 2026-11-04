@@ -18,15 +18,19 @@
 /// either side), and drops it otherwise, so fill lands 2 to 7 s after
 /// capture. What the lane does each step goes into its log (`track_log.hpp`).
 ///
-/// **Pairing.** The phone starts with the first gap, so nothing it sent while
-/// the cameras opened is waiting. Its frames are taken in order
-/// (`IRgbdSensor::drain`, a queue of 64). The first one taken pins the
-/// phone's clock to the rig's: its time pairs with the predicted time of the
-/// set it is taken for, and every later record is due at the set whose
-/// predicted time, on that offset, is at or past its own. A gap takes the
-/// newest record due and passes the older ones by, so a burst never leaves
-/// the lane behind. A file's records come as fast as they are read, so a
-/// replay repeats exactly; a live link's are read on a thread of their own
+/// **Pairing.** The phone starts with the first gap. Its frames are taken in
+/// order (`IRgbdSensor::drain`, a queue of 64) whenever none taken waits.
+/// The first take pins the phone's clock to the rig's at its newest record:
+/// that record's time pairs with the predicted time of the set it is taken
+/// for, so what a live link held while the cameras opened is passed by, and
+/// every later record is due at the set whose predicted time, on that offset,
+/// is at or past its own. A live link's records (`RgbdFrame::arrival_ns`
+/// set) are due once they have come: a take whose newest is fresher than the
+/// offset says moves the offset on, never back, so a backlog that comes over
+/// several gaps never leaves the lane behind. A gap takes the newest record
+/// due and passes the older ones by. A file's records come as fast as they
+/// are read and carry no arrival, so only its first take pins and a replay
+/// pairs exactly; a live link's are read on a thread of their own
 /// (@ref polled_in_background), so a set never waits for the phone. An error
 /// the phone returns is counted and the lane goes on.
 ///

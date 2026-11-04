@@ -299,8 +299,9 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
                             report ? &*report : nullptr));
         // The gap before the next set: the phone's frame due by then,
         // tracked against the grid as this set left it, and the frames
-        // placed so far for the next send.
-        {
+        // placed so far for the next send. The empty lane (no log) has no
+        // gap and no row.
+        if (mobile->log() != nullptr) {
           vkc::StageScope lane(s.rows, "mobile");
           VKC_ASSIGN(fill,
                      mobile->next(*volume, prepared.timestamp_ns + period_ns));
