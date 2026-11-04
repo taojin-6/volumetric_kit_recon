@@ -5668,15 +5668,15 @@ the surface was or is going averaged into its fresh samples.
 - **Rule 2.** A beside voxel lies on a ray that does not hit the object, so
   the reset along changed rays (the entry above) never reaches it when
   the object leaves
-  (the test's sphere: 779 weighted voxels off the wall in the set it
-  left). Clearing on any change instead let an arriving box clear one
-  camera's barely-past-band view of the other camera's wall band (653
-  weights fell); departures only, with the nearest-return test, clear none
-  there. A camera clears only beside a departure it saw itself, and the
-  resets run before any fuse, so another camera's band fuses again in the
-  same set, though at one sample's weight where it had up to the cap: on
-  rays its camera did not flag, so whether that keeps "cameras never evict
-  each other" is open (below).
+  (measured on a sphere moving at 1 m/s past three cameras: 779 weighted
+  voxels off the wall in the set it left). Clearing on any change instead
+  let an arriving box clear one camera's barely-past-band view of the
+  other camera's wall band (653 weights fell); departures only, with the
+  nearest-return test, clear none there. A camera clears only beside a
+  departure it saw itself, and the resets run before any fuse, so another
+  camera's band fuses again in the same set, though at one sample's
+  weight where it had up to the cap: on rays its camera did not flag, so
+  whether that keeps "cameras never evict each other" is open (below).
 - **That rule otherwise,** with its fix for walls behind rims (the
   shadow rule) and its gap weight.
 
@@ -5740,10 +5740,14 @@ within 2 mm of the true edge on average and 6 mm anywhere (projective:
 holds its Euclidean distance to within the pixel pitch, and a rod 1.6 cm
 across meshes along its whole length. Under Dynamic, a plate moving 3 cm a
 set leaves no weight beside its moving sides in a set it moves, and takes
-its distances in the first set it is still; a sphere at 1 m/s past a wall,
-seen by three cameras, is 97% covered in every set it moves, 99.5% once it
-stops, and leaves nothing off the wall's band in the set it goes. Each rule
-was taken out in turn, and its check failed. In the change-driven test's
+its distances in the first set it is still. `recon_sender_set_sender`
+checks rule 2: under Dynamic the near walls' blocks are all freed once
+the walls have left. Each rule was taken out in turn, and its check
+failed. A sphere at 1 m/s past a wall, seen by three cameras, measured
+97% covered in every set it moved, 99.5% once it stopped, and nothing
+off the wall's band in the set it went; it left the rim test on
+2026-11-04 (87% of the test's time under ASan): every bug planted in the
+rules that it caught fails another test too. In the change-driven test's
 box over no return, the set the box goes clears it also within 6 pixels of
 where a camera sees the wall past it (to 4 cm past where nothing returns
 behind it), and the rest the next set, as before. Run on the RTX 4090 and

@@ -26,10 +26,9 @@
 // before it moved go with it -- and in the first set it is still again, its
 // side outlines take their distances.
 //
-// Dynamic, three cameras around a sphere 0.4 m across that moves at 1 m/s
-// past a wall, stops and leaves: while it moves, the mesh covers 97% of its
-// visible surface in every set; once it stops, 99.5%; and in the set it
-// leaves, nothing of it meshes and no voxel off the wall's band holds weight.
+// The entry's rule 2, a departure takes what it left beside it, is
+// recon_sender_set_sender's to check: under Dynamic the near walls' blocks
+// are all freed once the walls have left.
 // Skips (exit 0) where no device is present.
 
 #include <algorithm>
@@ -39,7 +38,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
-#include <map>
 #include <tuple>
 #include <vector>
 
@@ -105,16 +103,6 @@ sensor::DepthCameraParams camera(const vr::Mat4f& pose) {
   return cam;
 }
 
-// A camera at `eye` looking at `target`, its image y along world y.
-sensor::DepthCameraParams look_at(const vr::Vec3f& eye,
-                                  const vr::Vec3f& target) {
-  const vr::Vec3f z = glm::normalize(target - eye);
-  const vr::Vec3f x = glm::normalize(glm::cross(vr::Vec3f(0, 1, 0), z));
-  const vr::Vec3f y = glm::cross(z, x);
-  return camera(vr::Mat4f(vr::Vec4f(x, 0.0f), vr::Vec4f(y, 0.0f),
-                          vr::Vec4f(z, 0.0f), vr::Vec4f(eye, 1.0f)));
-}
-
 // A world ray through pixel (u, v): its origin, and a direction whose
 // camera-space z is 1, so its parameter is the camera depth.
 struct Ray {
@@ -158,18 +146,6 @@ struct Plate {
     return std::sqrt(da * da + db * db + dz * dz);
   }
 };
-
-// Where a ray first meets a sphere, or infinity.
-float hit_sphere(const Ray& r, const vr::Vec3f& c, float radius) {
-  const vr::Vec3f oc = r.o - c;
-  const float a = glm::dot(r.d, r.d);
-  const float b = glm::dot(oc, r.d);
-  const float q = glm::dot(oc, oc) - radius * radius;
-  const float disc = b * b - a * q;
-  if (disc < 0.0f) return std::numeric_limits<float>::infinity();
-  const float t = (-b - std::sqrt(disc)) / a;
-  return t > 0.0f ? t : std::numeric_limits<float>::infinity();
-}
 
 // Where a ray first meets the rod, or infinity.
 float hit_rod(const Ray& r) {
@@ -459,169 +435,12 @@ int moving_plate(vkc::test::GpuContext& gpu) {
   return 0;
 }
 
-// The moving sphere: three cameras, Dynamic.
-constexpr float kSphereR = 0.2f;
-constexpr float kSphereZ = 2.0f;
-constexpr float kMoveWall = 3.0f;
-constexpr float kStep = 1.0f / 30.0f;  // 1 m/s at 30 sets a second
-constexpr int kMoveFrom = 10;          // still before, at x = -0.6
-constexpr int kMoveSets = 36;          // to x = +0.6
-constexpr int kLeaveSet = 56;          // gone from here
-constexpr int kSets = 58;
-
-// The sphere's centre in set `s`, and whether it is there.
-bool sphere_at(int s, vr::Vec3f* centre) {
-  const int k = std::clamp(s - kMoveFrom + 1, 0, kMoveSets);
-  *centre = vr::Vec3f(-0.6f + kStep * float(k), 0.0f, kSphereZ);
-  return s < kLeaveSet;
-}
-
-std::vector<float> render_moving(const sensor::DepthCameraParams& cam, int s) {
-  vr::Vec3f c;
-  const bool there = sphere_at(s, &c);
-  std::vector<float> depth(std::size_t(kWidth) * kHeight);
-  for (std::uint32_t v = 0; v < kHeight; ++v) {
-    for (std::uint32_t u = 0; u < kWidth; ++u) {
-      const Ray r = ray_of(cam, float(u), float(v));
-      float t = (kMoveWall - r.o.z) / r.d.z;
-      if (there) t = std::min(t, hit_sphere(r, c, kSphereR));
-      depth[std::size_t(v) * kWidth + u] = t;
-    }
-  }
-  return depth;
-}
-
-// The share of the sphere's surface the cameras see -- every 4th pixel's --
-// with a vertex within 1 cm: the vertices binned by 1 cm cell, so a point
-// looks in the 27 cells around its own. Only a vertex within 1 cm of the
-// sphere's surface can be within 1 cm of a point on it, so only those are
-// binned, not the wall's.
-float sphere_cover(const std::vector<sensor::DepthCameraParams>& cams,
-                   const vr::Vec3f& c, const mesh::Mesh& m) {
-  const auto cell = [](const vr::Vec3f& p) {
-    return std::make_tuple(int(std::floor(p.x / 0.01f)),
-                           int(std::floor(p.y / 0.01f)),
-                           int(std::floor(p.z / 0.01f)));
-  };
-  std::map<std::tuple<int, int, int>, std::vector<vr::Vec3f>> bins;
-  for (const mesh::Vertex& vtx : m.vertices) {
-    if (std::abs(glm::length(vtx.position - c) - kSphereR) > 0.011f) continue;
-    bins[cell(vtx.position)].push_back(vtx.position);
-  }
-  std::size_t seen = 0;
-  std::size_t covered = 0;
-  for (const sensor::DepthCameraParams& cam : cams) {
-    for (std::uint32_t v = 0; v < kHeight; v += 4) {
-      for (std::uint32_t u = 0; u < kWidth; u += 4) {
-        const Ray r = ray_of(cam, float(u), float(v));
-        const float t = hit_sphere(r, c, kSphereR);
-        if (!std::isfinite(t)) continue;
-        const vr::Vec3f p = r.o + t * r.d;
-        ++seen;
-        const auto [x, y, z] = cell(p);
-        bool near = false;
-        for (int dz = -1; dz <= 1 && !near; ++dz) {
-          for (int dy = -1; dy <= 1 && !near; ++dy) {
-            for (int dx = -1; dx <= 1 && !near; ++dx) {
-              const auto it = bins.find({x + dx, y + dy, z + dz});
-              if (it == bins.end()) continue;
-              for (const vr::Vec3f& q : it->second) {
-                if (glm::length(q - p) <= 0.01f) {
-                  near = true;
-                  break;
-                }
-              }
-            }
-          }
-        }
-        covered += near ? 1 : 0;
-      }
-    }
-  }
-  return seen > 0 ? float(covered) / float(seen) : 0.0f;
-}
-
-int moving_sphere(vkc::test::GpuContext& gpu) {
-  tsdf::FuserConfig config;
-  config.change.warm_up = 5;
-  auto fuser = tsdf::Fuser::create(gpu.device, gpu.allocator, config);
-  CHECK(fuser.ok());
-  // Shared vertices: the 34 square metres of wall the three cameras see mesh
-  // into 0.71 M triangles, whose 2.1 M private vertices, at 64 B each, pass
-  // the 128 MiB storage binding every Vulkan device guarantees (lavapipe's),
-  // so extract_host refuses that arena. Shared, they are 0.61 M.
-  mesh::MarchingCubesConfig mc_config;
-  mc_config.share_vertices = true;
-  auto mc = mesh::MarchingCubes::create(gpu.device, gpu.allocator, mc_config);
-  CHECK(mc.ok());
-  auto made =
-      tsdf::create_fusion_grid(gpu.device, gpu.allocator, kVoxel, kTrunc, 4096);
-  CHECK(made.ok());
-  vol::VoxelBlockGrid& grid = made.value();
-  const std::vector<sensor::DepthCameraParams> cams = {
-      look_at({0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, kSphereZ}),
-      look_at({1.2f, 0.1f, 0.4f}, {0.0f, 0.0f, kSphereZ}),
-      look_at({-0.7f, -1.0f, 0.5f}, {0.0f, 0.0f, kSphereZ})};
-  float worst_moving = 1.0f;
-  float worst_still = 1.0f;
-  for (int s = 0; s < kSets; ++s) {
-    std::vector<std::vector<float>> depths;
-    std::vector<tsdf::FrameInput> frames;
-    for (std::size_t k = 0; k < cams.size(); ++k) {
-      depths.push_back(render_moving(cams[k], s));
-    }
-    for (std::size_t k = 0; k < cams.size(); ++k) {
-      frames.push_back({vkc::StorageInput(depths[k].data()), cams[k], nullptr,
-                        static_cast<std::uint32_t>(k), vr_test::kFemtoNoise});
-    }
-    CHECK(fuser->fuse(grid, frames, kMaxWeight, tsdf::IntegrationMode::Dynamic)
-              .ok());
-    if (s < kMoveFrom) continue;
-    auto m = mc->extract_host(grid);
-    CHECK(m.ok());
-    vr::Vec3f c;
-    if (sphere_at(s, &c)) {
-      const float cover = sphere_cover(cams, c, *m);
-      if (s < kMoveFrom + kMoveSets) {
-        worst_moving = std::min(worst_moving, cover);
-      } else if (s > kMoveFrom + kMoveSets) {
-        worst_still = std::min(worst_still, cover);
-      }
-      continue;
-    }
-    // Gone: no vertex and no weighted voxel off the wall's band.
-    std::size_t off_wall = 0;
-    for (const mesh::Vertex& vtx : m->vertices) {
-      off_wall += vtx.position.z < kMoveWall - 0.05f ? 1 : 0;
-    }
-    auto f = field_of(gpu, grid);
-    CHECK(f.ok());
-    std::size_t held = 0;
-    for (const Voxel& x : f->voxels) {
-      held +=
-          (x.world.z < kMoveWall - 0.05f && f->weight[x.index] > 0.0f) ? 1 : 0;
-    }
-    std::printf(
-        "moving sphere, set %d (gone): %zu vertices and %zu weighted "
-        "voxels off the wall\n",
-        s, off_wall, held);
-    CHECK(off_wall == 0 && held == 0);
-  }
-  std::printf(
-      "moving sphere: covered %.3f at worst while it moves, %.3f once "
-      "it stops\n",
-      worst_moving, worst_still);
-  CHECK(worst_moving >= 0.97f && worst_still >= 0.995f);
-  return 0;
-}
-
 }  // namespace
 
 int gpu_main(vkc::test::GpuContext& gpu) {
   if (still_scene(gpu, tsdf::IntegrationMode::Classic) != 0) return 1;
   if (still_scene(gpu, tsdf::IntegrationMode::Dynamic) != 0) return 1;
   if (moving_plate(gpu) != 0) return 1;
-  if (moving_sphere(gpu) != 0) return 1;
   std::puts("tsdf_rim_distance: OK");
   return 0;
 }
