@@ -1012,15 +1012,23 @@ one PR. `PointToPlane` is the one kind:
   coarser levels, max(3 sigma, 1.5 cm) at the finest, normals within 30
   degrees, Huber at 2 sigma, sigma the frame's `DepthNoise` in quadrature
   with 5 mm for the model. It counts attempts, hits (the model answered) and
-  inliers, and with `see_through_m` hits in front of and behind the
-  surface. Workgroups are per view, summed in fixed trees, with no float
-  atomics, so a fit repeats bit for bit and is the same beside another.
+  inliers, and with `see_through_m`, at the finest level, the hits outside
+  a gate that lie that far in front of or behind the surface, so they never
+  overlap the inliers. Workgroups are per view, summed in fixed trees, with
+  no float atomics, so a fit repeats bit for bit and is the same beside
+  another.
 - *The solve* (one workgroup) takes the data H's eigensystem by cyclic
   Jacobi and steps along the directions at or above tau (1e-3) only, with
   the prior term on the data rescaled to `prior_n_eff` points a frame with
-  hits (mode b: unscaled, a 5 mm / 0.3 deg prior is inert). A step needs 6
-  inliers and a quarter of the hits; one over 0.5 m or rad marks the fit
-  diverged, which returns as solving nothing.
+  hits. A step needs 6 inliers and a quarter of the hits; one over 0.5 m or
+  rad marks the fit diverged, which returns as solving nothing. The steps
+  compose in float, so `finish` makes a correction that moved orthonormal
+  again in double (the exponential of its log); one that did not move is
+  the prior's, bit for bit.
+- *Frames* pass one check (`frame_check.hpp`), which the `Tracker` runs at
+  each frame's own record and the fitter at every record: depth at least the
+  camera's size and copyable, a known noise, a rigid pose, valid intrinsics
+  and range.
 
 **The judge** (internal; its config `track/correction.hpp`), one a chain: a
 fit that solved nothing is Coasting; a held direction caps a fit at
@@ -1030,7 +1038,10 @@ Partial, which moves the chain along its directions at or above
 jump at the frames' mean camera centre, against a gate growing with the
 time since the last Anchored fit, taken only when the fit before proposed
 the same correction. No prior and no jump gate before the first lock; after
-it the prior's sigma grows with the time since the last Anchored fit.
+it the prior's sigma grows with the time since the last Anchored fit. The
+see-through distance lives in the judge's config alone: `create_fitters`
+hands it to the chain's fitter, each `TrackFit` says the distance it counted
+at, and the `Tracker` refuses a fit counted at another.
 
 **The Tracker** (`track/tracker.hpp`) runs the driver on each of its model
 filters (a lane: the rig alone, then the rig with anchored fill) and the
@@ -1041,8 +1052,14 @@ Interpolated within `hold_ns` on both sides, Coasting, Device), release on
 the driver chains alone, and a ring that holds a frame until it is placed
 and decided. Shadows record after the driver, and a shadow's refusal is its
 own chain's, so they change nothing the driver does
-(`recon_track_tracker`). The bench (`track_eval`) and the phone lane are
-next work.
+(`recon_track_tracker`). A refused finish drops its step from that fit on,
+so no fitter is left holding a record. The bench (`track_eval`) and the
+phone lane are next work.
+
+**Memory** (computed, 256x192): an entry is 2.2 MiB (the three levels'
+depth, vertex and normal maps), so a 20-frame window fitter holds 44 MiB of
+pyramids and a 15 MiB model view, and a single-frame one 3 MiB. The ring
+holds each frame as recorded, colour included.
 
 ## Examples
 

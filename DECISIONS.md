@@ -6087,28 +6087,42 @@ frame prep states every frame's `DepthNoise`.
   every view in one dispatch. Entries commit at `finish`; an abandon or a
   failed record empties them, so a fit never reads a pyramid its batch did
   not build.
-- *0b's reference, on the device.* Its pyramid, gates, Huber weight, eigen
-  guard (tau 1e-3 on the scaled H) and per-iteration step acceptance; the
-  prior term with the data rescaled to 500 points a frame with hits (mode
-  b: unscaled, a 5 mm / 0.3 deg prior was inert); the inlier ratio over
-  hits, not valid pixels. Twists are about the frames' mean camera centre,
-  translation over the points' median distance (a 1 cm histogram, once a
-  fit at the prior; 0b took it per level). A step over 0.5 m or rad marks
-  the fit diverged, returned as solving nothing.
+- *0b's reference, on the device* (its numbers: DESIGN's track section).
+  Its pyramid, gates, Huber weight, eigen guard on the scaled H and
+  per-iteration step acceptance; the prior term on the data rescaled to a
+  fixed count of points a frame with hits, since on unscaled data a tight
+  prior barely holds (the conformance test's prior case); the inlier ratio
+  over hits, not valid pixels. Twists are about the frames' mean camera
+  centre, translation over the points' median distance (once a fit, at the
+  prior; 0b took it per level). A diverged step returns as solving nothing.
+  One departure is left to the bench: 0b also limits each iteration's step
+  to the strong directions when one is under the guard, where here only the
+  judge's final projection does (a `TODO:` in the solve).
+- *A correction comes back orthonormal.* The device composes each step in
+  float, and a correction fed back fit after fit drifted off a rotation
+  until the next record refused its prior as not rigid; `finish` makes one
+  that moved orthonormal again in double, and returns one that did not move
+  as the prior, bit for bit.
 - *A judge per chain, internal.* In 0b's gate order: a held direction caps
-  a fit at Partial, which moves the chain along its directions above 1e-2
-  only (so an ill-conditioned view is never Anchored); then inliers,
-  coverage, the ratio over hits; last the jump under a gate growing with
-  the time since the last Anchored fit, taken when proposed twice. The
-  prior's sigma grows at 0.3 deg/s since the last anchor. `see_through_m`
-  (0, off) takes hits far in front of or behind the surface out of coverage
-  and the ratio: one field, for the bench to try before any default.
+  a fit at Partial, which moves the chain along its strong directions only
+  (so an ill-conditioned view is never Anchored); then inliers, coverage,
+  the ratio over hits; last the jump under a gate growing with the time
+  since the last Anchored fit, taken when proposed twice. The prior's sigma
+  grows with the time since the last anchor. `see_through_m` (0, off) takes
+  hits far in front of or behind the surface out of coverage and the ratio,
+  for the bench to try before any default. It is one field, the judge's:
+  the fitter counts at the distance `create_fitters` gives it, only hits
+  that are not inliers, and each fit says that distance, so the `Tracker`
+  refuses a fit counted at another.
 - *The `Tracker` is the one home of windows and placement.* It runs the
   driver once per model filter (a lane: the rig alone, then the rig with
   anchored fill: fill's one generation) and the shadows on the first, every
   method a value. Decisions and release follow the frames' clock, so a
   replay repeats; shadows record after the driver and refuse into their own
-  chain, so they cannot delay, change or fail a placement.
+  chain, so they cannot delay, change or fail a placement. A frame passes
+  the fitters' own check at its own record, so one taken between fits never
+  refuses the records whose windows hold it; a refused finish drops its step
+  with no fitter left holding a record.
 
 **Evidence.** `recon_track_tracker` (scripted fitters) holds every rule of
 the header, shadows changing nothing bit for bit among them;
@@ -6116,10 +6130,15 @@ the header, shadows changing nothing bit for bit among them;
 `kFitKinds` on analytic rooms at 128x96 (at the truth 0.024 mm / 0.0006
 deg; from 2 cm / 1 deg 0.022 mm / 0.0013 deg left; a floor holds x, y and
 yaw; a turning corridor window holds its axis), on the M5 Max under the
-validation layer and sync validation, and on an RTX 4090. U3 on the 4090
-(256x192, a 1 cm room, device p50): a single-frame fit 0.86 ms; a 20-frame
-window 2.51 ms at 1 pass (the stacked cast 1.53 ms of it) and 6.45 ms at
-3. The 5090 was not measured: the lab's disk was under uvrun's floor.
+validation layer and sync validation, and on an RTX 4090. U3 (256x192, a 1
+cm room, device p50), on the lab's RTX 5090 beside other jobs: a
+single-frame fit 0.81 ms; a 20-frame window 1.71 ms at 1 pass (the stacked
+cast 0.73 ms of it, against the 0.59 ms planned) and 4.72 ms at 3; on an
+RTX 4090, 0.87, 2.52 and 6.47 ms. Fed back fit after fit before the
+orthonormal step, a correction's |R^T R - I| grew about 1.4e-7 a fit on a
+4090 and a driver chain refused every frame from about frame 650; after it,
+5,000 fed-back fits stay under 6e-8 and 5,000 frames through the `Tracker`
+are taken (the review's probes).
 
 ## Measured lessons
 
