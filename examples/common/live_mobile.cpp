@@ -3,15 +3,19 @@
 
 #include "live_mobile.hpp"
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <utility>
 
+#include "interrupt.hpp"
 #include "link/rgbd_stream_sensor.hpp"
+#include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
@@ -27,6 +31,9 @@ namespace sender = volumetric_kit::recon::sender;
 namespace tsdf = volumetric_kit::recon::tsdf;
 namespace vol = volumetric_kit::grid::volume;
 using volumetric_kit::recon::Mat4f;
+
+// How long a run waits for its live phone to dial.
+constexpr std::chrono::minutes kPhoneWait{5};
 
 track::TrackerConfig lane_tracking() {
   track::TrackerConfig c;
@@ -58,6 +65,10 @@ vkc::Status check_mobile(const config::Config& opt) {
         "source.mobile needs fusion.dynamic: the phone's frames fill only "
         "under Dynamic fusion");
   }
+  if (opt.operation == config::Operation::Stream) {
+    return vkc::Status::invalid_argument(
+        "source.mobile is not run by operation stream, which fuses nothing");
+  }
   return {};
 }
 
@@ -67,8 +78,6 @@ namespace {
 
 class PolledInBackground final : public sensor::IRgbdSensor {
  public:
-  static constexpr std::size_t kCapacity = 64;
-
   explicit PolledInBackground(std::unique_ptr<sensor::IRgbdSensor> inner)
       : inner_(std::move(inner)) {}
   ~PolledInBackground() override { stop(); }
@@ -79,11 +88,13 @@ class PolledInBackground final : public sensor::IRgbdSensor {
     return inner_->info();
   }
   vkc::Status set_queue_depth(std::size_t frames) override {
-    if (thread_.joinable()) {
+    if (frames == 0 || thread_.joinable()) {
       return vkc::Status::invalid_argument(
-          "polled_in_background: set_queue_depth once started");
+          "polled_in_background: set_queue_depth takes 1 or more, before the "
+          "start");
     }
-    return inner_->set_queue_depth(frames);
+    depth_ = frames;
+    return {};
   }
   // The inner sensor is started here and then used by the polling thread
   // alone until stop joins it: one thread at a time, as it requires.
@@ -96,6 +107,7 @@ class PolledInBackground final : public sensor::IRgbdSensor {
       ended_ = false;
       error_ = {};
       queue_.clear();
+      dropped_ = 0;
       stats_ = inner_->stats();
     }
     thread_ = std::thread([this] { run(); });
@@ -107,7 +119,7 @@ class PolledInBackground final : public sensor::IRgbdSensor {
       std::lock_guard<std::mutex> lock(mutex_);
       stopping_ = true;
     }
-    room_.notify_all();
+    idle_.notify_all();
     thread_.join();
     inner_->stop();
     std::lock_guard<std::mutex> lock(mutex_);
@@ -115,20 +127,21 @@ class PolledInBackground final : public sensor::IRgbdSensor {
   }
   vkc::Result<std::optional<sensor::RgbdFrame>> poll() override {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!error_.ok()) {
-      vkc::Status e = std::move(error_);
-      error_ = {};
-      return e;
-    }
+    VKC_TRY(take_error());
     if (queue_.empty()) return std::optional<sensor::RgbdFrame>{};
-    sensor::RgbdFrame f = std::move(queue_.front());
-    queue_.pop_front();
-    room_.notify_all();
+    dropped_ += queue_.size() - 1;  // the newest only
+    sensor::RgbdFrame f = std::move(queue_.back());
+    queue_.clear();
+    ++delivered_;
     return std::optional<sensor::RgbdFrame>(std::move(f));
   }
   vkc::Status drain(std::vector<sensor::RgbdFrame>* out) override {
-    VKC_ASSIGN(std::optional<sensor::RgbdFrame> f, poll());
-    if (f) out->push_back(std::move(*f));
+    VKC_CHECK(out != nullptr, "polled_in_background: drain into nothing");
+    std::lock_guard<std::mutex> lock(mutex_);
+    VKC_TRY(take_error());
+    for (sensor::RgbdFrame& f : queue_) out->push_back(std::move(f));
+    delivered_ += queue_.size();
+    queue_.clear();
     return {};
   }
   bool exhausted() const noexcept override {
@@ -137,39 +150,56 @@ class PolledInBackground final : public sensor::IRgbdSensor {
   }
   sensor::SensorStats stats() const noexcept override {
     std::lock_guard<std::mutex> lock(mutex_);
-    return stats_;
+    sensor::SensorStats s = stats_;
+    s.delivered = delivered_;
+    s.dropped += dropped_;
+    return s;
   }
 
  private:
+  // An error the inner poll returned, once; then OK.
+  vkc::Status take_error() {
+    vkc::Status e = std::move(error_);
+    error_ = {};
+    return e;
+  }
+
   void run() {
     for (;;) {
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        room_.wait(lock,
-                   [this] { return stopping_ || queue_.size() < kCapacity; });
-        if (stopping_) return;
-      }
       vkc::Result<std::optional<sensor::RgbdFrame>> polled = inner_->poll();
       const bool ended = inner_->exhausted();
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::unique_lock<std::mutex> lock(mutex_);
       stats_ = inner_->stats();
       if (!polled.ok()) {
         if (error_.ok()) error_ = polled.status();
       } else if (*polled) {
+        // A full queue lets its oldest go, so the inner link is always read.
+        while (queue_.size() >= depth_) {
+          queue_.pop_front();
+          ++dropped_;
+        }
         queue_.push_back(std::move(**polled));
       } else if (ended) {
         ended_ = true;
         return;
+      } else {
+        // A poll that does not wait of its own: wait a little before the next.
+        idle_.wait_for(lock, std::chrono::milliseconds(1),
+                       [this] { return stopping_; });
       }
+      if (stopping_) return;
     }
   }
 
   std::unique_ptr<sensor::IRgbdSensor> inner_;
+  std::size_t depth_ = 1;
   mutable std::mutex mutex_;
-  std::condition_variable room_;
+  std::condition_variable idle_;
   std::deque<sensor::RgbdFrame> queue_;
   vkc::Status error_;
   sensor::SensorStats stats_{};
+  std::uint64_t delivered_ = 0;
+  std::uint64_t dropped_ = 0;
   bool stopping_ = false;
   bool ended_ = false;
   std::thread thread_;
@@ -195,15 +225,17 @@ struct MobileLane::State {
   std::unique_ptr<TrackLog> log;
   // The frames placed, not yet handed to a send.
   std::deque<sender::Filler> queue;
-  // The next record, not yet due.
-  std::optional<sensor::RgbdFrame> pending;
+  // The records taken from the phone, oldest first, not yet due.
+  std::deque<sensor::RgbdFrame> held;
   // The phone's time less the rig's, pinned by the first record taken.
   std::optional<std::int64_t> offset;
   // The last record taken, for the loss test.
   std::optional<std::uint64_t> last_seq;
   std::uint64_t last_pts = 0;
-  // A loss: the tracker is flushed before the first frame at or after it.
-  std::optional<std::uint64_t> split_at;
+  // The losses, oldest first: the tracker is flushed before the first frame
+  // at or after each.
+  std::deque<std::uint64_t> splits;
+  bool started = false;  // the phone, at the first gap
   // The tint pictures, by tier, at the phone's depth size.
   std::shared_ptr<const vkc::Buffer> tint[2];
   std::uint32_t tint_width = 0;
@@ -212,6 +244,7 @@ struct MobileLane::State {
   bool closed = false;
   Counts counts;
   std::string first_refusal;  // why the first frame passed over was
+  std::string first_error;    // the first error the phone returned
 
   void passed_over(const vkc::Status& why) {
     if (counts.passed_over++ == 0) first_refusal = why.message();
@@ -231,33 +264,42 @@ struct MobileLane::State {
     return {};
   }
 
+  // The records the phone holds, taken in order; a loss is noted for its
+  // split. An error the phone returns is counted, and the lane goes on.
+  bool take_records() {
+    std::vector<sensor::RgbdFrame> got;
+    const vkc::Status st = phone->drain(&got);
+    if (!st.ok() && counts.errors++ == 0) first_error = st.message();
+    for (sensor::RgbdFrame& f : got) {
+      ++counts.polled;
+      if (last_seq && f.sequence > *last_seq + 1 &&
+          f.timestamp_ns >= last_pts + kSplitGapNs) {
+        splits.push_back(f.timestamp_ns);
+      }
+      last_seq = f.sequence;
+      last_pts = f.timestamp_ns;
+      held.push_back(std::move(f));
+    }
+    return !got.empty();
+  }
+
   // The newest record due by the set at `next_set_ns`; older ones due are
   // passed by. Reads on to the first record not yet due, which waits.
-  vkc::Result<std::optional<sensor::RgbdFrame>> pair(std::uint64_t next_set) {
+  std::optional<sensor::RgbdFrame> pair(std::uint64_t next_set) {
     std::optional<sensor::RgbdFrame> due;
     for (;;) {
-      if (!pending) {
-        VKC_ASSIGN(std::optional<sensor::RgbdFrame> polled, phone->poll());
-        if (!polled) break;
-        ++counts.polled;
-        if (last_seq && polled->sequence > *last_seq + 1 &&
-            polled->timestamp_ns >= last_pts + kSplitGapNs) {
-          split_at = polled->timestamp_ns;
-        }
-        last_seq = polled->sequence;
-        last_pts = polled->timestamp_ns;
-        pending = std::move(polled);
-      }
+      if (held.empty() && !take_records()) break;
       if (!offset) {
-        offset = std::int64_t(pending->timestamp_ns) - std::int64_t(next_set);
+        offset =
+            std::int64_t(held.front().timestamp_ns) - std::int64_t(next_set);
       }
-      if (std::int64_t(pending->timestamp_ns) >
+      if (std::int64_t(held.front().timestamp_ns) >
           std::int64_t(next_set) + *offset) {
         break;
       }
       if (due) ++counts.skipped;
-      due = std::move(pending);
-      pending.reset();
+      due = std::move(held.front());
+      held.pop_front();
     }
     return due;
   }
@@ -296,8 +338,14 @@ struct MobileLane::State {
   // waited on here, then judged, placed and logged.
   vkc::Status track_one(const vol::VoxelBlockGrid& grid,
                         sensor::RgbdFrame frame) {
-    if (split_at && frame.timestamp_ns >= *split_at) {
-      split_at.reset();
+    // Every loss before this frame: one flush (no frame between them was
+    // recorded).
+    bool split = false;
+    while (!splits.empty() && splits.front() <= frame.timestamp_ns) {
+      splits.pop_front();
+      split = true;
+    }
+    if (split) {
       ++counts.splits;
       VKC_TRY(take(tracker->flush()));
     }
@@ -379,7 +427,6 @@ vkc::Result<std::unique_ptr<MobileLane>> MobileLane::create(
     s->prep.emplace(std::move(prep));
     VKC_ASSIGN(vkc::GpuTimer timer, vkc::GpuTimer::create(device));
     s->timer.emplace(std::move(timer));
-    VKC_TRY(phone->start());
     s->phone = std::move(phone);
     s->tracker = std::move(tracker);
     s->log = std::move(log);
@@ -392,10 +439,16 @@ vkc::Result<std::vector<sender::Filler>> MobileLane::next(
   State& s = *state_;
   std::vector<sender::Filler> out;
   if (!s.phone || s.closed) return out;
+  if (!s.started) {
+    // At the first gap, so nothing sent while the cameras opened waits.
+    VKC_TRY(s.phone->set_queue_depth(kPhoneQueue));
+    VKC_TRY(s.phone->start());
+    s.started = true;
+  }
   if (!s.ended) {
-    VKC_ASSIGN(std::optional<sensor::RgbdFrame> due, s.pair(next_set_ns));
+    std::optional<sensor::RgbdFrame> due = s.pair(next_set_ns);
     if (due) VKC_TRY(s.track_one(grid, std::move(*due)));
-    if (!s.pending && s.phone->exhausted()) VKC_TRY(s.end());
+    if (s.held.empty() && s.phone->exhausted()) VKC_TRY(s.end());
   }
   while (!s.queue.empty() && out.size() < kDrainCap) {
     sender::Filler f = std::move(s.queue.front());
@@ -413,13 +466,11 @@ vkc::Status MobileLane::close() {
   State& s = *state_;
   if (!s.phone || s.closed) return {};
   s.closed = true;
-  if (!s.ended) {
-    s.ended = true;
-    VKC_TRY(s.log->write(s.tracker->flush()));
-  }
+  VKC_TRY(s.end());  // placed, not fused: the run is over
   s.phone->stop();
   VKC_TRY(s.log->close());
-  VKC_ASSIGN(const std::string table, summarize(s.log->run()));
+  VKC_ASSIGN(const std::string table,
+             summarize(s.log->run(), s.log->directory()));
   std::fputs(table.c_str(), stdout);
   return {};
 }
@@ -456,6 +507,10 @@ std::string MobileLane::report() const {
   if (!s.first_refusal.empty()) {
     out += "  first passed over: " + s.first_refusal + "\n";
   }
+  if (c.errors != 0) {
+    out += "  " + std::to_string(c.errors) +
+           " phone error(s), the first: " + s.first_error + "\n";
+  }
   return out;
 }
 
@@ -479,10 +534,32 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
                link::RgbdStreamSensor::open_file(m.path, std::move(options)));
   } else {
     source.session = "tcp://" + m.host + ":" + std::to_string(m.port);
-    std::printf("waiting for the phone to dial %s\n", source.session.c_str());
-    VKC_ASSIGN(
-        std::unique_ptr<link::RgbdStreamSensor> live,
-        link::RgbdStreamSensor::listen(m.host, m.port, std::move(options)));
+    std::printf("waiting for the phone to dial %s (Ctrl+C ends the wait)\n",
+                source.session.c_str());
+    // A second at a time, so a Ctrl+C ends the wait; the empty lane then
+    // lets the run return before its cameras open.
+    std::unique_ptr<link::RgbdStreamSensor> live;
+    const auto until = std::chrono::steady_clock::now() + kPhoneWait;
+    for (;;) {
+      if (vgrid_example::interrupted()) {
+        return MobileLane::create(device, allocator, {}, {}, {});
+      }
+      vkc::Result<std::unique_ptr<link::RgbdStreamSensor>> heard =
+          link::RgbdStreamSensor::listen(m.host, m.port, options, {},
+                                         std::chrono::seconds(1));
+      if (heard.ok()) {
+        live = std::move(*heard);
+        break;
+      }
+      // Only the wait running out is waited through again.
+      const bool waited =
+          heard.status().domain() == vkc::Status::Code::IoError &&
+          heard.status().message().find("no session within the wait") !=
+              std::string::npos;
+      if (!waited || std::chrono::steady_clock::now() >= until) {
+        return heard.status();
+      }
+    }
     phone = polled_in_background(std::move(live));
   }
   const track::TrackerConfig tracking = lane_tracking();

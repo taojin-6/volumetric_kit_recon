@@ -1164,9 +1164,11 @@ phone's stream").
 
 **The phone lane** (`examples/common/live_mobile.hpp`, `vr_example_mobile`)
 puts such a sensor beside a live run's cameras (`source.mobile`, the
-2026-11-04 entry): opened depth alone at confidence 2, a live link polled
-on a thread of its own (`polled_in_background`) so a set never waits on
-the phone. After each set's send, `MobileLane::next` takes the record due
+2026-11-04 entry): opened depth alone at confidence 2 and started at the
+first gap, its frames drained in order from a queue of 64, a live link
+polled on a thread of its own (`polled_in_background`, which keeps the
+interface's queue) so a set never waits on the phone; an error it returns
+is counted and the lane goes on. After each set's send, `MobileLane::next` takes the record due
 by the next set's predicted time (the first record taken pins the phone's
 clock to the rig's; the older of two due is passed by), prepares it, and
 records every fit due at it on `lane_tracking()` in one batch, waited on

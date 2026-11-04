@@ -19,14 +19,16 @@
 //   by every chain; close is idempotent; the phone's end flushes the tracker
 //   and what it placed still drains.
 // - A loss of 100 ms or more splits the windows: no fit holds frames from
-//   both sides.
+//   both sides, a frame alone between two losses included. An error the
+//   phone returns is counted and the lane goes on.
 // - Pairing: one record a set at 25 Hz sets, the older of two passed by at
 //   5 Hz sets.
 // - check_mobile: no phone, or a phone under Dynamic, runs; Classic and FFS
 //   depth are refused. The empty lane does nothing.
-// - polled_in_background: a poll never waits on the inner sensor's, frames
-//   come through in order, the end and an inner error come through, and stop
-//   joins while the inner poll waits.
+// - polled_in_background: a poll never waits on the inner sensor's; it keeps
+//   the interface's queue (a poll the newest, a drain every frame oldest
+//   first, a full queue letting its oldest go); an inner error and the end
+//   come through; stop joins while the inner poll waits.
 
 #include <algorithm>
 #include <atomic>
@@ -152,10 +154,16 @@ class FakePhone final : public sensor::IRgbdSensor {
     return std::optional<sensor::RgbdFrame>(std::move(f));
   }
   vkc::Status drain(std::vector<sensor::RgbdFrame>* out) override {
+    if (fail_at_ && next_ == *fail_at_) {
+      fail_at_.reset();
+      return vkc::Status::io_error("fake phone: a damaged record");
+    }
     VKC_ASSIGN(std::optional<sensor::RgbdFrame> f, poll());
     if (f) out->push_back(std::move(*f));
     return {};
   }
+  // The drain before record `n` returns an error, once.
+  void fail_before(std::size_t n) { fail_at_ = n; }
   bool exhausted() const noexcept override { return next_ >= script_.size(); }
   sensor::SensorStats stats() const noexcept override {
     sensor::SensorStats s{};
@@ -167,6 +175,7 @@ class FakePhone final : public sensor::IRgbdSensor {
  private:
   std::vector<PhoneFrame> script_;
   std::size_t next_ = 0;
+  std::optional<std::size_t> fail_at_;
   bool started_ = false;
   sensor::SensorInfo info_;
 };
@@ -210,6 +219,7 @@ struct Env {
 struct Lane {
   std::unique_ptr<MobileLane> lane;
   std::shared_ptr<const std::vector<vr_test::ScriptedRecord>> rig, track;
+  FakePhone* phone = nullptr;  // the lane's
 };
 
 vkc::Result<Lane> make_lane(const Env& env, std::vector<PhoneFrame> phone,
@@ -230,10 +240,11 @@ vkc::Result<Lane> make_lane(const Env& env, std::vector<PhoneFrame> phone,
       track::Tracker::create(vr_example::lane_tracking(), std::move(fitters)));
   VKC_ASSIGN(std::unique_ptr<vr_example::TrackLog> log,
              vr_example::TrackLog::open(dir, *tracker, {}));
-  VKC_ASSIGN(out.lane,
-             MobileLane::create(env.gpu.device, env.gpu.allocator,
-                                std::make_unique<FakePhone>(std::move(phone)),
-                                std::move(tracker), std::move(log)));
+  auto fake = std::make_unique<FakePhone>(std::move(phone));
+  out.phone = fake.get();
+  VKC_ASSIGN(out.lane, MobileLane::create(env.gpu.device, env.gpu.allocator,
+                                          std::move(fake), std::move(tracker),
+                                          std::move(log)));
   return out;
 }
 
@@ -457,6 +468,38 @@ int test_split(const Env& env) {
     CHECK(!(before && after));
   }
   CHECK(made->lane->close().ok());
+  // A frame alone between two losses: the lane takes the second loss's
+  // record while the first's is due, and still splits at both.
+  std::vector<PhoneFrame> lonely = ten_hz(10);  // 1.0-1.9 s
+  lonely.push_back({kS + 12 * 100 * kMs, 12});  // 2.2 s, after 10-11 lost
+  for (std::uint64_t i = 15; i < 26; ++i) {     // from 2.5 s, 13-14 lost
+    lonely.push_back({kS + i * 100 * kMs, i});
+  }
+  auto twice =
+      make_lane(env, lonely,
+                anchors_when([](std::uint64_t) { return true; }, Mat4f(1.0f)),
+                anchors_when(never, Mat4f(1.0f)));
+  CHECK(twice.ok() && run(env, *twice->lane, 100).ok());
+  CHECK(twice->lane->counts().splits == 2);
+  for (const auto& rec : *twice->rig) {
+    for (const std::uint64_t loss :
+         {kS + 12 * 100 * kMs, kS + 15 * 100 * kMs}) {
+      CHECK(!(rec.pts.front() < loss && rec.pts.back() >= loss));
+    }
+  }
+  CHECK(twice->lane->close().ok());
+  // An error the phone returns is counted, and the lane goes on.
+  auto failing =
+      make_lane(env, ten_hz(20),
+                anchors_when([](std::uint64_t) { return true; }, Mat4f(1.0f)),
+                anchors_when(never, Mat4f(1.0f)));
+  CHECK(failing.ok());
+  failing->phone->fail_before(5);
+  CHECK(run(env, *failing->lane, 80).ok());
+  CHECK(failing->lane->counts().errors == 1 &&
+        failing->lane->counts().paired == 20);
+  CHECK(failing->lane->report().find("a damaged record") != std::string::npos);
+  CHECK(failing->lane->close().ok());
   return 0;
 }
 
@@ -595,21 +638,22 @@ int test_background() {
   }
   CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(20));
   CHECK(!polled->exhausted());
-  // Frames come through in order, an error once between them, then the end.
-  const auto take = [&polled](std::vector<std::uint64_t>& got,
-                              std::size_t want) {
+  // Until the inner sensor has received n (bounded), yielding.
+  const auto received = [](sensor::IRgbdSensor& s, std::uint64_t n) {
     const auto until =
         std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (got.size() < want && std::chrono::steady_clock::now() < until) {
-      auto f = polled->poll();
-      if (f.ok() && *f) got.push_back((*f)->timestamp_ns);
-      if (!f.ok() || !*f) std::this_thread::yield();
+    while (s.stats().received < n && std::chrono::steady_clock::now() < until) {
+      std::this_thread::yield();
     }
+    return s.stats().received >= n;
   };
-  std::vector<std::uint64_t> got;
+  // The default queue of 1: a poll takes the newest, the older let go.
   gated->let_through(2);
-  take(got, 2);
-  CHECK((got == std::vector<std::uint64_t>{1, 2}));
+  CHECK(received(*polled, 2));
+  auto newest = polled->poll();
+  CHECK(newest.ok() && newest->has_value() && (*newest)->timestamp_ns == 2);
+  CHECK(polled->stats().dropped == 1 && polled->stats().delivered == 1);
+  // An error once, then the frames again; the end.
   gated->fail_once();
   bool errored = false;
   const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -620,14 +664,47 @@ int test_background() {
   }
   CHECK(errored);
   gated->let_through(3);
-  take(got, 5);
-  CHECK((got == std::vector<std::uint64_t>{1, 2, 3, 4, 5}));
+  CHECK(received(*polled, 5));
   const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
   while (!polled->exhausted() && std::chrono::steady_clock::now() < end) {
+    std::vector<sensor::RgbdFrame> rest;
+    CHECK(polled->drain(&rest).ok());
     std::this_thread::yield();
   }
   CHECK(polled->exhausted() && polled->stats().received == 5);
   polled->stop();
+  // A queue of 3: a drain takes every frame held, oldest first; a full
+  // queue lets its oldest go.
+  auto deep_inner = std::make_unique<GatedSensor>(5);
+  GatedSensor* deep_gate = deep_inner.get();
+  auto deep = vr_example::polled_in_background(std::move(deep_inner));
+  CHECK(deep->set_queue_depth(3).ok());
+  CHECK(deep->start().ok());
+  CHECK(deep->set_queue_depth(4).domain() ==
+        vkc::Status::Code::InvalidArgument);
+  deep_gate->let_through(2);
+  CHECK(received(*deep, 2));
+  std::vector<sensor::RgbdFrame> two;
+  CHECK(deep->drain(&two).ok() && two.size() == 2);
+  CHECK(two[0].timestamp_ns == 1 && two[1].timestamp_ns == 2);
+  deep_gate->let_through(3);
+  CHECK(received(*deep, 5));
+  std::vector<sensor::RgbdFrame> three;
+  CHECK(deep->drain(&three).ok() && three.size() == 3);
+  CHECK(three[0].timestamp_ns == 3 && three[2].timestamp_ns == 5);
+  CHECK(deep->stats().dropped == 0 && deep->stats().delivered == 5);
+  deep->stop();
+  auto small_inner = std::make_unique<GatedSensor>(5);
+  GatedSensor* small_gate = small_inner.get();
+  auto small = vr_example::polled_in_background(std::move(small_inner));
+  CHECK(small->set_queue_depth(2).ok() && small->start().ok());
+  small_gate->let_through(5);
+  CHECK(received(*small, 5));
+  std::vector<sensor::RgbdFrame> kept;
+  CHECK(small->drain(&kept).ok() && kept.size() == 2);
+  CHECK(kept[0].timestamp_ns == 4 && kept[1].timestamp_ns == 5);
+  CHECK(small->stats().dropped == 3);
+  small->stop();
   // Stopped while the inner poll waits for frames that never come.
   auto idle =
       vr_example::polled_in_background(std::make_unique<GatedSensor>(3));

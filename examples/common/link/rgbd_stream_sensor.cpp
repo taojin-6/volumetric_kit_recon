@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -22,6 +23,8 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <glm/glm.hpp>
 
 #include "link/failure_cap.hpp"
 #include "volumetric_kit/core/base/check.hpp"
@@ -56,6 +59,45 @@ namespace wire = volumetric_kit::sensor::wire;
 namespace hevc = volumetric_kit::sensor::hevc;
 using Code = vkc::Status::Code;
 using FrameResult = vkc::Result<std::optional<sensor::RgbdFrame>>;
+
+// A pose made in float on its device is rigid only to float's rounding: its
+// homogeneous row up to a few ulp off [0, 0, 0, 1] (ARKit's own transforms
+// read up to 3 ulp off 1 in the corner), and a rotation composed step on step
+// drifting off orthonormal (the device's map-step removal: 1e-5 after six
+// steps). Within these it is made rigid again -- the row exact, the rotation
+// the nearest one -- so frame prep, which holds the row to 1e-12 and the
+// rotation to 1e-6, takes the frame. A pose further off is handed on as
+// written, for the prep to refuse.
+constexpr double kFloatRowRounding = 1e-6;
+constexpr double kFloatRotationDrift = 1e-4;
+
+void exact_rigid(sensor::camera::Mat4d& m) noexcept {
+  if (!(std::fabs(m[0][3]) <= kFloatRowRounding &&
+        std::fabs(m[1][3]) <= kFloatRowRounding &&
+        std::fabs(m[2][3]) <= kFloatRowRounding &&
+        std::fabs(m[3][3] - 1.0) <= kFloatRowRounding)) {
+    return;
+  }
+  m[0][3] = 0.0;
+  m[1][3] = 0.0;
+  m[2][3] = 0.0;
+  m[3][3] = 1.0;
+  glm::dmat3 r(m);
+  const glm::dmat3 gram = glm::transpose(r) * r;
+  double drift = 0.0;
+  for (int c = 0; c < 3; ++c) {
+    for (int k = 0; k < 3; ++k) {
+      drift = std::max(drift, std::fabs(gram[c][k] - (c == k ? 1.0 : 0.0)));
+    }
+  }
+  // Orthonormal to double's rounding already (a calibration's): as written.
+  if (!(drift <= kFloatRotationDrift) || drift <= 1e-12) return;
+  // The polar factor by Newton's iteration, which squares the drift a step.
+  for (int i = 0; i < 4; ++i) r = 0.5 * (r + glm::inverse(glm::transpose(r)));
+  for (int c = 0; c < 3; ++c) {
+    for (int k = 0; k < 3; ++k) m[c][k] = r[c][k];
+  }
+}
 using Clock = std::chrono::steady_clock;
 
 // How long listen's wait for the first session reads at a time.
@@ -978,6 +1020,8 @@ FrameResult RgbdStreamSensor::State::take(const stream::Record& record) {
       frame.min_confidence < options.min_confidence) {
     frame.min_confidence = options.min_confidence;
   }
+  exact_rigid(frame.color_to_world);
+  exact_rigid(frame.depth_to_color);
   if (options.registration) {
     frame.color_to_world =
         options.registration->tracking_to_world * frame.color_to_world;

@@ -18,19 +18,27 @@
 /// either side), and drops it otherwise, so fill lands 2 to 7 s after
 /// capture. What the lane does each step goes into its log (`track_log.hpp`).
 ///
-/// **Pairing.** Records are taken in order. The first one taken pins the
+/// **Pairing.** The phone starts with the first gap, so nothing it sent while
+/// the cameras opened is waiting. Its frames are taken in order
+/// (`IRgbdSensor::drain`, a queue of 64). The first one taken pins the
 /// phone's clock to the rig's: its time pairs with the predicted time of the
 /// set it is taken for, and every later record is due at the set whose
 /// predicted time, on that offset, is at or past its own. A gap takes the
-/// newest record due and passes the older ones by. A file's records come as
-/// fast as they are read, so a replay repeats exactly; a live link's are read
-/// on a thread of their own (@ref polled_in_background), so a set never waits
-/// for the phone.
+/// newest record due and passes the older ones by, so a burst never leaves
+/// the lane behind. A file's records come as fast as they are read, so a
+/// replay repeats exactly; a live link's are read on a thread of their own
+/// (@ref polled_in_background), so a set never waits for the phone. An error
+/// the phone returns is counted and the lane goes on.
 ///
 /// **Splits.** Where records were lost over @ref kSplitGapNs or more (a gap in
-/// their sequence), the lane flushes the tracker before the next frame
-/// (`Tracker::flush`): a fit never holds frames on both sides of a loss, which
-/// may hide a map step the device's own step removal did not see.
+/// their sequence), the lane flushes the tracker before the first frame after
+/// the loss (`Tracker::flush`): a fit never holds frames on both sides of a
+/// loss, which may hide a map step the device's own step removal did not
+/// see.
+///
+/// **The log** has no `arkit_raw` row live: the wire carries no log of the
+/// device's removed map steps. A replay that has one gives it to its log
+/// (`RunSource::device_steps`).
 ///
 /// **Fill's colour** (pending owner decision): until the phone's picture is
 /// fused, fill is drawn in a fixed tint of its tier (@ref kAnchoredFillTint,
@@ -64,6 +72,10 @@ namespace vkc = volumetric_kit::core;
 /// the sets after.
 inline constexpr std::size_t kDrainCap = 3;
 
+/// The phone's queue (`IRgbdSensor::set_queue_depth`): 6 s of a 10 Hz
+/// phone, its oldest let go past it.
+inline constexpr std::size_t kPhoneQueue = 64;
+
 /// A loss this long or longer between two records starts the tracker's
 /// windows again (a split).
 inline constexpr std::uint64_t kSplitGapNs = 100'000'000;
@@ -93,15 +105,19 @@ volumetric_kit::recon::sender::Filler to_filler(track::Released&& released);
 /// @return OK; `Status::Code::Unsupported` beside FFS depth
 ///         (`source.depth` ffs), which stage 1 does not run the lane beside;
 ///         `Status::Code::InvalidArgument` under Classic fusion
-///         (`fusion.dynamic` false), since fill needs Dynamic.
+///         (`fusion.dynamic` false), since fill needs Dynamic, or with
+///         `operation: "stream"`, which fuses nothing.
 vkc::Status check_mobile(const config::Config& opt);
 
-/// @return @p sensor polled on a thread of its own, its frames queued (up to
-///         64) for a @ref sensor::IRgbdSensor::poll that never waits: what a
-///         live link needs, whose own poll waits for records. Its counters
-///         and @ref sensor::IRgbdSensor::exhausted are the inner sensor's,
+/// @return @p sensor polled on a thread of its own from its start, so a
+///         @ref sensor::IRgbdSensor::poll or `drain` never waits on it: what
+///         a live link needs, whose own poll waits for records. It keeps the
+///         interface's queue: `set_queue_depth` frames (1 by default), the
+///         oldest let go (counted dropped) when a newer one arrives on a
+///         full one; `poll` takes the newest, `drain` every frame, oldest
+///         first. Its other counters and `exhausted` are the inner sensor's
 ///         as of its last poll; an error the inner poll returns comes out of
-///         the next poll once, and the polling goes on.
+///         the next poll or drain once, and the polling goes on.
 std::unique_ptr<sensor::IRgbdSensor> polled_in_background(
     std::unique_ptr<sensor::IRgbdSensor> sensor);
 
@@ -117,6 +133,7 @@ class MobileLane {
     /// Frames the prep or the tracker refused: counted, and the lane goes on.
     std::uint64_t passed_over = 0;
     std::uint64_t splits = 0;      ///< Flushes at a loss.
+    std::uint64_t errors = 0;      ///< Errors the phone returned.
     std::uint64_t anchored = 0;    ///< Placed as Anchored fill.
     std::uint64_t unanchored = 0;  ///< Placed as Unanchored fill.
     std::uint64_t dropped = 0;     ///< Never placed.
@@ -124,13 +141,14 @@ class MobileLane {
   };
 
   /// @param device     The run's device; it and @p allocator outlive the lane.
-  /// @param phone      The phone, started here; null makes the empty lane,
-  ///                   whose every call does nothing.
+  /// @param phone      The phone, not started: its queue is set and it is
+  ///                   started at the first @ref next. Null makes the empty
+  ///                   lane, whose every call does nothing.
   /// @param tracker    Its tracker; required with a phone.
   /// @param log        Its log; required with a phone (an empty directory
   ///                   writes no files).
   /// @return The lane; `Status::Code::InvalidArgument` for a phone without a
-  ///         tracker or a log; or the phone's start's, or the prep's, error.
+  ///         tracker or a log; or the prep's error.
   static vkc::Result<std::unique_ptr<MobileLane>> create(
       vkc::Device& device, vkc::Allocator& allocator,
       std::unique_ptr<sensor::IRgbdSensor> phone,
@@ -177,7 +195,8 @@ class MobileLane {
 };
 
 /// @brief The run's lane: with `source.mobile` its session -- a file, or the
-///        phone dialling `tcp://ADDRESS:PORT`, waited for here and polled in
+///        phone dialling `tcp://ADDRESS:PORT`, waited for here up to 5
+///        minutes (a Ctrl+C ends the wait with the empty lane) and polled in
 ///        the background -- read depth alone at confidence 2 or more and
 ///        placed by `source.mobile_registration`
 ///        (`link::RgbdStreamSensor`), its tracker on @ref lane_tracking and

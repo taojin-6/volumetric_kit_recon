@@ -13,6 +13,8 @@
 //   sensor less its colour camera; every frame is its record's, bit for bit,
 //   its depth and plane read in place, held past the sensor; rgbd_breach is
 //   empty; a restart reads it again.
+// - A pose a float device left off rigid (its homogeneous row rounded, its
+//   rotation drifted 1e-5) comes back rigid; one further off as written.
 // - A registration places a tracked sensor's poses, and is refused for a
 //   fixed sensor, another sensor, session or epoch, or one that does not
 //   validate. Two sensors need Options::sensor. The floor raises records
@@ -51,6 +53,7 @@
 #include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/grid/stream/stream_reader.hpp"
 #include "volumetric_kit/grid/stream/stream_writer.hpp"
+#include "volumetric_kit/sensor/camera/geometry.hpp"
 #include "volumetric_kit/sensor/camera/tracked_registration.hpp"
 #include "volumetric_kit/sensor/rgbd_frame.hpp"
 #include "volumetric_kit/sensor/rgbd_sensor.hpp"
@@ -890,9 +893,59 @@ int test_open_refusals() {
 
 }  // namespace
 
+// A pose a float device left off rigid -- its homogeneous row up to 3 ulp
+// off (ARKit's own), its rotation 1e-5 off orthonormal (the device's step
+// removal) -- comes back rigid as frame prep reads it, its row exact, its
+// rotation the nearest one; one further off comes back as written.
+int test_rounded_pose_row() {
+  const vkc::test::Scratch scratch("recon_link_rgbd_row_");
+  const std::string path = (scratch.path / "ipad.vrst").string();
+  Take take = make_take(ipad_info(), 6, 2);
+  take.frames[1].color_to_world[3][3] = double(0.99999988f);
+  take.frames[2].color_to_world[3][3] = double(1.00000024f);
+  take.frames[2].color_to_world[1][3] = double(-1.0e-7f);
+  take.frames[3].color_to_world[3][3] = 0.999;
+  // A rotation 1e-5 off orthonormal (one axis stretched), and one 1e-3 off.
+  for (int k = 0; k < 3; ++k) take.frames[4].color_to_world[0][k] *= 1.00001;
+  for (int k = 0; k < 3; ++k) take.frames[5].color_to_world[0][k] *= 1.001;
+  CHECK(write_session(path, {&take}).ok());
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> opened =
+      RgbdStreamSensor::open_file(path, {});
+  CHECK(opened.ok());
+  const vkc::Result<std::vector<sensor::RgbdFrame>> read =
+      read_all(*opened.value());
+  CHECK(read.ok() && read.value().size() == 6);
+  for (std::size_t i = 0; i < 3; ++i) {
+    const camera::Mat4d& m = read.value()[i].color_to_world;
+    CHECK(m[0][3] == 0.0 && m[1][3] == 0.0 && m[2][3] == 0.0 && m[3][3] == 1.0);
+    CHECK(camera::check_rigid(m).ok());
+    for (int c = 0; c < 4; ++c) {
+      for (int r = 0; r < 3; ++r) {
+        CHECK(m[c][r] == take.frames[i].color_to_world[c][r]);
+      }
+    }
+  }
+  CHECK(read.value()[3].color_to_world[3][3] == 0.999);
+  // The drifted rotation comes back the nearest one, its translation kept.
+  const camera::Mat4d& drifted = read.value()[4].color_to_world;
+  CHECK(camera::check_rigid(drifted).ok());
+  for (int c = 0; c < 4; ++c) {
+    for (int r = 0; r < 3; ++r) {
+      CHECK(std::fabs(drifted[c][r] - take.frames[4].color_to_world[c][r]) <
+            2e-5);
+    }
+  }
+  CHECK(drifted[3] == take.frames[4].color_to_world[3]);
+  CHECK(!camera::check_rigid(take.frames[4].color_to_world).ok());
+  const camera::Mat4d& far = read.value()[5].color_to_world;
+  CHECK(far[0] == take.frames[5].color_to_world[0]);
+  return 0;
+}
+
 int main() {
   if (test_fixed_round_trip() != 0) return 1;
   if (test_tracked_round_trip() != 0) return 1;
+  if (test_rounded_pose_row() != 0) return 1;
   if (test_registration_refusals() != 0) return 1;
   if (test_two_sensors() != 0) return 1;
   if (test_floor() != 0) return 1;

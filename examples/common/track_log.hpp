@@ -191,6 +191,9 @@ class TrackLog {
   /// @return The run so far.
   const TrackRun& run() const noexcept;
 
+  /// @return The directory it writes into; empty for none.
+  const std::string& directory() const noexcept;
+
   /// @brief Write the pose files and flush and close every file. Idempotent.
   /// @return OK, or the first write's failure.
   vkc::Status close();

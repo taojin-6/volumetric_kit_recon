@@ -1076,6 +1076,26 @@ int test_split(const Env& env) {
       CHECK(near(rec.prior.correction, at));
     }
   }
+  // A split with every frame placed already (the ring empty) lets the
+  // anchors before it go too: 2 s, between the 1 s anchor before it and the
+  // 3 s one after, is not interpolated across it.
+  track::TrackerConfig e = every_frame({"rig"}, 5 * kS);
+  ASSIGN_OR_FAIL(
+      Rig q, make(e, {anchors_when(
+                         [](std::uint64_t t) { return t == kS || t == 3 * kS; },
+                         at)}));
+  ASSIGN_OR_FAIL(const track::TrackStep first,
+                 step(env, *q.tracker, frame_at(kS)));
+  CHECK(first.released.size() == 1);  // placed at once: the ring is empty
+  CHECK(q.tracker->flush().poses.empty());
+  std::vector<track::TrackStep> later;
+  for (const std::uint64_t t : {2 * kS, 3 * kS}) {
+    ASSIGN_OR_FAIL(track::TrackStep s, step(env, *q.tracker, frame_at(t)));
+    later.push_back(std::move(s));
+  }
+  later.push_back(q.tracker->flush());
+  const std::optional<track::FramePose> two = pose_of(later, 0, 2 * kS);
+  CHECK(two.has_value() && two->from == track::PoseFrom::Coasting);
   return 0;
 }
 

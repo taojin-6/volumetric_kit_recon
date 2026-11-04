@@ -312,6 +312,7 @@ Mat4f world_pose(const FrameRecord& f) {
 // --- TrackLog ---------------------------------------------------------------
 
 struct TrackLog::State {
+  std::string directory;      // as given
   std::filesystem::path dir;  // empty: no files
   TrackRun run;
   vkc::StageMetrics rows;
@@ -339,6 +340,7 @@ vkc::Result<std::unique_ptr<TrackLog>> TrackLog::open(
     const std::string& directory, const track::Tracker& tracker,
     RunSource source) try {
   auto s = std::make_unique<State>();
+  s->directory = directory;
   s->dir = directory;
   s->run.source = std::move(source);
   const track::TrackerConfig& config = tracker.config();
@@ -395,6 +397,10 @@ vkc::Result<std::unique_ptr<TrackLog>> TrackLog::open(
 vkc::StageMetrics& TrackLog::rows() noexcept { return state_->rows; }
 
 const TrackRun& TrackLog::run() const noexcept { return state_->run; }
+
+const std::string& TrackLog::directory() const noexcept {
+  return state_->directory;
+}
 
 vkc::Status TrackLog::write(const track::TrackStep& step) try {
   State& s = *state_;

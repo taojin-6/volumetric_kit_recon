@@ -595,10 +595,11 @@ void Tracker::abandon(const PendingStep& pending) noexcept {
 TrackStep Tracker::flush() {
   State& s = *state_;
   TrackStep step;
-  if (s.outstanding || s.ring.empty()) return step;
-  s.settle(step, *s.last_pts, true);
+  if (s.outstanding) return step;
+  if (!s.ring.empty()) s.settle(step, *s.last_pts, true);
   // A split: frames recorded after it are placed by fits after it alone, so
-  // no interpolation bridges a map step the frames before it may hold.
+  // no interpolation bridges a map step the frames before it may hold. So
+  // too when every frame was placed already.
   for (Chain& c : s.chains) c.anchored.clear();
   return step;
 }
