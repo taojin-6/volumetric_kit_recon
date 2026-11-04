@@ -634,10 +634,9 @@ vr_target_warnings(recon_tsdf_filler_test)
 add_test(NAME recon_tsdf_filler COMMAND recon_tsdf_filler_test)
 
 # tsdf rim distance: one camera's plate outline at its true edge in either mode,
-# the voxels beside it at their Euclidean distance, a thin rod solid; a plate
-# moving past one Dynamic camera with nothing beside its moving outline; and a
-# sphere moving past three Dynamic cameras covered in every set, nothing of it
-# left once gone. Skips (exit 0) where no device is present.
+# the voxels beside it at their Euclidean distance, a thin rod solid; and a
+# plate moving past one Dynamic camera with nothing beside its moving outline,
+# nothing of it left once gone. Skips (exit 0) where no device is present.
 add_executable(recon_tsdf_rim_distance_test tsdf_rim_distance_test.cpp)
 target_link_libraries(
   recon_tsdf_rim_distance_test
