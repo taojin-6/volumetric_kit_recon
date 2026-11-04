@@ -233,7 +233,13 @@ void main() {
       uint held = solved ? 0u : 0x3fu;
       st.lambda_max = solved ? top * trace : 0.0;
       for (uint i = 0u; i < 6u; ++i) {
-        float rel = solved ? max(lam[order[i]] / top, 0.0) : 0.0;
+        // The largest is 1 exactly and the rest at most 1: a device's
+        // x / x need not be 1 (an RTX 4090's was not, at the conformance
+        // test's fit at the truth, and is above 1 for 2.7% of x), so a
+        // second eigenvalue equal to the top could exceed it.
+        float rel = !solved ? 0.0
+                            : (i == 5u ? 1.0
+                                       : clamp(lam[order[i]] / top, 0.0, 1.0));
         st.rel[i] = rel;
         if (solved && rel < pc.tau) held |= 1u << i;
       }

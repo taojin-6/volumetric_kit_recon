@@ -1034,9 +1034,13 @@ one PR. `PointToPlane` is the one kind:
   with 5 mm for the model. It counts attempts, hits (the model answered) and
   inliers, and with `see_through_m`, at the finest level, the hits outside
   a gate that lie that far in front of or behind the surface, so they never
-  overlap the inliers. Workgroups are per view, summed in fixed trees, with
-  no float atomics, so a fit repeats bit for bit and is the same beside
-  another.
+  overlap the inliers. A point's model pixel is the nearest at the finest
+  level and a quarter pixel past the point at the coarser ones: at a pass's
+  first iteration the estimate is the cast's pose, so a coarser point lies
+  exactly between two pixels (u = 4x + 1.5 at level 2, 2x + 0.5 at level 1),
+  a tie the device's last bit would break, so devices would pick apart.
+  Workgroups are per view, summed in fixed trees, with no float atomics, so
+  a fit repeats bit for bit (on NVIDIA too) and is the same beside another.
 - *The solve* (one workgroup) takes the data H's eigensystem by cyclic
   Jacobi and steps along the directions at or above tau (1e-3) only, with
   the prior term on the data rescaled to `prior_n_eff` points a frame with

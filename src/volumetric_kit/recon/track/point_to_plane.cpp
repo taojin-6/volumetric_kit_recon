@@ -36,6 +36,7 @@
 #include <utility>
 #include <vector>
 
+#include "fit_abi.hpp"
 #include "frame_check.hpp"
 #include "se3.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -68,7 +69,6 @@ constexpr int kLevels = 3;
 constexpr std::uint32_t kLocal = 64;
 // The reduce's partials: at most this many workgroups a dispatch.
 constexpr std::uint32_t kMaxReduceGroups = 1024;
-constexpr std::uint32_t kPartial = 33;  // track_common.glsl
 // About this many pixels a reduce thread, before the group cap.
 constexpr std::uint32_t kPixelsPerThread = 8;
 // The scale's histogram: 1 cm bins to 5.12 m.
@@ -87,50 +87,7 @@ constexpr float kDamping = 1e-4f;
 constexpr float kStopM = 0.01f;
 constexpr float kStopDeg = 0.3f;
 
-// Mirrors FitView in track_common.glsl.
-struct FitView {
-  Mat4f cam_to_world{1.0f};
-  Vec4f k{0.0f};
-  Vec3f noise{0.0f};
-  std::uint32_t entry = 0;
-  float min_depth = 0.0f;
-  float max_depth = 0.0f;
-  std::uint32_t pad0 = 0;
-  std::uint32_t pad1 = 0;
-};
-static_assert(sizeof(FitView) == 112, "FitView layout drift");
-static_assert(offsetof(FitView, entry) == 92, "FitView layout drift");
-
-// Mirrors FitState in track_common.glsl.
-struct FitState {
-  Mat4f correction{1.0f};
-  Mat4f prior{1.0f};
-  Mat4f pass_start{1.0f};
-  Vec3f origin{0.0f};
-  float scale = 1.0f;
-  Vec2f info{0.0f};
-  float n_eff = 0.0f;
-  std::uint32_t frames = 0;
-  std::uint32_t serial_lo = 0;
-  std::uint32_t serial_hi = 0;
-  std::uint32_t stop = 0;
-  std::uint32_t diverged = 0;
-  float attempts = 0.0f;
-  float hits = 0.0f;
-  float inliers = 0.0f;
-  float in_front = 0.0f;
-  float behind = 0.0f;
-  float raw2 = 0.0f;
-  std::uint32_t evaluated = 0;
-  float lambda_max = 0.0f;
-  float rel[6] = {};
-  float dirs[36] = {};
-  std::uint32_t held = 0x3f;
-};
-static_assert(sizeof(FitState) == 444, "FitState layout drift");
-static_assert(offsetof(FitState, origin) == 192, "FitState layout drift");
-static_assert(offsetof(FitState, attempts) == 240, "FitState layout drift");
-static_assert(offsetof(FitState, held) == 440, "FitState layout drift");
+// FitView, FitState and ReducePush: fit_abi.hpp.
 
 struct FilterPush {
   std::uint32_t pixels, offset;
@@ -156,12 +113,6 @@ struct ScalePush {
   float bin_m;
 };
 static_assert(sizeof(ScalePush) == 20, "ScalePush layout drift");
-
-struct ReducePush {
-  std::uint32_t pixels, groups_per_view, model_width, model_height, finest;
-  float gate, gate_sigmas, normal_cos, huber_sigmas, model_sigma, see_through;
-};
-static_assert(sizeof(ReducePush) == 44, "ReducePush layout drift");
 
 struct SolvePush {
   std::uint32_t groups, groups_per_view, views, mode, finest;

@@ -855,6 +855,34 @@ vr_target_warnings(recon_track_fitter_conformance_test)
 add_test(NAME recon_track_fitter_conformance
          COMMAND recon_track_fitter_conformance_test)
 
+# track reduce tie: the point-to-plane reduce's model pick, the kernel alone
+# (its source embedded here, its ABI the fitter's internal fit_abi.hpp): a
+# coarser level's point on a rounding tie picks a quarter pixel past it, and the
+# finest level picks the nearest pixel; the counts and H against the host's,
+# which fail without the rule on every device. NVIDIA's run-to-run change shows
+# only in VR_TRACK_TIE_SOAK=1's 300k dispatches (17-19 s), not in the default
+# 40. Skips with no device.
+add_executable(recon_track_reduce_tie_test track_reduce_tie_test.cpp)
+target_include_directories(
+  recon_track_reduce_tie_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/track)
+target_link_libraries(
+  recon_track_reduce_tie_test
+  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_track
+          Vulkan::Vulkan)
+vr_embed_shaders(
+  recon_track_reduce_tie_test
+  SYMBOL_PREFIX
+  vrt_
+  INCLUDE_TARGETS
+  volumetric_kit::sensor_frame
+  WITH_SRC
+  SHADERS
+  "${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/track/shaders/track_reduce_point_to_plane.comp"
+)
+vr_target_warnings(recon_track_reduce_tie_test)
+add_test(NAME recon_track_reduce_tie COMMAND recon_track_reduce_tie_test)
+
 # Start the slowest tests first under `ctest --parallel`. Without a COST, CTest
 # runs tests in the order they were added, and a fresh CI runner has no timing
 # history, so a slow test added late finished last. Seconds under the sanitizers

@@ -4,11 +4,13 @@
 // reduced per workgroup (track_reduce_common.glsl). Workgroup g serves view
 // g / groups_per_view, its threads striding over that view's pixels. A
 // frame point p (its entry's vertex map) goes to the world at the estimate,
-// C * A_i, and projects into view i's cast camera; the nearest model pixel
-// that hit gives the surface point q and normal n_q. It is an inlier when
-// its normal lies within the normal gate of n_q and |p - q| within the
-// level's distance gate: a fixed one at the coarser levels, max(gate_sigmas
-// sigma, the floor) at the finest, sigma^2 = sigma(z)^2 + model_sigma^2.
+// C * A_i, and projects into view i's cast camera; the model pixel there
+// (the nearest at the finest level, a quarter pixel past the point at the
+// coarser ones: below) gives the surface point q and normal n_q, if the
+// cast hit there. It is an inlier when its normal lies within the normal
+// gate of n_q and |p - q| within the level's distance gate: a fixed one at
+// the coarser levels, max(gate_sigmas sigma, the floor) at the finest,
+// sigma^2 = sigma(z)^2 + model_sigma^2.
 // r = n_q . (p - q), Huber-weighted in sigmas, w = huber / sigma^2, and the
 // scaled Jacobian (s n_q, (p - o) x n_q) for the twist (v / s, w) about o.
 // The see-through counters take the finest level's hits that are not
@@ -95,7 +97,12 @@ void main() {
     if (!vs_project_pinhole(pm, mk, msize, uv)) {
       continue;
     }
-    uvec2 m = vs_nearest_pixel(uv, msize);
+    // At a pass's first iteration the estimate is the cast's pose, so a
+    // coarser level's point lands on a rounding tie between two model
+    // pixels (u = 4 x + 1.5 at level 2, 2 x + 0.5 at level 1), and the
+    // device's last bit would pick one. A quarter pixel moves the pick off
+    // it; at the finest level u = x, half a pixel from any tie.
+    uvec2 m = vs_nearest_pixel(uv + vec2(pc.finest != 0u ? 0.0 : 0.25), msize);
     uint mi = mbase + m.y * pc.model_width + m.x;
     float d = mdepth[mi];
     if (!(d > 0.0)) {
