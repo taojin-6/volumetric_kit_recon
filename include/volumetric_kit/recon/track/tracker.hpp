@@ -42,8 +42,8 @@
 /// - *The ring.* A frame is held until the driver has released or dropped
 ///   it and every chain has decided it: up to the longer of hold_ns and the
 ///   methods' windows of frames. It holds each frame as recorded, its colour
-///   too; a caller that takes colour from elsewhere records frames without
-///   it.
+///   too; a caller that does not need a released frame's colour records
+///   frames without it.
 ///
 /// All timing is by frame timestamps, never wall time, so replays repeat
 /// exactly. One thread, one step outstanding. The caller owns the queue: it
