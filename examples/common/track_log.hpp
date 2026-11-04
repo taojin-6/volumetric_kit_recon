@@ -44,6 +44,11 @@
 ///   camera pose in the world (`correction * device_pose`), `t` its timestamp
 ///   in seconds; written at @ref TrackLog::close, in time order, so evo and the
 ///   TUM tools read them.
+/// - `tags.csv`: each hold of the origin tag (live_tag.hpp's `TagHold`):
+///   `first_pts_ns`, `last_pts_ns`, `stills`, `use` (`registered`, `passed`,
+///   `refused`), `miss`, `rms_px`, `worst_px`, `range_m`, `off_normal_deg`,
+///   `tracking_to_world` and `reason` (the rest of the line). Written as it
+///   goes, for analysis; not part of @ref TrackRun, so not read back.
 
 #include <cstddef>
 #include <cstdint>
@@ -51,8 +56,10 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "live_tag.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
@@ -188,6 +195,21 @@ class TrackLog {
   ///         closed (`Status::Code::InvalidArgument`).
   vkc::Status write(const track::TrackStep& step);
 
+  /// @brief One hold of the origin tag: a `tags.csv` row.
+  /// @return OK; `Status::Code::IoError` for a write that fails, or once
+  ///         closed (`Status::Code::InvalidArgument`).
+  vkc::Status write(const TagHold& hold);
+
+  /// @brief Place the run once the tag registers it: `run.csv`'s
+  ///        `registration` and `tracking_to_world` rewritten, and @ref run's.
+  /// @param registration       What placed it: its registration file, say.
+  /// @param tracking_to_world  The registration's transform.
+  /// @return OK; `Status::Code::InvalidArgument` after a step with frames, a
+  ///         second time, or once closed; `Status::Code::IoError` for a write
+  ///         that fails.
+  vkc::Status registered(std::string registration,
+                         const volumetric_kit::recon::Mat4f& tracking_to_world);
+
   /// @return The run so far.
   const TrackRun& run() const noexcept;
 
@@ -231,5 +253,11 @@ vkc::Result<TrackRun> read_track_log(const std::string& directory);
 /// @return The table, or a file's write error.
 vkc::Result<std::string> summarize(const TrackRun& run,
                                    const std::string& directory = {});
+
+/// @return How far pose @p a is from pose @p b: their camera centres (mm) and
+///         their rotations (deg), as every distance of @ref summarize is
+///         measured.
+std::pair<double, double> pose_gap(const volumetric_kit::recon::Mat4f& a,
+                                   const volumetric_kit::recon::Mat4f& b);
 
 }  // namespace vr_example

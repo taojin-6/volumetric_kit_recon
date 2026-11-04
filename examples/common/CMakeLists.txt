@@ -56,4 +56,13 @@ add_library(vr_example_mobile STATIC live_mobile.cpp track_log.cpp)
 target_link_libraries(
   vr_example_mobile PUBLIC vr_example_link volumetric_kit::recon_track
                            volumetric_kit::recon_sender)
+# The origin tag's watch (live_tag.hpp): on calib's detector and solve and
+# sensor's picture readback with VR_WITH_CALIB, a refusal without.
+if(VR_WITH_CALIB)
+  target_sources(vr_example_mobile PRIVATE live_tag.cpp)
+  target_link_libraries(vr_example_mobile PRIVATE volumetric_kit::calib_detect
+                                                  volumetric_kit::calib_solve)
+else()
+  target_sources(vr_example_mobile PRIVATE live_tag_off.cpp)
+endif()
 vr_target_warnings(vr_example_mobile)

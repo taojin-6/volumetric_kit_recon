@@ -83,6 +83,7 @@
 /// @warning Not thread-safe: open, start, poll, drain and stop from one
 ///          thread.
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -322,6 +323,10 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
 
   /// @return The live link's counts since @ref listen; all 0 for a file.
   const LinkStats& link_stats() const noexcept;
+
+  /// @return The session's id (grid's `Session::id`): the file's, or the
+  ///         first live session's, which every later connection must match.
+  const std::array<std::uint8_t, 16>& session_id() const noexcept;
 
  private:
   struct State;  // the records' source, its place, the decoder, the join

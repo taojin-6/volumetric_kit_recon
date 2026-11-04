@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
+#include <filesystem>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -22,6 +23,7 @@
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/recon/tsdf/source.hpp"
+#include "volumetric_kit/sensor/camera/array_calibration.hpp"
 #include "volumetric_kit/sensor/camera/tracked_registration.hpp"
 #include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
 
@@ -70,9 +72,12 @@ vkc::Status check_mobile(const config::Config& opt) {
         "source.mobile is not run by operation stream, which fuses nothing");
   }
   if (opt.source.mobile->registration.empty()) {
-    return vkc::Status::invalid_argument(
-        "source.mobile needs source.mobile_registration: the lane places a "
-        "phone only by its registration file");
+    // Registered by the origin tag: this build must find it, and the
+    // calibration's world must be a tag.
+    VKC_ASSIGN(const sensor::camera::ArrayCalibration rig,
+               sensor::camera::read_array_calibration(opt.source.calibration));
+    VKC_TRY(TagWatch::check(rig.world).with_context(
+        "source.mobile without source.mobile_registration"));
   }
   return {};
 }
@@ -228,6 +233,20 @@ struct MobileLane::State {
   // The tracker goes after the log, which its rows are named by.
   std::unique_ptr<track::Tracker> tracker;
   std::unique_ptr<TrackLog> log;
+  // The origin tag's watch: let go before the phone stops.
+  std::unique_ptr<TagWatch> tags;
+  bool by_tag = false;
+  bool placed = true;  // false until the tag registers the phone
+  sensor::camera::Mat4d tracking_to_world{1.0};  // the tag's registration
+  // The newest paired frame: its time, and its colour camera in the phone's
+  // own world, where the gaps are measured.
+  std::optional<std::uint64_t> first_paired;
+  sensor::camera::Mat4d newest_tracking{1.0};
+  std::optional<Mat4f> rig_correction;  // the rig chain's, after its last fit
+  bool rig_anchored = false;            // its first Anchored fit printed
+  std::optional<std::uint64_t> registered_after;  // the first frame to it
+  TagWatch::Counts tag_counts;                    // as of the last take
+  std::string first_tag_failure;
   // The frames placed, not yet handed to a send.
   std::deque<sender::Filler> queue;
   // The records taken from the phone, oldest first, not yet due.
@@ -256,8 +275,95 @@ struct MobileLane::State {
     if (counts.passed_over++ == 0) first_refusal = why.message();
   }
 
+  // The newest paired frame's camera as the tag registered it.
+  Mat4f registered_camera() const {
+    return Mat4f(tracking_to_world * newest_tracking);
+  }
+
+  // The rig chain's fits; on the tag, its first Anchored one prints how far
+  // it moved the registration.
+  void watch_rig(const track::TrackStep& step) {
+    for (const track::ChainFit& f : step.fits) {
+      if (f.chain != 0 || !f.refused.empty()) continue;  // the rig chain's
+      rig_correction = f.judged.correction;
+      if (!by_tag || rig_anchored ||
+          f.judged.state != track::TrackState::Anchored) {
+        continue;
+      }
+      rig_anchored = true;
+      const Mat4f at = registered_camera();
+      const auto [mm, deg] = pose_gap(f.judged.correction * at, at);
+      std::printf(
+          "phone: first rig fit: %.1f cm / %.1f deg from the tag's "
+          "registration\n",
+          mm / 10.0, deg);
+    }
+  }
+
+  // The session registered by the tag's first hold that passed: frames are
+  // placed from now on, and the run's log and registration file say so.
+  vkc::Status register_by(const sensor::camera::TrackedRegistration& reg,
+                          const TagHold& hold) {
+    placed = true;
+    tracking_to_world = reg.tracking_to_world;
+    registered_after = hold.last_pts_ns - first_paired.value_or(0);
+    std::string where = "tag";
+    if (!log->directory().empty()) {
+      where = (std::filesystem::path(log->directory()) / "registration.json")
+                  .string();
+      VKC_TRY(sensor::camera::write_tracked_registration(
+          where, reg, vkc::WriteMode::CreateNew));
+    }
+    return log->registered(std::move(where), Mat4f(reg.tracking_to_world));
+  }
+
+  // What the watch found: each hold logged and printed, the first that
+  // passed registering the session, a passed one after it measured against
+  // the rig chain; the first failure printed, every one counted.
+  vkc::Status apply(TagNews news) {
+    for (const std::string& f : news.failures) {
+      if (!first_tag_failure.empty()) break;
+      first_tag_failure = f;
+      std::printf("phone: tag search failed (counted, the run goes on): %s\n",
+                  f.c_str());
+    }
+    for (const TagHold& h : news.holds) {
+      VKC_TRY(log->write(h));
+      if (h.use == TagHold::Use::Refused) {
+        std::printf("phone: tag hold refused: %s: %s\n", h.miss.c_str(),
+                    h.reason.c_str());
+        continue;
+      }
+      std::string outcome = "registered";
+      if (h.use == TagHold::Use::Registered) {
+        VKC_CHECK(news.registered.has_value(),
+                  "MobileLane: a registering hold without its registration");
+        VKC_TRY(register_by(*news.registered, h));
+      } else if (!rig_correction) {
+        outcome = "passed, no rig fit yet (logged)";
+      } else {
+        const auto [mm, deg] =
+            pose_gap(Mat4f(h.tracking_to_world * newest_tracking),
+                     *rig_correction * registered_camera());
+        char buf[96];
+        std::snprintf(buf, sizeof(buf),
+                      "passed, %.1f cm / %.1f deg from the rig chain (logged)",
+                      mm / 10.0, deg);
+        outcome = buf;
+      }
+      std::printf(
+          "phone: tag hold: %u stills over %.1f s, RMS %.1f px, worst %.1f "
+          "px, %.1f m, %.0f deg off normal -> %s\n",
+          h.stills, double(h.last_pts_ns - h.first_pts_ns) * 1e-9, h.rms_px,
+          h.worst_px, h.range_m, h.off_normal_deg, outcome.c_str());
+    }
+    tag_counts = tags->counts();
+    return {};
+  }
+
   // A step's placements into the queue, its counts, and the log.
   vkc::Status take(const track::TrackStep& step) {
+    watch_rig(step);
     VKC_TRY(log->write(step));
     for (const track::Released& r : step.released) {
       track::Released copy = r;
@@ -349,17 +455,33 @@ struct MobileLane::State {
     f.frame.color_encoding = {};
   }
 
-  // One phone frame: prepared and its due fits recorded in one batch,
-  // waited on here, then judged, placed and logged.
-  vkc::Status track_one(const vol::VoxelBlockGrid& grid,
-                        sensor::RgbdFrame frame) {
-    // Every loss before this frame: one flush (no frame between them was
-    // recorded).
+  // A frame paired: shown to the tag's watch, then tracked once placed. Every
+  // loss before it is one split (no frame between them was paired).
+  vkc::Status paired(const vol::VoxelBlockGrid& grid, sensor::RgbdFrame frame) {
     bool split = false;
     while (!splits.empty() && splits.front() <= frame.timestamp_ns) {
       splits.pop_front();
       split = true;
     }
+    if (!first_paired) first_paired = frame.timestamp_ns;
+    newest_tracking = frame.color_to_world;
+    if (tags) {
+      if (split) tags->split();
+      VKC_TRY(tags->see(frame));  // before track_one lets its picture go
+    }
+    if (!placed) {
+      ++counts.unregistered;  // nothing tracked before the tag
+      return {};
+    }
+    if (tags) frame.color_to_world = tracking_to_world * frame.color_to_world;
+    return track_one(grid, std::move(frame), split);
+  }
+
+  // One phone frame: prepared and its due fits recorded in one batch,
+  // waited on here, then judged, placed and logged; after a loss, the
+  // tracker flushed first.
+  vkc::Status track_one(const vol::VoxelBlockGrid& grid,
+                        sensor::RgbdFrame frame, bool split) {
     if (split) {
       ++counts.splits;
       VKC_TRY(take(tracker->flush()));
@@ -422,13 +544,16 @@ struct MobileLane::State {
 MobileLane::MobileLane(std::unique_ptr<State> state) noexcept
     : state_(std::move(state)) {}
 MobileLane::~MobileLane() {
-  if (state_ && state_->phone) state_->phone->stop();
+  if (!state_) return;
+  state_->tags.reset();  // its thread may hold a picture of the phone's
+  if (state_->phone) state_->phone->stop();
 }
 
 vkc::Result<std::unique_ptr<MobileLane>> MobileLane::create(
     vkc::Device& device, vkc::Allocator& allocator,
     std::unique_ptr<sensor::IRgbdSensor> phone,
-    std::unique_ptr<track::Tracker> tracker, std::unique_ptr<TrackLog> log) {
+    std::unique_ptr<track::Tracker> tracker, std::unique_ptr<TrackLog> log,
+    std::unique_ptr<TagWatch> tags) {
   auto s = std::make_unique<State>();
   s->device = &device;
   s->allocator = &allocator;
@@ -445,6 +570,9 @@ vkc::Result<std::unique_ptr<MobileLane>> MobileLane::create(
     s->phone = std::move(phone);
     s->tracker = std::move(tracker);
     s->log = std::move(log);
+    s->by_tag = tags != nullptr;
+    s->placed = !s->by_tag;
+    s->tags = std::move(tags);
   }
   return std::unique_ptr<MobileLane>(new MobileLane(std::move(s)));
 }
@@ -461,9 +589,13 @@ vkc::Result<std::vector<sender::Filler>> MobileLane::next(
     VKC_TRY(s.phone->start());
     s.started = true;
   }
+  if (s.tags) {
+    VKC_ASSIGN(TagNews news, s.tags->take());
+    VKC_TRY(s.apply(std::move(news)));
+  }
   if (!s.ended) {
     std::optional<sensor::RgbdFrame> due = s.pair(next_set_ns);
-    if (due) VKC_TRY(s.track_one(grid, std::move(*due)));
+    if (due) VKC_TRY(s.paired(grid, std::move(*due)));
     if (s.held.empty() && s.phone->exhausted()) VKC_TRY(s.end());
   }
   while (!s.queue.empty() && out.size() < kDrainCap) {
@@ -482,6 +614,13 @@ vkc::Status MobileLane::close() {
   State& s = *state_;
   if (!s.phone || s.closed) return {};
   s.closed = true;
+  vkc::Status tagged;
+  if (s.tags) {  // its last news, then let go before the phone stops
+    vkc::Result<TagNews> news = s.tags->take();
+    tagged = news.ok() ? s.apply(std::move(news).value()) : news.status();
+    s.tags.reset();
+  }
+  VKC_TRY(tagged);
   VKC_TRY(s.end());  // placed, not fused: the run is over
   s.phone->stop();
   VKC_TRY(s.log->close());
@@ -520,6 +659,29 @@ std::string MobileLane::report() const {
       static_cast<unsigned long long>(c.dropped),
       static_cast<unsigned long long>(c.fused), s.queue.size());
   std::string out = buf;
+  if (s.by_tag) {
+    const TagWatch::Counts& t = s.tag_counts;
+    char when[96];
+    if (s.registered_after) {
+      std::snprintf(when, sizeof(when),
+                    "registered at %.1f s, %llu frames before it",
+                    double(*s.registered_after) * 1e-9,
+                    static_cast<unsigned long long>(c.unregistered));
+    } else {
+      std::snprintf(when, sizeof(when), "not registered, %llu frames",
+                    static_cast<unsigned long long>(c.unregistered));
+    }
+    std::snprintf(buf, sizeof(buf),
+                  "  tag: %llu searched, %llu stills, %llu holds (%llu "
+                  "refused), %llu replaced, %llu failed; %s\n",
+                  static_cast<unsigned long long>(t.candidates),
+                  static_cast<unsigned long long>(t.stills),
+                  static_cast<unsigned long long>(t.holds),
+                  static_cast<unsigned long long>(t.refused),
+                  static_cast<unsigned long long>(t.replaced),
+                  static_cast<unsigned long long>(t.failed), when);
+    out += buf;
+  }
   if (!s.first_refusal.empty()) {
     out += "  first passed over: " + s.first_refusal + "\n";
   }
@@ -536,36 +698,66 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
     return MobileLane::create(device, allocator, {}, {}, {});
   VKC_TRY(check_mobile(opt));  // every refusal before any wait
   const config::MobileSession& m = *opt.source.mobile;
+  const std::filesystem::path dir = opt.diagnostics.track_log;
+  const bool by_tag = m.registration.empty();
   link::RgbdStreamSensor::Options options;
-  VKC_ASSIGN(options.registration,
-             sensor::camera::read_tracked_registration(m.registration));
   options.min_confidence = 2;  // the phone's high, whatever it fused at
   RunSource source;
-  source.registration = m.registration;
-  source.tracking_to_world = Mat4f(options.registration->tracking_to_world);
   source.device = device.caps().properties().deviceName;
-  std::unique_ptr<sensor::IRgbdSensor> phone;
+  sensor::camera::WorldFrame world;
+  if (by_tag) {
+    VKC_ASSIGN(const sensor::camera::ArrayCalibration rig,
+               sensor::camera::read_array_calibration(opt.source.calibration));
+    world = rig.world;
+    options.device = &device;  // the pictures, for the tag
+    options.allocator = &allocator;
+    source.registration = "tag";  // until the watch registers it
+    std::error_code ignored;
+    if (!dir.empty() &&
+        std::filesystem::exists(dir / "registration.json", ignored)) {
+      return vkc::Status::invalid_argument(
+          "diagnostics.track_log: " + dir.string() +
+          " holds an earlier run's registration.json: give each run its own "
+          "directory");
+    }
+  } else {
+    VKC_ASSIGN(options.registration,
+               sensor::camera::read_tracked_registration(m.registration));
+    source.registration = m.registration;
+    source.tracking_to_world = Mat4f(options.registration->tracking_to_world);
+  }
+  std::unique_ptr<link::RgbdStreamSensor> stream;
   if (m.host.empty()) {
     source.session = m.path;
-    VKC_ASSIGN(phone,
-               link::RgbdStreamSensor::open_file(m.path, std::move(options)));
+    VKC_ASSIGN(stream, link::RgbdStreamSensor::open_file(m.path, options));
   } else {
     source.session = "tcp://" + m.host + ":" + std::to_string(m.port);
+    // With a log, the phone is recorded beside it from its first session,
+    // so the run replays; listen refuses a recording already there.
+    std::string record;
+    if (!dir.empty()) {
+      std::error_code made;
+      std::filesystem::create_directories(dir, made);
+      if (made) {
+        return vkc::Status::io_error("diagnostics.track_log: cannot make " +
+                                     dir.string() + ": " + made.message());
+      }
+      record = (dir / "phone.vrst").string();
+    }
     std::printf("waiting for the phone to dial %s (Ctrl+C ends the wait)\n",
                 source.session.c_str());
     // A second at a time, so a Ctrl+C ends the wait; the empty lane then
     // lets the run return before its cameras open.
-    std::unique_ptr<link::RgbdStreamSensor> live;
     const auto until = std::chrono::steady_clock::now() + kPhoneWait;
     for (;;) {
       if (vgrid_example::interrupted()) {
         return MobileLane::create(device, allocator, {}, {}, {});
       }
       vkc::Result<std::unique_ptr<link::RgbdStreamSensor>> heard =
-          link::RgbdStreamSensor::listen(m.host, m.port, options, {},
+          link::RgbdStreamSensor::listen(m.host, m.port, options, record,
                                          std::chrono::seconds(1));
       if (heard.ok()) {
-        live = std::move(*heard);
+        stream = std::move(*heard);
         break;
       }
       // Only the wait running out is waited through again.
@@ -577,7 +769,35 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
         return heard.status();
       }
     }
-    phone = polled_in_background(std::move(live));
+  }
+  // The tag's watch, for the session that came: it needs its pictures.
+  std::unique_ptr<TagWatch> tags;
+  if (by_tag) {
+    const std::string id = stream->info().id;
+    if (!stream->info().color) {
+      return vkc::Status::invalid_argument(
+          "source.mobile: " + source.session + ": sensor " + id +
+          " sends no pictures, which the origin tag is found in: give "
+          "source.mobile_registration");
+    }
+    const std::array<std::uint8_t, 16>& session = stream->session_id();
+    char hex[9];
+    std::snprintf(hex, sizeof(hex), "%02x%02x%02x%02x", session[0], session[1],
+                  session[2], session[3]);
+    std::printf(
+        "phone: session %s… (%s): registering by the origin tag, %s id "
+        "%d, at its printed edge %.4g mm\n",
+        hex, id.c_str(), world.apriltag->family.c_str(), world.apriltag->id,
+        world.apriltag->size_m * 1e3);
+    VKC_ASSIGN(tags,
+               TagWatch::create(device, allocator,
+                                {id, session, world, /*background=*/true}));
+  }
+  std::unique_ptr<sensor::IRgbdSensor> phone;
+  if (m.host.empty()) {
+    phone = std::move(stream);
+  } else {
+    phone = polled_in_background(std::move(stream));
   }
   const track::TrackerConfig tracking = lane_tracking();
   VKC_ASSIGN(std::vector<std::unique_ptr<track::IFitter>> fitters,
@@ -588,7 +808,8 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
       std::unique_ptr<TrackLog> log,
       TrackLog::open(opt.diagnostics.track_log, *tracker, std::move(source)));
   return MobileLane::create(device, allocator, std::move(phone),
-                            std::move(tracker), std::move(log));
+                            std::move(tracker), std::move(log),
+                            std::move(tags));
 }
 
 }  // namespace vr_example

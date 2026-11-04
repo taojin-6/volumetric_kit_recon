@@ -123,4 +123,34 @@ class ScriptedFitter final : public track::IFitter {
   std::uint64_t next_ = 1;
 };
 
+// A fit the judge anchors: every direction strong, ample inliers.
+inline track::TrackFit anchored_fit(
+    const volumetric_kit::recon::Mat4f& correction) {
+  track::TrackFit fit;
+  fit.correction = correction;
+  fit.lambda_max = 1.0f;
+  fit.relative_eigenvalues = {1, 1, 1, 1, 1, 1};
+  for (int i = 0; i < 6; ++i) fit.directions[std::size_t(7 * i)] = 1.0f;
+  fit.held = 0;
+  fit.frames = 1;
+  fit.attempts = 20000;
+  fit.hits = 18000;
+  fit.inliers = 17000;
+  return fit;
+}
+
+// Anchored at `at` when `when(the newest frame's pts)`, else nothing solved.
+inline ScriptedFitter::Script anchors_when(
+    std::function<bool(std::uint64_t)> when, volumetric_kit::recon::Mat4f at) {
+  return [when = std::move(when), at](
+             const std::vector<volumetric_kit::sensor::DeviceFrame>& frames,
+             const track::PosePrior& prior)
+             -> volumetric_kit::core::Result<track::TrackFit> {
+    if (when(frames.back().timestamp_ns)) return anchored_fit(at);
+    track::TrackFit none;
+    none.correction = prior.correction;
+    return none;
+  };
+}
+
 }  // namespace vr_test

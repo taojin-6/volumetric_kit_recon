@@ -43,6 +43,30 @@ option(VR_BUILD_EXAMPLES "Build example programs" ${_vr_examples_default})
 option(VR_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 option(VR_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
        ${PROJECT_IS_TOP_LEVEL})
+# The phone lane's registration by the origin tag (examples/common/live_tag.hpp)
+# runs on volumetric_kit_calib's tag detector and solve, fetched pinned
+# (third_party/) for the examples and tests, and so on OpenCV 5, an installed
+# prerequisite. Off, a phone needs source.mobile_registration. CMake 3.28 for
+# the fetch's EXCLUDE_FROM_ALL, which builds only what the examples link.
+option(
+  VR_WITH_CALIB
+  "fuse_orbbec registers a phone by the origin tag (fetches calib; OpenCV 5; CMake 3.28)"
+  OFF)
+if(VR_WITH_CALIB)
+  if(CMAKE_VERSION VERSION_LESS 3.28)
+    message(FATAL_ERROR "VR_WITH_CALIB needs CMake 3.28 or newer")
+  endif()
+  # Found here, so its imported targets reach the tests, which draw markers.
+  find_package(OpenCV 5.0 CONFIG QUIET COMPONENTS core imgproc objdetect
+                                                  geometry calib)
+  if(NOT OpenCV_FOUND)
+    message(
+      FATAL_ERROR
+        "VR_WITH_CALIB=ON needs OpenCV 5: Homebrew's opencv on macOS; on Linux "
+        "calib's tools/install-opencv.sh, then "
+        "-DOpenCV_DIR=<prefix>/lib/cmake/opencv5")
+  endif()
+endif()
 
 # Semicolon list of sanitizers (e.g. "address;undefined"); empty = off. Applied
 # globally, the fetched packages included -- see cmake/vr_sanitizers.cmake for

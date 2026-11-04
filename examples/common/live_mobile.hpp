@@ -40,6 +40,17 @@
 /// loss, which may hide a map step the device's own step removal did not
 /// see.
 ///
+/// **Registration.** By `source.mobile_registration` (the phone opened with
+/// it, depth alone), or without one by the origin tag (live_tag.hpp): the
+/// phone opened with its pictures, every paired frame shown to the watch and
+/// none tracked until it registers the session (counted `unregistered`);
+/// from then on each frame is placed by that registration
+/// (`tracking_to_world * color_to_world`, the product `RgbdStreamSensor`
+/// applies to one it is given). The first Anchored fit of the rig chain
+/// prints how far it moved the tag's registration; a later hold that passes
+/// is printed with its gap from the rig chain and logged, never applied. Both
+/// gaps are @ref pose_gap at the newest paired frame's camera.
+///
 /// **The log** has no `arkit_raw` row live: the wire carries no log of the
 /// device's removed map steps. A replay that has one gives it to its log
 /// (`RunSource::device_steps`).
@@ -56,6 +67,7 @@
 #include <vector>
 
 #include "config.hpp"
+#include "live_tag.hpp"
 #include "track_log.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -109,9 +121,12 @@ volumetric_kit::recon::sender::Filler to_filler(track::Released&& released);
 /// @return OK; `Status::Code::Unsupported` beside FFS depth
 ///         (`source.depth` ffs), which stage 1 does not run the lane beside;
 ///         `Status::Code::InvalidArgument` under Classic fusion
-///         (`fusion.dynamic` false), since fill needs Dynamic, with
-///         `operation: "stream"`, which fuses nothing, or without
-///         `source.mobile_registration`, which the core leaves to the lane.
+///         (`fusion.dynamic` false), since fill needs Dynamic, or with
+///         `operation: "stream"`, which fuses nothing; without
+///         `source.mobile_registration`, `source.calibration`'s read error
+///         or @ref TagWatch::check's refusal of its world
+///         (`Status::Code::Unsupported` in a build without
+///         `VR_WITH_CALIB`).
 vkc::Status check_mobile(const config::Config& opt);
 
 /// @return @p sensor polled on a thread of its own from its start, so a
@@ -143,6 +158,8 @@ class MobileLane {
     std::uint64_t unanchored = 0;  ///< Placed as Unanchored fill.
     std::uint64_t dropped = 0;     ///< Never placed.
     std::uint64_t fused = 0;       ///< Handed to a send.
+    /// Paired before the tag registered the session: not tracked.
+    std::uint64_t unregistered = 0;
   };
 
   /// @param device     The run's device; it and @p allocator outlive the lane.
@@ -152,12 +169,20 @@ class MobileLane {
   /// @param tracker    Its tracker; required with a phone.
   /// @param log        Its log; required with a phone (an empty directory
   ///                   writes no files).
+  /// @param tags       The origin tag's watch, which registers the phone,
+  ///                   its frames in the phone's own world; with a log
+  ///                   directory, the registration is written there
+  ///                   (`registration.json`, never over one). Null: placed
+  ///                   as the phone was opened. Destroyed before the phone
+  ///                   stops (its thread may hold a picture of the phone's
+  ///                   decoder).
   /// @return The lane; `Status::Code::InvalidArgument` for a phone without a
   ///         tracker or a log; or the prep's error.
   static vkc::Result<std::unique_ptr<MobileLane>> create(
       vkc::Device& device, vkc::Allocator& allocator,
       std::unique_ptr<sensor::IRgbdSensor> phone,
-      std::unique_ptr<track::Tracker> tracker, std::unique_ptr<TrackLog> log);
+      std::unique_ptr<track::Tracker> tracker, std::unique_ptr<TrackLog> log,
+      std::unique_ptr<TagWatch> tags = {});
   ~MobileLane();
   MobileLane(const MobileLane&) = delete;
   MobileLane& operator=(const MobileLane&) = delete;
@@ -173,14 +198,17 @@ class MobileLane {
   /// @param next_set_ns  The next set's predicted time, on the rig's clock.
   /// @return The next send's fillers, at most @ref kDrainCap, oldest first;
   ///         a frame the prep or the tracker refuses is passed over and
-  ///         counted. Only the device's, a poll's or the log's errors return.
+  ///         counted. Only the device's, a poll's, the log's, the tag
+  ///         watch's device or copy errors and the registration file's write
+  ///         error return.
   vkc::Result<std::vector<volumetric_kit::recon::sender::Filler>> next(
       const volumetric_kit::grid::volume::VoxelBlockGrid& grid,
       std::uint64_t next_set_ns);
 
-  /// @brief The run's end: the tracker flushed (held frames decided, placed
-  ///        or dropped, and logged, not fused), the log closed and its
-  ///        summary printed. Idempotent.
+  /// @brief The run's end: the tag watch's last news taken and the watch
+  ///        let go, the tracker flushed (held frames decided, placed or
+  ///        dropped, and logged, not fused), the log closed and its summary
+  ///        printed. Idempotent.
   vkc::Status close();
 
   /// @return What the lane did so far.
@@ -202,12 +230,22 @@ class MobileLane {
 /// @brief The run's lane: with `source.mobile` its session -- a file, or the
 ///        phone dialling `tcp://ADDRESS:PORT`, waited for here up to 5
 ///        minutes (a Ctrl+C ends the wait with the empty lane) and polled in
-///        the background -- read depth alone at confidence 2 or more and
-///        placed by `source.mobile_registration`
+///        the background -- read at confidence 2 or more
 ///        (`link::RgbdStreamSensor`), its tracker on @ref lane_tracking and
 ///        its log in `diagnostics.track_log`; without it, the empty lane.
-/// @return The lane, or the opener's, the registration's or the tracker's
-///         error.
+///        Placed by `source.mobile_registration`, read depth alone; or
+///        without one by the origin tag, read with its pictures: a
+///        @ref TagWatch in `source.calibration`'s world, on its own thread
+///        (every lane runs beside a live rig). With `diagnostics.track_log`,
+///        a live phone is recorded there (`phone.vrst`), and the tag's
+///        registration is written beside it (`registration.json`), so the
+///        run replays.
+/// @return The lane; @ref check_mobile's refusal, before any wait; with the
+///         tag, `Status::Code::InvalidArgument` before any wait for a
+///         `diagnostics.track_log` that holds a `registration.json` already
+///         (an earlier run's), and once the session has come for one with no
+///         pictures; or the opener's, the registration's, the watch's or the
+///         tracker's error.
 vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
     const config::Config& opt, vkc::Device& device, vkc::Allocator& allocator);
 

@@ -130,3 +130,42 @@ if((VR_BUILD_EXAMPLES OR VR_BUILD_TESTS) AND NOT TARGET grid_example_common)
       "helpers: set VGRID_BUILD_EXAMPLES ON before the "
       "first FetchContent_MakeAvailable of grid")
 endif()
+
+# --- volumetric_kit_calib: the origin tag's detector and solve ---------------
+# With VR_WITH_CALIB (the root CMakeLists, which finds OpenCV 5 first), for the
+# phone lane's registration by the tag (examples/common/live_tag.hpp): calib's
+# calib_detect (detect_tag) and calib_solve (tracked_world_from_tag,
+# register_tracked). Declared after the core and sensor, so their pins above are
+# the ones built and calib's own declarations of them yield, one core and one
+# sensor in the build. As a subproject calib builds no examples, tests or apps
+# and leaves its rig tiers off (VC_WITH_RIG); EXCLUDE_FROM_ALL builds only what
+# the examples link. Pinned by commit, never main, as are the OpenCV action CI
+# runs from calib (.github/workflows/_build.yml); an application that also
+# fetches calib declares it first, and FetchContent keeps that declaration. Work
+# on both checkouts at once with
+# -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CALIB=<calib checkout>.
+#
+# The pin is calib 0.12.0 (58a6dd6, calib #75's merge: its OpenCV action runs
+# the script beside it, so recon's CI can call it; register_tracked since 0.9.0,
+# on sensor 0.43.0, recon's pin).
+if(VR_WITH_CALIB AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
+  FetchContent_Declare(
+    volumetric_kit_calib
+    GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_calib.git
+    GIT_TAG 58a6dd6a043e8b055d1e067c33bcd294012f6214
+    EXCLUDE_FROM_ALL)
+  FetchContent_MakeAvailable(volumetric_kit_calib)
+  # calib sets no VKC_PACKAGE_VERSION on its umbrella: its project's version.
+  get_directory_property(
+    _vr_calib_version DIRECTORY "${volumetric_kit_calib_SOURCE_DIR}" DEFINITION
+                                PROJECT_VERSION)
+  if(NOT (TARGET volumetric_kit::calib_detect AND TARGET
+                                                  volumetric_kit::calib_solve)
+     OR _vr_calib_version VERSION_LESS 0.9.0)
+    message(
+      FATAL_ERROR
+        "VR_WITH_CALIB needs volumetric_kit_calib 0.9.0 or newer with "
+        "calib_detect and calib_solve, but the calib at "
+        "${volumetric_kit_calib_SOURCE_DIR} is ${_vr_calib_version}")
+  endif()
+endif()

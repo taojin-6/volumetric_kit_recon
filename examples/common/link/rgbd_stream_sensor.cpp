@@ -526,6 +526,7 @@ struct RgbdStreamSensor::State {
   std::unique_ptr<Link> link;
   std::vector<std::uint8_t> live_payload;  // the live record's, read with it
   std::uint64_t arrival_ns = 0;            // when the live record came
+  std::array<std::uint8_t, 16> session{};  // its id
   std::uint16_t track = 0;                 // the depth track's index
   std::optional<std::uint16_t> picture_track;  // the picture track's, when read
   sensor::SensorInfo info;
@@ -731,6 +732,7 @@ RgbdStreamSensor::State::open(const stream::Session& session, Options options,
   // Without the picture track read, the sensor names no colour camera.
   if (!state->picture_track) info.color.reset();
 
+  state->session = session.id;
   state->track = *found;
   state->info = std::move(info);
   state->options = std::move(options);
@@ -840,6 +842,11 @@ const RgbdStreamSensor::LinkStats& RgbdStreamSensor::link_stats()
     const noexcept {
   static const LinkStats kNone;
   return state_->link ? state_->link->stats() : kNone;
+}
+
+const std::array<std::uint8_t, 16>& RgbdStreamSensor::session_id()
+    const noexcept {
+  return state_->session;
 }
 
 vkc::Status RgbdStreamSensor::set_queue_depth(std::size_t frames) {

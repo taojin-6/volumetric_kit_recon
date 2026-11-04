@@ -282,6 +282,26 @@ cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
     -DVS_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk> -DVS_WITH_PORTAUDIO=ON
 ```
 
+### Optional: the origin tag
+
+A phone given as `source.mobile` with no `source.mobile_registration`
+([config/README.md](config/README.md)) is registered by the origin tag of the
+calibration's world, found in its own pictures by
+[volumetric_kit_calib](https://github.com/taojin-6/volumetric_kit_calib)'s
+tag detector and solve, which `VR_WITH_CALIB=ON` fetches, pinned
+(`third_party/CMakeLists.txt`), on OpenCV 5, an installed prerequisite, and
+CMake 3.28 or newer. On macOS Homebrew's `opencv` is found as it is; on Linux,
+calib's `tools/install-opencv.sh` installs it, and `-DOpenCV_DIR` names it. The
+pictures decode on sensor's decoders (VideoToolbox, or NVDEC with
+`VS_WITH_FFMPEG` and `VS_WITH_CUDA`). Off, the default, a phone without a
+registration is refused before anything opens.
+
+```sh
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
+    -DVS_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk> -DVR_WITH_CALIB=ON \
+    -DOpenCV_DIR=<prefix>/lib/cmake/opencv5
+```
+
 ## Codec evaluation
 
 `codec_replica` runs grid's codec on a fused room sequence; grid's
