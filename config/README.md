@@ -113,9 +113,17 @@ and its counters at the end. It needs a build with sensor's microphone driver
 (README, "Optional: a microphone"). `output.stream` records its track and
 `output.serve` serves it, both with the frames.
 
-`fuse_orbbec` refuses the phone the core's FuseOrbbec profile takes,
-`source.mobile` and `diagnostics.track_log`, before anything opens: it does
-not run the phone's session yet, and fuses the rig's cameras alone.
+`source.mobile` adds a phone to `fuse_orbbec`'s rig: a recorded session's
+`.vrst`, or `tcp://ADDRESS:PORT`, one of this host's addresses, which the
+phone dials (the run waits for it before the cameras open). Its tracked world
+is placed by `source.mobile_registration` (beside a file, `<file>.registration.json`
+unless given). Its depth, high confidence only, is tracked against the rig's
+model in 2 s windows and fused as fill where the rig's cameras do not see,
+2 to 7 s after capture, in a fixed tint of how it was placed (teal: by the
+rig alone; orange: with fill's help or between fits). It needs Dynamic fusion
+(the default) and is not run beside FFS depth. `diagnostics.track_log` names
+a directory for its tracking log (`examples/common/track_log.hpp`); its
+summary prints at the end either way.
 
 `fuse_realsense` (core's FuseRealsense profile) fuses one RealSense camera's
 depth and its colour to the PLY at `output.path`, Dynamic by default as

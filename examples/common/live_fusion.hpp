@@ -8,8 +8,10 @@
 ///        and fuse_realsense's. The cameras are read as a sensor array, each
 ///        set prepared on the device and fused (and coded, where the scenario
 ///        says) through a sender (`send_set.hpp`), any mic recorded beside
-///        them into the stream (`live_audio.hpp`), and the mesh written to a
-///        PLY; with the array's report (`live_sets.hpp`). Header-only.
+///        them into the stream (`live_audio.hpp`), any phone's frames
+///        tracked and fused as fill (`live_mobile.hpp`), and the mesh
+///        written to a PLY; with the array's report (`live_sets.hpp`).
+///        Header-only.
 
 #include <algorithm>
 #include <chrono>
@@ -30,6 +32,7 @@
 #include "fuse_sender.hpp"
 #include "interrupt.hpp"
 #include "live_audio.hpp"
+#include "live_mobile.hpp"
 #include "live_sets.hpp"
 #include "send_set.hpp"
 #include "set_dump.hpp"
@@ -82,7 +85,12 @@ using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
 /// then sweeps the codec over the last grid. With `source.audio`, the mic
 /// opens before the GPU, its track joins the session, and it records from
 /// when the cameras stream (@ref AudioFeed), its counters beside theirs; with
-/// `output.serve`, the viewers get its track with the frames.
+/// `output.serve`, the viewers get its track with the frames. With
+/// `source.mobile` (@ref check_mobile first), the phone's session opens after
+/// the GPU, a live one waited for, and after each set's send its lane
+/// (@ref MobileLane) tracks the frame due by the next set against the grid
+/// and hands that send its placed frames as fillers (the set's `"mobile"`
+/// row); its summary and counts follow the cameras'.
 /// operation=stream polls, counts and releases each set, with no GPU
 /// preparation, fusion or mesh, so the run measures the cameras' stream and
 /// decode alone.
@@ -124,6 +132,7 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
   SetDump dump(opt.diagnostics.dump_directory,
                static_cast<std::size_t>(opt.diagnostics.dump_sets));
   VKC_TRY(dump.check());
+  VKC_TRY(check_mobile(opt));
   VKC_ASSIGN(const vgrid::codec::EncoderConfig encoder,
              vgrid_example::encoder_config(opt.codec));
   // The mic source.audio names, if any, which the core lets through only with
@@ -173,6 +182,11 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
       std::printf("serving on port %u\n", unsigned{server->port()});
     }
   }
+
+  // The phone, with source.mobile: its session's file, or a live phone waited
+  // for here, before the cameras stream; without it, the empty lane.
+  VKC_ASSIGN(const std::unique_ptr<MobileLane> mobile,
+             open_mobile_lane(opt, device, allocator));
 
   // The cameras, read as an array that poses each frame and, when fusing,
   // prepares each set on the device in one batch. An optional so the run can
@@ -241,6 +255,9 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
                                               stream ? &*stream : nullptr,
                                               sender_config(opt, 1)));
   }
+  // The phone's fillers for the next set's send, from the last set's gap.
+  std::vector<sender::Filler> fill;
+  const std::uint64_t period_ns = 1'000'000'000ULL / opt.source.fps;
   const auto t_start = std::chrono::steady_clock::now();
   const vkc::Status streamed = [&]() -> vkc::Status {
     std::size_t reported = 0;  // the count last reported; a set may pass 100
@@ -273,12 +290,21 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
                    array->record_process(front, set, &s.rows));
         const std::uint64_t pts_ns =
             std::max(prepared.timestamp_ns, stream ? stream->last_pts_ns() : 0);
-        VKC_ASSIGN(
-            const sender::SetSender::Sent sent,
-            send_set(*out, front, prepared, std::move(set), sets.sets() - 1,
-                     pts_ns, &s.rows, [&s] { s.published(); }));
+        VKC_ASSIGN(const sender::SetSender::Sent sent,
+                   send_set(*out, front, prepared, fill, std::move(set),
+                            sets.sets() - 1, pts_ns, &s.rows,
+                            [&s] { s.published(); }));
+        fill.clear();  // lets the phone's frames go
         VKC_TRY(report_sent(sent, sets.sets() - 1, program, s,
                             report ? &*report : nullptr));
+        // The gap before the next set: the phone's frame due by then,
+        // tracked against the grid as this set left it, and the frames
+        // placed so far for the next send.
+        {
+          vkc::StageScope lane(s.rows, "mobile");
+          VKC_ASSIGN(fill,
+                     mobile->next(*volume, prepared.timestamp_ns + period_ns));
+        }
       } else {
         s.published();  // operation=stream: polled and released only
       }
@@ -305,8 +331,11 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
   const vkc::Status heard = audio.finish();
   const bool coded = stream && stream->coded() > 0;
   const vkc::Status finished = coded ? stream->finish() : vkc::Status{};
+  fill.clear();
+  const vkc::Status tracked = mobile->close();  // prints its summary
   std::fputs(array_report(*array, &sets, counters).c_str(), stdout);
   std::fputs(audio.report().c_str(), stdout);
+  std::fputs(mobile->report().c_str(), stdout);
   std::fputs(dump.report().c_str(), stdout);
   // A coded frame per source set; one frame alone has no bitrate.
   if (coded && !report->rows().empty()) {
@@ -315,6 +344,7 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
   VKC_TRY(streamed);
   VKC_TRY(heard);
   VKC_TRY(finished);
+  VKC_TRY(tracked);
   array.reset();
 
   std::fputs(log.table("per set").c_str(), stdout);

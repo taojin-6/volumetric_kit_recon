@@ -17,23 +17,6 @@ namespace vr_example {
 
 namespace config = volumetric_kit::core::config;
 
-/// @return OK unless @p settings names the phone, `source.mobile` or
-///         `diagnostics.track_log` (which requires it), which fuse_orbbec
-///         does not run yet: `Status::Code::Unsupported`, naming both keys.
-///         fuse_orbbec checks it first, before any GPU or camera opens, so
-///         the rig never fuses alone in a run that asked for the phone.
-inline volumetric_kit::core::Status check_orbbec_phone(
-    const config::Config& settings) {
-  // TODO: run the phone's session beside the rig, then take these keys.
-  if (!settings.source.mobile && settings.diagnostics.track_log.empty()) {
-    return {};
-  }
-  return volumetric_kit::core::Status::unsupported(
-      "source.mobile (the phone's session) and diagnostics.track_log are not "
-      "run by this fuse_orbbec yet, which fuses the rig's cameras alone; "
-      "remove both to fuse the rig");
-}
-
 /// @return Runtime stream settings copied from core's validated configuration.
 inline volumetric_kit::sensor::OrbbecStreamOptions orbbec_stream_options(
     const config::Config& settings) {

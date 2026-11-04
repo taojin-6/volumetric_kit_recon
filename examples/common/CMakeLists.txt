@@ -47,3 +47,13 @@ if(TARGET volumetric_kit::sensor_video)
   target_compile_definitions(vr_example_link PRIVATE VR_EXAMPLE_LINK_VIDEO=1)
 endif()
 vr_target_warnings(vr_example_link)
+
+# The live runs' phone lane (live_mobile.hpp) and the tracking log it writes
+# (track_log.hpp): the phone's session read back (vr_example_link), prepared
+# (sensor_prep), tracked (recon_track) and handed to the sender as fill
+# (recon_sender).
+add_library(vr_example_mobile STATIC live_mobile.cpp track_log.cpp)
+target_link_libraries(
+  vr_example_mobile PUBLIC vr_example_link volumetric_kit::recon_track
+                           volumetric_kit::recon_sender)
+vr_target_warnings(vr_example_mobile)

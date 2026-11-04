@@ -78,14 +78,16 @@ endif()
 # sensor, so its tests and -Werror stay off in this build; recon's examples take
 # its test fixtures (VS_TEST_DATA_DIR, which it sets).
 #
-# The pin is sensor 0.37.0 (c4038bb, sensor #42's merge: the PatternReader, on
-# 0.36.0's HEVC encoder on NVENC and 0.28.0's GPU hand-over of NVIDIA's decoded
-# pictures), as are its Orbbec SDK and librealsense actions in .github/workflows
-# (the sibling-actions-at-pins hook).
+# The pin is sensor 0.43.0 (1c5dd48, sensor #51's merge: on 0.40.0's depth noise
+# that may fall with depth, which ARKit's states and the phone lane's tracker
+# needs known; 0.37.0's PatternReader, 0.36.0's HEVC encoder on NVENC and
+# 0.28.0's GPU hand-over of NVIDIA's decoded pictures), as are its Orbbec SDK
+# and librealsense actions in .github/workflows (the sibling-actions-at-pins
+# hook).
 FetchContent_Declare(
   volumetric_kit_sensor
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
-  GIT_TAG c4038bb7379e431cbd654a7ac691746145494895)
+  GIT_TAG 1c5dd4855995c5168477ffc7322f0ad6dad81e2d)
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)

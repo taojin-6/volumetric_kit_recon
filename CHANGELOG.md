@@ -8,6 +8,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **a phone's frames fill the rig's model in the live runs**
+  (`source.mobile`, `examples/common/live_mobile.hpp`, `vr_example_mobile`).
+  After each set's send, `MobileLane::next` takes the phone record due by
+  the next set's predicted time (a recorded session's, or a phone dialling
+  `tcp://ADDRESS:PORT`, polled on a thread of its own), prepares it and runs
+  every fit due at it on `lane_tracking()` (2 s windows every 0.5 s on the
+  rig-only and the fill-assisted chain, ARKit beside them) in one batch,
+  and hands the next send up to 3 placed frames as fillers: Anchored fill
+  when the rig-only chain anchored it, else Unanchored. A frame waits up to
+  5 s for an Anchored fit after it and is dropped otherwise; a loss of
+  100 ms or more starts the windows again. Fill fuses in a fixed tint of its
+  tier, the phone's picture never read. `check_mobile` refuses the phone
+  under Classic fusion or beside FFS depth before anything opens. Replaces
+  `fuse_orbbec`'s refusal of `source.mobile`.
+- `examples`: **a tracking run's log and its one summary**
+  (`examples/common/track_log.hpp`): `TrackLog` keeps a `Tracker`'s steps
+  in memory and writes them to `diagnostics.track_log` (CSVs and a TUM pose
+  file a chain), `read_track_log` reads them back, and `summarize` computes
+  every metric once: decisions by kind, lock share, latency, distance from
+  `arkit` (and from `arkit_raw`, the device's own poses rebuilt from its
+  removed map steps), jitter, fits by verdict, fill by placement, the stage
+  rows.
+- `sender`: **`SetSender::send` and `fuse_inputs` take fillers**
+  (`sender::Filler`: a frame, its `FillTier` and its mobile index), fused
+  after the set's fixed frames in the same integrate; the calls without
+  them are those with none, bit for bit.
+
 - `track`: **a new tier, `recon_track`: a self-posed camera's frames
   fitted to a model on the device** (`volumetric_kit::recon_track`, in the
   umbrella; on grid's `volume` and `sensor_frame`, not `tsdf`). The one
@@ -162,6 +189,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server; both floors rise with them.
 
 ### Changed
+
+- build: **recon pins sensor 0.43.0** (sensor #51's merge, `1c5dd48`; was
+  0.37.0), and CI takes its actions at the new pin. Its `DepthNoise::known`
+  (0.40.0) takes ARKit's noise, which falls with depth near the camera, so
+  the floor rises to 0.40.0: the lane's tracker refuses a frame whose noise
+  is unknown. The core stays at 0.43.0, above the 0.41.0 sensor needs, and
+  grid at 0.12.0.
+- `track`: **`Tracker::flush` may be followed by more frames**: the chains
+  keep their judges and hops, and a frame after it is fitted and placed by
+  fits after it alone. The lane splits so at a loss.
+- `examples`: `fuse_orbbec` no longer refuses `source.mobile` and
+  `diagnostics.track_log` (`check_orbbec_phone` is gone): it runs the phone.
 
 - build: **recon pins sensor 0.37.0** (sensor #42's merge, `c4038bb`; was
   0.29.0), and CI takes its actions at the new pin. recon's code builds and

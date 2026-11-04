@@ -7,7 +7,8 @@
 // it (an unknown one stays unknown, for Dynamic to refuse), its camera the
 // frame's depth camera, and its colour the frame's, through its own camera
 // with the coverage in the high byte, or none; moved, the inputs' colours
-// still point into their own list. Host only: no buffer is bound.
+// still point into their own list; fillers follow the fixed frames, each a
+// Filler of its tier and index. Host only: no buffer is bound.
 
 #include <cstddef>
 #include <cstdint>
@@ -98,6 +99,43 @@ int run() {
   CHECK(sender::fuse_inputs(Frames{}).frames.empty());
   const sender::FuseInputs none = sender::fuse_inputs(Frames(3));
   CHECK(none.frames.empty() && none.colors.empty());
+
+  // Fillers follow every fixed frame, in their order: each a Filler of its
+  // tier, its index the slot, its noise and colour its frame's, the default
+  // fill rule. With none, the inputs are the fixed frames' alone.
+  std::vector<sender::Filler> fillers(2);
+  fillers[0].frame = frame(20, true, constant);
+  fillers[0].tier = tsdf::FillTier::Anchored;
+  fillers[1].frame = frame(22, false, stereo);
+  fillers[1].index = 5;
+  const sender::FuseInputs filled = sender::fuse_inputs(set, fillers);
+  CHECK(filled.frames.size() == 6 && filled.colors.size() == 4);
+  for (std::size_t k = 0; k < 4; ++k) {
+    const tsdf::FrameInput& f = filled.frames[k];
+    CHECK(f.role == tsdf::FrameRole::Fixed && f.slot == slots[k]);
+    CHECK(f.camera.width == set[slots[k]]->depth_camera.width);
+  }
+  const tsdf::FrameInput& a = filled.frames[4];
+  const tsdf::FrameInput& b = filled.frames[5];
+  CHECK(a.role == tsdf::FrameRole::Filler && b.role == tsdf::FrameRole::Filler);
+  CHECK(a.tier == tsdf::FillTier::Anchored &&
+        b.tier == tsdf::FillTier::Unanchored);
+  CHECK(a.slot == 0 && b.slot == 5);
+  CHECK(a.camera.width == 20 && b.camera.width == 22);
+  CHECK(a.noise == constant && b.noise == stereo);
+  CHECK(a.color == &filled.colors[3] &&
+        a.color->buffer == fillers[0].frame.color.get() &&
+        a.color->coverage_in_alpha);
+  CHECK(b.color == nullptr);
+  const tsdf::FillRule rule{};
+  CHECK(a.fill.cap_fraction == rule.cap_fraction &&
+        a.fill.max_depth_m == rule.max_depth_m);
+  const sender::FuseInputs unfilled = sender::fuse_inputs(set, {});
+  CHECK(unfilled.frames.size() == 4 && unfilled.colors.size() == 3);
+  for (std::size_t k = 0; k < 4; ++k) {
+    CHECK(unfilled.frames[k].slot == slots[k] &&
+          unfilled.frames[k].role == tsdf::FrameRole::Fixed);
+  }
   std::puts("recon sender fuse_inputs test passed");
   return 0;
 }

@@ -32,7 +32,28 @@ namespace vr_example {
 ///        device for the set's pictures' ready values
 ///        (`sensor::ready_points`), gathered here before the set moves into
 ///        what the batch holds until it has run.
+///        @p fillers, a phone's placed frames (`live_mobile.hpp`), fuse after
+///        the set's cameras.
 /// @return What `send` returns.
+inline volumetric_kit::core::Result<
+    volumetric_kit::recon::sender::SetSender::Sent>
+send_set(volumetric_kit::recon::sender::SetSender& out,
+         volumetric_kit::core::CommandBatch& front,
+         const volumetric_kit::sensor::DeviceFrameSet& prepared,
+         const std::vector<volumetric_kit::recon::sender::Filler>& fillers,
+         volumetric_kit::sensor::FrameSet&& set, std::size_t index,
+         std::uint64_t pts_ns,
+         volumetric_kit::core::StageMetrics* rows = nullptr,
+         const std::function<void()>& sent = {}) {
+  namespace sensor = volumetric_kit::sensor;
+  const std::vector<volumetric_kit::core::TimelinePoint> ready =
+      sensor::ready_points(set.frames);
+  return out.send(front, prepared.frames, fillers, ready,
+                  std::make_shared<sensor::FrameSet>(std::move(set)), index,
+                  pts_ns, rows, sent);
+}
+
+/// @brief @ref send_set with no fillers.
 inline volumetric_kit::core::Result<
     volumetric_kit::recon::sender::SetSender::Sent>
 send_set(volumetric_kit::recon::sender::SetSender& out,
@@ -42,12 +63,8 @@ send_set(volumetric_kit::recon::sender::SetSender& out,
          std::uint64_t pts_ns,
          volumetric_kit::core::StageMetrics* rows = nullptr,
          const std::function<void()>& sent = {}) {
-  namespace sensor = volumetric_kit::sensor;
-  const std::vector<volumetric_kit::core::TimelinePoint> ready =
-      sensor::ready_points(set.frames);
-  return out.send(front, prepared.frames, ready,
-                  std::make_shared<sensor::FrameSet>(std::move(set)), index,
-                  pts_ns, rows, sent);
+  return send_set(out, front, prepared, {}, std::move(set), index, pts_ns, rows,
+                  sent);
 }
 
 }  // namespace vr_example

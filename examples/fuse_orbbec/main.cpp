@@ -24,8 +24,11 @@
 // exposure. source.host_clock puts one camera on the
 // host's clock (OrbbecSensor::Options::sync_clock_to_host), which its first
 // frame's age checks; a rig is always on it. Each camera's counters at the
-// end count its `lost` frames too (vr_example::orbbec_counters). The phone
-// (source.mobile, diagnostics.track_log) is refused: it does not run yet.
+// end count its `lost` frames too (vr_example::orbbec_counters). A phone
+// (source.mobile, a recorded session or tcp://ADDRESS:PORT it dials, placed by
+// source.mobile_registration) is tracked against the rig's model and fused as
+// fill where the rig does not see (vr_example::MobileLane);
+// diagnostics.track_log writes its tracking log.
 
 #include <cstdio>
 
@@ -39,13 +42,6 @@
 namespace vkc = volumetric_kit::core;
 
 int run_main(const vgrid_example::config::Config& opt) {
-  // A scenario with the phone, which this build does not run yet, is refused
-  // as invalid, so the rig never fuses alone in its place.
-  if (const vkc::Status phone = vr_example::check_orbbec_phone(opt);
-      !phone.ok()) {
-    std::fprintf(stderr, "fuse_orbbec: %s\n", phone.message().c_str());
-    return 2;
-  }
   vgrid_example::print_info_log();  // output.serve's viewers joining and
                                     // leaving
   const vkc::Status status = vr_example::run_live_fusion(
