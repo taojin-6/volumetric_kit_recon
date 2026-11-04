@@ -589,8 +589,11 @@ void main() {
   // A filler writes no fixed camera's voxel, and its free space only into
   // fill holding weight, of its own tier or below: an Unanchored frame
   // never writes anchored fill. Its Anchored band sample restarts unanchored
-  // fill as anchored. Then the set's fixed frames may veto it (vetoed).
-  bool held = weight[idx] > 0.0;
+  // fill as anchored where the weight is no more than a filler's cap, which
+  // fillers alone may have built; above it fixed samples raised the voxel, so
+  // the sample averages in. Then the set's fixed frames may veto it (vetoed).
+  float held_weight = weight[idx];
+  bool held = held_weight > 0.0;
   uint held_source = held ? read_source(idx) : 0u;
   bool frame_unanchored = (pc.source & kUnanchoredBit) != 0u;
   bool voxel_unanchored = (held_source & kUnanchoredBit) != 0u;
@@ -601,7 +604,8 @@ void main() {
   if (vetoed(world, sdf)) {
     return;
   }
-  bool restart = held && voxel_unanchored && !frame_unanchored && !free_space;
+  bool restart = held && voxel_unanchored && !frame_unanchored &&
+                 !free_space && held_weight <= pc.fill_cap;
 #else
   if (free_space && pc.mode == kModeDynamic && !(weight[idx] > 0.0)) {
     return;
@@ -702,11 +706,7 @@ void main() {
   // the voxel's own surface, so it brings no colour; classic's does, as it
   // always has. A rim voxel in front of or beside a surface, or over a gap,
   // holds a distance to a surface it is not on, so it brings none either.
-  // A filler's free space, in either mode, brings none.
   bool surface_sample = rim != kRimBeside && rim != kRimGap;
-#ifdef VR_TSDF_FILL
-  surface_sample = surface_sample && !free_space;
-#endif
   if (pc.has_color != 0u && surface_sample &&
       !(free_space && pc.mode == kModeDynamic)) {
     vec2 cpx;

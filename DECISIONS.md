@@ -1049,8 +1049,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   fill with a mobile bit and an unanchored bit; 63 sensors a class). Fixed
   cameras remove fill only on their own change, where the new reading
   contradicts it, and never write a rim distance into it; a
-  `FrameRole::Filler` fills only where no fixed camera of the set holds
-  weight or vetoes, capped at half `max_weight`, to 3 m.
+  `FrameRole::Filler` fills only where no fixed camera holds weight and none
+  of its set vetoes, capped at half `max_weight`, to 3 m.
 
 ## Decision record
 
@@ -6082,7 +6082,7 @@ reading of the voxel.
   (fill). Four voxels share a word, written `atomicAnd` then `atomicOr` from
   the voxel's one thread, so no device needs 8-bit storage. A fixed camera
   writes its byte only into a voxel at weight 0: later samples leave it, so
-  the rig pays one atomic a new voxel, none a sample.
+  the rig pays one write (two atomics) a new voxel, none a sample.
 - **Across sources, a camera removes evidence only on its own change, and
   only what its new reading contradicts.** On fill a fixed camera resets
   only on a pixel its change test flagged Nearer or Farther, where the new
@@ -6099,8 +6099,11 @@ reading of the voxel.
   the voxel inside its band vetoes every write, one that sees past it by
   more than the band a sample of 0 or less, so a face only the phone sees
   keeps its free side. Tiers: an Unanchored frame never writes anchored
-  fill, and an Anchored band sample restarts unanchored fill as anchored;
-  a filler's free space goes only into fill of its tier or below, at a
+  fill, and an Anchored band sample restarts unanchored fill as anchored
+  where its weight is at most the cap, which fillers alone could build
+  (above it fixed samples raised it, and a restart would throw their
+  weight away on a set where no fixed frame vetoes); a filler's free
+  space goes only into fill of its tier or below, at a
   sample's weight, so it clears its own ghosts in a few frames. Its average
   stops at half `max_weight` (`FillRule::cap_fraction`), never lowering a
   weight, and returns past 3 m (`FillRule::max_depth_m`) fill nothing, as a
@@ -6125,10 +6128,17 @@ reading of the voxel.
   stands within a band of a fill-only face takes that patch from the fill,
   which the phone's next pass restores.
 
-- **One exception to "inside the rig nothing changes":** a filler's band
-  allocates blocks, and a fixed camera may write into such a block what its
-  own allocation left out, an outline's rim distance. Exact elsewhere; none
-  on the recorded take below.
+- **One exception to "inside the rig nothing changes"** (stated on
+  `TsdfIntegrator`): a filler's band allocates blocks, and a fixed sample
+  its own allocation left out (an outline's rim distance) can land in one,
+  which stays different once the rig allocates that block too. None on the
+  recorded take below.
+- **Fixed samples never turn fill into rig.** A fixed camera that agrees
+  with fill averages in and leaves the byte; one that sees past wrong fill
+  on a quiet pixel only wears it down; only its own change that
+  contradicts the fill clears it at once. So `rig_cast()` and, while it is
+  unanchored, `tracking_cast()` skip a shared voxel (402 on the recorded
+  take at the end).
 
 **Evidence.** Tests: `recon_tsdf_source` (the table and the casts; a rig with
 the byte and without it is the same grid in either mode; the cases where a

@@ -15,18 +15,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `kMobileBit` with the sensor's index, and `kUnanchoredBit` from a frame
   no rig-only fit anchored (`FillTier`). A `FrameInput` with
   `role = FrameRole::Filler` (Dynamic only) fills only where no fixed camera
-  of its set
-  holds weight or vetoes it (inside a fixed band, or on the far side of a
-  surface a fixed camera sees past), up to `FillRule::cap_fraction` of
-  `max_weight` and out to `FillRule::max_depth_m`; tiers never overwrite a
-  higher one, and an Anchored band sample restarts unanchored fill. On fill,
-  fixed cameras write no rim distance and, under Dynamic, reset only where
-  their own change contradicts it; everywhere else they average in, so a
-  voxel no filler wrote is the same as without fillers, in the blocks the
-  fixed frames allocate. `tsdf::rig_cast()`
-  and `tsdf::tracking_cast()` filter grid's `RayCaster` to the rig, or the
-  rig and anchored fill. Each fusion voxel takes 13 bytes, one more; a
-  slot of 63 or more is refused on a grid with the byte.
+  holds weight and none of its set vetoes, up to `FillRule::cap_fraction`
+  of `max_weight` and out to `FillRule::max_depth_m`; on fill, fixed
+  cameras write no rim distance and reset only where their own change
+  contradicts it, so a voxel no filler wrote is the same as without
+  fillers (the rules and their one exception: `FrameRole` and
+  `TsdfIntegrator`). `tsdf::rig_cast()` and `tsdf::tracking_cast()` filter
+  grid's `RayCaster` to the rig, or the rig and anchored fill. Each fusion
+  voxel takes 13 bytes, one more; a slot of 63 or more is refused on a grid
+  with the byte.
 
 - `examples`, tools: **a sensor's stream read live, recorded and checked.**
   `RgbdStreamSensor::listen` (`examples/common/link/rgbd_stream_sensor.hpp`)

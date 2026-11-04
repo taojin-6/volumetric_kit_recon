@@ -15,14 +15,13 @@
 /// a weight above 0. Marching cubes and the codec never read it.
 ///
 /// The value table:
-///
-/// | Byte | Meaning |
-/// |---|---|
-/// | 0 | No sensor: the voxel holds no weight |
-/// | 1-63 | Fixed camera `byte - 1` started the voxel's history (@ref
-/// fixed_source) | | 128 + (1-63) | Mobile sensor `(byte & 63) - 1` wrote it,
-/// posed by a rig-only fit: anchored fill | | 192 + (1-63) | The same from a
-/// frame no rig-only fit anchored: unanchored fill |
+/// - 0: no sensor; the voxel holds no weight.
+/// - 1 to 63: fixed camera `byte - 1` started the voxel's history
+///   (@ref fixed_source).
+/// - 128 + (1 to 63): mobile sensor `(byte & 63) - 1` wrote it, posed by a
+///   rig-only fit: anchored fill (@ref mobile_source).
+/// - 192 + (1 to 63): the same from a frame no rig-only fit anchored:
+///   unanchored fill.
 ///
 /// A fixed camera writes its byte only into a voxel at weight 0, so later
 /// samples, its own and other cameras', average in and leave the byte as it

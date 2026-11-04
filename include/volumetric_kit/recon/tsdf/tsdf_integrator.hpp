@@ -127,9 +127,11 @@ enum class FrameRole : std::uint32_t {
   ///
   /// Its band sample into a voxel at weight 0 starts fill:
   /// @ref mobile_source of its slot and tier. An Anchored band sample into
-  /// unanchored fill restarts the voxel, as anchored fill. Any other sample
-  /// averages in, raising the weight to at most @ref FillRule::cap_fraction
-  /// times the call's `max_weight` and never lowering it. Its free space
+  /// unanchored fill whose weight fillers alone could have built (no more
+  /// than the cap below) restarts the voxel, as anchored fill. Any other
+  /// sample averages in and keeps the byte, raising the weight to at most
+  /// @ref FillRule::cap_fraction times the call's `max_weight` and never
+  /// lowering it. Its free space
   /// past the band goes in at a sample's weight, only into fill holding
   /// weight. It fuses no rim distance, and returns past
   /// @ref FillRule::max_depth_m are no return.
@@ -241,9 +243,12 @@ VR_TSDF_API volumetric_kit::grid::volume::DepthPinhole to_depth_pinhole(
 /// 0, and a set's @ref FrameRole::Filler frames fill only where its fixed
 /// cameras neither see nor hold weight. A voxel no filler wrote is the same,
 /// bit for bit, as in the same fixed frames' run without fillers -- the fixed
-/// cameras' rules read the byte only on fill -- in every block the fixed
-/// frames' own bands allocate: a block only a filler's band allocated can
-/// also take a fixed camera's rim distance there.
+/// cameras' rules read the byte only on fill -- in every block no fixed
+/// sample reached before the fixed frames' own bands allocated it. A fixed
+/// sample (an outline's rim distance, say) can land in a block only a
+/// filler's band allocated, which a run without fillers does not hold; the
+/// voxels it wrote differ from then on, even once the fixed frames allocate
+/// that block too.
 ///
 /// @warning The `Device` and `Allocator` passed to @ref create must
 ///          outlive this object; it stores references to them.

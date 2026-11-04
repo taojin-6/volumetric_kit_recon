@@ -182,16 +182,24 @@ int tier_case(vkc::test::GpuContext& gpu) {
     CHECK(c.most == cap);
   }
   {
-    // Fill above the cap (fixed samples raised it) is never lowered.
-    auto rig = make_rig(gpu);
-    CHECK(rig.ok());
-    auto seeded = seed(gpu, rig->grid, {-0.25f, -0.2f, kFace - kTrunc},
-                       {0.25f, 0.2f, kFace + kTrunc}, face(kFace), kA, 4.0f);
-    CHECK(seeded.ok() && seeded->size() > 500);
-    CHECK(fuse(rig.value(), {filler(face_depth(), camera(), kAnchored)}).ok());
-    auto v = read_voxels(gpu, rig->grid);
-    CHECK(v.ok());
-    for (const std::size_t i : seeded.value()) CHECK(v->weight[i] == 4.0f);
+    // Fill above the cap (fixed samples raised it) is never lowered, nor
+    // restarted: an Anchored frame over unanchored fill there averages in,
+    // the byte kept, with no fixed frame in the set to veto it.
+    for (const std::uint8_t byte : {kA, kU}) {
+      auto rig = make_rig(gpu);
+      CHECK(rig.ok());
+      auto seeded =
+          seed(gpu, rig->grid, {-0.25f, -0.2f, kFace - kTrunc},
+               {0.25f, 0.2f, kFace + kTrunc}, face(kFace), byte, 4.0f);
+      CHECK(seeded.ok() && seeded->size() > 500);
+      CHECK(
+          fuse(rig.value(), {filler(face_depth(), camera(), kAnchored)}).ok());
+      auto v = read_voxels(gpu, rig->grid);
+      CHECK(v.ok());
+      for (const std::size_t i : seeded.value()) {
+        CHECK(v->weight[i] == 4.0f && v->source[i] == byte);
+      }
+    }
   }
   {
     // A fixed camera's voxels: a filler writes none of them.

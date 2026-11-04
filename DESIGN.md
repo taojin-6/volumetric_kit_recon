@@ -823,36 +823,19 @@ by that camera the same set, at one sample's weight.
 **The source byte and fillers** (2026-11-03). A grid that carries
 `kSourceAttribute` (`tsdf/source.hpp`, one byte a voxel, four to a
 `uint32` word, written `atomicAnd` then `atomicOr` from the voxel's one
-thread) records which sensor wrote each voxel: 0 for none, which every
-reset writes, so a nonzero byte implies weight; `slot + 1` of the fixed
-camera whose sample started the voxel (its later samples, and other
-cameras', leave it); and `kMobileBit | index + 1`, with `kUnanchoredBit`
-from an Unanchored frame, for fill. A fixed camera treats fill by the rule
-across sources -- it removes evidence only on its own change and only what
-its new reading contradicts: under Dynamic it resets fill only on a pixel
-flagged Nearer or Farther, where the reading lies more than the band behind
-a voxel whose tsdf is 0 or less, or in a Nearer reading's band; the reset
-beside a departure and a Vanished ray leave fill alone, and in either mode
-a rim distance never writes it. Its other samples average into fill and
-keep the byte. A `FrameRole::Filler` frame (a phone, under Dynamic only)
-takes no change test and resets nothing; it fuses after every fixed frame
-of the set (the fill
-kernel, the integrate body built as `VR_TSDF_FILL`) into a voxel only where
-no fixed camera holds weight, its tier allows (an Unanchored frame never
-writes anchored fill, and an Anchored band sample restarts unanchored fill
-as anchored), and no fixed frame of the set vetoes: a fixed return that
-puts the voxel inside its band vetoes every write, one more than the band
-behind it a sample of 0 or less, read at the voxel's nearest pixel of each
-fixed depth, which a gather kernel stacks into one buffer for the set. Its
-average stops at `FillRule::cap_fraction` of `max_weight` without lowering
-a weight, returns past `FillRule::max_depth_m` (3 m) are no return, and its
-free space goes in at a sample's weight, into fill only. So a voxel no
-filler wrote is the same, bit for bit, as without fillers, in every block
-the fixed frames' own bands allocate; a block only a filler's band
-allocated can also take a fixed camera's rim distance (none on the rig's
-recorded take). `rig_cast()`
-and `tracking_cast()` filter grid's `RayCaster` to the rig alone, or the
-rig and anchored fill, at weight 2 or more.
+thread) records which sensor wrote each voxel (the value table is in that
+header). The rules each role follows on it are `FrameRole`'s
+(`tsdf_integrator.hpp`), with the exception to the rig's bit-identity
+stated on `TsdfIntegrator`; why, and the measurements, are DECISIONS.md's
+2026-11-03 entry. How they run: a fixed camera reads the byte only where
+the shipped rules would reset a voxel or write a rim distance, so the rig's
+own voxels cost one load there, and writes it only into a voxel at weight
+0. A set's `FrameRole::Filler` frames fuse after every fixed frame (the
+fill kernel, the integrate body built as `VR_TSDF_FILL`); their veto reads
+each fixed depth at the voxel's nearest pixel, from one buffer a gather
+kernel stacks for the set, so a set with no filler records none of it.
+`rig_cast()` and `tracking_cast()` filter grid's `RayCaster` on the byte.
+
 `Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). A set
 records into a caller's batch (`record_fuse`, 2026-10-25): the fuse's checks
 (`check_frames`), a grow ahead past `kGrowThreshold`, blocking, then one
