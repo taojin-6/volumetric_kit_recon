@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "correction_filter.hpp"
+#include "frame_check.hpp"
 #include "se3.hpp"
 
 namespace volumetric_kit::recon::track {
@@ -428,13 +429,11 @@ core::Result<PendingStep> Tracker::State::record(
     return core::Status::invalid_argument("Tracker::record: " + why);
   };
   if (s.outstanding) return refuse("a step is outstanding");
-  if (!frame.depth) return refuse("the frame has no depth");
-  if (!frame.depth_noise.known()) {
-    return refuse("the frame states no depth noise");
-  }
-  if (!detail::rigid(frame.depth_camera.cam_to_world)) {
-    return refuse("the frame's pose is not rigid");
-  }
+  // The fitters' frame check, at the frame's own record: a frame taken on a
+  // step where no fit is due must not make every later record refuse while
+  // a window still holds it.
+  const std::string why = detail::frame_refusal(frame);
+  if (!why.empty()) return refuse("the frame: " + why);
   const std::pair<std::uint32_t, std::uint32_t> size{frame.depth_camera.width,
                                                      frame.depth_camera.height};
   if (s.size && *s.size != size) {
@@ -529,9 +528,20 @@ core::Result<TrackStep> Tracker::finish(const PendingStep& pending) try {
   for (std::size_t i = 0; i < out.fits.size(); ++i) {
     const Recorded& r = out.fits[i];
     if (!r.refused.empty()) continue;
-    core::Result<TrackFit> fit = s.chains[r.chain].fitter->finish(r.pending);
+    const Chain& chain = s.chains[r.chain];
+    core::Result<TrackFit> fit = chain.fitter->finish(r.pending);
+    if (fit.ok() && fit->see_through_m != chain.method.judge.see_through_m) {
+      fit = core::Status::invalid_argument(
+          "Tracker::finish: chain '" + chain.name +
+          "' counted see-through hits past " +
+          std::to_string(fit->see_through_m) + " m, its judge's is " +
+          std::to_string(chain.method.judge.see_through_m) + " m");
+    }
     if (!fit.ok()) {
-      std::vector<Recorded> rest(out.fits.begin() + std::ptrdiff_t(i) + 1,
+      // From fit i on: a fitter that refused its finish may still hold its
+      // record (one whose readback never came), and an abandon ignores a
+      // record its fitter no longer holds.
+      std::vector<Recorded> rest(out.fits.begin() + std::ptrdiff_t(i),
                                  out.fits.end());
       Outstanding remaining = out;
       remaining.fits = std::move(rest);

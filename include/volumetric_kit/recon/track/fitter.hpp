@@ -60,7 +60,8 @@ struct PosePrior {
 /// Gauss-Newton returns the point-to-plane system at its prior, so one judge
 /// reads every kind.
 struct TrackFit {
-  /// The prior's, moved along its kept directions only.
+  /// The prior's, moved along its kept directions only; rigid, so it can be
+  /// the next fit's prior.
   Mat4f correction{1.0f};
   float lambda_max = 0.0f;
   /// lambda / lambda_max, ascending.
@@ -77,13 +78,17 @@ struct TrackFit {
   std::uint32_t attempts = 0;
   std::uint32_t hits = 0;     ///< Of them, those the model answered.
   std::uint32_t inliers = 0;  ///< Of the hits, those inside every gate.
-  /// Of the hits, those more than `FitterConfig::see_through_m` in front of
-  /// the model's surface along the cast ray (an occluder: a person); 0
-  /// with the distance 0.
+  /// Of the hits outside a gate, those more than @ref see_through_m in front
+  /// of the model's surface along the cast ray (an occluder: a person); 0
+  /// with the distance 0. Never an inlier: `inliers + in_front + behind`
+  /// is at most @ref hits.
   std::uint32_t in_front = 0;
-  /// Of the hits, those more than `FitterConfig::see_through_m` behind it
-  /// (the view sees through the model: something left).
+  /// As @ref in_front, behind the surface (the view sees through the model:
+  /// something left).
   std::uint32_t behind = 0;
+  /// The distance @ref in_front and @ref behind counted past (metres): the
+  /// fitter's `FitterConfig::see_through_m`; 0 counted none.
+  float see_through_m = 0.0f;
   float rms_m = 0.0f;  ///< The inliers' RMS point-to-plane residual.
   /// The twists' centre: the frames' mean camera centre at the prior (world).
   Vec3f origin{0.0f};
@@ -209,7 +214,7 @@ struct IcpConfig {
   /// tau: directions of the scaled H below this share of its largest
   /// eigenvalue keep the prior [M, 0a]; in (0, 1).
   float min_relative_eigenvalue = 1e-3f;
-  /// Points each frame with hits counts for against the prior [M, mode b].
+  /// Points each frame with hits counts for against the prior.
   float prior_n_eff = 500.0f;
 };
 
@@ -222,8 +227,10 @@ struct FitterConfig {
   volumetric_kit::grid::volume::CastFilter model_filter{};
   IcpConfig icp{};
   /// The distance @ref TrackFit::in_front and @ref TrackFit::behind count
-  /// past (metres); 0 counts none. `create_fitters` takes the method's
-  /// judge's.
+  /// past (metres), at the finest level; 0 counts none. `create_fitters`
+  /// takes the method's judge's, and each fit carries it
+  /// (@ref TrackFit::see_through_m), so a `Tracker` refuses a fit counted at
+  /// another distance than its judge's.
   float see_through_m = 0.0f;
 };
 

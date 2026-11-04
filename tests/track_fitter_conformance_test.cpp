@@ -27,7 +27,10 @@
 //   stops the solves (3 passes at the truth give 1 pass's fit).
 // - Determinism: a record twice is bit-identical; a second fitter in the
 //   same batch changes nothing.
-// - The see-through counters count hits in front of and behind the surface.
+// - The see-through counters count hits in front of and behind the surface,
+//   never an inlier, and the fit says the distance it counted at.
+// - A correction that moved comes back orthonormal from a prior that is not
+//   quite.
 //
 // VR_TRACK_TIMING=1 adds U3's timing (256x192 in a 1 cm room, K = 1 and 20,
 // passes 1 and 3, the configurations alternated), and VR_TRACK_SWEEP=1 a
@@ -902,7 +905,27 @@ int test_see_through(const vkc::test::Gpu& gpu, track::FitKind kind,
               fit.fit.hits);
   CHECK(fit.fit.in_front > fit.fit.hits / 5 &&
         fit.fit.behind > fit.fit.hits / 5);
-  CHECK(fit.fit.in_front + fit.fit.behind < fit.fit.hits);
+  CHECK(fit.fit.in_front + fit.fit.behind + fit.fit.inliers <= fit.fit.hits);
+  CHECK(fit.fit.see_through_m == 0.1f);
+  // A third 2 cm up, past a 1 cm distance: near the image centre inside the
+  // finest gate (about 2.4 cm at 1.5 m), farther out past it along the
+  // oblique rays. The inliers among its hits are not counted in front.
+  const std::vector<float> stepped =
+      render(floor_only(), cam, down,
+             [](double u, double t) { return u < 1.0 / 3.0 ? t - 0.02 : t; });
+  ASSIGN_OR_FAIL(const sensor::DeviceFrame g,
+                 make_frame(gpu, stepped, cam, down, 1000));
+  track::FitterConfig close = counting;
+  close.see_through_m = 0.01f;
+  ASSIGN_OR_FAIL(auto close_fitter,
+                 track::create_fitter(gpu.device, gpu.allocator, close));
+  ASSIGN_OR_FAIL(const Fit inside, fit_once(gpu, *close_fitter, m.floor, {g}));
+  std::printf("  %s a 2 cm step at 1 cm: %u in front, %u inliers of %u hits\n",
+              track::to_string(kind), inside.fit.in_front, inside.fit.inliers,
+              inside.fit.hits);
+  CHECK(inside.fit.inliers > inside.fit.hits / 2);
+  CHECK(inside.fit.in_front + inside.fit.behind + inside.fit.inliers <=
+        inside.fit.hits);
   // Off by default: none counted.
   track::FitterConfig plain = config_for(kind);
   plain.icp.iterations = {0, 0, 0};
@@ -910,6 +933,48 @@ int test_see_through(const vkc::test::Gpu& gpu, track::FitKind kind,
                  track::create_fitter(gpu.device, gpu.allocator, plain));
   ASSIGN_OR_FAIL(const Fit none, fit_once(gpu, *quiet, m.floor, {f}));
   CHECK(none.fit.in_front == 0 && none.fit.behind == 0);
+  CHECK(none.fit.see_through_m == 0.0f);
+  return 0;
+}
+
+// |R^T R - I|'s largest element.
+double ortho_error(const Mat4f& m) {
+  const Mat3d r = rot_of(m);
+  const Mat3d e = glm::transpose(r) * r;
+  double worst = 0.0;
+  for (int c = 0; c < 3; ++c) {
+    for (int k = 0; k < 3; ++k) {
+      worst = std::max(worst, std::fabs(e[c][k] - (c == k ? 1.0 : 0.0)));
+    }
+  }
+  return worst;
+}
+
+// A correction that moved comes back orthonormal, from a prior rigid only to
+// the record's 1e-4: the device composes its steps in float, and fed back
+// fit after fit its rotation would drift until a prior is refused.
+int test_rigid_output(const vkc::test::Gpu& gpu, track::FitKind kind,
+                      const Models& m) {
+  const Camera cam;
+  const Mat4f truth = look_at(kRoomEye, kRoomTarget);
+  const Mat4f error =
+      error_at(Vec3d(kRoomEye), {0.01, -0.005, 0.004}, {0.3, 1, 0.2}, 0.5);
+  ASSIGN_OR_FAIL(const auto frames,
+                 frames_of(gpu, room(), cam, {truth}, error));
+  track::PosePrior prior;
+  prior.correction[0] *= 1.00004f;  // R^T R's (0, 0) is 1 + 8e-5
+  CHECK(ortho_error(prior.correction) > 5e-5);
+  ASSIGN_OR_FAIL(auto fitter, track::create_fitter(gpu.device, gpu.allocator,
+                                                   config_for(kind)));
+  ASSIGN_OR_FAIL(const Fit fit, fit_once(gpu, *fitter, m.room, frames, prior));
+  std::printf("  %s from a prior 8e-5 off orthonormal: %.1e\n",
+              track::to_string(kind), ortho_error(fit.fit.correction));
+  CHECK(fit.fit.solved());
+  CHECK(ortho_error(fit.fit.correction) < 1e-6);
+  double em = 0.0;
+  double edeg = 0.0;
+  gap(fit.fit.correction * error, Mat4f(1.0f), kRoomEye, em, edeg);
+  CHECK(em < 2e-3 && edeg < 0.05);
   return 0;
 }
 
@@ -1078,6 +1143,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
     CHECK(test_prior(gpu, kind, m) == 0);
     CHECK(test_determinism(gpu, kind, m) == 0);
     CHECK(test_see_through(gpu, kind, m) == 0);
+    CHECK(test_rigid_output(gpu, kind, m) == 0);
     if (flag("VR_TRACK_TIMING")) CHECK(timing(gpu, kind) == 0);
     if (flag("VR_TRACK_SWEEP")) CHECK(sweep(gpu, kind, m) == 0);
   }

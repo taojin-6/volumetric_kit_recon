@@ -113,6 +113,13 @@ inline Mat4f to_f(const Mat3d& r, const Vec3d& t) {
   return m;
 }
 
+// m with its rotation made orthonormal again (the exponential of its log),
+// its translation kept. A rotation composed in float drifts off orthonormal a
+// little at each step; fed back fit after fit, it would reach rigid()'s 1e-4.
+inline Mat4f orthonormalised(const Mat4f& m) {
+  return to_f(so3_exp(so3_log(rotation_of(m))), translation_of(m));
+}
+
 // The twist about o that takes `from` to `to`: to = exp(twist; o) * from.
 inline Twist twist_between(const Mat4f& from, const Mat4f& to, const Vec3d& o) {
   const Mat3d rd = rotation_of(to) * glm::transpose(rotation_of(from));

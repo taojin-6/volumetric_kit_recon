@@ -19,6 +19,8 @@
 
 // The frame's depth noise, sigma(z) = a + b z + c z^2 metres (sensor's
 // DepthNoise::sigma).
+// TODO(sensor): include sensor's shader form of DepthNoise::sigma once it
+// exports one; this and tsdf_change_detect.comp's are copies of it.
 float vr_track_sigma(vec3 abc, float z) {
   return abc.x + z * (abc.y + z * abc.z);
 }

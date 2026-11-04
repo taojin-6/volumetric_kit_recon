@@ -36,6 +36,7 @@
 #include <utility>
 #include <vector>
 
+#include "frame_check.hpp"
 #include "se3.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -322,6 +323,8 @@ core::Status PointToPlane::init() {
 core::Status PointToPlane::ensure(std::uint32_t width, std::uint32_t height,
                                   std::uint32_t views) {
   if (width == w_[0] && height == h_[0] && views <= capacity_) return {};
+  // TODO: keep the committed entries when the stack grows; a window's first
+  // hops (K = 1, 5, 10, ...) now reallocate and rebuild every pyramid.
   const bool resized = width != w_[0] || height != h_[0];
   const std::uint32_t capacity = resized ? views : std::max(views, capacity_);
   // Drop the old buffers first, so a grow never holds both.
@@ -429,23 +432,8 @@ core::Status PointToPlane::check(const vol::VoxelBlockGrid& model,
     if (i > 0 && !(f.timestamp_ns > frames[i - 1].timestamp_ns)) {
       return refuse(at + "timestamps are not ascending");
     }
-    if (!f.depth || !f.depth->valid()) return refuse(at + "no depth");
-    if (f.depth->size() < VkDeviceSize(w) * h * 4 ||
-        (f.depth->usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) == 0) {
-      return refuse(at +
-                    "its depth is smaller than its camera, or not "
-                    "copyable (no TRANSFER_SRC)");
-    }
-    if (!f.depth_noise.known()) return refuse(at + "no depth noise");
-    if (!rigid(f.depth_camera.cam_to_world)) {
-      return refuse(at + "its pose is not rigid");
-    }
-    const sensor::DepthCameraParams& c = f.depth_camera;
-    if (!(c.fx > 0.0f && c.fy > 0.0f && std::isfinite(c.cx) &&
-          std::isfinite(c.cy) && c.min_depth >= 0.0f &&
-          c.max_depth > c.min_depth && std::isfinite(c.max_depth))) {
-      return refuse(at + "its camera's intrinsics or range are invalid");
-    }
+    const std::string why = frame_refusal(f);
+    if (!why.empty()) return refuse(at + why);
   }
   if (!rigid(prior.correction)) return refuse("the prior is not rigid");
   const auto sigma_ok = [](float s) { return std::isfinite(s) && s >= 0.0f; };
@@ -764,6 +752,7 @@ core::Result<TrackFit> PointToPlane::finish(const PendingFit& pending) {
   fit.inliers = std::uint32_t(std::lround(r.inliers));
   fit.in_front = std::uint32_t(std::lround(r.in_front));
   fit.behind = std::uint32_t(std::lround(r.behind));
+  fit.see_through_m = config_.see_through_m;
   fit.rms_m = r.inliers > 0.0f ? std::sqrt(r.raw2 / r.inliers) : 0.0f;
   fit.origin = r.origin;
   fit.scale_m = r.scale;
@@ -776,7 +765,13 @@ core::Result<TrackFit> PointToPlane::finish(const PendingFit& pending) {
     fit.held = 0x3f;
     return fit;
   }
-  fit.correction = r.correction;
+  // The device composes its steps in float: a correction that moved is made
+  // orthonormal again here, in double, so one fed back as the next prior
+  // stays rigid. One that did not move is the prior's, bit for bit.
+  fit.correction =
+      std::memcmp(&r.correction, &out.prior.correction, sizeof(Mat4f)) == 0
+          ? out.prior.correction
+          : orthonormalised(r.correction);
   fit.lambda_max = r.lambda_max;
   for (int i = 0; i < 6; ++i)
     fit.relative_eigenvalues[std::size_t(i)] = r.rel[i];

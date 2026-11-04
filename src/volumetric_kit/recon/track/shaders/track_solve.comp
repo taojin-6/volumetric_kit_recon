@@ -13,6 +13,10 @@
 // only with 6 inliers and a quarter of the hits; one longer than max_step
 // (metres or radians) marks the fit diverged and is not taken. Every branch
 // that holds a barrier is uniform: it reads push constants or shared memory.
+// TODO: 0b's window reference also limits each iteration's step to the
+// directions at or above the judge's partial threshold (1e-2) whenever one
+// is under tau; here only the judge's final projection does. The bench
+// (track_eval) compares the two on recorded takes before this changes.
 
 #extension GL_GOOGLE_include_directive : require
 #include "track_common.glsl"

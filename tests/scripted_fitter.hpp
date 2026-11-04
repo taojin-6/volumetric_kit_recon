@@ -7,8 +7,9 @@
 // (track::Tracker, and later the mobile lane): it records nothing into the
 // batch and returns what its script makes of each record's frames and prior.
 // It keeps the IFitter contract the tracker relies on -- one record
-// outstanding, a finish only of the last record, an abandon that drops it --
-// and logs each record's frames, prior and row names.
+// outstanding, a finish only of the last record, an abandon that drops it, a
+// refused finish that keeps it (scripted: refuse_next_finish) -- and logs
+// each record's frames, prior and row names.
 
 #include <cstddef>
 #include <cstdint>
@@ -89,6 +90,13 @@ class ScriptedFitter final : public track::IFitter {
       return volumetric_kit::core::Status::invalid_argument(
           "ScriptedFitter: not the last record");
     }
+    if (refuse_finish_) {
+      // As PointToPlane refuses a readback that never came: the record stays
+      // outstanding until an abandon.
+      refuse_finish_ = false;
+      return volumetric_kit::core::Status::invalid_argument(
+          "ScriptedFitter: a scripted finish refusal");
+    }
     pending_ = 0;
     log_->back().finished = true;
     return fit_;
@@ -102,10 +110,13 @@ class ScriptedFitter final : public track::IFitter {
 
   // Whether a record is outstanding.
   bool outstanding() const noexcept { return pending_ != 0; }
+  // The next finish of the last record refuses and keeps the record.
+  void refuse_next_finish() noexcept { refuse_finish_ = true; }
 
  private:
   Script script_;
   double cost_ms_ = 0.0;
+  bool refuse_finish_ = false;
   std::shared_ptr<std::vector<ScriptedRecord>> log_;
   track::TrackFit fit_;
   std::uint64_t pending_ = 0;

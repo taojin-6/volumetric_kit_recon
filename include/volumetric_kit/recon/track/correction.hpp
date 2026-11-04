@@ -63,18 +63,20 @@ struct CorrectionFilterConfig {
   float jump_deg = 1.0f;           ///< As @ref jump_m, the rotation.
   float jump_growth_m_s = 0.02f;   ///< Per second since the last Anchored fit.
   float jump_growth_deg_s = 0.3f;  ///< As @ref jump_growth_m_s.
-  /// The prior's sigma at an Anchored fit [M, mode b]; 0 holds nothing.
+  /// The prior's sigma at an Anchored fit; 0 holds nothing.
   float prior_sigma_m = 0.005f;
   float prior_sigma_deg = 0.3f;  ///< As @ref prior_sigma_m, the rotation.
   /// The prior's sigma grows at these per second since the last Anchored
-  /// fit (ARKit's measured drift is at least 0.3 deg/s).
+  /// fit, as the device's pose drifts.
   float prior_growth_m_s = 0.008f;
   float prior_growth_deg_s = 0.3f;  ///< As @ref prior_growth_m_s.
   /// The see-through check (metres): above 0, hits more than this in front
   /// of or behind the model's surface (`TrackFit::in_front`,
   /// `TrackFit::behind`) leave the coverage and the inlier ratio, so a
   /// person in view or an object that left does not refuse the fit. 0 (the
-  /// default) is off.
+  /// default) is off. The one home of the distance: `create_fitters` gives
+  /// it to the chain's fitter, and the `Tracker` refuses a fit that counted
+  /// at another (`TrackFit::see_through_m`).
   float see_through_m = 0.0f;
 };
 

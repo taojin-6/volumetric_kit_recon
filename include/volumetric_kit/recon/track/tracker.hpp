@@ -40,7 +40,10 @@
 ///   does (Interpolated); otherwise, once hold_ns has run out, the frame is
 ///   dropped. A shadow never delays, changes or fails a release.
 /// - *The ring.* A frame is held until the driver has released or dropped
-///   it and every chain has decided it.
+///   it and every chain has decided it: up to the longer of hold_ns and the
+///   methods' windows of frames. It holds each frame as recorded, its colour
+///   too; a caller that takes colour from elsewhere records frames without
+///   it.
 ///
 /// All timing is by frame timestamps, never wall time, so replays repeat
 /// exactly. One thread, one step outstanding. The caller owns the queue: it
@@ -243,10 +246,13 @@ class VR_TRACK_API Tracker {
   ///                 destroyed.
   /// @return The pending step. Any error leaves no frame held and no fitter
   ///         outstanding. `Status::Code::InvalidArgument` for a step
-  ///         outstanding; a frame without depth or a known `DepthNoise`,
-  ///         not rigid, of another size than the first, or not newer than
-  ///         the last; or a driver chain's refusal. A buffer failure poisons
-  ///         @p batch (core), so the caller drops it.
+  ///         outstanding; a frame any fitter would refuse (no depth, or one
+  ///         smaller than its camera or not copyable; no known
+  ///         `DepthNoise`; not rigid; invalid intrinsics or range), checked
+  ///         at its own record whether or not a fit is due; a frame of
+  ///         another size than the first, or not newer than the last; or a
+  ///         driver chain's refusal. A buffer failure poisons @p batch
+  ///         (core), so the caller drops it.
   core::Result<PendingStep> record(
       core::CommandBatch& batch,
       const volumetric_kit::grid::volume::VoxelBlockGrid& model,
@@ -255,8 +261,10 @@ class VR_TRACK_API Tracker {
   ///        release the driver's placements.
   /// @pre The batch's wait returned OK.
   /// @return The step; `Status::Code::InvalidArgument` for a pending step
-  ///         not the last record's, or a fitter's refusal of its finish,
-  ///         which drops the step as @ref abandon does.
+  ///         not the last record's, or, dropping the step as @ref abandon
+  ///         does (no fitter left holding a record), a fitter's refusal of
+  ///         its finish or a fit counted at another see-through distance
+  ///         than its chain's judge's (`TrackFit::see_through_m`).
   core::Result<TrackStep> finish(const PendingStep& pending);
   /// @brief The batch failed or never ran: its frame and fits are dropped,
   ///        no judge moves, and a hop due at it stays due at the next frame.

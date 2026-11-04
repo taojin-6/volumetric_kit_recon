@@ -10,9 +10,11 @@
 // the tie and the drop, and one chain; the judge through ChainFit (gate order,
 // the first lock, a repeated jump, a Partial fit's strong directions, sigma's
 // growth and reset, the inlier ratio over hits, the see-through check, a fit
-// that solved nothing); the rows per chain; the contract (refusals, errors
-// that leave nothing held, abandon, flush, create's refusals); replays repeat;
-// and corrected() moves both cameras.
+// that solved nothing, a fit counted at another see-through distance); the
+// rows per chain; the contract (refusals, every frame check at the frame's
+// own record, errors that leave nothing held, a refused finish that leaves no
+// fitter holding a record, abandon, flush, create's refusals); replays
+// repeat; and corrected() moves both cameras.
 
 #include <algorithm>
 #include <cmath>
@@ -35,6 +37,7 @@
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
+#include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/track/tracker.hpp"
@@ -97,11 +100,17 @@ bool near(const Mat4f& a, const Mat4f& b, float tol = 1e-5f) {
   return true;
 }
 
-// A frame at `pts`, its buffers empty (a scripted fitter never reads them).
+// Every frame's depth: one buffer of the widest frame's size (64 x 24), which
+// the tracker's frame check reads the size and usage of and a scripted fitter
+// never reads; gpu_main makes it. A buffer too small for a 32 x 24 frame.
+std::shared_ptr<const vkc::Buffer> g_depth;
+std::shared_ptr<const vkc::Buffer> g_short_depth;
+
+// A frame at `pts` (its depth unread by a scripted fitter).
 sensor::DeviceFrame frame_at(std::uint64_t pts, const Mat4f& pose = Mat4f(1.0f),
                              std::uint32_t width = 32) {
   sensor::DeviceFrame f;
-  f.depth = std::make_shared<const vkc::Buffer>();
+  f.depth = g_depth;
   f.depth_camera = {40.0f, 40.0f, 15.5f, 11.5f, 0.1f, 5.0f, width, 24, pose};
   f.color_camera = {40.0f, 40.0f, 15.5f, 11.5f, width, 24, pose};
   f.timestamp_ns = pts;
@@ -706,25 +715,31 @@ int test_judge(const Env& env) {
   return 0;
 }
 
-// The see-through check: hits far off the surface leave the ratio.
+// The see-through check: hits far off the surface leave the ratio. A fit
+// counted at another distance than its judge's is refused.
 int test_see_through(const Env& env) {
-  for (const float distance : {0.0f, 0.1f}) {
+  const auto config = [](float distance) {
     track::TrackerConfig c = every_frame({"rig"});
     c.driver = track::window_method();
     c.driver.window_ns = 0;
     c.driver.hop_ns = 0;
     c.driver.judge.see_through_m = distance;
-    const Script script =
-        [](const std::vector<sensor::DeviceFrame>&,
-           const track::PosePrior&) -> vkc::Result<track::TrackFit> {
+    return c;
+  };
+  const auto counted_at = [](float distance) -> Script {
+    return [distance](const std::vector<sensor::DeviceFrame>&,
+                      const track::PosePrior&) -> vkc::Result<track::TrackFit> {
       track::TrackFit fit = anchored(Mat4f(1.0f));
       fit.hits = 18000;
       fit.inliers = 11000;  // 0.61 of the hits
       fit.behind = 2000;    // a door opened: the view sees past the model
       fit.in_front = 1000;  // a person in view
+      fit.see_through_m = distance;
       return fit;
     };
-    ASSIGN_OR_FAIL(Rig rig, make(c, {script}));
+  };
+  for (const float distance : {0.0f, 0.1f}) {
+    ASSIGN_OR_FAIL(Rig rig, make(config(distance), {counted_at(distance)}));
     ASSIGN_OR_FAIL(const track::TrackStep s,
                    step(env, *rig.tracker, frame_at(0)));
     CHECK(s.fits.size() == 1);
@@ -732,6 +747,90 @@ int test_see_through(const Env& env) {
                                          ? track::TrackState::Anchored
                                          : track::TrackState::Rejected));
   }
+  // The judge's check on, the fitter's counters off (a fitter made without
+  // the distance), and the reverse: the step is dropped, nothing held.
+  for (const float judge : {0.0f, 0.1f}) {
+    ASSIGN_OR_FAIL(Rig rig, make(config(judge), {counted_at(0.1f - judge)}));
+    {
+      vkc::CommandBatch batch(env.gpu.device, env.gpu.allocator);
+      ASSIGN_OR_FAIL(const track::PendingStep p,
+                     rig.tracker->record(batch, env.grid, frame_at(0)));
+      CHECK(!rig.tracker->finish(p).ok());
+    }
+    CHECK(!rig.fitters[0]->outstanding());
+    CHECK(rig.tracker->flush().poses.empty());  // the frame was dropped
+  }
+  return 0;
+}
+
+// A fitter that refuses its finish (its batch never ran) keeps its record,
+// as PointToPlane does; the Tracker drops the step with no fitter left
+// holding one, so the next records work. Either chain refusing.
+int test_finish_refused(const Env& env) {
+  for (const std::size_t refusing : {std::size_t(0), std::size_t(1)}) {
+    const track::TrackerConfig c = every_frame({"rig", "track"});
+    ASSIGN_OR_FAIL(Rig rig, make(c, {anchors_when([](auto) { return true; }),
+                                     anchors_when([](auto) { return true; })}));
+    track::Tracker& t = *rig.tracker;
+    ASSIGN_OR_FAIL(const track::TrackStep s1, step(env, t, frame_at(0)));
+    CHECK(s1.released.size() == 1);
+    {
+      vkc::CommandBatch batch(env.gpu.device, env.gpu.allocator);
+      ASSIGN_OR_FAIL(const track::PendingStep p,
+                     t.record(batch, env.grid, frame_at(100 * kMs)));
+      rig.fitters[refusing]->refuse_next_finish();
+      CHECK(!t.finish(p).ok());
+      t.abandon(p);  // ignored: the step is gone
+    }
+    CHECK(!rig.fitters[0]->outstanding() && !rig.fitters[1]->outstanding());
+    // The dropped frame's time records again, and the run goes on.
+    ASSIGN_OR_FAIL(const track::TrackStep s2,
+                   step(env, t, frame_at(100 * kMs)));
+    CHECK(s2.fits.size() == 2 && s2.released.size() == 1 &&
+          s2.released[0].frame.timestamp_ns == 100 * kMs);
+    ASSIGN_OR_FAIL(const track::TrackStep s3,
+                   step(env, t, frame_at(200 * kMs)));
+    CHECK(s3.fits.size() == 2 && s3.released.size() == 1);
+  }
+  return 0;
+}
+
+// A frame no fitter can read is refused at its own record, though no fit is
+// due at it, so the frames after it are not refused for it while a window
+// holds it. The script refuses as PointToPlane does: a window holding a frame
+// whose range is invalid.
+int test_bad_frame_between_hops(const Env& env) {
+  track::TrackerConfig c;
+  c.driver = track::window_method();  // 2 s windows every 0.5 s
+  c.drivers = {{"rig", {}}};
+  c.shadows = {};
+  const Script checks =
+      [](const std::vector<sensor::DeviceFrame>& frames,
+         const track::PosePrior&) -> vkc::Result<track::TrackFit> {
+    for (const sensor::DeviceFrame& f : frames) {
+      if (!(f.depth_camera.max_depth > f.depth_camera.min_depth)) {
+        return vkc::Status::invalid_argument("a held frame's range");
+      }
+    }
+    return anchored(Mat4f(1.0f));
+  };
+  ASSIGN_OR_FAIL(Rig rig, make(c, {checks}));
+  std::vector<std::uint64_t> refused;
+  for (std::uint64_t i = 0; i < 40; ++i) {
+    sensor::DeviceFrame f = frame_at(i * 100 * kMs);
+    if (i == 12) f.depth_camera.max_depth = 0.05f;  // at 1.2 s: no fit due
+    vkc::CommandBatch batch(env.gpu.device, env.gpu.allocator);
+    const vkc::Result<track::PendingStep> p =
+        rig.tracker->record(batch, env.grid, std::move(f));
+    if (!p.ok()) {
+      refused.push_back(i);
+      continue;
+    }
+    ASSIGN_OR_FAIL(const track::TrackStep s, rig.tracker->finish(*p));
+    (void)s;
+  }
+  CHECK(refused == std::vector<std::uint64_t>{12});
+  CHECK(rig.fitters[0]->log()->size() == 8);  // a fit every 0.5 s to 3.9 s
   return 0;
 }
 
@@ -793,8 +892,15 @@ int test_contract(const Env& env) {
   skewed.depth_camera.cam_to_world[0][0] = 2.0f;
   const sensor::DeviceFrame wider = frame_at(200 * kMs, Mat4f(1.0f), 64);
   const sensor::DeviceFrame stale = frame_at(0);
+  sensor::DeviceFrame short_depth = frame_at(200 * kMs);
+  short_depth.depth = g_short_depth;
+  sensor::DeviceFrame no_focal = frame_at(200 * kMs);
+  no_focal.depth_camera.fx = 0.0f;
+  sensor::DeviceFrame inverted = frame_at(200 * kMs);
+  inverted.depth_camera.max_depth = 0.05f;  // under its min_depth
   for (const sensor::DeviceFrame& bad :
-       {no_depth, no_noise, skewed, wider, stale}) {
+       {no_depth, no_noise, skewed, wider, stale, short_depth, no_focal,
+        inverted}) {
     vkc::CommandBatch batch(env.gpu.device, env.gpu.allocator);
     CHECK(!t.record(batch, env.grid, bad).ok());
   }
@@ -940,6 +1046,20 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::Result<vol::VoxelBlockGrid> grid =
       vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, p, attrs, 2);
   CHECK(grid.ok());
+  vkc::Result<vkc::Buffer> depth =
+      vkc::device_storage_buffer(gpu.allocator, 64 * 24 * 4);
+  vkc::Result<vkc::Buffer> short_depth =
+      vkc::device_storage_buffer(gpu.allocator, 16);
+  CHECK(depth.ok() && short_depth.ok());
+  g_depth = std::make_shared<const vkc::Buffer>(std::move(*depth));
+  g_short_depth = std::make_shared<const vkc::Buffer>(std::move(*short_depth));
+  // The buffers go before the device does, whatever case fails.
+  struct Release {
+    ~Release() {
+      g_depth.reset();
+      g_short_depth.reset();
+    }
+  } release;
   const Env env{gpu, *grid};
   CHECK(test_device(env) == 0);
   CHECK(test_shadows_isolated(env) == 0);
@@ -951,6 +1071,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_see_through(env) == 0);
   CHECK(test_rows(env) == 0);
   CHECK(test_contract(env) == 0);
+  CHECK(test_finish_refused(env) == 0);
+  CHECK(test_bad_frame_between_hops(env) == 0);
   CHECK(test_abandon(env) == 0);
   CHECK(test_replay(env) == 0);
   CHECK(test_corrected() == 0);
