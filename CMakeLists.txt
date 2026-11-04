@@ -135,6 +135,15 @@ set(VR_CORE_MIN_VERSION 0.49.0)
 set(VR_SENSOR_MIN_VERSION 0.40.0)
 set(VR_GRID_MIN_VERSION 0.12.0)
 add_subdirectory(third_party)
+# The tag is found in the phone's pictures, which only sensor's video decoders
+# read: refused here rather than once a phone has dialled.
+if(VR_WITH_CALIB AND NOT TARGET volumetric_kit::sensor_video)
+  message(
+    FATAL_ERROR
+      "VR_WITH_CALIB=ON needs sensor's video decoders (sensor_video): built "
+      "on macOS always, on Linux with -DVS_WITH_FFMPEG=ON and "
+      "-DVS_WITH_CUDA=ON (NVDEC)")
+endif()
 
 add_subdirectory(src)
 

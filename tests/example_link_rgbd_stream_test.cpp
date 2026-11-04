@@ -361,6 +361,7 @@ int test_fixed_round_trip() {
   CHECK(opened.ok());
   std::unique_ptr<RgbdStreamSensor> s = std::move(opened).value();
   CHECK(same_info_less_color(s->info(), take.info));
+  CHECK(s->session_id() == kSessionId);
   CHECK(s->set_queue_depth(0).domain() == Code::InvalidArgument);
   CHECK(s->set_queue_depth(4).ok());
   CHECK(s->set_frame_notify([] {}).domain() == Code::Unsupported);

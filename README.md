@@ -293,8 +293,10 @@ tag detector and solve, which `VR_WITH_CALIB=ON` fetches, pinned
 CMake 3.28 or newer. On macOS Homebrew's `opencv` is found as it is; on Linux,
 calib's `tools/install-opencv.sh` installs it, and `-DOpenCV_DIR` names it. The
 pictures decode on sensor's decoders (VideoToolbox, or NVDEC with
-`VS_WITH_FFMPEG` and `VS_WITH_CUDA`). Off, the default, a phone without a
-registration is refused before anything opens.
+`VS_WITH_FFMPEG` and `VS_WITH_CUDA`), and configure refuses the option in a
+build without them. The calibration's world must be calib's origin tag
+(`kOriginTag`, AprilTag 36h11 id 0) alone. Off, the default, a phone without
+a registration is refused before anything opens.
 
 ```sh
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \

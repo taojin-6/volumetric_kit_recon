@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <new>
+#include <opencv2/core/utility.hpp>
 #include <thread>
 #include <utility>
 
@@ -104,10 +105,18 @@ struct TagWatch::State {
     news.failures.push_back(message);
   }
 
-  // The hold of `held` solved: refused, passed, or the session's
-  // registration.
-  TagHold solve(const std::vector<Still>& held) {
+  // A hold solved, and the registration it made, if it made one.
+  struct Solved {
     TagHold hold;
+    std::optional<camera::TrackedRegistration> registered;
+  };
+
+  // The hold of `held` solved: refused, passed, or the session's
+  // registration. Nothing shared is touched: the caller publishes both at
+  // once, so a take never gets the one without the other.
+  Solved solve(const std::vector<Still>& held) {
+    Solved out;
+    TagHold& hold = out.hold;
     hold.first_pts_ns = held.front().pts;
     hold.last_pts_ns = held.back().pts;
     hold.stills = static_cast<std::uint32_t>(held.size());
@@ -127,12 +136,12 @@ struct TagWatch::State {
     if (!found.ok()) {
       hold.miss = "error";
       hold.reason = found.status().message();
-      return hold;
+      return out;
     }
     if (!found->fit) {
       hold.miss = calib::solve::to_string(found->miss);
       hold.reason = found->reason;
-      return hold;
+      return out;
     }
     const calib::solve::TrackedTagFit& fit = *found->fit;
     hold.rms_px = fit.rms_px;
@@ -147,21 +156,20 @@ struct TagWatch::State {
     if (registered) {
       hold.use = TagHold::Use::Passed;
       hold.tracking_to_world = fit.tracking_to_world;
-      return hold;
+      return out;
     }
     vkc::Result<camera::TrackedRegistration> reg =
         calib::solve::register_tracked(session, options.world, *found);
     if (!reg.ok()) {
       hold.miss = "error";
       hold.reason = reg.status().message();
-      return hold;
+      return out;
     }
     hold.use = TagHold::Use::Registered;
     hold.tracking_to_world = fit.tracking_to_world;
     registered = true;
-    std::lock_guard<std::mutex> lock(mutex);
-    news.registered = std::move(reg).value();
-    return hold;
+    out.registered = std::move(reg).value();
+    return out;
   }
 
   // One candidate searched, counted once its news is in.
@@ -221,11 +229,13 @@ struct TagWatch::State {
     if (stills.size() < kHoldStills) return {};
     std::vector<Still> held = std::move(stills);
     stills.clear();  // spent
-    TagHold hold = solve(held);
+    Solved solved = solve(held);
+    // The hold, its registration and its counts in one lock section.
     std::lock_guard<std::mutex> lock(mutex);
     ++counts.holds;
-    if (hold.use == TagHold::Use::Refused) ++counts.refused;
-    news.holds.push_back(std::move(hold));
+    if (solved.hold.use == TagHold::Use::Refused) ++counts.refused;
+    if (solved.registered) news.registered = std::move(solved.registered);
+    news.holds.push_back(std::move(solved.hold));
     return {};
   }
 
@@ -261,10 +271,26 @@ vkc::Status TagWatch::check(const sensor::camera::WorldFrame& world) {
                               : "sensor " + world.sensor) +
         "), so a phone needs source.mobile_registration");
   }
-  const double edge = world.apriltag->size_m;
-  if (!std::isfinite(edge) || edge <= 0.0) {
+  const sensor::camera::AprilTagWorld& t = *world.apriltag;
+  const std::string family =
+      calib::apriltag_family(calib::kOriginTag.dictionary);
+  // register_tracked's own world check, but for the edge, which the watch
+  // takes from the world: a world it would refuse never registers.
+  if (!world.sensor.empty() || t.family != family ||
+      t.id != calib::kOriginTag.id) {
     return vkc::Status::invalid_argument(
-        "TagWatch: the calibration's tag has no edge (size_m)");
+        "TagWatch: the calibration's world is " + t.family + " id " +
+        std::to_string(t.id) +
+        (world.sensor.empty() ? std::string()
+                              : " beside sensor " + world.sensor) +
+        ", not the origin tag the watch finds (" + family + " id " +
+        std::to_string(calib::kOriginTag.id) +
+        " alone), so a phone needs source.mobile_registration");
+  }
+  if (!std::isfinite(t.size_m) || t.size_m <= 0.0) {
+    return vkc::Status::invalid_argument(
+        "TagWatch: the calibration's tag has no edge (size_m), so a phone "
+        "needs source.mobile_registration");
   }
   return {};
 }
@@ -284,6 +310,10 @@ vkc::Result<std::unique_ptr<TagWatch>> TagWatch::create(
   s->tag.edge_m = options.world.apriltag->size_m;  // the printed edge
   VKC_TRY(calib::check_origin_tag(s->tag));
   VKC_ASSIGN(s->readback, sensor::PictureReadback::create(device, allocator));
+  // OpenCV's detector runs on one thread, the caller's (the watch's own), not
+  // its pool of a thread a core. Process-wide: the run has no other OpenCV
+  // user.
+  cv::setNumThreads(1);
   s->options = std::move(options);
   if (s->options.background) {
     State* state = s.get();

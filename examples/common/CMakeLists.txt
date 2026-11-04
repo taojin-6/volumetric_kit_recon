@@ -57,11 +57,13 @@ target_link_libraries(
   vr_example_mobile PUBLIC vr_example_link volumetric_kit::recon_track
                            volumetric_kit::recon_sender)
 # The origin tag's watch (live_tag.hpp): on calib's detector and solve and
-# sensor's picture readback with VR_WITH_CALIB, a refusal without.
+# sensor's picture readback with VR_WITH_CALIB, a refusal without. OpenCV's core
+# for the one call that keeps the detector on the watch's thread.
 if(VR_WITH_CALIB)
   target_sources(vr_example_mobile PRIVATE live_tag.cpp)
-  target_link_libraries(vr_example_mobile PRIVATE volumetric_kit::calib_detect
-                                                  volumetric_kit::calib_solve)
+  target_link_libraries(
+    vr_example_mobile PRIVATE volumetric_kit::calib_detect
+                              volumetric_kit::calib_solve opencv_core)
 else()
   target_sources(vr_example_mobile PRIVATE live_tag_off.cpp)
 endif()

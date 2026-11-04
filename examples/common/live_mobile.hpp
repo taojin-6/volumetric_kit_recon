@@ -206,9 +206,10 @@ class MobileLane {
       std::uint64_t next_set_ns);
 
   /// @brief The run's end: the tag watch's last news taken and the watch
-  ///        let go, the tracker flushed (held frames decided, placed or
-  ///        dropped, and logged, not fused), the log closed and its summary
-  ///        printed. Idempotent.
+  ///        let go (a hold its thread is solving then, one search of 10 to
+  ///        55 ms, is not logged), the tracker flushed (held frames decided,
+  ///        placed or dropped, and logged, not fused), the log closed and its
+  ///        summary printed. Idempotent.
   /// @return OK; the tracker's or the log's error; or the watch's device or
   ///         copy error, once the rest of the close has run.
   vkc::Status close();
@@ -238,10 +239,13 @@ class MobileLane {
 ///        Placed by `source.mobile_registration`, read depth alone; or
 ///        without one by the origin tag, read with its pictures: a
 ///        @ref TagWatch in `source.calibration`'s world, on its own thread
-///        (every lane runs beside a live rig). With `diagnostics.track_log`,
-///        a live phone is recorded there (`phone.vrst`), and the tag's
-///        registration is written beside it (`registration.json`), so the
-///        run replays.
+///        (every lane runs beside a live rig). A file read so decodes its
+///        pictures in @ref MobileLane::next, on the set loop (about 1 ms at
+///        p95 a gap, measured on an RTX 5090): a replay's cost, not a live
+///        run's, whose phone decodes on its poll thread. With
+///        `diagnostics.track_log`, a live phone is recorded there
+///        (`phone.vrst`), and the tag's registration is written beside it
+///        (`registration.json`), so the run replays.
 /// @return The lane; @ref check_mobile's refusal, before any wait; with the
 ///         tag, `Status::Code::InvalidArgument` before any wait for a
 ///         `diagnostics.track_log` that holds a `registration.json` already

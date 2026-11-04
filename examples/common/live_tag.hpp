@@ -34,9 +34,12 @@
 /// and the solve run on the watch's own thread: @ref TagWatch::see hands it
 /// the picture through a one-slot box, newest wins, letting go of the one it
 /// replaces, and never waits; @ref TagWatch::take returns what the thread
-/// found. Without it, all of it runs inside @ref TagWatch::see, so a replay
-/// repeats exactly. The copy is one submit on the run's device, waited on by
-/// the watch alone; nothing of the run waits on the watch.
+/// found, each hold with its registration in the same take. Without it, all
+/// of it runs inside @ref TagWatch::see, so a replay repeats exactly. The
+/// copy is one submit on the run's device, waited on by the watch alone;
+/// nothing of the run waits on the watch. The search runs on that one
+/// thread, never OpenCV's pool: @ref TagWatch::create sets OpenCV's threads
+/// to 1 (`cv::setNumThreads`), for the whole process.
 ///
 /// A build without `VR_WITH_CALIB` has the same header and refuses: its
 /// @ref TagWatch::check and @ref TagWatch::create return
@@ -168,25 +171,30 @@ class TagWatch {
     std::uint64_t failed = 0;
   };
 
-  /// @return OK when this build registers by the tag and @p world is a tag;
-  ///         `Status::Code::Unsupported` in a build without `VR_WITH_CALIB`,
-  ///         naming `-DVR_WITH_CALIB=ON` and `source.mobile_registration`;
-  ///         `Status::Code::InvalidArgument` for a world with no tag, or a
-  ///         tag of no edge. Cheap: the lane calls it before it waits for
-  ///         the phone.
+  /// @return OK when this build registers by the tag and @p world is the
+  ///         origin tag the watch finds (calib's `kOriginTag`: its family
+  ///         and id, no sensor beside it); `Status::Code::Unsupported` in a
+  ///         build without `VR_WITH_CALIB`, naming `-DVR_WITH_CALIB=ON` and
+  ///         `source.mobile_registration`; `Status::Code::InvalidArgument`
+  ///         for a world with no tag, another tag, a sensor beside it, or a
+  ///         tag of no edge, naming `source.mobile_registration`. Cheap: the
+  ///         lane calls it before it waits for the phone.
   static vkc::Status check(const sensor::camera::WorldFrame& world);
 
   /// @param device     The run's device; it and @p allocator outlive the
   ///                   watch.
   /// @param allocator  What the copy's host memory comes from.
   /// @param options    Whose pictures, in which world, on which thread.
+  ///                   OpenCV's threads are set to 1 (above).
   /// @return The watch; @ref check's refusal; `Status::Code::InvalidArgument`
   ///         for an empty sensor id or an all-zero session; or the
   ///         readback's error.
   static vkc::Result<std::unique_ptr<TagWatch>> create(
       const vkc::Device& device, vkc::Allocator& allocator, Options options);
 
-  ~TagWatch();  ///< Joins its thread; the boxed picture is let go.
+  /// Joins its thread, after the search it is running; the boxed picture is
+  /// let go, and so is what that search found since the last @ref take.
+  ~TagWatch();
   TagWatch(const TagWatch&) = delete;
   TagWatch& operator=(const TagWatch&) = delete;
   TagWatch(TagWatch&&) = delete;
