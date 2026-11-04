@@ -6137,14 +6137,14 @@ reading of the voxel.
   with fill averages in and leaves the byte; one that sees past wrong fill
   on a quiet pixel only wears it down; only its own change that
   contradicts the fill clears it at once. So `rig_cast()` and, while it is
-  unanchored, `tracking_cast()` skip a shared voxel (402 on the recorded
-  take at the end).
+  unanchored, `tracking_cast()` skip a shared voxel (402 at the end of the
+  recorded take with the synthetic filler below).
 
 **Evidence.** Tests: `recon_tsdf_source` (the table and the casts; a rig with
 the byte and without it is the same grid in either mode; the cases where a
 fixed camera has no standing; removal only on contradiction; noise and false
 alarms under a band) and `recon_tsdf_filler` (tiers in every order, each
-veto, the rig unchanged beside a filler, the refusals); four planted bugs,
+veto, the rig unchanged beside a filler, the refusals); five planted bugs,
 each killed. The rig's recorded take (4 Femtos, 300 sets, 1 cm, Dynamic,
 max weight 20), on the lab's RTX 5090, Release:
 - with the byte, the grid's digest (every block's tsdf, weight and colour,
@@ -6157,7 +6157,9 @@ max weight 20), on the lab's RTX 5090, Release:
   other voxel equal to the run without it at every set (1.27 G voxel
   comparisons), none in a block only the filler allocated; the filler's
   veto gather and pass 0.18 ms a set it fuses (median), integrate 3.14
-  against 2.83 ms in those sets.
+  against 2.83 ms in those sets. The restart's cap changes that run's grid
+  from set 129 on (Anchored turns over fill the rig raised), with the
+  same fill count, I1 and cost.
 
 ## Measured lessons
 
