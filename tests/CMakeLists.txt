@@ -385,6 +385,28 @@ if(VR_BUILD_EXAMPLES)
            COMMAND recon_example_link_listen_color_test)
 endif()
 
+# The live runs' phone lane (live_mobile.hpp) on a fake phone, its frames
+# prepared on the device and tracked by scripted fitters: tiers, one generation,
+# the wait and the drop, replays, the drain cap, the log, splits, pairing,
+# check_mobile and the background poll. And the tracking log (track_log.hpp):
+# its files read back, its summary by hand, and a window of real fitters
+# recovering what single frames leave held.
+if(VR_BUILD_EXAMPLES)
+  add_executable(recon_example_live_mobile_test example_live_mobile_test.cpp)
+  target_link_libraries(
+    recon_example_live_mobile_test PRIVATE vr_example_mobile
+                                           volumetric_kit::core_test_policy)
+  vr_target_warnings(recon_example_live_mobile_test)
+  add_test(NAME recon_example_live_mobile
+           COMMAND recon_example_live_mobile_test)
+  add_executable(recon_example_track_log_test example_track_log_test.cpp)
+  target_link_libraries(
+    recon_example_track_log_test PRIVATE vr_example_mobile
+                                         volumetric_kit::core_test_policy)
+  vr_target_warnings(recon_example_track_log_test)
+  add_test(NAME recon_example_track_log COMMAND recon_example_track_log_test)
+endif()
+
 # session_check's command line (tools/session_check): usage, for no source and
 # for a live option given a file, and a file that is not there named in its
 # refusal.

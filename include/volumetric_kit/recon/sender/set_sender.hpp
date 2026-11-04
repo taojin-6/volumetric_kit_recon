@@ -23,6 +23,7 @@
 #include "volumetric_kit/grid/codec_stream/codec_stream.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/sender/export.hpp"
+#include "volumetric_kit/recon/sender/fuse_inputs.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/sensor/frame/device_frame.hpp"
@@ -149,6 +150,25 @@ class VR_SENDER_API SetSender {
   core::Result<Sent> send(
       core::CommandBatch& front,
       const std::vector<std::optional<sensor::DeviceFrame>>& frames,
+      const std::vector<core::TimelinePoint>& waits,
+      std::shared_ptr<const void> inputs, std::size_t index,
+      std::uint64_t pts_ns, core::StageMetrics* rows = nullptr,
+      const std::function<void()>& sent = {});
+
+  /// @brief @ref send with @p fillers fused after the set's fixed frames, in
+  ///        the same integrate (`fuse_inputs(frames, fillers)`): each fills
+  ///        only where the set's fixed cameras neither see nor hold weight.
+  ///        With none it is the call above, bit for bit.
+  /// @param fillers  The set's fillers, at their placed poses; kept by the
+  ///                 caller as @p frames are. They need
+  ///                 @ref Config::mode Dynamic and a grid with
+  ///                 @ref tsdf::kSourceAttribute, or the fusion refuses the
+  ///                 set (`Status::Code::InvalidArgument`) before anything is
+  ///                 recorded.
+  core::Result<Sent> send(
+      core::CommandBatch& front,
+      const std::vector<std::optional<sensor::DeviceFrame>>& frames,
+      const std::vector<Filler>& fillers,
       const std::vector<core::TimelinePoint>& waits,
       std::shared_ptr<const void> inputs, std::size_t index,
       std::uint64_t pts_ns, core::StageMetrics* rows = nullptr,

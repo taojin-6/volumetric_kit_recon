@@ -14,7 +14,8 @@
 // rows per chain; the contract (refusals, every frame check at the frame's
 // own record, errors that leave nothing held, a refused finish that leaves no
 // fitter holding a record, abandon, flush, create's refusals); replays
-// repeat; and corrected() moves both cameras.
+// repeat; a split (flush mid-run, then more frames: windows and placements
+// start again, the judge goes on); and corrected() moves both cameras.
 
 #include <algorithm>
 #include <cmath>
@@ -50,6 +51,7 @@ using volumetric_kit::recon::Mat4f;
 using volumetric_kit::recon::Vec3f;
 using volumetric_kit::recon::Vec4f;
 using vr_test::ScriptedFitter;
+using vr_test::ScriptedRecord;
 
 // `lhs = *expr` for a test returning an exit code: on an error, print it and
 // return 1.
@@ -1019,6 +1021,84 @@ int test_replay(const Env& env) {
   return 0;
 }
 
+// 11. A split: flush mid-run places every held frame, and recording goes on.
+// The next fit holds only frames recorded since, on the same hops; a frame
+// after the split waiting for an Anchored fit is not interpolated from one
+// before it, and the judge keeps its correction across it.
+int test_split(const Env& env) {
+  track::TrackerConfig c;  // window_method: 2 s, hop 0.5 s
+  c.drivers = {{"rig", {}}};
+  c.shadows = {};
+  // Anchored at 1 s and from 4 s on, nothing solved between.
+  const Mat4f at = translate(0.01f, 0, 0);
+  ASSIGN_OR_FAIL(
+      Rig r, make(c, {anchors_when(
+                         [](std::uint64_t t) { return t == kS || t >= 4 * kS; },
+                         at)}));
+  std::vector<track::TrackStep> steps;
+  for (const sensor::DeviceFrame& f : frames_every(0, 100 * kMs, 15)) {
+    ASSIGN_OR_FAIL(track::TrackStep s, step(env, *r.tracker, f));
+    steps.push_back(std::move(s));
+  }
+  steps.push_back(r.tracker->flush());
+  for (std::uint64_t t = 0; t <= 1400 * kMs; t += 100 * kMs) {
+    CHECK(release_of(steps, t).has_value() != dropped(steps, t));
+    CHECK(pose_of(steps, 0, t).has_value());
+  }
+  // 300 ms of loss, then frames again.
+  std::vector<track::TrackStep> after;
+  for (const sensor::DeviceFrame& f : frames_every(1700 * kMs, 100 * kMs, 30)) {
+    ASSIGN_OR_FAIL(track::TrackStep s, step(env, *r.tracker, f));
+    after.push_back(std::move(s));
+  }
+  after.push_back(r.tracker->flush());
+  const auto& log = *r.fitters[0]->log();
+  bool saw_after = false;
+  for (const ScriptedRecord& rec : log) {
+    if (rec.pts.back() < 1700 * kMs) continue;
+    saw_after = true;
+    CHECK(rec.pts.front() >= 1700 * kMs);  // nothing from before the split
+    // The hops stay on the clock: 1.7 s (its hop past 1 s's), then each 0.5 s.
+    CHECK(rec.pts.back() == 1700 * kMs || rec.pts.back() % (500 * kMs) == 0);
+  }
+  CHECK(saw_after);
+  // 1.7 to 2 s lie between the 1 s anchor, before the split, and the 4 s
+  // one, which holds from 2.1 s: never interpolated across the split.
+  for (std::uint64_t t = 1700 * kMs; t <= 2 * kS; t += 100 * kMs) {
+    const std::optional<track::FramePose> p = pose_of(after, 0, t);
+    CHECK(p.has_value() && p->from == track::PoseFrom::Coasting);
+  }
+  const std::optional<track::FramePose> held = pose_of(after, 0, 2100 * kMs);
+  CHECK(held.has_value() && held->from == track::PoseFrom::Anchored);
+  // The judge kept the 1 s anchor's correction: the prior at 1.7 s is it.
+  for (const ScriptedRecord& rec : log) {
+    if (rec.pts.back() == 2000 * kMs) {
+      CHECK(near(rec.prior.correction, at));
+    }
+  }
+  // A split with every frame placed already (the ring empty) lets the
+  // anchors before it go too: 2 s, between the 1 s anchor before it and the
+  // 3 s one after, is not interpolated across it.
+  track::TrackerConfig e = every_frame({"rig"}, 5 * kS);
+  ASSIGN_OR_FAIL(
+      Rig q, make(e, {anchors_when(
+                         [](std::uint64_t t) { return t == kS || t == 3 * kS; },
+                         at)}));
+  ASSIGN_OR_FAIL(const track::TrackStep first,
+                 step(env, *q.tracker, frame_at(kS)));
+  CHECK(first.released.size() == 1);  // placed at once: the ring is empty
+  CHECK(q.tracker->flush().poses.empty());
+  std::vector<track::TrackStep> later;
+  for (const std::uint64_t t : {2 * kS, 3 * kS}) {
+    ASSIGN_OR_FAIL(track::TrackStep s, step(env, *q.tracker, frame_at(t)));
+    later.push_back(std::move(s));
+  }
+  later.push_back(q.tracker->flush());
+  const std::optional<track::FramePose> two = pose_of(later, 0, 2 * kS);
+  CHECK(two.has_value() && two->from == track::PoseFrom::Coasting);
+  return 0;
+}
+
 int test_corrected() {
   const Mat4f pose = translate(1, 2, 3) * rotate_z(30);
   sensor::DeviceFrame f = frame_at(5, pose);
@@ -1075,6 +1155,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_bad_frame_between_hops(env) == 0);
   CHECK(test_abandon(env) == 0);
   CHECK(test_replay(env) == 0);
+  CHECK(test_split(env) == 0);
   CHECK(test_corrected() == 0);
   std::printf("track tracker: all cases passed\n");
   return 0;

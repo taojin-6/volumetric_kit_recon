@@ -46,6 +46,17 @@ core::Result<SetSender::Sent> SetSender::send(
     const std::vector<core::TimelinePoint>& waits,
     std::shared_ptr<const void> inputs, std::size_t index, std::uint64_t pts_ns,
     core::StageMetrics* rows, const std::function<void()>& sent) {
+  return send(front, frames, {}, waits, std::move(inputs), index, pts_ns, rows,
+              sent);
+}
+
+core::Result<SetSender::Sent> SetSender::send(
+    core::CommandBatch& front,
+    const std::vector<std::optional<sensor::DeviceFrame>>& frames,
+    const std::vector<Filler>& fillers,
+    const std::vector<core::TimelinePoint>& waits,
+    std::shared_ptr<const void> inputs, std::size_t index, std::uint64_t pts_ns,
+    core::StageMetrics* rows, const std::function<void()>& sent) {
   // A coded set's frame goes through the stream in halves.
   volumetric_kit::grid::codec_stream::CodecStream* const coder =
       code_due(index) ? stream_ : nullptr;
@@ -54,7 +65,7 @@ core::Result<SetSender::Sent> SetSender::send(
         "SetSender: the stream is moved from");
   }
   Sent out;
-  const FuseInputs in = fuse_inputs(frames);
+  const FuseInputs in = fuse_inputs(frames, fillers);
   VKC_ASSIGN(const tsdf::PendingFuse fused,
              fuser_->record_fuse(front, *grid_, in.frames, config_.max_weight,
                                  config_.mode, rows));

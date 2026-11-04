@@ -27,8 +27,15 @@ tsdf::ColorFrame device_color(const sensor::DeviceFrame& frame) {
 
 FuseInputs fuse_inputs(
     const std::vector<std::optional<sensor::DeviceFrame>>& frames) {
+  return fuse_inputs(frames, {});
+}
+
+FuseInputs fuse_inputs(
+    const std::vector<std::optional<sensor::DeviceFrame>>& frames,
+    const std::vector<Filler>& fillers) {
   FuseInputs in;
-  in.colors.reserve(frames.size());  // the inputs point into it
+  // The inputs point into it.
+  in.colors.reserve(frames.size() + fillers.size());
   for (std::size_t c = 0; c < frames.size(); ++c) {
     const std::optional<sensor::DeviceFrame>& frame = frames[c];
     if (!frame) continue;
@@ -43,6 +50,19 @@ FuseInputs fuse_inputs(
     in.frames.push_back({core::StorageInput(*frame->depth), frame->depth_camera,
                          color, static_cast<std::uint32_t>(c),
                          frame->depth_noise});
+  }
+  for (const Filler& filler : fillers) {
+    const sensor::DeviceFrame& frame = filler.frame;
+    const tsdf::ColorFrame* color = nullptr;
+    if (frame.has_color()) {
+      in.colors.push_back(device_color(frame));
+      color = &in.colors.back();
+    }
+    tsdf::FrameInput input{core::StorageInput(*frame.depth), frame.depth_camera,
+                           color, filler.index, frame.depth_noise};
+    input.role = tsdf::FrameRole::Filler;
+    input.tier = filler.tier;
+    in.frames.push_back(input);
   }
   return in;
 }
