@@ -93,6 +93,15 @@ on:
         required: false
         type: boolean
         default: false
+      calib:
+        description: >-
+          Build with VR_WITH_CALIB=ON: the phone lane's registration by the
+          origin tag on calib's detector and solve, on OpenCV 5 (Linux:
+          calib's opencv action at the calib pin, built once a release and
+          cached; macOS: the runner's Homebrew formula, checked).
+        required: false
+        type: boolean
+        default: false
       build_types:
         description: >-
           JSON array of the CMAKE_BUILD_TYPEs this leg builds and tests, one
@@ -304,6 +313,10 @@ jobs:
           if [ "${{ inputs.portaudio }}" = "true" ]; then
             pkgs="$pkgs portaudio"
           fi
+          # OpenCV 5 for VR_WITH_CALIB, as calib's CI takes it on this Mac.
+          if [ "${{ inputs.calib }}" = "true" ]; then
+            pkgs="$pkgs opencv"
+          fi
           echo "formulae=$pkgs" >> "$GITHUB_OUTPUT"
           # Without brew every formula would look missing.
           command -v brew >/dev/null || {
@@ -350,7 +363,7 @@ jobs:
       - name: Homebrew key
         id: brew
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
-        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@2163debc075bd7bfcd3738f8273821096cc6bece
+        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@947fe197290299d723dadf92a008ea06a40e87b7
         with:
           formulae: ${{ steps.formulae.outputs.formulae }}
 
@@ -360,6 +373,14 @@ jobs:
       - name: Install the Orbbec SDK
         if: steps.detect.outputs.present == 'true' && inputs.orbbec_sdk
         uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@1c5dd4855995c5168477ffc7322f0ad6dad81e2d
+
+      # OpenCV 5 for VR_WITH_CALIB on Linux, whose packages are OpenCV 4:
+      # built from source by calib's action at the calib pin in
+      # third_party/CMakeLists.txt, once a release and cached, which sets
+      # OpenCV_DIR for the configure.
+      - name: OpenCV 5 (Linux)
+        if: steps.detect.outputs.present == 'true' && inputs.calib && runner.os == 'Linux'
+        uses: taojin-6/volumetric_kit_calib/.github/actions/opencv@58a6dd6a043e8b055d1e067c33bcd294012f6214
 
       # librealsense, on the Ubuntu legs that build VS_WITH_REALSENSE: the
       # pinned release from RealSense's apt repository, its key checked, by
@@ -474,6 +495,7 @@ jobs:
                 -DVS_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }} \
                 -DVS_WITH_FFS=${{ inputs.ffs && 'ON' || 'OFF' }} \
                 -DVS_WITH_PORTAUDIO=${{ inputs.portaudio && 'ON' || 'OFF' }} \
+                -DVR_WITH_CALIB=${{ inputs.calib && 'ON' || 'OFF' }} \
                 -DVGRID_WITH_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}; then
               ok=1
               break

@@ -26,7 +26,10 @@
 //   or over several gaps, is passed by but for each take's newest, and the
 //   records after it are tracked in the first gap after they came.
 // - check_mobile: no phone, or a phone under Dynamic, runs; Classic and FFS
-//   depth are refused. The empty lane does nothing.
+//   depth are refused. A phone with no registration needs the origin tag: a
+//   build without VR_WITH_CALIB refuses it, naming the option, before the
+//   wait too; one with it takes a tag world and refuses another. The empty
+//   lane does nothing.
 // - polled_in_background: a poll never waits on the inner sensor's; it keeps
 //   the interface's queue (a poll the newest, a drain every frame oldest
 //   first, a full queue letting its oldest go); an inner error and the end
@@ -60,6 +63,7 @@
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
 #include "volumetric_kit/recon/tsdf/source.hpp"
+#include "volumetric_kit/sensor/camera/array_calibration.hpp"
 
 namespace vkc = volumetric_kit::core;
 namespace cfg = volumetric_kit::core::config;
@@ -226,32 +230,7 @@ class LivePhone final : public sensor::IRgbdSensor {
 
 // --- Scripts ----------------------------------------------------------------
 
-track::TrackFit anchored_fit(const Mat4f& correction) {
-  track::TrackFit fit;
-  fit.correction = correction;
-  fit.lambda_max = 1.0f;
-  fit.relative_eigenvalues = {1, 1, 1, 1, 1, 1};
-  for (int i = 0; i < 6; ++i) fit.directions[std::size_t(7 * i)] = 1.0f;
-  fit.held = 0;
-  fit.frames = 1;
-  fit.attempts = 20000;
-  fit.hits = 18000;
-  fit.inliers = 17000;
-  return fit;
-}
-
-// Anchored at `at` when `when(the newest frame's pts)`, else nothing solved.
-ScriptedFitter::Script anchors_when(std::function<bool(std::uint64_t)> when,
-                                    Mat4f at) {
-  return [when = std::move(when), at](
-             const std::vector<sensor::DeviceFrame>& frames,
-             const track::PosePrior& prior) -> vkc::Result<track::TrackFit> {
-    if (when(frames.back().timestamp_ns)) return anchored_fit(at);
-    track::TrackFit none;
-    none.correction = prior.correction;
-    return none;
-  };
-}
+using vr_test::anchors_when;
 
 bool never(std::uint64_t) { return false; }
 
@@ -635,26 +614,74 @@ int test_live_backlog(const Env& env) {
   return 0;
 }
 
-int test_check_and_empty(const Env& env) {
-  const auto parse = [](const std::string& extra) {
+int test_check_and_empty(const Env& env, const std::filesystem::path& dir) {
+  // Two calibration files: the world a tag, and the world a sensor.
+  namespace camera = sensor::camera;
+  std::filesystem::create_directories(dir);
+  camera::ArrayCalibration array;
+  array.sensors.push_back({"rig-0", camera::Mat4d(1.0), {}, {}, {}, 0.0});
+  array.world.apriltag = camera::AprilTagWorld{"tag36h11", 0, 0.15};
+  const std::string tag_world = (dir / "tag_world.json").string();
+  CHECK(
+      camera::write_array_calibration(tag_world, array, vkc::WriteMode::Replace)
+          .ok());
+  array.world = {"rig-0", std::nullopt};
+  const std::string sensor_world = (dir / "sensor_world.json").string();
+  CHECK(camera::write_array_calibration(sensor_world, array,
+                                        vkc::WriteMode::Replace)
+            .ok());
+  const auto parse = [](const std::string& extra,
+                        const std::string& calibration = "poses.json") {
     return cfg::parse(R"({"version": 1, "operation": "fuse",
         "source": {"kind": "live", "sync_config": "sync.json",
-                   "calibration": "poses.json")" +
-                          extra + "}",
+                   "calibration": ")" +
+                          calibration + "\"" + extra + "}",
                       cfg::Application::FuseOrbbec);
   };
   auto rig = parse("}");
-  auto phone = parse(R"(, "mobile": "phone.vrst"})");
+  auto phone = parse(R"(, "mobile": "phone.vrst",
+      "mobile_registration": "phone.registration.json"})");
   auto live = parse(R"(, "mobile": "tcp://10.8.0.1:7101",
       "mobile_registration": "phone.registration.json"})");
-  auto classic =
-      parse(R"(, "mobile": "phone.vrst"}, "fusion": {"dynamic": false})");
+  auto classic = parse(R"(, "mobile": "phone.vrst",
+      "mobile_registration": "phone.registration.json"},
+      "fusion": {"dynamic": false})");
   CHECK(rig.ok() && phone.ok() && live.ok() && classic.ok());
   CHECK(vr_example::check_mobile(*rig).ok());
   CHECK(vr_example::check_mobile(*phone).ok());
   CHECK(vr_example::check_mobile(*live).ok());
   CHECK(vr_example::check_mobile(*classic).domain() ==
         vkc::Status::Code::InvalidArgument);
+  // Without a registration (the core defaults none since 0.49.0) the origin
+  // tag registers the phone, which the build and the calibration's world
+  // must allow: checked before any device opens, and again before any wait.
+  auto by_tag = parse(R"(, "mobile": "tcp://10.8.0.1:7101"})", tag_world);
+  auto by_sensor = parse(R"(, "mobile": "phone.vrst"})", sensor_world);
+  auto no_file = parse(R"(, "mobile": "phone.vrst"})");
+  CHECK(by_tag.ok() && by_sensor.ok() && no_file.ok());
+  CHECK(vr_example::check_mobile(*no_file).domain() ==
+        vkc::Status::Code::NotFound);
+  const vkc::Status tagged = vr_example::check_mobile(*by_tag);
+  const vkc::Status sensored = vr_example::check_mobile(*by_sensor);
+#ifdef VR_TEST_WITH_CALIB
+  CHECK(tagged.ok());
+  CHECK(sensored.domain() == vkc::Status::Code::InvalidArgument);
+  CHECK(sensored.message().find("source.mobile_registration") !=
+        std::string::npos);
+#else
+  // live_tag_off.cpp: refused, naming the option and the key.
+  for (const vkc::Status& s : {tagged, sensored}) {
+    CHECK(s.domain() == vkc::Status::Code::Unsupported);
+    CHECK(s.message().find("-DVR_WITH_CALIB=ON") != std::string::npos);
+    CHECK(s.message().find("source.mobile_registration") != std::string::npos);
+  }
+  CHECK(vr_example::open_mobile_lane(*by_tag, env.gpu.device, env.gpu.allocator)
+            .status()
+            .domain() == vkc::Status::Code::Unsupported);
+  CHECK(vr_example::TagWatch::create(env.gpu.device, env.gpu.allocator, {})
+            .status()
+            .domain() == vkc::Status::Code::Unsupported);
+#endif
   cfg::Config ffs = *phone;
   ffs.source.depth = cfg::DepthSource::Ffs;
   const vkc::Status refused = vr_example::check_mobile(ffs);
@@ -838,7 +865,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_split(env) == 0);
   CHECK(test_pairing(env) == 0);
   CHECK(test_live_backlog(env) == 0);
-  CHECK(test_check_and_empty(env) == 0);
+  CHECK(test_check_and_empty(env, scratch.path / "check") == 0);
   CHECK(test_background() == 0);
   std::puts("recon_example_live_mobile: OK");
   return 0;

@@ -243,6 +243,7 @@ int test_loopback(const vkc::test::Scratch& scratch) {
   if (!live.ok()) std::fprintf(stderr, "%s\n", live.status().message().c_str());
   CHECK(live.ok());
   RgbdStreamSensor& s = *live.value();
+  CHECK(s.session_id() == vr_test::session_of(p.info).id);  // the dialler's
   CHECK(s.start().ok());
   const Frames frames = poll_frames(s, 8);
   const bool quick = empty_poll(s);  // the writer connected and silent

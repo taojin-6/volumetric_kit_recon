@@ -18,6 +18,10 @@
 //   anchors and its correction undoes the error within 3 mm / 0.1 deg; the
 //   single-frame shadow refuses every frame (coverage under 0.4) and keeps
 //   the error, as the summary's rows say.
+// - The origin tag's holds (tags.csv, a row each, the reason the rest of the
+//   line) and the late registration: run.csv rewritten once, before any step
+//   with frames, refused a second time, after such a step or once closed;
+//   pose_gap's millimetres and degrees.
 
 #include <cmath>
 #include <cstdint>
@@ -478,10 +482,103 @@ int window_recovers(vkc::test::GpuContext& gpu) {
   return 0;
 }
 
+// --- 4. The origin tag's holds and its late registration --------------------
+
+std::vector<std::string> lines_of(const std::filesystem::path& path) {
+  std::ifstream in(path);
+  std::vector<std::string> out;
+  for (std::string line; std::getline(in, line);) out.push_back(line);
+  return out;
+}
+
+int tags_and_registration(const std::filesystem::path& dir) {
+  track::TrackerConfig config;
+  config.drivers = {{"rig", {}}};
+  config.shadows = {};
+  const auto make = [&config]() {
+    std::vector<std::unique_ptr<track::IFitter>> fitters;
+    fitters.push_back(std::make_unique<vr_test::ScriptedFitter>(
+        [](const std::vector<sensor::DeviceFrame>&,
+           const track::PosePrior& prior) -> vkc::Result<track::TrackFit> {
+          track::TrackFit none;
+          none.correction = prior.correction;
+          return none;
+        }));
+    return track::Tracker::create(config, std::move(fitters));
+  };
+  auto tracker = make();
+  CHECK(tracker.ok());
+  vr_example::RunSource source;
+  source.registration = "tag";
+  auto log = vr_example::TrackLog::open(dir.string(), **tracker, source);
+  CHECK(log.ok());
+  // Each hold a row of tags.csv, its reason the rest of the line.
+  vr_example::TagHold refused;
+  refused.first_pts_ns = 2000 * kMs;
+  refused.last_pts_ns = 3000 * kMs;
+  refused.stills = 6;
+  refused.miss = "poor_fit";
+  refused.reason = "RMS 19.7 px, over 12 px, and a comma";
+  vr_example::TagHold registered = refused;
+  registered.use = vr_example::TagHold::Use::Registered;
+  registered.miss.clear();
+  registered.reason.clear();
+  registered.rms_px = 0.25;
+  registered.range_m = 0.9375;
+  registered.tracking_to_world[3] = {0.4, -0.3, 0.02, 1.0};
+  CHECK((*log)->write(refused).ok() && (*log)->write(registered).ok());
+  // The run placed once, before any step with frames: run.csv rewritten.
+  const Mat4f t = translate(0.4f, -0.3f, 0.02f);
+  const std::string file = (dir / "registration.json").string();
+  CHECK((*log)->write(track::TrackStep{}).ok());  // a flush with no frames
+  CHECK((*log)->registered(file, t).ok());
+  CHECK((*log)->run().source.registration == file);
+  CHECK((*log)->registered(file, t).domain() ==
+        vkc::Status::Code::InvalidArgument);
+  CHECK((*log)->close().ok());
+  CHECK((*log)->write(refused).domain() == vkc::Status::Code::InvalidArgument);
+  auto read = vr_example::read_track_log(dir.string());
+  CHECK(read.ok() && read->source.registration == file &&
+        same(read->source.tracking_to_world, t));
+  const std::vector<std::string> rows = lines_of(dir / "tags.csv");
+  CHECK(rows.size() == 3);
+  CHECK(rows[0].rfind("first_pts_ns,last_pts_ns,stills,use,miss,rms_px,", 0) ==
+        0);
+  CHECK(rows[1].rfind("2000000000,3000000000,6,refused,poor_fit,0,", 0) == 0);
+  CHECK(rows[1].size() > refused.reason.size() &&
+        rows[1].compare(rows[1].size() - refused.reason.size(),
+                        refused.reason.size(), refused.reason) == 0);
+  CHECK(rows[2].find(",registered,,0.25,") != std::string::npos);
+  CHECK(rows[2].find(",0.40000000000000002,-0.29999999999999999,") !=
+        std::string::npos);
+  // Refused after a step with frames, whose poses it did not place.
+  auto later_tracker = make();
+  CHECK(later_tracker.ok());
+  auto later = vr_example::TrackLog::open("", **later_tracker, source);
+  CHECK(later.ok());
+  track::TrackStep step;
+  track::ChainPose pose;
+  pose.frame.timestamp_ns = 1000 * kMs;
+  step.poses.push_back(pose);
+  CHECK((*later)->write(step).ok());
+  CHECK((*later)->registered(file, t).domain() ==
+        vkc::Status::Code::InvalidArgument);
+  // pose_gap: the camera centres' distance (mm) and the rotation (deg), as
+  // the summary measures every distance.
+  Mat4f turned(1.0f);
+  turned[0] = Vec4f(0, 1, 0, 0);
+  turned[1] = Vec4f(-1, 0, 0, 0);
+  const auto [mm, deg] = vr_example::pose_gap(
+      translate(0.003f, 0.004f, 0.0f) * turned, Mat4f(1.0f));
+  CHECK(std::fabs(mm - 5.0) < 1e-4 && std::fabs(deg - 90.0) < 1e-4);
+  return 0;
+}
+
 int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::test::Scratch scratch("recon_example_track_log_");
   CHECK(round_trip(gpu, scratch.path / "run") == 0);
   CHECK(summary_by_hand(scratch.path / "hand") == 0);
+  CHECK(tags_and_registration(scratch.path / "tags") == 0);
   CHECK(window_recovers(gpu) == 0);
   std::puts("recon_example_track_log: OK");
   return 0;

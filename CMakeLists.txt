@@ -43,6 +43,30 @@ option(VR_BUILD_EXAMPLES "Build example programs" ${_vr_examples_default})
 option(VR_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 option(VR_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
        ${PROJECT_IS_TOP_LEVEL})
+# The phone lane's registration by the origin tag (examples/common/live_tag.hpp)
+# runs on volumetric_kit_calib's tag detector and solve, fetched pinned
+# (third_party/) for the examples and tests, and so on OpenCV 5, an installed
+# prerequisite. Off, a phone needs source.mobile_registration. CMake 3.28 for
+# the fetch's EXCLUDE_FROM_ALL, which builds only what the examples link.
+option(
+  VR_WITH_CALIB
+  "fuse_orbbec registers a phone by the origin tag (fetches calib; OpenCV 5; CMake 3.28)"
+  OFF)
+if(VR_WITH_CALIB)
+  if(CMAKE_VERSION VERSION_LESS 3.28)
+    message(FATAL_ERROR "VR_WITH_CALIB needs CMake 3.28 or newer")
+  endif()
+  # Found here, so its imported targets reach the tests, which draw markers.
+  find_package(OpenCV 5.0 CONFIG QUIET COMPONENTS core imgproc objdetect
+                                                  geometry calib)
+  if(NOT OpenCV_FOUND)
+    message(
+      FATAL_ERROR
+        "VR_WITH_CALIB=ON needs OpenCV 5: Homebrew's opencv on macOS; on Linux "
+        "calib's tools/install-opencv.sh, then "
+        "-DOpenCV_DIR=<prefix>/lib/cmake/opencv5")
+  endif()
+endif()
 
 # Semicolon list of sanitizers (e.g. "address;undefined"); empty = off. Applied
 # globally, the fetched packages included -- see cmake/vr_sanitizers.cmake for
@@ -75,40 +99,51 @@ find_package(Vulkan REQUIRED)
 # Pinned dependencies: volumetric_kit_core, volumetric_kit_sensor and
 # volumetric_kit_grid, linked PUBLIC. The oldest core recon's libraries build
 # with is checked in the core that arrives (third_party/, which also checks the
-# config tier the examples and tests need): 0.43.0, whose net tier (core_net's
-# Listener and dial, testing/net_loopback.hpp) RgbdStreamSensor::listen and the
-# link tests use; 0.42.0 brought the source.mobile and diagnostics.track_log the
-# phone lane reads, 0.39.0 the FuseDecklink profile fuse_decklink loads, 0.34.0
-# the source.audio that names the input the live examples record, 0.33.0
-# FuseRealsense's source.depth, 0.31.0 the FuseRealsense profile, 0.30.0 the
-# output.max_viewers fuse_orbbec serves by, 0.29.0 the vulkan/fwd.hpp the public
-# headers include, and 0.28.0 the test support the tests run on. The oldest
-# sensor is 0.40.0, whose DepthNoise::known takes the noise ARKit's driver
-# states, which the phone lane's tracker refuses unknown; 0.37.0 brought the
-# PatternReader (testing/pattern_reader.hpp) session_check and the link tests
-# read each frame's pattern index with on the device, 0.28.0 the ready_points (a
-# picture's ready value, YuvImage::ready) the examples pass to SetSender::send,
-# the waits of a set's front batch, which records the set's prep, 0.27.0 the
-# wire form (sensor_wire) RgbdStreamSensor reads a session's depth records in,
-# 0.19.0 the DecklinkStereo fuse_decklink opens (0.17.0 the stereo_calibration
-# it pairs the calibration file's two cameras with, and 0.16.0 the V210 pictures
-# they capture); 0.13.0's frame prep drops depth outliers by default, 0.12.0
-# brought the filter, 0.11.0 the IAudioSensor the live examples record through,
-# 0.10.0 the frames' depth noise (DeviceFrame::depth_noise), which Dynamic's
-# change test reads, and 0.9.0 the frame prep's crop of a frame with colour to
-# what both its cameras see. The live examples rely on the crop and the filter
-# with no option of their own (fuse_realsense builds only with sensor_realsense,
-# and even without FFS with its RealSenseStereo, which 0.7.0 brought; it runs
-# FFS only with sensor_ffs, which 0.8.0 brought); the oldest grid is
+# config tier the examples and tests need): 0.49.0, whose
+# source.mobile_registration is optional and never defaulted, which the phone
+# lane refuses empty; 0.43.0 brought the net tier (core_net's Listener and dial,
+# testing/net_loopback.hpp) RgbdStreamSensor::listen and the link tests use,
+# 0.42.0 the source.mobile and diagnostics.track_log the phone lane reads,
+# 0.39.0 the FuseDecklink profile fuse_decklink loads, 0.34.0 the source.audio
+# that names the input the live examples record, 0.33.0 FuseRealsense's
+# source.depth, 0.31.0 the FuseRealsense profile, 0.30.0 the output.max_viewers
+# fuse_orbbec serves by, 0.29.0 the vulkan/fwd.hpp the public headers include,
+# and 0.28.0 the test support the tests run on. The oldest sensor is 0.40.0,
+# whose DepthNoise::known takes the noise ARKit's driver states, which the phone
+# lane's tracker refuses unknown; 0.37.0 brought the PatternReader
+# (testing/pattern_reader.hpp) session_check and the link tests read each
+# frame's pattern index with on the device, 0.28.0 the ready_points (a picture's
+# ready value, YuvImage::ready) the examples pass to SetSender::send, the waits
+# of a set's front batch, which records the set's prep, 0.27.0 the wire form
+# (sensor_wire) RgbdStreamSensor reads a session's depth records in, 0.19.0 the
+# DecklinkStereo fuse_decklink opens (0.17.0 the stereo_calibration it pairs the
+# calibration file's two cameras with, and 0.16.0 the V210 pictures they
+# capture); 0.13.0's frame prep drops depth outliers by default, 0.12.0 brought
+# the filter, 0.11.0 the IAudioSensor the live examples record through, 0.10.0
+# the frames' depth noise (DeviceFrame::depth_noise), which Dynamic's change
+# test reads, and 0.9.0 the frame prep's crop of a frame with colour to what
+# both its cameras see. The live examples rely on the crop and the filter with
+# no option of their own (fuse_realsense builds only with sensor_realsense, and
+# even without FFS with its RealSenseStereo, which 0.7.0 brought; it runs FFS
+# only with sensor_ffs, which 0.8.0 brought); the oldest grid is
 # VR_GRID_MIN_VERSION: 0.12.0, whose TrackKind::RgbdDepth RgbdStreamSensor reads
 # and whose three-run payloads its tests write; 0.6.0 brought the StreamServer
 # serving the live examples' Audio track with the frames, 0.5.0 CodecStream
 # writing it (TrackKind::Audio, 0.4.0) muxed by pts, and 0.3.0 codec_outputs
 # passing output.max_viewers to the server.
-set(VR_CORE_MIN_VERSION 0.43.0)
+set(VR_CORE_MIN_VERSION 0.49.0)
 set(VR_SENSOR_MIN_VERSION 0.40.0)
 set(VR_GRID_MIN_VERSION 0.12.0)
 add_subdirectory(third_party)
+# The tag is found in the phone's pictures, which only sensor's video decoders
+# read: refused here rather than once a phone has dialled.
+if(VR_WITH_CALIB AND NOT TARGET volumetric_kit::sensor_video)
+  message(
+    FATAL_ERROR
+      "VR_WITH_CALIB=ON needs sensor's video decoders (sensor_video): built "
+      "on macOS always, on Linux with -DVS_WITH_FFMPEG=ON and "
+      "-DVS_WITH_CUDA=ON (NVDEC)")
+endif()
 
 add_subdirectory(src)
 

@@ -8,6 +8,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **a live phone registered by the origin tag**
+  (`examples/common/live_tag.hpp`, in a build with `-DVR_WITH_CALIB=ON`): a
+  phone given with no `source.mobile_registration` is read with its
+  pictures, and a `TagWatch` finds the calibration world's tag in steady
+  frames (at most 5 Hz, on its own thread, OpenCV's pool set to one thread:
+  the luma copied by sensor's `PictureReadback`, searched and solved by
+  calib's `detect_tag`, `tracked_world_from_tag` and `register_tracked`, at
+  the tag's printed edge; each hold handed over with its registration). A
+  file read so decodes its pictures on the set loop (about 1 ms at p95 a gap
+  on an RTX 5090); a live phone's decode on its poll thread. The lane tracks
+  nothing until the first hold of six stills that
+  passes registers the session (`MobileLane::Counts::unregistered`), then
+  places each frame by it; later holds are printed and logged with their gap
+  from the rig chain, never applied. `diagnostics.track_log` records a live
+  phone (`phone.vrst`) and writes the registration (`registration.json`)
+  and each hold (`tags.csv`); `TrackLog::registered`, `pose_gap` and
+  `RgbdStreamSensor::session_id` are new. `VR_WITH_CALIB` fetches calib
+  pinned (`58a6dd6`, calib 0.12.0) on OpenCV 5, an installed prerequisite,
+  and CMake 3.28, and configure refuses it without sensor's video decoders;
+  off, the default, `TagWatch` refuses (`Unsupported`). CI builds it on the
+  ubuntu-24.04 (NVIDIA) and macos-26 legs.
 - `examples`: **a phone's frames fill the rig's model in the live runs**
   (`source.mobile`, `examples/common/live_mobile.hpp`, `vr_example_mobile`):
   a recorded session, or a phone dialling `tcp://ADDRESS:PORT`, tracked on
@@ -183,6 +204,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **recon pins core 0.49.0** (core #99's merge, `947fe19`; was
+  0.43.0), and CI takes the core's actions at the new pin. 0.44.0-0.48.0
+  change nothing recon calls but `source.mobile`'s address reasons, the net
+  tier's stricter `resolve` (recon listens on a numeric address alone) and
+  two Vulkan fixes (an acquire after a wait, an exported timeline's host
+  wait). 0.49.0 leaves `source.mobile_registration` empty when it is not
+  given, for a recorded session too (it was `<file>.registration.json`): a
+  phone without one is registered by the origin tag (above), and
+  **`check_mobile` refuses it in a build without `VR_WITH_CALIB`**
+  (`Unsupported`), or with a calibration whose world is not the origin tag
+  the watch finds, calib's `kOriginTag`, alone (`InvalidArgument`), before
+  anything opens (`open_mobile_lane` checks
+  again before any wait); the core floor rises to 0.49.0.
 - build: **recon pins sensor 0.43.0** (sensor #51's merge, `1c5dd48`; was
   0.37.0), and CI takes its actions at the new pin. Its `DepthNoise::known`
   (0.40.0) takes the noise ARKit's driver states, so the floor rises to
