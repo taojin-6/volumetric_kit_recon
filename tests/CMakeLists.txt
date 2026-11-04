@@ -787,6 +787,32 @@ _vr_expect_message(
   "volumetric_kit_recon needs volumetric_kit_core's vulkan tier, which the core at .+ was built without: set VKC_WITH_VULKAN ON before"
 )
 
+# track tracker: the Tracker's rules on scripted fitters (scripted_fitter.hpp);
+# no kernel runs, the device only gives the calls their batch and model. Skips
+# with no device.
+add_executable(recon_track_tracker_test track_tracker_test.cpp)
+target_link_libraries(
+  recon_track_tracker_test PRIVATE volumetric_kit::core_test_policy
+                                   volumetric_kit::recon_track Vulkan::Vulkan)
+vr_target_warnings(recon_track_tracker_test)
+add_test(NAME recon_track_tracker COMMAND recon_track_tracker_test)
+
+# track fitter conformance: every kind of kFitKinds against analytic rooms whose
+# tsdf the test writes: the record contract, pyramid entries' rollback and
+# reuse, the fit and its eigensystem, the model filter, windows, zero
+# iterations, passes, determinism and independence, the see-through counters,
+# orthonormal corrections. VR_TRACK_TIMING=1 adds the timing cases (K = 1 / 20,
+# passes 1 / 3), which print and assert nothing. Skips with no device.
+add_executable(recon_track_fitter_conformance_test
+               track_fitter_conformance_test.cpp)
+target_link_libraries(
+  recon_track_fitter_conformance_test
+  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_track
+          Vulkan::Vulkan)
+vr_target_warnings(recon_track_fitter_conformance_test)
+add_test(NAME recon_track_fitter_conformance
+         COMMAND recon_track_fitter_conformance_test)
+
 # Start the slowest tests first under `ctest --parallel`. Without a COST, CTest
 # runs tests in the order they were added, and a fresh CI runner has no timing
 # history, so a slow test added late finished last. Seconds under the sanitizers

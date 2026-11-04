@@ -1,0 +1,50 @@
+#version 450
+
+// An entry's next level: each 2x2 block's returns averaged where they span
+// under 3 cm, else no return (KinectFusion's block average, which drops a
+// discontinuity rather than blending it). A trailing odd row or column is left out.
+
+#extension GL_GOOGLE_include_directive : require
+#include "track_common.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, scalar) readonly buffer In { float din[]; };
+layout(set = 0, binding = 1, scalar) writeonly buffer Out { float dout[]; };
+
+// Mirrors DownPush.
+layout(push_constant, scalar) uniform Push {
+  uint w_in;
+  uint h_in;
+  uint w_out;
+  uint h_out;
+  uint in_offset;   // the entry's first element at the finer level
+  uint out_offset;  // and at this one
+} pc;
+
+const float kSpan = 0.03;
+
+void main() {
+  uint gid = gl_GlobalInvocationID.x;
+  if (gid >= pc.w_out * pc.h_out) {
+    return;
+  }
+  uint x = gid % pc.w_out;
+  uint y = gid / pc.w_out;
+  float sum = 0.0;
+  float n = 0.0;
+  float lo = 1e30;
+  float hi = -1e30;
+  for (uint j = 0u; j < 2u; ++j) {
+    for (uint i = 0u; i < 2u; ++i) {
+      float d = din[pc.in_offset + (2u * y + j) * pc.w_in + 2u * x + i];
+      if (d > 0.0) {
+        sum += d;
+        n += 1.0;
+        lo = min(lo, d);
+        hi = max(hi, d);
+      }
+    }
+  }
+  dout[pc.out_offset + gid] = (n > 0.0 && hi - lo < kSpan) ? sum / n : 0.0;
+}

@@ -8,6 +8,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `track`: **a new tier, `recon_track`: a self-posed camera's frames
+  fitted to a model on the device** (`volumetric_kit::recon_track`, in the
+  umbrella; on grid's `volume` and `sensor_frame`, not `tsdf`). The one
+  backend interface is `IFitter` (`track/fitter.hpp`): from a `PosePrior`
+  it fits 1-32 frames of one pose chain, recorded into the caller's batch,
+  and returns a `TrackFit`, the world correction and the data's H as its
+  eigensystem. `FitKind::PointToPlane`, the one kind (`kFitKinds`,
+  `create_fitter`), is projective point-to-plane ICP over grid's
+  `RayCaster`: each frame's pyramid kept in an entry, the frames cast in one
+  dispatch and reduced in one an iteration, the eigen guard and a prior on
+  data rescaled to `IcpConfig::prior_n_eff` points a frame, and passes
+  that recast on the device. `track::Tracker` (`track/tracker.hpp`) runs
+  a driver `Method` on each of its model filters and shadow methods beside
+  it on the same frames, judges each chain's fits (`track/correction.hpp`:
+  `CorrectionFilterConfig`, with `see_through_m`, off by default), decides
+  each frame's pose (Anchored, Interpolated, Coasting, Device) and
+  releases the driver's placements; `corrected()` moves both of a frame's
+  cameras. `tests/scripted_fitter.hpp` is a fitter whose fits are scripted.
+  `recon_track_fitter_conformance` with `VR_TRACK_TIMING=1` times a fit at
+  K = 1 and 20 and 1 and 3 passes.
 - `tsdf`: **a source byte in every fusion grid, and fillers.**
   `create_fusion_grid` grids carry `tsdf::kSourceAttribute`, one byte a
   voxel (`tsdf/source.hpp`): 0 for no sensor, which every reset writes; a
@@ -24,7 +44,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   grid's `RayCaster` to the rig, or the rig and anchored fill. Each fusion
   voxel takes 13 bytes, one more; a slot of 63 or more is refused on a grid
   with the byte.
-
 - `examples`, tools: **a sensor's stream read live, recorded and checked.**
   `RgbdStreamSensor::listen` (`examples/common/link/rgbd_stream_sensor.hpp`)
   waits for a writer to dial one numeric IPv4 address of this host and reads

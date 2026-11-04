@@ -1044,6 +1044,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   FFS depth on R'G'B' views, on the live run; built on every build, refusing
   the scenario without sensor's DeckLink driver or FFS; FFS's near gate
   passed (both openers); a measured 0.07 px disparity noise.
+- [**2026-11-03**](#2026-11-03--the-track-tier-one-fitter-interface-pointtoplane-on-the-device-a-judge-per-chain-and-a-tracker-that-runs-a-driver-beside-its-shadows) —
+  The `track` tier: one fitter interface (`IFitter`, a closed `FitKind`),
+  `PointToPlane` over a stacked cast and one stacked reduce an iteration
+  with the eigen guard and a rescaled prior, a judge per chain in 0b's gate
+  order, and a `Tracker` that runs the driver on each model filter beside
+  its shadows, which change nothing it does.
 - [**2026-11-03**](#2026-11-03--every-fusion-grid-carries-a-source-byte-fixed-cameras-remove-fill-only-on-a-change-that-contradicts-it-and-a-filler-fills-only-where-no-fixed-camera-sees-or-holds-weight-amends-the-2026-10-29-dynamic-and-outline-entries) —
   Every fusion grid carries a source byte (0 none, a fixed camera's slot + 1,
   fill with a mobile bit and an unanchored bit; 63 sensors a class). Fixed
@@ -6062,6 +6068,84 @@ the suite, 46 tests. On an M5 Max build with neither part: the scenario,
 report and refusal tests. Three planted bugs, each killed: the left and
 right connectors swapped, the disparity noise not passed to FFS, and luma
 views for the DeckLink cameras. Not run: the cameras, the hand check.
+
+### 2026-11-03 — The track tier: one fitter interface, PointToPlane on the device, a judge per chain, and a Tracker that runs a driver beside its shadows.
+
+**Context.** A phone's depth fills what the rig's cameras do not see, posed
+by ARKit and registered once to the rig's world by a tag. ARKit drifts
+10-20 cm over a minute, so each phone frame needs a world correction that
+fits it to the rig's model, and the methods for it (single frames, 2 s
+windows, other residuals) must be compared on the same frames. grid's
+`RayCaster` casts K views in one dispatch behind a `CastFilter`; sensor's
+frame prep states every frame's `DepthNoise`.
+
+**Decision.**
+- *One backend interface.* `IFitter` refines a prior over 1-32 frames of one
+  pose chain inside the caller's batch (`record`, `finish`, `abandon`) and
+  returns the correction and the data H as its eigensystem, so one judge
+  reads every kind. `FitKind` is closed and listed in `kFitKinds`; a kind
+  is added in one PR and deleted when its question closes. A method that
+  proposes a pose from nothing (a localizer) is not a fitter: it will
+  reseed a chain.
+- *`PointToPlane` keeps every descriptor set fixed.* Core refuses a batch
+  whose set was rewritten after it was recorded, so frames' pyramids live in
+  entries (stacked per level, grown to the largest window, reached by push
+  constant), the K views cast in one dispatch, and each iteration reduces
+  every view in one dispatch. Entries commit at `finish`; an abandon or a
+  failed record empties them, so a fit never reads a pyramid its batch did
+  not build.
+- *0b's reference, on the device* (its numbers: DESIGN's track section).
+  Its pyramid, gates, Huber weight, eigen guard on the scaled H and
+  per-iteration step acceptance; the prior term on the data rescaled to a
+  fixed count of points a frame with hits, since on unscaled data a tight
+  prior barely holds (the conformance test's prior case); the inlier ratio
+  over hits, not valid pixels. Twists are about the frames' mean camera
+  centre, translation over the points' median distance (once a fit, at the
+  prior; 0b took it per level). A diverged step returns as solving nothing.
+  One departure is left to the bench: 0b also limits each iteration's step
+  to the strong directions when one is under the guard, where here only the
+  judge's final projection does (a `TODO:` in the solve).
+- *A correction comes back orthonormal.* The device composes each step in
+  float, and a correction fed back fit after fit drifted off a rotation
+  until the next record refused its prior as not rigid; `finish` makes one
+  that moved orthonormal again in double, and returns one that did not move
+  as the prior, bit for bit.
+- *A judge per chain, internal.* In 0b's gate order: a held direction caps
+  a fit at Partial, which moves the chain along its strong directions only
+  (so an ill-conditioned view is never Anchored); then inliers, coverage,
+  the ratio over hits; last the jump under a gate growing with the time
+  since the last Anchored fit, taken when proposed twice. The prior's sigma
+  grows with the time since the last anchor. `see_through_m` (0, off) takes
+  hits far in front of or behind the surface out of coverage and the ratio,
+  for the bench to try before any default. It is one field, the judge's:
+  the fitter counts at the distance `create_fitters` gives it, only hits
+  that are not inliers, and each fit says that distance, so the `Tracker`
+  refuses a fit counted at another.
+- *The `Tracker` is the one home of windows and placement.* It runs the
+  driver once per model filter (a lane: the rig alone, then the rig with
+  anchored fill: fill's one generation) and the shadows on the first, every
+  method a value. Decisions and release follow the frames' clock, so a
+  replay repeats; shadows record after the driver and refuse into their own
+  chain, so they cannot delay, change or fail a placement. A frame passes
+  the fitters' own check at its own record, so one taken between fits never
+  refuses the records whose windows hold it; a refused finish drops its step
+  with no fitter left holding a record.
+
+**Evidence.** `recon_track_tracker` (scripted fitters) holds every rule of
+the header, shadows changing nothing bit for bit among them;
+`recon_track_fitter_conformance` holds the contract and the fit over
+`kFitKinds` on analytic rooms at 128x96 (at the truth 0.024 mm / 0.0006
+deg; from 2 cm / 1 deg 0.022 mm / 0.0013 deg left; a floor holds x, y and
+yaw; a turning corridor window holds its axis), on the M5 Max under the
+validation layer and sync validation, and on an RTX 4090. U3 (256x192, a 1
+cm room, device p50), on the lab's RTX 5090 beside other jobs: a
+single-frame fit 0.81 ms; a 20-frame window 1.71 ms at 1 pass (the stacked
+cast 0.73 ms of it, against the 0.59 ms planned) and 4.72 ms at 3; on an
+RTX 4090, 0.87, 2.52 and 6.47 ms. Fed back fit after fit before the
+orthonormal step, a correction's |R^T R - I| grew about 1.4e-7 a fit on a
+4090 and a driver chain refused every frame from about frame 650; after it,
+5,000 fed-back fits stay under 6e-8 and 5,000 frames through the `Tracker`
+are taken (the review's probes).
 
 ### 2026-11-03 — Every fusion grid carries a source byte; fixed cameras remove fill only on a change that contradicts it, and a filler fills only where no fixed camera sees or holds weight (amends the 2026-10-29 Dynamic and outline entries).
 

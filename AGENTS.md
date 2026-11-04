@@ -68,15 +68,16 @@ repository, under its own AGENTS.md and DECISIONS.md; recon then moves its
 pin. recon's dependencies flow left to right, over grid:
 
 ```text
-core → tsdf → texture → interop      (on grid's volume and mesh;
-                                       later: track)
+core → tsdf → texture → interop      (on grid's volume and mesh)
+core → track                          (on grid's volume and sensor_frame;
+                                       not tsdf)
 sender                                (on tsdf, the sensor package's
                                        sensor_frame and grid's codec_stream)
 ```
 
-- No upward includes. `tsdf` and `texture` link grid's tiers and the sensor
-  package's `sensor_frame`, and `sender` grid's `codec_stream`, `tsdf` and
-  `sensor_frame`. Asset I/O is host-side at file boundaries.
+- No upward includes. `tsdf`, `texture` and `track` link grid's tiers and
+  the sensor package's `sensor_frame`, and `sender` grid's `codec_stream`,
+  `tsdf` and `sensor_frame`. Asset I/O is host-side at file boundaries.
 - C++17, no compiler extensions. Namespace `volumetric_kit::recon` (`vr::` in
   docs), nested per tier except `core`, which stays in `volumetric_kit::recon`:
   recon declares no `core` namespace, so `core::` always means the core's.
