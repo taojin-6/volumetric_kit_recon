@@ -201,6 +201,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fits after it alone. The lane splits so at a loss.
 - `examples`: `fuse_orbbec` no longer refuses `source.mobile` and
   `diagnostics.track_log` (`check_orbbec_phone` is gone): it runs the phone.
+- `examples`: **`RgbdStreamSensor` hands out a float device's pose rigid**:
+  a homogeneous row within 1e-6 of [0, 0, 0, 1] made exact (ARKit's own
+  transforms read up to 3 ulp off 1 there) and a rotation within 1e-4 of
+  orthonormal made the nearest rotation (the device's map-step removal
+  drifts it), which frame prep refused as not rigid; a pose further off is
+  handed on as written.
 
 - build: **recon pins sensor 0.37.0** (sensor #42's merge, `c4038bb`; was
   0.29.0), and CI takes its actions at the new pin. recon's code builds and

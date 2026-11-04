@@ -1057,6 +1057,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   contradicts it, and never write a rim distance into it; a
   `FrameRole::Filler` fills only where no fixed camera holds weight and none
   of its set vetoes, capped at half `max_weight`, to 3 m.
+- [**2026-11-04**](#2026-11-04--the-phone-lane-a-phones-frames-tracked-in-the-gap-after-each-set-and-fused-as-fill-in-the-next) —
+  The phone lane in the live runs: one blocking batch in the gap after each
+  set's send (prep and every fit due on `lane_tracking()`), the record due by
+  the next set's predicted time, at most 3 fillers a send, a split at a loss
+  of 100 ms or more, fill in a fixed tint of its tier. Its log and one
+  summary in `examples/common`; the bench waits for a rig model it can read.
 
 ## Decision record
 
@@ -6244,6 +6250,73 @@ max weight 20), on the lab's RTX 5090, Release:
   against 2.83 ms in those sets. The restart's cap changes that run's grid
   from set 129 on (Anchored turns over fill the rig raised), with the
   same fill count, I1 and cost.
+
+### 2026-11-04 — The phone lane: a phone's frames tracked in the gap after each set, and fused as fill in the next.
+
+**Context.** The track tier places a phone's frames against the rig's model
+and the source byte lets them fill only where the rig does not see (both
+2026-11-03). `source.mobile` names a recorded session or a phone that dials
+the lab; `fuse_orbbec` refused it until something ran it.
+
+**Decision.**
+- *One queue, in the gap.* After a set's send, the lane takes the phone
+  record due by the next set's predicted time, prepares it and records every
+  fit due at it in one batch, waited on there, then hands the next send at
+  most 3 placed frames (`kDrainCap`); no fit runs inside a set's batches. The
+  first record taken pins the phone's clock to
+  the rig's; the newest of several due is taken, so a burst never leaves the
+  lane behind. A file replays exactly; a live link is polled on a thread of
+  its own, so no set waits on the 20 ms live poll. The phone starts at the
+  first gap, so what it sent while the cameras opened does not lead the lane.
+- *What fuses is code* (`lane_tracking()`): 2 s windows every 0.5 s on the
+  rig-only and the fill-assisted chain, ARKit beside them; Anchored fill only
+  from the rig-only chain (fill's one generation, D3). A frame no fit placed
+  within the Tracker's hold is dropped, never fused at a guessed pose.
+- *A split at a loss.* A gap of 100 ms or more in the records' sequence
+  flushes the tracker before the next frame (owner, 2026-11-03: a map step may
+  hide in it); `Tracker::flush` may now be followed by more frames, its judges
+  kept, the anchors before it let go.
+- *Fill's colour* (owner item L, pending): a fixed tint of its tier, fused as
+  the filler's colour; the phone's picture is never read (it is opened depth
+  alone).
+- *A float device's pose made rigid where float left it off.* ARKit's own
+  transforms read up to 3 ulp off 1 in the homogeneous corner (1358 of 0b's
+  3668 frames) and the device's map-step removal drifts the rotation 1e-5 off
+  orthonormal after six steps; frame prep refused both, which would have
+  passed over a third of the phone's frames. `RgbdStreamSensor` snaps a row
+  within 1e-6 and takes the nearest rotation within 1e-4; anything further
+  is handed on for the prep to refuse. The producer's fix is the device's.
+- *Refused beside FFS depth* (owner E, "for now") and under Classic fusion,
+  before anything opens; nothing else in the lane ties it to the Orbbec rig.
+- *The log and its one summary* (`track_log.hpp`) are CSVs and TUM files, not
+  JSON: recon carries no JSON parser, and one CSV reader reads every file
+  back. The bench (`tools/track_eval`) waits for a rig model it can read; the
+  reference check below ran from a harness that links this log.
+
+**Evidence** (lab RTX 5090, Release; the GPU shared with other sessions'
+jobs at 88-100%, so device times are an upper bound; raw logs in the PR).
+- *The rig unchanged.* take1 (300 sets, 1 cm, Dynamic, max weight 20)
+  through the live set step with the lane compiled in and no phone: every
+  set's grid digest equals main's, 300/300 in three alternated runs each;
+  send 11.0 against 11.0 ms p50, the allocator 949 MB both.
+- *0b's reference.* Each of 0b's torch window fits redone from its own seed:
+  where the reference anchored, the parity settings (its noise curve, 4 mm
+  model sigma, 3 passes, no outlier filter) land 0.82 mm / 0.02 deg from it
+  (median; worst 4.4 mm / 0.13 deg) on the session's own frames, inside the
+  bar of 1 mm / 0.05 deg and 16 mm; the lane's settings 1.8 mm / 0.05 deg
+  (worst 5.9 mm). Point counts agree to 1-2%. On the reference's Partial
+  windows the fits differ by 45 mm (median): 0b restricts each iteration's
+  step once a direction falls under the guard, here only the judge's last
+  projection does (the solve's `TODO:`).
+- *0b replayed through the lane* (the rig's 1482 sets, the phone's 481
+  records from the start tag's registration): the rig chain anchors 34% of
+  the frames, the fill-assisted one 58%; 330 placed (165 Anchored), 150
+  dropped; 4.9 M fill voxels beside the rig's 4.5 M, on the walls and
+  partitions the ceiling rig does not see. The hop's batch costs 7.9 and
+  8.5 ms of device time a chain (p50; the casts 5-6 ms of it), so a set's
+  send and gap together read 14 ms p50, 27 ms p95, 43 ms p99: 28 of 1472
+  sets past 40 ms against 1 without the phone. The allocator grows by
+  149 MB.
 
 ## Measured lessons
 

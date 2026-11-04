@@ -1444,11 +1444,14 @@ summary: the shipped `lane_tracking()` with its keys, a rig model read
 from a file, the tag-hold and twin judges, per-chain meshes), whose
 reference check against 0b ran once from a harness (the 2026-11-04
 entry); the live phone lane's minute on the rig (its gap, its fill
-surviving people). The hop's batch (two window fits)
+surviving people); the Partial step restricted in each iteration, as 0b's
+reference does (the solve's `TODO:`). The hop's batch (two window fits)
 must fit the gap after a set's send: on a 4090 a 20-frame window costs
-2.5 ms at 1 pass, three fifths of it the stacked cast, so the lane takes 1
-pass, and 3 only once the bench shows they matter and the gap holds them
-(else the fill chain fits one step behind the rig's).
+2.5 ms at 1 pass in a synthetic room, but on 0b's real room, on a shared
+5090, 8 ms a chain (p50; the casts 5-6 ms of it), which puts 2% of sets
+past 40 ms (the 2026-11-04 entry). Next: the fill chain one step behind the
+rig's, and the casts no farther than fill reaches, each measured on a quiet
+GPU; 3 passes only once the bench shows they matter and the gap holds them.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an
