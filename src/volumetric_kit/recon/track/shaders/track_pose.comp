@@ -1,0 +1,37 @@
+#version 450
+
+// The start of a pass after the first, one thread: a pass that moved the
+// estimate under stop_m and stop_rad (at o) stops the fit's solves; then
+// pass_start takes the estimate, and each cast camera its frame's pose at
+// it, C * A_i, for the next cast in the same batch.
+
+#extension GL_GOOGLE_include_directive : require
+#include "track_common.glsl"
+
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0, scalar) buffer State { FitState st; };
+layout(set = 0, binding = 1, scalar) readonly buffer Views { FitView views[]; };
+layout(set = 0, binding = 2, scalar) buffer Cams { CastCamera cams[]; };
+
+// Mirrors PosePush.
+layout(push_constant, scalar) uniform Push {
+  uint views;
+  float stop_m;
+  float stop_rad;
+} pc;
+
+void main() {
+  if (st.stop == 0u && st.diverged == 0u) {
+    vec3 v;
+    vec3 w;
+    vr_track_between(st.pass_start, st.correction, st.origin, v, w);
+    if (length(v) < pc.stop_m && length(w) < pc.stop_rad) {
+      st.stop = 1u;
+    }
+  }
+  st.pass_start = st.correction;
+  for (uint i = 0u; i < pc.views; ++i) {
+    cams[i].cam_to_world = st.correction * views[i].cam_to_world;
+  }
+}

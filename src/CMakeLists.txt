@@ -17,8 +17,11 @@ add_subdirectory(volumetric_kit/recon/texture)
 # A sender's set step: it links the frame contract, the fuser and grid's codec
 # stream.
 add_subdirectory(volumetric_kit/recon/sender)
+# Tracking a self-posed camera against a model: grid's volume (the model and its
+# cast) and the frame contract, not tsdf.
+add_subdirectory(volumetric_kit/recon/track)
 # TODO: add_subdirectory() for interop as that tier lands.
-set(_vr_tiers recon_core recon_tsdf recon_texture recon_sender)
+set(_vr_tiers recon_core recon_tsdf recon_texture recon_sender recon_track)
 
 # --- recon: umbrella alias --------------------------------------------------
 # Consumers link `volumetric_kit::recon` and get whatever tiers are built. It

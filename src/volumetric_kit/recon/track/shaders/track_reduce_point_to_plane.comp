@@ -1,0 +1,125 @@
+#version 450
+
+// One point-to-plane iteration's linear system over every view of a fit,
+// reduced per workgroup (track_reduce_common.glsl). Workgroup g serves view
+// g / groups_per_view, its threads striding over that view's pixels. A
+// frame point p (its slot's vertex map) goes to the world at the estimate,
+// C * A_i, and projects into view i's cast camera; the nearest model pixel
+// that hit gives the surface point q and normal n_q. It is an inlier when
+// its normal lies within the normal gate of n_q and |p - q| within the
+// level's distance gate: a fixed one at the coarser levels, max(gate_sigmas
+// sigma, the floor) at the finest, sigma^2 = sigma(z)^2 + model_sigma^2.
+// r = n_q . (p - q), Huber-weighted in sigmas, w = huber / sigma^2, and the
+// scaled Jacobian (s n_q, (p - o) x n_q) for the twist (v / s, w) about o.
+// The see-through counters take hits more than see_through_m in front of or
+// behind the model's depth along the cast ray.
+
+#extension GL_GOOGLE_include_directive : require
+#include "track_reduce_common.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, scalar) readonly buffer Vtx { vec4 vtx[]; };
+layout(set = 0, binding = 1, scalar) readonly buffer Nrm { vec4 nrm[]; };
+layout(set = 0, binding = 2, scalar) readonly buffer MDepth { float mdepth[]; };
+// Three floats a pixel.
+layout(set = 0, binding = 3, scalar) readonly buffer MNormal {
+  float mnormal[];
+};
+layout(set = 0, binding = 4, scalar) readonly buffer Cams { CastCamera cams[]; };
+layout(set = 0, binding = 5, scalar) readonly buffer Views { FitView views[]; };
+layout(set = 0, binding = 6, scalar) readonly buffer State { FitState st; };
+layout(set = 0, binding = 7, scalar) writeonly buffer Partial {
+  float partial[];
+};
+
+// Mirrors ReducePush.
+layout(push_constant, scalar) uniform Push {
+  uint pixels;           // the level's width * height: a slot's elements
+  uint groups_per_view;
+  uint model_width;      // the cast's (level 0's) size
+  uint model_height;
+  uint finest;           // 1: the sigma gate and the see-through counters
+  float gate;            // a coarser level's gate, or the finest's floor (m)
+  float gate_sigmas;
+  float normal_cos;
+  float huber_sigmas;
+  float model_sigma;
+  float see_through;     // 0 counts none
+} pc;
+
+void main() {
+  uint lid = gl_LocalInvocationID.x;
+  // Uniform across the dispatch: no workgroup reaches the fold's barriers
+  // while another skips them.
+  if (st.stop != 0u || st.diverged != 0u) {
+    return;
+  }
+  vr_track_clear();
+  uint group = gl_WorkGroupID.x;
+  uint view = group / pc.groups_per_view;
+  uint first = (group % pc.groups_per_view) * kReduceLocal + lid;
+  uint stride = pc.groups_per_view * kReduceLocal;
+  FitView fv = views[view];
+  CastCamera cam = cams[view];
+  mat4 pose = st.correction * fv.cam_to_world;
+  mat3 rot = mat3(pose);
+  vec4 mk = vec4(cam.fx, cam.fy, cam.cx, cam.cy);
+  uvec2 msize = uvec2(pc.model_width, pc.model_height);
+  uint base = fv.slot * pc.pixels;
+  uint mbase = view * pc.model_width * pc.model_height;
+  for (uint px = first; px < pc.pixels; px += stride) {
+    vec4 lv = vtx[base + px];
+    if (lv.w == 0.0) {
+      continue;
+    }
+    g_acc[kAttempts] += 1.0;
+    vec3 p = (pose * vec4(lv.xyz, 1.0)).xyz;
+    vec3 pm = vs_world_to_camera(cam.cam_to_world, p);
+    vec2 uv;
+    if (!vs_project_pinhole(pm, mk, msize, uv)) {
+      continue;
+    }
+    uvec2 m = vs_nearest_pixel(uv, msize);
+    uint mi = mbase + m.y * pc.model_width + m.x;
+    float d = mdepth[mi];
+    if (!(d > 0.0)) {
+      continue;
+    }
+    g_acc[kHits] += 1.0;
+    if (pc.see_through > 0.0) {
+      if (pm.z < d - pc.see_through) {
+        g_acc[kInFront] += 1.0;
+      } else if (pm.z > d + pc.see_through) {
+        g_acc[kBehind] += 1.0;
+      }
+    }
+    vec3 q = (cam.cam_to_world *
+              vec4(vs_unproject_pinhole(vec2(m), d, mk), 1.0)).xyz;
+    vec3 nq = vec3(mnormal[3u * mi], mnormal[3u * mi + 1u],
+                   mnormal[3u * mi + 2u]);
+    vec3 n_live = rot * nrm[base + px].xyz;
+    if (dot(n_live, nq) < pc.normal_cos) {
+      continue;
+    }
+    float sd = vr_track_sigma(fv.noise, lv.z);
+    float sigma = sqrt(sd * sd + pc.model_sigma * pc.model_sigma);
+    float gate = pc.finest != 0u ? max(pc.gate_sigmas * sigma, pc.gate)
+                                 : pc.gate;
+    vec3 diff = p - q;
+    if (!(length(diff) < gate)) {
+      continue;
+    }
+    float r = dot(nq, diff);
+    float e = abs(r) / sigma;
+    float huber = e <= pc.huber_sigmas ? 1.0 : pc.huber_sigmas / e;
+    vec3 jw = cross(p - st.origin, nq);
+    float j[6] = float[6](st.scale * nq.x, st.scale * nq.y, st.scale * nq.z,
+                          jw.x, jw.y, jw.z);
+    vr_track_add(j, r, huber / (sigma * sigma));
+  }
+  vr_track_fold(lid);
+  if (lid < kPartial) {
+    partial[group * kPartial + lid] = g_shared[lid * kReduceLocal];
+  }
+}

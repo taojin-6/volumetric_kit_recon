@@ -1,0 +1,66 @@
+#version 450
+
+// The twists' translation scale s: the fit's finest points' median distance
+// from o at the prior. Mode 0 counts each kept level-0 point into a 1 cm
+// bin (the last bin takes everything past it), one thread a pixel of each
+// view; mode 1, one thread, takes the bin where the count passes half and
+// writes its centre to state.scale (1 m with no point). Counts are integer
+// atomics, so the result is the same however the threads run.
+
+#extension GL_GOOGLE_include_directive : require
+#include "track_common.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, scalar) readonly buffer Vtx { vec4 vtx[]; };
+layout(set = 0, binding = 1, scalar) readonly buffer Views { FitView views[]; };
+layout(set = 0, binding = 2, scalar) buffer State { FitState st; };
+layout(set = 0, binding = 3, scalar) buffer Bins { uint bins[]; };
+
+// Mirrors ScalePush.
+layout(push_constant, scalar) uniform Push {
+  uint mode;
+  uint pixels;  // level 0's width * height: a slot's elements
+  uint views;
+  uint bins;    // kScaleBins
+  float bin_m;  // a bin's width
+} pc;
+
+void main() {
+  if (pc.mode == 1u) {
+    if (gl_GlobalInvocationID.x != 0u) {
+      return;
+    }
+    uint total = 0u;
+    for (uint b = 0u; b < pc.bins; ++b) {
+      total += bins[b];
+    }
+    float scale = 1.0;
+    if (total > 0u) {
+      uint half_count = (total + 1u) / 2u;
+      uint run = 0u;
+      for (uint b = 0u; b < pc.bins; ++b) {
+        run += bins[b];
+        if (run >= half_count) {
+          scale = (float(b) + 0.5) * pc.bin_m;
+          break;
+        }
+      }
+    }
+    st.scale = scale;
+    return;
+  }
+  uint gid = gl_GlobalInvocationID.x;
+  if (gid >= pc.pixels * pc.views) {
+    return;
+  }
+  uint view = gid / pc.pixels;
+  uint px = gid % pc.pixels;
+  vec4 v = vtx[views[view].slot * pc.pixels + px];
+  if (v.w == 0.0) {
+    return;
+  }
+  vec3 p = (st.prior * views[view].cam_to_world * vec4(v.xyz, 1.0)).xyz;
+  uint b = min(uint(length(p - st.origin) / pc.bin_m), pc.bins - 1u);
+  atomicAdd(bins[b], 1u);
+}

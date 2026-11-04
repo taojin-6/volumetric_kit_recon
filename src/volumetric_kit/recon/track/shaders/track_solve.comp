@@ -1,0 +1,329 @@
+#version 450
+
+// One iteration's solve, one workgroup: sum the reduce's partials in a fixed
+// tree, take the data H's eigensystem (cyclic Jacobi, on H over its trace),
+// and step the estimate along its kept directions only (the eigen guard:
+// relative eigenvalue at least tau), with the prior term:
+//   M = P (s H + L + damp I) P + (I - P),  M x = -P (s g + L delta),
+// P the kept directions' projector, L the prior's information on the
+// scaled twist, delta the estimate's twist from the prior, s the data's
+// rescale to n_eff points a frame with hits. At the finest level it also
+// keeps the evaluation for the readback: the counts and the eigensystem.
+// Mode 1 evaluates and does not step. A step is taken only with 6 inliers
+// and a quarter of the hits; one longer than max_step (metres or radians)
+// marks the fit diverged and is not taken.
+
+#extension GL_GOOGLE_include_directive : require
+#include "track_common.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, scalar) readonly buffer Partial {
+  float partial[];
+};
+layout(set = 0, binding = 1, scalar) buffer State { FitState st; };
+
+// Mirrors SolvePush.
+layout(push_constant, scalar) uniform Push {
+  uint groups;
+  uint groups_per_view;
+  uint views;
+  uint mode;    // 0: step; 1: evaluate only
+  uint finest;  // 1: keep the evaluation
+  float tau;
+  float damping;
+  float max_step;
+  float min_ratio;
+  uint min_inliers;
+} pc;
+
+const uint kLocal = 64u;
+
+shared float sh[kPartial * kLocal];
+shared uint view_hits[32];
+
+// The symmetric a's eigenvalues (its diagonal, after) and eigenvectors (the
+// columns of vec, row-major), by cyclic Jacobi.
+void jacobi(inout float a[36], out float vec[36]) {
+  for (uint i = 0u; i < 36u; ++i) {
+    vec[i] = (i % 7u) == 0u ? 1.0 : 0.0;
+  }
+  for (uint sweep = 0u; sweep < 16u; ++sweep) {
+    float off = 0.0;
+    for (uint p = 0u; p < 5u; ++p) {
+      for (uint q = p + 1u; q < 6u; ++q) {
+        off += a[p * 6u + q] * a[p * 6u + q];
+      }
+    }
+    if (off < 1e-24) {
+      break;
+    }
+    for (uint p = 0u; p < 5u; ++p) {
+      for (uint q = p + 1u; q < 6u; ++q) {
+        float apq = a[p * 6u + q];
+        if (abs(apq) < 1e-30) {
+          continue;
+        }
+        float theta = (a[q * 7u] - a[p * 7u]) / (2.0 * apq);
+        float t;
+        if (abs(theta) > 1e15) {
+          t = 0.5 / theta;
+        } else {
+          t = (theta >= 0.0 ? 1.0 : -1.0) /
+              (abs(theta) + sqrt(theta * theta + 1.0));
+        }
+        float c = 1.0 / sqrt(t * t + 1.0);
+        float s = t * c;
+        for (uint k = 0u; k < 6u; ++k) {
+          float akp = a[k * 6u + p];
+          float akq = a[k * 6u + q];
+          a[k * 6u + p] = c * akp - s * akq;
+          a[k * 6u + q] = s * akp + c * akq;
+        }
+        for (uint k = 0u; k < 6u; ++k) {
+          float apk = a[p * 6u + k];
+          float aqk = a[q * 6u + k];
+          a[p * 6u + k] = c * apk - s * aqk;
+          a[q * 6u + k] = s * apk + c * aqk;
+        }
+        for (uint k = 0u; k < 6u; ++k) {
+          float vkp = vec[k * 6u + p];
+          float vkq = vec[k * 6u + q];
+          vec[k * 6u + p] = c * vkp - s * vkq;
+          vec[k * 6u + q] = s * vkp + c * vkq;
+        }
+      }
+    }
+  }
+}
+
+void main() {
+  uint lid = gl_LocalInvocationID.x;
+  if (st.stop != 0u || st.diverged != 0u) {
+    return;  // uniform
+  }
+  float acc[kPartial];
+  for (uint i = 0u; i < kPartial; ++i) {
+    acc[i] = 0.0;
+  }
+  for (uint g = lid; g < pc.groups; g += kLocal) {
+    for (uint i = 0u; i < kPartial; ++i) {
+      acc[i] += partial[g * kPartial + i];
+    }
+  }
+  for (uint i = 0u; i < kPartial; ++i) {
+    sh[i * kLocal + lid] = acc[i];
+  }
+  if (lid < pc.views) {
+    float view_sum = 0.0;
+    for (uint j = 0u; j < pc.groups_per_view; ++j) {
+      view_sum += partial[(lid * pc.groups_per_view + j) * kPartial + kHits];
+    }
+    view_hits[lid] = view_sum > 0.0 ? 1u : 0u;
+  }
+  barrier();
+  for (uint s = kLocal / 2u; s > 0u; s >>= 1u) {
+    if (lid < s) {
+      for (uint i = 0u; i < kPartial; ++i) {
+        sh[i * kLocal + lid] += sh[i * kLocal + lid + s];
+      }
+    }
+    barrier();
+  }
+  if (lid != 0u) {
+    return;
+  }
+
+  float v[kPartial];
+  for (uint i = 0u; i < kPartial; ++i) {
+    v[i] = sh[i * kLocal];
+  }
+  float h[36];
+  uint k = 0u;
+  for (uint a = 0u; a < 6u; ++a) {
+    for (uint b = a; b < 6u; ++b) {
+      h[a * 6u + b] = v[kH + k];
+      h[b * 6u + a] = v[kH + k];
+      ++k;
+    }
+  }
+  float trace = h[0] + h[7] + h[14] + h[21] + h[28] + h[35];
+  float inliers = v[kInliers];
+  float hits = v[kHits];
+
+  // The eigensystem, ascending, each vector's largest component positive.
+  float lam[6];
+  float dir[36];
+  float lambda_max = 0.0;
+  bool solved = trace > 0.0 && !isinf(trace) && !isnan(trace);
+  if (solved) {
+    float a[36];
+    for (uint i = 0u; i < 36u; ++i) {
+      a[i] = h[i] / trace;
+    }
+    float vec[36];
+    jacobi(a, vec);
+    uint order[6] = uint[6](0u, 1u, 2u, 3u, 4u, 5u);
+    for (uint i = 0u; i < 6u; ++i) {
+      for (uint j = i + 1u; j < 6u; ++j) {
+        if (a[order[j] * 7u] < a[order[i] * 7u]) {
+          uint t = order[i];
+          order[i] = order[j];
+          order[j] = t;
+        }
+      }
+    }
+    for (uint i = 0u; i < 6u; ++i) {
+      uint c = order[i];
+      lam[i] = a[c * 7u];
+      float big = 0.0;
+      for (uint r = 0u; r < 6u; ++r) {
+        float x = vec[r * 6u + c];
+        if (abs(x) > abs(big)) big = x;
+      }
+      float flip = big < 0.0 ? -1.0 : 1.0;
+      for (uint r = 0u; r < 6u; ++r) {
+        dir[i * 6u + r] = flip * vec[r * 6u + c];
+      }
+    }
+    lambda_max = lam[5] * trace;
+    solved = lam[5] > 0.0;
+  }
+  if (pc.finest != 0u) {
+    st.attempts = v[kAttempts];
+    st.hits = hits;
+    st.inliers = inliers;
+    st.in_front = v[kInFront];
+    st.behind = v[kBehind];
+    st.raw2 = v[kRaw2];
+    st.evaluated = 1u;
+    uint held = 0u;
+    if (solved) {
+      st.lambda_max = lambda_max;
+      for (uint i = 0u; i < 6u; ++i) {
+        float rel = max(lam[i] / lam[5], 0.0);
+        st.rel[i] = rel;
+        if (rel < pc.tau) held |= 1u << i;
+      }
+      for (uint i = 0u; i < 36u; ++i) {
+        st.dirs[i] = dir[i];
+      }
+    } else {
+      st.lambda_max = 0.0;
+      for (uint i = 0u; i < 6u; ++i) {
+        st.rel[i] = 0.0;
+      }
+      for (uint i = 0u; i < 36u; ++i) {
+        st.dirs[i] = (i % 7u) == 0u ? 1.0 : 0.0;
+      }
+      held = 0x3fu;
+    }
+    st.held = held;
+  }
+  if (pc.mode != 0u || !solved || inliers < float(pc.min_inliers) ||
+      !(hits > 0.0) || inliers / hits < pc.min_ratio) {
+    return;
+  }
+
+  // The prior: the data rescaled to n_eff points a frame with hits.
+  float s = 1.0;
+  float lv = 0.0;
+  float lw = 0.0;
+  float delta[6] = float[6](0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+  if (st.info.x > 0.0 || st.info.y > 0.0) {
+    uint frames_hit = 0u;
+    for (uint i = 0u; i < pc.views; ++i) {
+      frames_hit += view_hits[i];
+    }
+    s = min(1.0, st.n_eff * float(frames_hit) / inliers);
+    lv = st.info.x * st.scale * st.scale;
+    lw = st.info.y;
+    vec3 dv;
+    vec3 dw;
+    vr_track_between(st.prior, st.correction, st.origin, dv, dw);
+    delta = float[6](dv.x / st.scale, dv.y / st.scale, dv.z / st.scale, dw.x,
+                     dw.y, dw.z);
+  }
+  float damp = pc.damping * s * trace / 6.0;
+  float lprior[6] = float[6](lv, lv, lv, lw, lw, lw);
+  // The kept directions' projector.
+  float proj[36];
+  for (uint i = 0u; i < 36u; ++i) {
+    proj[i] = 0.0;
+  }
+  for (uint i = 0u; i < 6u; ++i) {
+    if (!(lam[i] / lam[5] >= pc.tau)) continue;
+    for (uint r = 0u; r < 6u; ++r) {
+      for (uint c = 0u; c < 6u; ++c) {
+        proj[r * 6u + c] += dir[i * 6u + r] * dir[i * 6u + c];
+      }
+    }
+  }
+  float am[36];
+  float b[6];
+  for (uint r = 0u; r < 6u; ++r) {
+    for (uint c = 0u; c < 6u; ++c) {
+      am[r * 6u + c] = s * h[r * 6u + c];
+    }
+    am[r * 7u] += lprior[r] + damp;
+    b[r] = -(s * v[kG + r] + lprior[r] * delta[r]);
+  }
+  // M = P A P + (I - P); rhs = P b.
+  float pa[36];
+  for (uint r = 0u; r < 6u; ++r) {
+    for (uint c = 0u; c < 6u; ++c) {
+      float x = 0.0;
+      for (uint j = 0u; j < 6u; ++j) x += proj[r * 6u + j] * am[j * 6u + c];
+      pa[r * 6u + c] = x;
+    }
+  }
+  float m[36];
+  float rhs[6];
+  for (uint r = 0u; r < 6u; ++r) {
+    for (uint c = 0u; c < 6u; ++c) {
+      float x = 0.0;
+      for (uint j = 0u; j < 6u; ++j) x += pa[r * 6u + j] * proj[j * 6u + c];
+      m[r * 6u + c] = x - proj[r * 6u + c] + (r == c ? 1.0 : 0.0);
+    }
+    float y = 0.0;
+    for (uint j = 0u; j < 6u; ++j) y += proj[r * 6u + j] * b[j];
+    rhs[r] = y;
+  }
+  // Cholesky M = L L^T, in place, lower.
+  for (uint j = 0u; j < 6u; ++j) {
+    float d = m[j * 7u];
+    for (uint q = 0u; q < j; ++q) d -= m[j * 6u + q] * m[j * 6u + q];
+    if (!(d > 0.0)) {
+      return;  // not positive definite: no step
+    }
+    float ljj = sqrt(d);
+    m[j * 7u] = ljj;
+    for (uint i = j + 1u; i < 6u; ++i) {
+      float t = m[i * 6u + j];
+      for (uint q = 0u; q < j; ++q) t -= m[i * 6u + q] * m[j * 6u + q];
+      m[i * 6u + j] = t / ljj;
+    }
+  }
+  float fwd[6];
+  for (uint i = 0u; i < 6u; ++i) {
+    float t = rhs[i];
+    for (uint q = 0u; q < i; ++q) t -= m[i * 6u + q] * fwd[q];
+    fwd[i] = t / m[i * 7u];
+  }
+  float step[6];
+  for (int i = 5; i >= 0; --i) {
+    float t = fwd[i];
+    for (int q = i + 1; q < 6; ++q) t -= m[q * 6 + i] * step[q];
+    step[i] = t / m[i * 7];
+  }
+  vec3 dv = vec3(step[0], step[1], step[2]) * st.scale;
+  vec3 dw = vec3(step[3], step[4], step[5]);
+  if (any(isnan(dv)) || any(isinf(dv)) || any(isnan(dw)) || any(isinf(dw))) {
+    return;
+  }
+  if (length(dv) > pc.max_step || length(dw) > pc.max_step) {
+    st.diverged = 1u;
+    return;
+  }
+  st.correction = vr_track_apply(dv, dw, st.origin, st.correction);
+}

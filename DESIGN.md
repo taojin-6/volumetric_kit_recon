@@ -8,7 +8,7 @@ to the task, and update them with the code when a contract changes.
 
 - [Tiered architecture](#tiered-architecture) and [package names](#naming-conventions-use-these-consistently)
 - [Interop and device ownership](#the-interop-seam), [Vulkan gotchas](#key-gotchas-verified), and [color](#color-space)
-- Implementation: [core](#core), [tsdf](#tsdf), [texture](#texture), [sender](#sender); the voxel grid, meshing, the codec and streaming are grid's ([its DESIGN.md](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md)), and the camera side sensor's ([its DESIGN.md](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DESIGN.md))
+- Implementation: [core](#core), [tsdf](#tsdf), [texture](#texture), [sender](#sender), [track](#track); the voxel grid, meshing, the codec and streaming are grid's ([its DESIGN.md](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md)), and the camera side sensor's ([its DESIGN.md](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DESIGN.md))
 - [Examples](#examples) and [next work](#next-work)
 
 The tier descriptions and next-work notes below retain the implementation
@@ -72,7 +72,7 @@ conventions and Vulkan setup.
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: fetched by commit (`FetchContent`); component targets
   `volumetric_kit::recon_core`, `…_tsdf`, `…_texture`, `…_sender`,
-  `…_interop` (+ later `…_track`); umbrella alias `volumetric_kit::recon`.
+  `…_track` (+ later `…_interop`); umbrella alias `volumetric_kit::recon`.
   The camera and sensor targets are the sensor package's
   (`volumetric_kit::sensor_*`, [its names](https://github.com/taojin-6/volumetric_kit_sensor/blob/main/DESIGN.md#names)).
 - grid's names are its own: `volumetric_kit::grid`, `vgrid::` in docs,
@@ -85,9 +85,10 @@ conventions and Vulkan setup.
 Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
-`core` → `tsdf` → `texture` → `interop` (later: `track`), every tier free
-to link grid's tiers below it and the sensor package's frame tier: `tsdf`
-fuses into grid's `volume`, `texture` textures grid's `mesh`. `sender`
+`core` → `tsdf` → `texture` → `interop`, and `core` → `track`, every tier
+free to link grid's tiers below it and the sensor package's frame tier:
+`tsdf` fuses into grid's `volume`, `texture` textures grid's `mesh`, and
+`track` casts grid's `volume` (not `tsdf`: its filters arrive as values). `sender`
 comes last: it links grid's `codec_stream`, `tsdf` and the sensor
 package's frame contract (`sensor_frame`). Neither grid nor the sensor
 package includes anything of recon's ([grid's tiers](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DESIGN.md#tiered-architecture)).
@@ -118,6 +119,10 @@ package includes anything of recon's ([grid's tiers](https://github.com/taojin-6
   schedule and its frame coded in two batches through the codec stream's
   halves (`SetSender`), and the fuser's inputs for prepared frames
   (`fuse_inputs`) (2026-10-26). It prints nothing.
+- **`track`** — a self-posed camera's frames fitted to a model on the
+  device: the one backend interface (`IFitter`, its kinds `FitKind`), each
+  chain's judge, and the `Tracker` that runs a driver and its shadows on
+  the same frames and places the driver's frames (2026-11-03).
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Backend strategy: one Vulkan path
@@ -965,6 +970,78 @@ halves; a set due a frame of a moved-from stream is refused before anything
 is recorded. The live examples send a camera set through
 `examples/common/send_set.hpp`, which gathers its waits before the set
 moves into what the batch holds.
+
+### track
+
+`recon_track` fits a self-posed camera's frames (a phone's, ARKit-posed and
+registered to the rig's world) to a model on the device, and decides what
+correction each frame takes (the 2026-11-03 entry). A pose is a world
+correction of the frame's own: the camera sits at `correction *
+depth_camera.cam_to_world`.
+
+**The backend** (`track/fitter.hpp`). `IFitter` refines: from a `PosePrior`
+(a correction and its sigmas) it fits 1-32 frames of one pose chain, one
+correction for all, recorded into the caller's batch (`record`; `finish`
+once the batch's wait returned; `abandon` when it failed or never ran).
+`TrackFit` carries the correction and the data's H as the device's own
+eigensystem (`lambda_max`, ascending relative eigenvalues, the unit twists,
+the `held` directions), on twists about the frames' mean camera centre with
+translation over the points' median distance. `FitKind` is closed;
+`kFitKinds` lists it for the conformance test and a bench, and a new kind is
+one PR. `PointToPlane` is the one kind:
+- *Slots.* A fitter keeps each frame's 3-level pyramid (depth, vertex and
+  normal maps) in a slot, stacked by slot in one buffer a level, grown to its
+  largest window. A frame comes back to its slot when its timestamp and
+  depth buffer (weakly held) match; a new one is copied in and gets its
+  pyramid (6 dispatches). Slots a record fills count once its `finish`
+  returns; an abandon or a failed record empties them. Every descriptor set
+  but the ray caster's ring is written once, when the slots grow, so a
+  record rewrites none (core refuses a batch whose set was rewritten).
+- *The pyramid* follows 0b's reference: the frame's range, a 2x2 block
+  average under a 3 cm span, a vertex dropped beside a 3 cm + 1 % edge or a
+  hole (`edge_px` at level 0, 1 above), on the border, or grazing past 75
+  degrees; central-difference normals.
+- *A pass* is one stacked cast of the K views (grid's `RayCaster`, each
+  frame's own intrinsics, `FitterConfig::model_filter`), then coarse to
+  fine one reduce over all K views and one solve an iteration (4 / 5 / 10).
+  Later passes move the cast cameras on the device first
+  (`track_pose.comp`); a pass that moved under 1 cm / 0.3 deg stops the
+  solves, not the casts.
+- *The reduce* is projective point-to-plane: gates of 10 and 5 cm at the
+  coarser levels, max(3 sigma, 1.5 cm) at the finest, normals within 30
+  degrees, Huber at 2 sigma, sigma the frame's `DepthNoise` in quadrature
+  with 5 mm for the model. It counts attempts, hits (the model answered) and
+  inliers, and with `see_through_m` hits in front of and behind the
+  surface. Workgroups are per view, folded in fixed trees, with no float
+  atomics, so a fit repeats bit for bit and is the same beside another.
+- *The solve* (one workgroup) takes the data H's eigensystem by cyclic
+  Jacobi and steps along the directions at or above tau (1e-3) only, with
+  the prior term on the data rescaled to `prior_n_eff` points a frame with
+  hits (mode b: unscaled, a 5 mm / 0.3 deg prior is inert). A step needs 6
+  inliers and a quarter of the hits; one over 0.5 m or rad marks the fit
+  diverged, which returns as solving nothing.
+
+**The judge** (internal; its config `track/correction.hpp`), one a chain: a
+fit that solved nothing is Coasting; a held direction caps a fit at
+Partial, which moves the chain along its directions at or above
+`partial_min_relative_eigenvalue` only; then the inlier count, the coverage
+(hits / attempts) and the inlier ratio over hits refuse (Rejected); last the
+jump at the frames' mean camera centre, against a gate growing with the
+time since the last Anchored fit, taken only when the fit before proposed
+the same correction. No prior and no jump gate before the first lock; after
+it the prior's sigma grows with the time since the last Anchored fit.
+
+**The Tracker** (`track/tracker.hpp`) runs the driver on each of its model
+filters (a lane: the rig alone, then the rig with anchored fill) and the
+shadows on the first; a `Method` is a value (kind or none, window, hop,
+icp, judge, seed). Its rules are the header's: windows and hops on the
+frames' clock, decisions once no fit can hold a frame (Anchored,
+Interpolated within `hold_ns` on both sides, Coasting, Device), release on
+the driver chains alone, and a ring that holds a frame until it is placed
+and decided. Shadows record after the driver, and a shadow's refusal is its
+own chain's, so they change nothing the driver does
+(`recon_track_tracker`). The bench (`track_eval`) and the phone lane are
+next work.
 
 ## Examples
 
