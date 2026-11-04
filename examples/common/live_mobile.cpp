@@ -69,6 +69,11 @@ vkc::Status check_mobile(const config::Config& opt) {
     return vkc::Status::invalid_argument(
         "source.mobile is not run by operation stream, which fuses nothing");
   }
+  if (opt.source.mobile->registration.empty()) {
+    return vkc::Status::invalid_argument(
+        "source.mobile needs source.mobile_registration: the lane places a "
+        "phone only by its registration file");
+  }
   return {};
 }
 
@@ -529,6 +534,7 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
     const config::Config& opt, vkc::Device& device, vkc::Allocator& allocator) {
   if (!opt.source.mobile)
     return MobileLane::create(device, allocator, {}, {}, {});
+  VKC_TRY(check_mobile(opt));  // every refusal before any wait
   const config::MobileSession& m = *opt.source.mobile;
   link::RgbdStreamSensor::Options options;
   VKC_ASSIGN(options.registration,

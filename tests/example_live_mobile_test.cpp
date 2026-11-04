@@ -644,17 +644,30 @@ int test_check_and_empty(const Env& env) {
                       cfg::Application::FuseOrbbec);
   };
   auto rig = parse("}");
-  auto phone = parse(R"(, "mobile": "phone.vrst"})");
+  auto phone = parse(R"(, "mobile": "phone.vrst",
+      "mobile_registration": "phone.registration.json"})");
   auto live = parse(R"(, "mobile": "tcp://10.8.0.1:7101",
       "mobile_registration": "phone.registration.json"})");
-  auto classic =
-      parse(R"(, "mobile": "phone.vrst"}, "fusion": {"dynamic": false})");
-  CHECK(rig.ok() && phone.ok() && live.ok() && classic.ok());
+  auto unplaced = parse(R"(, "mobile": "phone.vrst"})");
+  auto classic = parse(R"(, "mobile": "phone.vrst",
+      "mobile_registration": "phone.registration.json"},
+      "fusion": {"dynamic": false})");
+  CHECK(rig.ok() && phone.ok() && live.ok() && unplaced.ok() && classic.ok());
   CHECK(vr_example::check_mobile(*rig).ok());
   CHECK(vr_example::check_mobile(*phone).ok());
   CHECK(vr_example::check_mobile(*live).ok());
   CHECK(vr_example::check_mobile(*classic).domain() ==
         vkc::Status::Code::InvalidArgument);
+  // The core defaults no registration (0.49.0): the lane refuses none, before
+  // any wait.
+  const vkc::Status no_registration = vr_example::check_mobile(*unplaced);
+  CHECK(no_registration.domain() == vkc::Status::Code::InvalidArgument);
+  CHECK(no_registration.message().find("source.mobile_registration") !=
+        std::string::npos);
+  CHECK(
+      vr_example::open_mobile_lane(*unplaced, env.gpu.device, env.gpu.allocator)
+          .status()
+          .domain() == vkc::Status::Code::InvalidArgument);
   cfg::Config ffs = *phone;
   ffs.source.depth = cfg::DepthSource::Ffs;
   const vkc::Status refused = vr_example::check_mobile(ffs);

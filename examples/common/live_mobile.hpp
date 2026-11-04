@@ -109,8 +109,9 @@ volumetric_kit::recon::sender::Filler to_filler(track::Released&& released);
 /// @return OK; `Status::Code::Unsupported` beside FFS depth
 ///         (`source.depth` ffs), which stage 1 does not run the lane beside;
 ///         `Status::Code::InvalidArgument` under Classic fusion
-///         (`fusion.dynamic` false), since fill needs Dynamic, or with
-///         `operation: "stream"`, which fuses nothing.
+///         (`fusion.dynamic` false), since fill needs Dynamic, with
+///         `operation: "stream"`, which fuses nothing, or without
+///         `source.mobile_registration`, which the core leaves to the lane.
 vkc::Status check_mobile(const config::Config& opt);
 
 /// @return @p sensor polled on a thread of its own from its start, so a

@@ -183,6 +183,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **recon pins core 0.49.0** (core #99's merge, `947fe19`; was
+  0.43.0), and CI takes the core's actions at the new pin. 0.44.0-0.48.0
+  change nothing recon calls but `source.mobile`'s address reasons, the net
+  tier's stricter `resolve` (recon listens on a numeric address alone) and
+  two Vulkan fixes (an acquire after a wait, an exported timeline's host
+  wait). 0.49.0 leaves `source.mobile_registration` empty when it is not
+  given, for a recorded session too (it was `<file>.registration.json`), so
+  **`check_mobile` refuses a phone without one** (`InvalidArgument`, before
+  anything opens; `open_mobile_lane` checks it before any wait); the core
+  floor rises to 0.49.0.
 - build: **recon pins sensor 0.43.0** (sensor #51's merge, `1c5dd48`; was
   0.37.0), and CI takes its actions at the new pin. Its `DepthNoise::known`
   (0.40.0) takes the noise ARKit's driver states, so the floor rises to
