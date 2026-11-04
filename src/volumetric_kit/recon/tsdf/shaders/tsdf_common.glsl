@@ -95,4 +95,13 @@ layout(push_constant, scalar) uniform PushConstants {
   // Dynamic: this set's stamp in the camera's change reach (binding 11), the
   // pixels within the rim distance's search of a change; 0 under Classic.
   uint reach_stamp;
+  // 1 = binding 14 is the grid's source byte (tsdf::kSourceAttribute).
+  uint has_source;
+  // The byte this frame writes into a voxel it starts: tsdf::fixed_source of
+  // a fixed camera's index, tsdf::mobile_source of a filler's.
+  uint source;
+  // A filler: its average's cap (FillRule::cap_fraction x max_weight), and
+  // how many fixed frames of the set veto it (bindings 15 and 16).
+  float fill_cap;
+  uint veto_count;
 } pc;

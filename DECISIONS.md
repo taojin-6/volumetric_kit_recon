@@ -1044,6 +1044,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   FFS depth on R'G'B' views, on the live run; built on every build, refusing
   the scenario without sensor's DeckLink driver or FFS; FFS's near gate
   passed (both openers); a measured 0.07 px disparity noise.
+- [**2026-11-03**](#2026-11-03--every-fusion-grid-carries-a-source-byte-fixed-cameras-remove-fill-only-on-a-change-that-contradicts-it-and-a-filler-fills-only-where-no-fixed-camera-sees-or-holds-weight-amends-the-2026-10-29-dynamic-and-outline-entries) —
+  Every fusion grid carries a source byte (0 none, a fixed camera's slot + 1,
+  fill with a mobile bit and an unanchored bit; 63 sensors a class). Fixed
+  cameras remove fill only on their own change, where the new reading
+  contradicts it, and never write a rim distance into it; a
+  `FrameRole::Filler` fills only where no fixed camera of the set holds
+  weight or vetoes, capped at half `max_weight`, to 3 m.
 
 ## Decision record
 
@@ -6055,6 +6062,92 @@ the suite, 46 tests. On an M5 Max build with neither part: the scenario,
 report and refusal tests. Three planted bugs, each killed: the left and
 right connectors swapped, the disparity noise not passed to FFS, and luma
 views for the DeckLink cameras. Not run: the cameras, the hand check.
+
+### 2026-11-03 — Every fusion grid carries a source byte; fixed cameras remove fill only on a change that contradicts it, and a filler fills only where no fixed camera sees or holds weight (amends the 2026-10-29 Dynamic and outline entries).
+
+**Context.** A moving camera (a phone, tracked against the rig) is to fill
+what the fixed cameras cannot see: under furniture, behind people, the empty
+parts of the room. Shipped Dynamic treats every voxel alike, so its rule
+beside a departure, its Vanished rays and its rim distances remove what a
+second source wrote: replaying the rig's recording of a walking person over
+a phone's real fill, shipped Dynamic removed 18% of the fill in 48 s, most of
+it by the reset beside a departure, over holes where no fixed camera had a
+reading of the voxel.
+
+**Decision.**
+- **One byte a voxel** (`tsdf/source.hpp`), the attribute `"source"` of
+  every `create_fusion_grid` grid: 0 is no sensor, which every reset writes,
+  so a nonzero byte implies weight; bits 0-5 are the sensor's index in its
+  class plus 1, 63 sensors a class; bit 6 is unanchored; bit 7 is mobile
+  (fill). Four voxels share a word, written `atomicAnd` then `atomicOr` from
+  the voxel's one thread, so no device needs 8-bit storage. A fixed camera
+  writes its byte only into a voxel at weight 0: later samples leave it, so
+  the rig pays one atomic a new voxel, none a sample.
+- **Across sources, a camera removes evidence only on its own change, and
+  only what its new reading contradicts.** On fill a fixed camera resets
+  only on a pixel its change test flagged Nearer or Farther, where the new
+  reading lies more than the band behind a voxel whose tsdf is 0 or less,
+  or the change is Nearer and the voxel lies in its band (the arrival then
+  starts it as the rig's). The reset beside a departure, a Vanished ray and
+  a rim distance are no reading of the voxel: they never touch fill. Quiet
+  and Farther samples in the band, and free space past it, average into
+  fill and keep its byte. Inside the rig nothing changes.
+- **A filler** (`FrameRole::Filler`, after every fixed frame of the set,
+  under Dynamic only: Classic's free space would start voxels in the blocks
+  a filler's band allocates) writes only where no fixed camera holds
+  weight; a fixed return that puts
+  the voxel inside its band vetoes every write, one that sees past it by
+  more than the band a sample of 0 or less, so a face only the phone sees
+  keeps its free side. Tiers: an Unanchored frame never writes anchored
+  fill, and an Anchored band sample restarts unanchored fill as anchored;
+  a filler's free space goes only into fill of its tier or below, at a
+  sample's weight, so it clears its own ghosts in a few frames. Its average
+  stops at half `max_weight` (`FillRule::cap_fraction`), never lowering a
+  weight, and returns past 3 m (`FillRule::max_depth_m`) fill nothing, as a
+  noisy far return biases fill along the band's back ramp.
+- `rig_cast()` and `tracking_cast()` are grid's `CastFilter`s on the byte at
+  weight 2 or more: the rig alone, and the rig plus anchored fill.
+
+**Why.**
+- The rule is the measured one: the same replay with the byte seeded and
+  this rule removed 2.75% of the fill in 48 s, 99.8% of it fill shipped
+  Dynamic removes too, and every voxel the phone did not write matched the
+  run without the phone at every set.
+- The value table keeps which sensor wrote, gives tracking its three classes
+  (rig, anchored fill, other fill), and leaves 63 sensors a class; the cast
+  filter takes any table, so a wider tag needs no grid change.
+- The veto is per set and read at the voxel's nearest pixel of each fixed
+  frame, from their depths stacked once a set with a filler: any number of
+  fixed cameras, no per-voxel state, and a set without a filler records
+  none of it.
+- What it costs: fill no fixed camera sees stays until a sensor sees the
+  place again, a person who stood still on it included; and a person who
+  stands within a band of a fill-only face takes that patch from the fill,
+  which the phone's next pass restores.
+
+- **One exception to "inside the rig nothing changes":** a filler's band
+  allocates blocks, and a fixed camera may write into such a block what its
+  own allocation left out, an outline's rim distance. Exact elsewhere; none
+  on the recorded take below.
+
+**Evidence.** Tests: `recon_tsdf_source` (the table and the casts; a rig with
+the byte and without it is the same grid in either mode; the cases where a
+fixed camera has no standing; removal only on contradiction; noise and false
+alarms under a band) and `recon_tsdf_filler` (tiers in every order, each
+veto, the rig unchanged beside a filler, the refusals); four planted bugs,
+each killed. The rig's recorded take (4 Femtos, 300 sets, 1 cm, Dynamic,
+max weight 20), on the lab's RTX 5090, Release:
+- with the byte, the grid's digest (every block's tsdf, weight and colour,
+  by coordinate) equals main's at all 300 sets, in three runs each;
+- integrate 2.50 against 2.47 ms a set (medians of three alternated runs
+  each, +0.03 ms), the reset 0.692 against 0.687 ms; the grid's attributes
+  872 against 805 MB (+8.3%);
+- with a synthetic filler every third set (one camera's frames re-posed
+  10 cm and 3 degrees, an object only it sees), 282 k fill voxels; every
+  other voxel equal to the run without it at every set (1.27 G voxel
+  comparisons), none in a block only the filler allocated; the filler's
+  veto gather and pass 0.18 ms a set it fuses (median), integrate 3.14
+  against 2.83 ms in those sets.
 
 ## Measured lessons
 
