@@ -28,8 +28,6 @@ namespace camera = volumetric_kit::sensor::camera;
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
-
 // A frame chosen for a search: its picture, held until searched or let go.
 struct Candidate {
   sensor::YuvImage picture;
@@ -49,13 +47,6 @@ struct Still {
 
 bool device_picture(const sensor::YuvImage& p) {
   return p.device != nullptr || p.image[0] != nullptr;
-}
-
-// The angle of rotation `r` (degrees).
-double angle_deg(const camera::Mat3d& r) {
-  const double c =
-      std::clamp((r[0][0] + r[1][1] + r[2][2] - 1.0) * 0.5, -1.0, 1.0);
-  return std::acos(c) * 180.0 / kPi;
 }
 
 double median(std::vector<double> v) {
@@ -79,7 +70,6 @@ struct TagWatch::State {
   // The lane's thread alone: which frames are candidates.
   std::optional<std::uint64_t> first_pts;
   std::optional<std::uint64_t> last_candidate;
-  std::optional<std::pair<std::uint64_t, camera::Mat4d>> previous;
   std::uint64_t epoch = 0;
   Counts published;  // what counts() returns
 
@@ -341,23 +331,13 @@ vkc::Status TagWatch::see(const sensor::RgbdFrame& frame) try {
   State& s = *state_;
   const std::uint64_t pts = frame.timestamp_ns;
   if (!s.first_pts) s.first_pts = pts;
-  bool candidate = false;
-  if (camera::check_rigid(frame.color_to_world).ok()) {
-    if (s.previous && pts > s.previous->first) {
-      const double dt = double(pts - s.previous->first) * 1e-9;
-      const camera::Mat4d& a = s.previous->second;
-      const camera::Mat4d& b = frame.color_to_world;
-      const double moved =
-          glm::length(camera::Vec3d(b[3]) - camera::Vec3d(a[3]));
-      const double turned =
-          angle_deg(camera::Mat3d(b) * glm::transpose(camera::Mat3d(a)));
-      candidate =
-          device_picture(frame.color) && pts - *s.first_pts >= kSettleNs &&
-          (!s.last_candidate || pts - *s.last_candidate >= kTagEveryNs) &&
-          moved / dt < kSteadyMPerS && turned / dt < kSteadyDegPerS;
-    }
-    s.previous.emplace(pts, frame.color_to_world);
-  }
+  // Sums, not differences, so a frame time before the first frame's or the
+  // last candidate's is no candidate.
+  const bool candidate =
+      device_picture(frame.color) &&
+      camera::check_rigid(frame.color_to_world).ok() &&
+      pts >= *s.first_pts + kSettleNs &&
+      (!s.last_candidate || pts >= *s.last_candidate + kTagEveryNs);
   Candidate c;
   if (candidate) {
     s.last_candidate = pts;
@@ -389,11 +369,7 @@ vkc::Status TagWatch::see(const sensor::RgbdFrame& frame) try {
   return vkc::Status::out_of_memory("TagWatch::see");
 }
 
-void TagWatch::split() noexcept {
-  State& s = *state_;
-  ++s.epoch;
-  s.previous.reset();  // no steadiness across a loss
-}
+void TagWatch::split() noexcept { ++state_->epoch; }
 
 vkc::Result<TagNews> TagWatch::take() {
   State& s = *state_;

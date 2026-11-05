@@ -407,14 +407,16 @@ if(VR_BUILD_EXAMPLES)
            COMMAND recon_example_live_mobile_test)
   # The origin tag's watch (live_tag.hpp), with VR_WITH_CALIB: OpenCV's markers
   # pasted face-on into NV12 pictures on the device (sensor's nv12_picture.hpp),
-  # searched, gated and solved by calib; the lane registered by it, on scripted
-  # fitters; and open_mobile_lane on a session of sensor's committed H.265 clips
+  # moved and turned by OpenCV's warp for a moving camera, searched, gated and
+  # solved by calib; the lane registered by it, on scripted fitters; and
+  # open_mobile_lane on a session of sensor's committed H.265 clips
   # (VS_TEST_DATA_DIR), decoded on this machine's hardware.
   if(VR_WITH_CALIB)
     add_executable(recon_example_live_tag_test example_live_tag_test.cpp)
     target_link_libraries(
-      recon_example_live_tag_test PRIVATE vr_example_mobile opencv_objdetect
-                                          volumetric_kit::core_test_policy)
+      recon_example_live_tag_test
+      PRIVATE vr_example_mobile opencv_imgproc opencv_objdetect
+              volumetric_kit::core_test_policy)
     target_compile_definitions(recon_example_live_tag_test
                                PRIVATE VR_HEVC_DATA="${VS_TEST_DATA_DIR}/hevc")
     vr_target_warnings(recon_example_live_tag_test)

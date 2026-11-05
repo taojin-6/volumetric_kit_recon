@@ -11,7 +11,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `examples`: **a live phone registered by the origin tag**
   (`examples/common/live_tag.hpp`, in a build with `-DVR_WITH_CALIB=ON`): a
   phone given with no `source.mobile_registration` is read with its
-  pictures, and a `TagWatch` finds the calibration world's tag in steady
+  pictures, and a `TagWatch` finds the calibration world's tag in its
   frames (at most 5 Hz, on its own thread, OpenCV's pool set to one thread:
   the luma copied by sensor's `PictureReadback`, searched and solved by
   calib's `detect_tag`, `tracked_world_from_tag` and `register_tracked`, at
@@ -474,6 +474,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pin above (grid 0.2.1, grid #5).
 
 ### Fixed
+
+- `examples`: **a hand-held phone registers by the origin tag**: `TagWatch`
+  searches a frame however fast its camera moves; the hold's gates still
+  refuse a wrong pose.
 
 - `track`: **a fit repeats on NVIDIA, and devices pick the same model
   pixels.** At a pass's first iteration a coarser level's point lands

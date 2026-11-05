@@ -11,13 +11,12 @@
 /// **Stills.** The lane shows the watch each frame it pairs, in the phone's
 /// own (ARKit's) world, before it lets the frame's picture go (@ref
 /// TagWatch::see). A frame is a candidate when it is @ref kSettleNs past the
-/// first frame shown (ARKit settling), at least @ref kTagEveryNs of frame
-/// time after the last candidate, and steady: its camera moved slower than
-/// @ref kSteadyMPerS and @ref kSteadyDegPerS since the frame before it, about
-/// 3 px of blur at a 10 ms exposure and fx 1600. A candidate's Y plane is
-/// copied to the host (sensor's `PictureReadback`, `Planes::Luma`) and
-/// searched for calib's `kOriginTag` (`detect_tag`): a still when the picture
-/// holds exactly one print of it.
+/// first frame shown (ARKit settling) and at least @ref kTagEveryNs of frame
+/// time after the last candidate, however fast its camera moves: the hold's
+/// gates refuse a wrong pose, and the rig chain's fits correct a rough one
+/// (live_mobile.hpp). A candidate's Y plane is copied to the host (sensor's
+/// `PictureReadback`, `Planes::Luma`) and searched for calib's `kOriginTag`
+/// (`detect_tag`): a still when the picture holds exactly one print of it.
 ///
 /// **Holds.** @ref kHoldStills stills within @ref kHoldSpanNs, with no
 /// @ref TagWatch::split between them, are a hold; its stills are then spent,
@@ -84,11 +83,6 @@ inline constexpr std::uint64_t kHoldSpanNs = 3'000'000'000;
 inline constexpr std::uint64_t kTagEveryNs = 200'000'000;
 /// No candidate before this much frame time after the first frame shown.
 inline constexpr std::uint64_t kSettleNs = 2'000'000'000;
-/// Steady: the camera's centre moved slower than this since the frame
-/// before (metres a second),
-inline constexpr double kSteadyMPerS = 0.10;
-/// and it turned slower than this (degrees a second).
-inline constexpr double kSteadyDegPerS = 10.0;
 
 /// @brief One hold the watch solved: a row of the track log's `tags.csv`.
 struct TagHold {

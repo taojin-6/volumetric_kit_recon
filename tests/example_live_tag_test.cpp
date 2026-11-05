@@ -3,17 +3,18 @@
 
 // The origin tag's watch (examples/common/live_tag.hpp), built with
 // VR_WITH_CALIB, on 640 x 480 pictures of OpenCV's 36h11 marker 0 pasted
-// face-on, the camera (fx 500) straight above it, put on the device as a
-// decoder's NV12 (sensor's testing/nv12_picture.hpp); the phone's world is
-// ARKit's, +y up, at a known transform from the tag's. Accuracy is calib's
-// own test's; here, the glue:
-// - Six steady stills register: the registration validates, names the
-//   session and the sensor, and places a still's camera where its picture
-//   has it, within 1 cm / 0.5 deg.
-// - The gates: no candidate before the settle, while the camera moves or
-//   turns too fast, or within 200 ms of the last; no hold from 5 stills or
-//   across a split; a still older than the span drops out; two prints in
-//   view are no still.
+// face-on (moved and turned as a moving camera sees it), the camera (fx 500)
+// straight above it, put on the device as a decoder's NV12 (sensor's
+// testing/nv12_picture.hpp); the phone's world is ARKit's, +y up, at a known
+// transform from the tag's. Accuracy is calib's own test's; here, the glue:
+// - Six stills register: the registration validates, names the session and
+//   the sensor, and places a still's camera where its picture has it, within
+//   1 cm / 0.5 deg.
+// - The gates: no candidate before the settle or within 200 ms of the last;
+//   no hold from 5 stills or across a split; a still older than the span
+//   drops out; two prints in view are no still.
+// - A camera moving at 1 m/s or turning at 90 deg/s is searched as often as
+//   one held still, and registers as well.
 // - A hold with one still's pose 10 cm off is refused (poor_fit) and
 //   registers nothing; the next good hold registers, and a good one after it
 //   passes, applied by nothing.
@@ -39,6 +40,7 @@
 //   opens, that case skips, unless VS_TEST_HEVC_BACKEND promises one.
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -47,6 +49,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <memory>
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 #include <opencv2/objdetect/aruco_dictionary.hpp>
 #include <string>
 #include <thread>
@@ -155,6 +158,28 @@ sensor::testing::HostNv12 tag_picture(
   return p;
 }
 
+// The tag's picture as the camera at above(x, y, turn_deg) sees it: the one
+// from above(0, 0) moved by (-x, +y) times kF / kHeight pixels, then turned
+// by -turn_deg about the principal point (the image's x right, y down).
+sensor::testing::HostNv12 tag_seen_from(double x, double y, double turn_deg) {
+  const sensor::testing::HostNv12 face = tag_picture({{280, 200}});
+  sensor::testing::HostNv12 p = face;
+  const double dx = -x * kF / kHeight;
+  const double dy = y * kF / kHeight;
+  const double cx = kCamera.intrinsics.cx;
+  const double cy = kCamera.intrinsics.cy;
+  const double c = std::cos(glm::radians(turn_deg));
+  const double s = std::sin(glm::radians(turn_deg));
+  const cv::Matx23d m(c, s, cx + c * (dx - cx) + s * (dy - cy),  //
+                      -s, c, cy - s * (dx - cx) + c * (dy - cy));
+  const cv::Mat from(int(kH), int(kW), CV_8UC1,
+                     const_cast<std::uint8_t*>(face.luma.data()));
+  cv::Mat to(int(kH), int(kW), CV_8UC1, p.luma.data());
+  cv::warpAffine(from, to, m, to.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT,
+                 cv::Scalar(128));
+  return p;
+}
+
 vkc::Result<sensor::YuvImage> on_device(vkc::test::GpuContext& gpu,
                                         const sensor::testing::HostNv12& p) {
   VKC_ASSIGN(sensor::YuvImage yuv,
@@ -214,6 +239,14 @@ bool same(const TagHold& a, const TagHold& b) {
          same(a.tracking_to_world, b.tracking_to_world);
 }
 
+// How far a registration places a still's camera from where its picture has
+// it (mm, deg).
+std::pair<double, double> off_truth(const camera::Mat4d& tracking_to_world) {
+  const camera::Mat4d placed =
+      tracking_to_world * glm::inverse(truth()) * above(0.0, 0.0);
+  return vr_example::pose_gap(Mat4f(placed), Mat4f(above(0.0, 0.0)));
+}
+
 // --- The cases --------------------------------------------------------------
 
 int test_registers(vkc::test::GpuContext& gpu, const Pictures& pics) {
@@ -234,11 +267,7 @@ int test_registers(vkc::test::GpuContext& gpu, const Pictures& pics) {
   CHECK(reg.sensor == "phone" && reg.session == kSession &&
         reg.world_epoch == 0 && reg.views == 6 && reg.edge_m == kEdge);
   CHECK(same(reg.tracking_to_world, h.tracking_to_world));
-  // A still's camera, placed by the registration, where its picture has it.
-  const camera::Mat4d placed =
-      reg.tracking_to_world * glm::inverse(truth()) * above(0.0, 0.0);
-  const auto [mm, deg] =
-      vr_example::pose_gap(Mat4f(placed), Mat4f(above(0.0, 0.0)));
+  const auto [mm, deg] = off_truth(reg.tracking_to_world);
   std::printf("registered: %.2f mm / %.3f deg from the truth\n", mm, deg);
   CHECK(mm < 10.0 && deg < 0.5);
   const TagWatch::Counts& c = (*w)->counts();
@@ -255,21 +284,8 @@ int test_gates(vkc::test::GpuContext& gpu, const Pictures& pics) {
   CHECK((*settle)->counts().candidates == 0);
   CHECK(show(**settle, 20, 28, pics.tag) == 0);
   CHECK((*settle)->counts().stills == 5 && (*settle)->counts().holds == 0);
-  // Moving at 0.2 m/s, or turning at 20 deg/s: never steady.
-  auto moving = watch(gpu, false);
-  auto turning = watch(gpu, false);
-  CHECK(moving.ok() && turning.ok());
-  for (std::size_t i = 0; i <= 30; ++i) {
-    CHECK(
-        (*moving)->see(shown(i, above(0.02 * double(i), 0.0), pics.tag)).ok());
-    CHECK((*turning)
-              ->see(shown(i, above(0.0, 0.0, 2.0 * double(i)), pics.tag))
-              .ok());
-  }
-  CHECK((*moving)->counts().seen == 31 && (*moving)->counts().candidates == 0);
-  CHECK((*turning)->counts().candidates == 0);
   // A split ends the hold being gathered: stills at 2.0-2.4 s, then from
-  // 2.7 s (the frame after it has nothing to be steady against).
+  // 2.6 s, the frame after it.
   auto split = watch(gpu, false);
   CHECK(split.ok());
   CHECK(show(**split, 0, 25, pics.tag) == 0);
@@ -279,7 +295,7 @@ int test_gates(vkc::test::GpuContext& gpu, const Pictures& pics) {
   CHECK(show(**split, 34, 37, pics.tag) == 0);
   auto after = (*split)->take();
   CHECK(after.ok() && after->holds.size() == 1);
-  CHECK(after->holds[0].first_pts_ns == pts(27));
+  CHECK(after->holds[0].first_pts_ns == pts(26));
   // A still more than 3 s older than the newest drops out.
   auto span = watch(gpu, false);
   CHECK(span.ok());
@@ -299,12 +315,42 @@ int test_gates(vkc::test::GpuContext& gpu, const Pictures& pics) {
   return 0;
 }
 
+// Moving at 1 m/s, to and fro across 20 cm, or turning at 90 deg/s, each
+// frame's picture as its camera sees the tag: the candidates of a camera held
+// still, and a hold that registers.
+int test_moving(vkc::test::GpuContext& gpu) {
+  constexpr double kToAndFro[] = {-0.1, 0.0, 0.1, 0.0};  // m, a frame each
+  for (const bool turning : {false, true}) {
+    auto w = watch(gpu, false);
+    CHECK(w.ok());
+    for (std::size_t i = 0; i <= 30; ++i) {
+      const double x = turning ? 0.0 : kToAndFro[i % 4];
+      const double turn = turning ? 9.0 * double(i) : 0.0;
+      auto picture = on_device(gpu, tag_seen_from(x, 0.0, turn));
+      CHECK(picture.ok());
+      CHECK((*w)->see(shown(i, above(x, 0.0, turn), *picture)).ok());
+    }
+    auto news = (*w)->take();
+    CHECK(news.ok() && news->failures.empty() && news->holds.size() == 1);
+    const TagHold& h = news->holds[0];
+    CHECK(h.use == TagHold::Use::Registered && news->registered);
+    CHECK(h.first_pts_ns == pts(20) && h.last_pts_ns == pts(30));
+    const auto [mm, deg] = off_truth(news->registered->tracking_to_world);
+    std::printf("%s: RMS %.2f px, %.2f mm / %.3f deg from the truth\n",
+                turning ? "turning" : "moving", h.rms_px, mm, deg);
+    CHECK(h.rms_px < 2.0 && mm < 10.0 && deg < 0.5);
+    const TagWatch::Counts& c = (*w)->counts();
+    CHECK(c.seen == 31 && c.candidates == 6 && c.stills == 6);
+  }
+  return 0;
+}
+
 // One still 10 cm off: refused; then a hold registers, and one passes.
 vkc::Result<TagNews> refused_then_passed(vkc::test::GpuContext& gpu,
                                          const Pictures& pics) {
   VKC_ASSIGN(std::unique_ptr<TagWatch> w, watch(gpu, false));
   for (std::size_t i = 0; i <= 54; ++i) {
-    const bool off = i == 23 || i == 24;  // 24 is a still, steady after 23
+    const bool off = i == 24;  // a still
     VKC_TRY(w->see(shown(i, above(off ? 0.1 : 0.0, 0.0), pics.tag)));
   }
   return w->take();
@@ -648,15 +694,14 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
 }
 
 // Records 25 and 26 lost (300 ms, a loss): the lane splits the watch, so the
-// stills of 2.0-2.4 s are let go, frame 27 has nothing to be steady against,
-// and the hold is 2.8-3.8 s, registered at 3.8 s (across the loss it would
-// have been 2.0-3.1 s, at 3.1 s).
+// stills of 2.0-2.4 s are let go, and the hold is 2.7-3.7 s, registered at
+// 3.7 s (across the loss it would have been 2.0-3.1 s, at 3.1 s).
 int test_lane_loss(vkc::test::GpuContext& gpu, const Pictures& pics) {
   auto ran = run_lane(gpu, std::make_unique<TagPhone>(45, pics.tag, 25, 2), "");
   CHECK(ran.ok());
   CHECK(ran->report.find("tag: 12 searched, 12 stills, 1 holds (0 refused)") !=
         std::string::npos);
-  CHECK(ran->report.find("registered at 3.8 s, 37 frames before it") !=
+  CHECK(ran->report.find("registered at 3.7 s, 36 frames before it") !=
         std::string::npos);
   return 0;
 }
@@ -879,6 +924,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   const Pictures pics{*tag, *blank, *two};
   CHECK(test_registers(gpu, pics) == 0);
   CHECK(test_gates(gpu, pics) == 0);
+  CHECK(test_moving(gpu) == 0);
   CHECK(test_refused_then_passed(gpu, pics) == 0);
   CHECK(test_background(gpu) == 0);
   CHECK(test_background_news(gpu, pics) == 0);
