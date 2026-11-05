@@ -476,8 +476,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - `examples`: **a hand-held phone registers by the origin tag**: `TagWatch`
-  searches a frame however fast its camera moves (`kSteadyMPerS` and
-  `kSteadyDegPerS` are gone); the hold's gates still refuse a wrong pose.
+  searches a frame however fast its camera moves; the hold's gates still
+  refuse a wrong pose.
 
 - `track`: **a fit repeats on NVIDIA, and devices pick the same model
   pixels.** At a pass's first iteration a coarser level's point lands
