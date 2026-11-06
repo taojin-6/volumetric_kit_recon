@@ -104,12 +104,13 @@ vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
 # turn on grid's test support, and recon's examples and tests its example
 # helpers (grid_example_common), which grid builds with its examples.
 #
-# The pin is grid 0.14.0 (368e111, grid #23's merge: a session names the world's
-# up, on 0.11.0's networking on the core's net tier, which needs core 0.43.0).
+# The pin is grid 0.15.0 (af45973, grid #24's merge: a viewer's notes up the
+# socket it reads from, on 0.11.0's networking on the core's net tier, which
+# needs core 0.43.0).
 FetchContent_Declare(
   volumetric_kit_grid
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_grid.git
-  GIT_TAG 368e1112d66ed4f3200fc8d224fdee3e1603e43f)
+  GIT_TAG af459730f2696f8121b6c6bb773c16b17888333f)
 set(VGRID_BUILD_TEST_SUPPORT ${VR_BUILD_TESTS})
 if(VR_BUILD_EXAMPLES OR VR_BUILD_TESTS)
   set(VGRID_BUILD_EXAMPLES ON)

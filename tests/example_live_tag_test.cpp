@@ -28,6 +28,9 @@
 //   the destructor joins with one boxed; and a take spinning on the lane's
 //   thread gets each registration in the same news as its hold, never one
 //   without the other (30 registrations).
+// - The count toward a hold rises with each still, falls as the oldest passes
+//   the span with the tag out of view, and is 0 at a hold and at the search
+//   after a split.
 // - check and create refuse a world with no tag, another tag, a sensor
 //   beside it, an empty sensor or session.
 // - The lane registered by the tag: frames before the registration are
@@ -37,13 +40,20 @@
 //   refused before any wait. A loss in the phone's records splits the
 //   watch: no hold spans it. With the watch on its own thread, as
 //   open_mobile_lane makes it, the lane registers and places the same way.
+// - What the lane tells: looking, the count, a refusal, registered, in that
+//   order, on a change and at least once a second; given no one to tell, it
+//   runs the same.
 // - open_mobile_lane on a session file of sensor's H.265 patch clips (no
 //   tag), on the tag's world with no registration: the pictures decode on
 //   this machine's hardware, the watch searches them on its own thread, and
 //   every frame is paired unregistered. A session with no picture track is
 //   refused, naming source.mobile_registration. Where no decoder path
 //   opens, that case skips, unless VS_TEST_HEVC_BACKEND promises one.
+// - open_mobile_lane on a phone dialling over loopback, on the same world:
+//   its server, reading notes, reads what the lane tells it. That case skips
+//   as the file's does.
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -62,13 +72,16 @@
 #include <vector>
 
 #include "fuse_device.hpp"
+#include "link_dialler.hpp"
 #include "live_mobile.hpp"
 #include "live_tag.hpp"
 #include "scripted_fitter.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
+#include "volumetric_kit/core/testing/net_loopback.hpp"
 #include "volumetric_kit/core/testing/scratch_dir.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
+#include "volumetric_kit/grid/networking/stream_server.hpp"
 #include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/grid/stream/stream_writer.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
@@ -89,6 +102,7 @@ namespace vol = volumetric_kit::grid::volume;
 namespace stream = volumetric_kit::grid::stream;
 namespace wire = volumetric_kit::sensor::wire;
 namespace hevc = volumetric_kit::sensor::hevc;
+namespace gnet = volumetric_kit::grid::networking;
 using volumetric_kit::recon::Mat4f;
 using vr_example::TagHold;
 using vr_example::TagNews;
@@ -559,6 +573,56 @@ int test_background_news(vkc::test::GpuContext& gpu, const Pictures& pics) {
   return 0;
 }
 
+// The count toward a hold, inline and, as of a take, on the watch's thread.
+int test_gathered(vkc::test::GpuContext& gpu, const Pictures& pics) {
+  auto w = watch(gpu, false);
+  CHECK(w.ok());
+  const auto gathered = [&w] { return (*w)->counts().gathered; };
+  CHECK(show(**w, 0, 19, pics.tag) == 0);
+  CHECK(gathered() == 0);  // the settle
+  for (std::size_t i = 20; i <= 24; ++i) {
+    CHECK(show(**w, i, i, pics.tag) == 0);
+    CHECK(gathered() == i - 19);
+  }
+  // The tag out of view: frame 50 is 3 s after frame 20, the span itself, and
+  // each frame after it lets one still go.
+  CHECK(show(**w, 25, 50, pics.blank) == 0);
+  CHECK(gathered() == 5);
+  for (std::size_t i = 51; i <= 55; ++i) {
+    CHECK(show(**w, i, i, pics.blank) == 0);
+    CHECK(gathered() == 55 - i);
+  }
+  CHECK((*w)->counts().holds == 0);
+  // A hold's stills are spent.
+  CHECK(show(**w, 56, 60, pics.tag) == 0);
+  CHECK(gathered() == 5);
+  CHECK(show(**w, 61, 61, pics.tag) == 0);
+  CHECK((*w)->counts().holds == 1 && gathered() == 0);
+  // A split ends the stills, at the search after it.
+  auto split = watch(gpu, false);
+  CHECK(split.ok());
+  CHECK(show(**split, 0, 21, pics.tag) == 0);
+  CHECK((*split)->counts().gathered == 2);
+  (*split)->split();
+  CHECK(show(**split, 22, 22, pics.blank) == 0);
+  CHECK((*split)->counts().gathered == 0);
+  // On its thread: three candidates searched, the count as of the take.
+  auto thread = watch(gpu, true);
+  CHECK(thread.ok());
+  CHECK(show(**thread, 0, 20, pics.tag) == 0);
+  const auto until =
+      std::chrono::steady_clock::now() + std::chrono::seconds(20);
+  for (std::uint64_t searched = 1, i = 21; searched <= 3; ++searched, ++i) {
+    while ((*thread)->take().ok() &&
+           (*thread)->counts().candidates < searched) {
+      CHECK(std::chrono::steady_clock::now() < until);
+    }
+    CHECK((*thread)->counts().gathered == searched);
+    if (searched < 3) CHECK(show(**thread, i, i, pics.tag) == 0);
+  }
+  return 0;
+}
+
 int test_refusals(vkc::test::GpuContext& gpu) {
   CHECK(TagWatch::check(tag_world()).ok());
   CHECK(TagWatch::check({}).domain() == vkc::Status::Code::InvalidArgument);
@@ -602,14 +666,16 @@ constexpr std::uint32_t kDepthH = 24;
 
 // A recorded phone above the tag, steady, at 10 Hz from 1 s: depth and the
 // tag's picture, its poses in its own world; the records from `lost_from`
-// for `lost` of them are lost on the way.
+// for `lost` of them are lost on the way, and frame `off`'s pose is 10 cm off.
 class TagPhone final : public sensor::IRgbdSensor {
  public:
   TagPhone(std::size_t count, sensor::YuvImage picture,
-           std::size_t lost_from = 0, std::size_t lost = 0)
+           std::size_t lost_from = 0, std::size_t lost = 0,
+           std::size_t off = ~std::size_t{0})
       : count_(count),
         lost_from_(lost_from),
         lost_(lost),
+        off_(off),
         picture_(std::move(picture)) {
     info_.id = "phone";
     info_.clock = sensor::ClockDomain::Host;
@@ -629,7 +695,8 @@ class TagPhone final : public sensor::IRgbdSensor {
     auto pixels = std::make_shared<Pixels>();
     pixels->depth.assign(std::size_t{kDepthW} * kDepthH, 900);
     pixels->confidence.assign(std::size_t{kDepthW} * kDepthH, 2);
-    sensor::RgbdFrame f = shown(next_++, above(0.0, 0.0), picture_);
+    const double x = next_ == off_ ? 0.1 : 0.0;
+    sensor::RgbdFrame f = shown(next_++, above(x, 0.0), picture_);
     f.depth = pixels->depth.data();
     f.depth_confidence = pixels->confidence.data();
     f.min_confidence = 2;
@@ -657,6 +724,7 @@ class TagPhone final : public sensor::IRgbdSensor {
   std::size_t count_;
   std::size_t lost_from_;
   std::size_t lost_;
+  std::size_t off_;
   std::size_t next_ = 0;
   sensor::YuvImage picture_;
   sensor::SensorInfo info_;
@@ -669,19 +737,28 @@ std::vector<std::string> lines(const std::filesystem::path& path) {
   return out;
 }
 
+// A note the lane told, and the set it told it at.
+struct Told {
+  std::uint64_t set_ns = 0;
+  gnet::ViewerNote note;
+};
+
 // The lane over `phone` registered by a watch in see() (so the run repeats),
 // or on its own thread with 2 ms between the sets; on scripted fitters, the
-// rig's anchoring every fit: 200 sets, then closed.
+// rig's anchoring every fit: 200 sets, then closed. `told` holds what it told
+// (nothing with `saying` false, which gives it no one to tell).
 struct LaneRun {
   std::unique_ptr<vr_example::MobileLane> lane;
   std::shared_ptr<const std::vector<vr_test::ScriptedRecord>> rig_fits;
   std::size_t fillers = 0;
   std::string report;
+  std::shared_ptr<std::vector<Told>> told;
 };
 
 vkc::Result<LaneRun> run_lane(vkc::test::GpuContext& gpu,
                               std::unique_ptr<TagPhone> phone,
-                              const std::string& dir, bool background = false) {
+                              const std::string& dir, bool background = false,
+                              bool saying = true) {
   VKC_ASSIGN(
       vol::VoxelBlockGrid grid,
       tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64));
@@ -702,13 +779,22 @@ vkc::Result<LaneRun> run_lane(vkc::test::GpuContext& gpu,
   VKC_ASSIGN(std::unique_ptr<vr_example::TrackLog> log,
              vr_example::TrackLog::open(dir, *tracker, source));
   VKC_ASSIGN(std::unique_ptr<TagWatch> tags, watch(gpu, background));
-  VKC_ASSIGN(run.lane,
-             vr_example::MobileLane::create(
-                 gpu.device, gpu.allocator, std::move(phone),
-                 std::move(tracker), std::move(log), std::move(tags)));
+  run.told = std::make_shared<std::vector<Told>>();
+  auto set_ns = std::make_shared<std::uint64_t>(0);
+  std::function<void(gnet::ViewerNote)> say;
+  if (saying) {
+    say = [told = run.told, set_ns](gnet::ViewerNote note) {
+      told->push_back({*set_ns, std::move(note)});
+    };
+  }
+  VKC_ASSIGN(run.lane, vr_example::MobileLane::create(
+                           gpu.device, gpu.allocator, std::move(phone),
+                           std::move(tracker), std::move(log), std::move(tags),
+                           std::move(say)));
   for (std::size_t i = 0; i < 200; ++i) {
+    *set_ns = kS + (i + 1) * 40 * kMs;
     VKC_ASSIGN(const std::vector<volumetric_kit::recon::sender::Filler> sent,
-               run.lane->next(grid, kS + (i + 1) * 40 * kMs));
+               run.lane->next(grid, *set_ns));
     run.fillers += sent.size();
     if (background) std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
@@ -718,6 +804,42 @@ vkc::Result<LaneRun> run_lane(vkc::test::GpuContext& gpu,
   return run;
 }
 
+// The lines told, each change once.
+std::vector<std::string> told_lines(const std::vector<Told>& told) {
+  std::vector<std::string> out;
+  for (const Told& t : told) {
+    if (out.empty() || out.back() != t.note.line) out.push_back(t.note.line);
+  }
+  return out;
+}
+
+// Told on a change and at least once a second, in set time: a line again only
+// after a second, and never more than a second and a set (40 ms) between two.
+bool told_at_rate(const std::vector<Told>& told) {
+  for (std::size_t k = 1; k < told.size(); ++k) {
+    const std::uint64_t gap = told[k].set_ns - told[k - 1].set_ns;
+    const bool same_line = told[k].note.line == told[k - 1].note.line;
+    if (gap > kS + 40 * kMs || (same_line && gap < kS)) {
+      std::fprintf(stderr, "told \"%s\" %llu ms after \"%s\"\n",
+                   told[k].note.line.c_str(),
+                   static_cast<unsigned long long>(gap / kMs),
+                   told[k - 1].note.line.c_str());
+      return false;
+    }
+  }
+  return true;
+}
+
+const std::vector<std::string> kLooking = {
+    "Looking for the tag", "Tag seen: 1 of 6", "Tag seen: 2 of 6",
+    "Tag seen: 3 of 6",    "Tag seen: 4 of 6", "Tag seen: 5 of 6"};
+
+std::vector<std::string> looking_then(std::vector<std::string> rest) {
+  std::vector<std::string> out = kLooking;
+  out.insert(out.end(), rest.begin(), rest.end());
+  return out;
+}
+
 int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
               const std::filesystem::path& dir) {
   auto ran =
@@ -725,6 +847,11 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
   CHECK(ran.ok());
   const std::unique_ptr<vr_example::MobileLane>& lane = ran->lane;
   const std::string& report = ran->report;
+  // What it told: from the first gap, the count as each still came, and the
+  // registration, then that alone.
+  CHECK(!ran->told->empty() && ran->told->front().set_ns == kS + 40 * kMs);
+  CHECK(told_lines(*ran->told) == looking_then({"Tag found, registered"}));
+  CHECK(told_at_rate(*ran->told));
   // Frames 0-25 came before the registration (the hold of 2.0-2.5 s, taken
   // in the gap after frame 25's): never tracked.
   const vr_example::MobileLane::Counts& c = lane->counts();
@@ -789,12 +916,30 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
 // stills of 2.0-2.4 s are let go, and the hold is 2.7-3.2 s, registered at
 // 3.2 s (across the loss it would have been 2.0-2.7 s, at 2.7 s).
 int test_lane_loss(vkc::test::GpuContext& gpu, const Pictures& pics) {
-  auto ran = run_lane(gpu, std::make_unique<TagPhone>(45, pics.tag, 25, 2), "");
+  auto ran = run_lane(gpu, std::make_unique<TagPhone>(45, pics.tag, 25, 2), "",
+                      false, /*saying=*/false);
   CHECK(ran.ok());
+  CHECK(ran->told->empty());
   CHECK(ran->report.find("tag: 17 searched, 17 stills, 2 holds (0 refused)") !=
         std::string::npos);
   CHECK(ran->report.find("registered at 3.2 s, 31 frames before it") !=
         std::string::npos);
+  return 0;
+}
+
+// A refused hold is told at once, over the count, until the registration.
+int test_lane_refused(vkc::test::GpuContext& gpu, const Pictures& pics) {
+  auto ran =
+      run_lane(gpu, std::make_unique<TagPhone>(40, pics.tag, 0, 0, 24), "");
+  CHECK(ran.ok());
+  CHECK(ran->report.find("2 holds (1 refused)") != std::string::npos);
+  CHECK(told_lines(*ran->told) ==
+        looking_then({"Tag refused, trying again", "Tag found, registered"}));
+  CHECK(told_at_rate(*ran->told));
+  for (const Told& t : *ran->told) {
+    const bool refused = t.note.line == "Tag refused, trying again";
+    CHECK(refused == (t.note.tone == gnet::ViewerNote::Tone::Caution));
+  }
   return 0;
 }
 
@@ -806,6 +951,8 @@ int test_lane_background(vkc::test::GpuContext& gpu, const Pictures& pics,
   auto ran = run_lane(gpu, std::make_unique<TagPhone>(60, pics.tag),
                       dir.string(), /*background=*/true);
   CHECK(ran.ok());
+  CHECK(!ran->told->empty() && told_at_rate(*ran->told));
+  CHECK(ran->told->back().note.line == "Tag found, registered");
   const vr_example::MobileLane::Counts& c = ran->lane->counts();
   CHECK(c.unregistered >= 26 && c.unregistered + c.paired == 60);
   CHECK(c.paired > 0 && ran->fillers > 0);
@@ -854,13 +1001,9 @@ sensor::SensorInfo clip_phone() {
   return info;
 }
 
-// A finished session of the phone, steady at its world's origin, frame i
-// at 1 s + i * 100 ms: each of the clip's access units (`units`) a colour
-// record on track 0 and the frame's depth record after it on track 1; with
-// no units, the depth track alone and no records.
-vkc::Status write_clip_session(
-    const std::string& path,
-    const std::vector<std::vector<std::uint8_t>>& units) {
+// The phone's session: its depth track, after a picture track on track 0 with
+// `pictures`.
+vkc::Result<stream::Session> clip_session(bool pictures) {
   const sensor::SensorInfo info = clip_phone();
   stream::Session session;
   session.id = kSession;
@@ -874,7 +1017,7 @@ vkc::Status write_clip_session(
   depth.height = kDepthH;
   depth.sensor = info.id;
   VKC_ASSIGN(depth.params, wire::encode_sensor(info));
-  if (!units.empty()) {
+  if (pictures) {
     stream::Track color = depth;
     color.kind = stream::TrackKind::RgbdColor;
     color.width = kClipW;
@@ -883,6 +1026,18 @@ vkc::Status write_clip_session(
     session.tracks.push_back(color);
   }
   session.tracks.push_back(depth);
+  return session;
+}
+
+// A finished session of the phone, steady at its world's origin, frame i
+// at 1 s + i * 100 ms: each of the clip's access units (`units`) a colour
+// record on track 0 and the frame's depth record after it on track 1; with
+// no units, the depth track alone and no records.
+vkc::Status write_clip_session(
+    const std::string& path,
+    const std::vector<std::vector<std::uint8_t>>& units) {
+  const sensor::SensorInfo info = clip_phone();
+  VKC_ASSIGN(const stream::Session session, clip_session(!units.empty()));
   VKC_ASSIGN(auto writer, stream::StreamWriter::create(path, session));
   std::vector<std::uint16_t> depth_pixels(std::size_t{kDepthW} * kDepthH, 900);
   std::vector<std::uint8_t> confidence(std::size_t{kDepthW} * kDepthH, 2);
@@ -1007,6 +1162,68 @@ int test_open_file(vkc::test::GpuContext& gpu,
   return 0;
 }
 
+// A phone that dials the lane, its server reading notes, as a scanner's does:
+// what the lane tells it comes up the socket, with no frame needed. The lane's
+// sets run until it is heard.
+int test_open_live(vkc::test::GpuContext& gpu,
+                   const std::filesystem::path& dir) {
+  std::filesystem::create_directories(dir);
+  const auto session = clip_session(true);
+  CHECK(session.ok());
+  const std::uint16_t port = vkc::test::closed_port();
+  std::atomic<bool> heard{false};
+  std::atomic<bool> done{false};
+  gnet::ViewerNote note;  // read once heard
+  std::thread phone([&] {
+    auto d = vr_test::Dialler::dial(*session, port, /*read_notes=*/true);
+    if (!d.ok()) return;
+    (void)vr_test::wait_for([&] {
+      const std::optional<gnet::ViewerNote> newest =
+          (*d)->server().newest_note();
+      if (newest) {
+        note = *newest;
+        heard = true;
+      }
+      return heard.load() || done.load();
+    });
+    (void)vr_test::wait_for([&] { return done.load(); });
+  });
+  auto opt = tag_scenario(dir, "tcp://127.0.0.1:" + std::to_string(port));
+  auto lane =
+      opt.ok() ? vr_example::open_mobile_lane(*opt, gpu.device, gpu.allocator)
+               : opt.status();
+  if (!lane.ok() && lane.status().domain() == vkc::Status::Code::Unsupported &&
+      !sensor::testing::hevc_decoder_promised()) {
+    std::printf(
+        "open_mobile_lane on a live phone: skipped, no decoder path: %s\n",
+        lane.status().message().c_str());
+    done = true;
+    phone.join();
+    return 0;
+  }
+  vkc::Status ran = lane.status();
+  if (ran.ok()) {
+    auto grid =
+        tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64);
+    ran = grid.status();
+    const auto until =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (std::size_t i = 0;
+         ran.ok() && !heard.load() && std::chrono::steady_clock::now() < until;
+         ++i) {
+      ran = (*lane)->next(*grid, kS + (i + 1) * 40 * kMs).status();
+    }
+    if (ran.ok()) ran = (*lane)->close();
+  }
+  done = true;
+  phone.join();
+  if (!ran.ok()) std::fprintf(stderr, "FAIL: %s\n", ran.message().c_str());
+  CHECK(ran.ok() && heard.load());
+  CHECK(note.line == "Looking for the tag" &&
+        note.tone == gnet::ViewerNote::Tone::Neutral);
+  return 0;
+}
+
 int gpu_main(vkc::test::GpuContext& gpu) {
   vkc::test::Scratch scratch("recon_example_live_tag_");
   auto tag = on_device(gpu, tag_picture({{280, 200}}));
@@ -1022,11 +1239,14 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_refused_then_passed(gpu, pics) == 0);
   CHECK(test_background(gpu) == 0);
   CHECK(test_background_news(gpu, pics) == 0);
+  CHECK(test_gathered(gpu, pics) == 0);
   CHECK(test_refusals(gpu) == 0);
   CHECK(test_lane(gpu, pics, scratch.path / "lane") == 0);
   CHECK(test_lane_loss(gpu, pics) == 0);
+  CHECK(test_lane_refused(gpu, pics) == 0);
   CHECK(test_lane_background(gpu, pics, scratch.path / "lane_background") == 0);
   CHECK(test_open_file(gpu, scratch.path / "file") == 0);
+  CHECK(test_open_live(gpu, scratch.path / "live") == 0);
   std::puts("recon_example_live_tag: OK");
   return 0;
 }

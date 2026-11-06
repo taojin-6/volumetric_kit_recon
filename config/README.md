@@ -119,17 +119,17 @@ phone dials (the run waits for it before the cameras open). Its tracked world
 is placed by `source.mobile_registration`, or without one, a file's too, by
 the origin tag of `source.calibration`'s world, found in the phone's own
 pictures: until a hold of it registers the session nothing of the phone is
-fused (`examples/common/live_tag.hpp`). That needs a build with
-`-DVR_WITH_CALIB=ON` (README, "Optional: the origin tag"). Its depth is
-tracked against the rig's model and fused as fill where the rig's cameras do
-not see, seconds after capture, teal where the rig alone placed it and orange
-elsewhere (`examples/common/live_mobile.hpp` has the rules). It needs Dynamic
-fusion (the default) and is not run beside FFS depth. `diagnostics.track_log`
-names a directory for its tracking log (`examples/common/track_log.hpp`),
-where a live phone is recorded (`phone.vrst`) and the tag's registration
-written (`registration.json`), so the run replays; a tag run refuses a
-directory that holds a registration already. The log's summary prints at the
-end either way.
+fused (`examples/common/live_tag.hpp`), and a live phone is told how the search
+goes. That needs a build with `-DVR_WITH_CALIB=ON` (README, "Optional: the
+origin tag"). Its depth is tracked against the rig's model and fused as fill
+where the rig's cameras do not see, seconds after capture, teal where the rig
+alone placed it and orange elsewhere (`examples/common/live_mobile.hpp` has the
+rules). It needs Dynamic fusion (the default) and is not run beside FFS depth.
+`diagnostics.track_log` names a directory for its tracking log
+(`examples/common/track_log.hpp`), where a live phone is recorded (`phone.vrst`)
+and the tag's registration written (`registration.json`), so the run replays; a
+tag run refuses a directory that holds a registration already. The log's summary
+prints at the end either way.
 
 `fuse_realsense` (core's FuseRealsense profile) fuses one RealSense camera's
 depth and its colour to the PLY at `output.path`, Dynamic by default as

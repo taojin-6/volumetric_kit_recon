@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -53,6 +54,35 @@ sender::Filler to_filler(track::Released&& released) {
   f.tier = rig_anchored ? tsdf::FillTier::Anchored : tsdf::FillTier::Unanchored;
   f.index = 0;
   return f;
+}
+
+gnet::ViewerNote lane_note(const MobileLane::Status& status,
+                           std::uint64_t set_ns) {
+  using Tone = gnet::ViewerNote::Tone;
+  gnet::ViewerNote note;
+  if (status.registered) {
+    note.tone = Tone::Good;
+    note.line = "Tag found, registered";
+  } else if (status.refused_ns != 0 &&
+             set_ns < status.refused_ns + kRefusedShownNs) {
+    note.tone = Tone::Caution;
+    note.line = "Tag refused, trying again";
+  } else if (status.gathered != 0) {
+    note.tone = Tone::Good;
+    note.line = "Tag seen: " + std::to_string(status.gathered) + " of " +
+                std::to_string(kHoldStills);
+  } else {
+    note.tone = Tone::Neutral;
+    note.line = "Looking for the tag";
+  }
+  return note;
+}
+
+bool note_due(const gnet::ViewerNote& now,
+              const std::optional<gnet::ViewerNote>& last,
+              std::uint64_t since_ns) {
+  return !last || now.tone != last->tone || now.line != last->line ||
+         since_ns >= kNoteAtLeastNs;
 }
 
 vkc::Status check_mobile(const config::Config& opt) {
@@ -247,6 +277,12 @@ struct MobileLane::State {
   std::optional<std::uint64_t> registered_after;  // the first frame to it
   TagWatch::Counts tag_counts;                    // as of the last take
   std::string first_tag_failure;
+  std::uint64_t set_ns = 0;      // the set the newest gap came before
+  std::uint64_t refused_ns = 0;  // the set time of the newest refused hold
+  // What the phone is told, with the tag: the last note, and its set time.
+  std::function<void(gnet::ViewerNote)> say;
+  std::optional<gnet::ViewerNote> said;
+  std::uint64_t said_ns = 0;
   // The frames placed, not yet handed to a send.
   std::deque<sender::Filler> queue;
   // The records taken from the phone, oldest first, not yet due.
@@ -330,6 +366,7 @@ struct MobileLane::State {
     for (const TagHold& h : news.holds) {
       VKC_TRY(log->write(h));
       if (h.use == TagHold::Use::Refused) {
+        refused_ns = set_ns;
         std::printf("phone: tag hold refused: %s: %s\n", h.miss.c_str(),
                     h.reason.c_str());
         continue;
@@ -359,6 +396,21 @@ struct MobileLane::State {
     }
     tag_counts = tags->counts();
     return {};
+  }
+
+  // Where the tag search stands: the one source of the words.
+  MobileLane::Status status() const {
+    return {by_tag && placed, tag_counts.gathered, refused_ns};
+  }
+
+  // The words said when they are due.
+  void tell() {
+    if (!say) return;
+    gnet::ViewerNote now = lane_note(status(), set_ns);
+    if (!note_due(now, said, set_ns - said_ns)) return;
+    say(now);
+    said = std::move(now);
+    said_ns = set_ns;
   }
 
   // A step's placements into the queue, its counts, and the log.
@@ -553,7 +605,7 @@ vkc::Result<std::unique_ptr<MobileLane>> MobileLane::create(
     vkc::Device& device, vkc::Allocator& allocator,
     std::unique_ptr<sensor::IRgbdSensor> phone,
     std::unique_ptr<track::Tracker> tracker, std::unique_ptr<TrackLog> log,
-    std::unique_ptr<TagWatch> tags) {
+    std::unique_ptr<TagWatch> tags, std::function<void(gnet::ViewerNote)> say) {
   auto s = std::make_unique<State>();
   s->device = &device;
   s->allocator = &allocator;
@@ -573,6 +625,7 @@ vkc::Result<std::unique_ptr<MobileLane>> MobileLane::create(
     s->by_tag = tags != nullptr;
     s->placed = !s->by_tag;
     s->tags = std::move(tags);
+    if (s->by_tag) s->say = std::move(say);
   }
   return std::unique_ptr<MobileLane>(new MobileLane(std::move(s)));
 }
@@ -589,6 +642,7 @@ vkc::Result<std::vector<sender::Filler>> MobileLane::next(
     VKC_TRY(s.phone->start());
     s.started = true;
   }
+  s.set_ns = next_set_ns;
   if (s.tags) {
     VKC_ASSIGN(TagNews news, s.tags->take());
     VKC_TRY(s.apply(std::move(news)));
@@ -607,6 +661,7 @@ vkc::Result<std::vector<sender::Filler>> MobileLane::next(
     out.push_back(std::move(f));
   }
   s.counts.fused += out.size();
+  s.tell();
   return out;
 }
 
@@ -794,6 +849,15 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
                TagWatch::create(device, allocator,
                                 {id, session, world, /*background=*/true}));
   }
+  // A live phone on the tag is told how the search goes. The sensor stays where
+  // it is inside the background poll, and the lane says nothing after its
+  // close, before the phone stops.
+  std::function<void(gnet::ViewerNote)> say;
+  if (by_tag && !m.host.empty()) {
+    say = [reader = stream.get()](gnet::ViewerNote note) {
+      reader->say(std::move(note));
+    };
+  }
   std::unique_ptr<sensor::IRgbdSensor> phone;
   if (m.host.empty()) {
     phone = std::move(stream);
@@ -809,8 +873,8 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
       std::unique_ptr<TrackLog> log,
       TrackLog::open(opt.diagnostics.track_log, *tracker, std::move(source)));
   return MobileLane::create(device, allocator, std::move(phone),
-                            std::move(tracker), std::move(log),
-                            std::move(tags));
+                            std::move(tracker), std::move(log), std::move(tags),
+                            std::move(say));
 }
 
 }  // namespace vr_example
