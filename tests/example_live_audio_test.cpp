@@ -14,9 +14,9 @@
 // stops the mic, and reports its counters and what the stream wrote and
 // dropped of its chunks. A mic whose drain fails ends the audio there, warned
 // once, and the frames go on. With no mic the feed does nothing, and the file
-// is byte for byte the one the session before audio writes. With
-// output.serve, on 127.0.0.1 as a live run serves, a viewer that joined
-// before the first frame gets the session with the mic's track and the
+// is byte for byte the one the session before audio, with the world's up,
+// writes. With output.serve, on 127.0.0.1 as a live run serves, a viewer that
+// joined before the first frame gets the session with the mic's track and the
 // file's records as it holds them, both tracks, every one up to the last
 // frame's pts, then the end. open_audio opens
 // nothing for an empty source.audio, and a build without the microphone
@@ -313,8 +313,10 @@ int recorded(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
              const vkc::test::Scratch& scratch) {
   const std::uint64_t first_ns = kStartNs - kEarlyChunks * kChunkNs;
   FakeMic mic(first_ns, 0);
-  const stream::Session session =
+  const vkc::Result<stream::Session> made =
       vr_example::live_session(kProgram, scenario(), true, &mic.info());
+  CHECK(made.ok());
+  const stream::Session& session = *made;
   CHECK(session.tracks.size() == 2);
   const std::string path = (scratch.path / "recorded.vrst").string();
   std::string report;
@@ -341,8 +343,10 @@ int recorded(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
 int lost(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
          const vkc::test::Scratch& scratch) {
   FakeMic mic(kStartNs, 4);
-  const stream::Session session =
+  const vkc::Result<stream::Session> made =
       vr_example::live_session(kProgram, scenario(), true, &mic.info());
+  CHECK(made.ok());
+  const stream::Session& session = *made;
   const std::string path = (scratch.path / "lost.vrst").string();
   std::string report;
   CHECK(run(gpu, grid, session, &mic, path, &report) == 0);
@@ -361,17 +365,19 @@ int lost(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
 }
 
 // No mic: the feed does nothing, and the file is the one the session before
-// audio writes, byte for byte.
+// audio, with the world's up, writes, byte for byte.
 int no_mic(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
            const vkc::test::Scratch& scratch) {
   stream::Session before = vgrid_example::codec_session(kProgram, {25, 1});
+  before.up = {0.0f, -1.0f, 0.0f};
   before.tracks[0].clock = stream::kHostClock;
-  const stream::Session session =
+  const vkc::Result<stream::Session> session =
       vr_example::live_session(kProgram, scenario(), true, nullptr);
+  CHECK(session.ok());
   const std::string with_feed = (scratch.path / "no_mic.vrst").string();
   const std::string plain = (scratch.path / "before.vrst").string();
   std::string report = "unset";
-  CHECK(run(gpu, grid, session, nullptr, with_feed, &report) == 0);
+  CHECK(run(gpu, grid, *session, nullptr, with_feed, &report) == 0);
   CHECK(report.empty());
   codec_stream::CodecOutputs outputs;
   outputs.stream = plain;
@@ -396,8 +402,10 @@ int served(vkc::test::GpuContext& gpu, vol::VoxelBlockGrid& grid,
            const vkc::test::Scratch& scratch) {
   const std::uint64_t first_ns = kStartNs - kEarlyChunks * kChunkNs;
   FakeMic mic(first_ns, 0);
-  const stream::Session session =
+  const vkc::Result<stream::Session> made =
       vr_example::live_session(kProgram, scenario(), true, &mic.info());
+  CHECK(made.ok());
+  const stream::Session& session = *made;
   const std::string path = (scratch.path / "served.vrst").string();
   std::string report;
   std::vector<net::Got> viewed;

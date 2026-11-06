@@ -473,9 +473,9 @@ vr_target_warnings(recon_example_set_log_test)
 add_test(NAME recon_example_set_log COMMAND recon_example_set_log_test)
 
 # A sender's set into the run's figures (examples/common/fuse_sender.hpp): a set
-# stamped from what the set step returned, its frame's row kept; and a live
-# run's session, which builds on codec_config.hpp's and so links voxelize, as
-# its mesh sources need. Host only.
+# stamped from what the set step returned, its frame's row kept; the world's up
+# a calibration file names; and a live run's session, which builds on
+# codec_config.hpp's and so links voxelize, as its mesh sources need. Host only.
 add_executable(recon_example_fuse_sender_test example_fuse_sender_test.cpp)
 target_include_directories(recon_example_fuse_sender_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
@@ -492,9 +492,9 @@ add_test(NAME recon_example_fuse_sender COMMAND recon_example_fuse_sender_test)
 # builds it): a fake mic's tone chunks fed into a codec stream between frames,
 # both tracks in the file, the audio unbroken and at its chunks' times, the last
 # drain's chunks in it; a mic whose drain fails ends the audio and the frames go
-# on; no mic, the file of the session before audio, byte for byte; served, a
-# viewer on loopback gets both tracks' records as the file holds them. No device
-# is opened; the device part skips with no GPU.
+# on; no mic, the file of the session before audio, with the world's up, byte
+# for byte; served, a viewer on loopback gets both tracks' records as the file
+# holds them. No device is opened; the device part skips with no GPU.
 if(VR_BUILD_EXAMPLES)
   add_executable(recon_example_live_audio_test example_live_audio_test.cpp)
   target_link_libraries(

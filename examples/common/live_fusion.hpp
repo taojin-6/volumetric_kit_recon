@@ -77,20 +77,20 @@ using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
 ///        `output.serve`, coded; the array's report (@ref array_report, with
 ///        @p counters), the per-set table and the PLY.
 ///
-/// The codec stream is made before the cameras open, so a port in use, a
-/// rerun onto an existing stream, or a PLY that is its file or the CSV's
-/// under another name, is refused before any camera opens; a stream that
-/// codes no set is removed again. Each set is coded at its time, on the
-/// clock the stream's session names (@ref live_session), and `codec.sweep`
-/// then sweeps the codec over the last grid. With `source.audio`, the mic
-/// opens before the GPU, its track joins the session, and it records from
-/// when the cameras stream (@ref AudioFeed), its counters beside theirs; with
-/// `output.serve`, the viewers get its track with the frames. With
-/// `source.mobile` (@ref check_mobile first), the phone's session opens after
-/// the GPU, a live one waited for, and after each set's send its lane
-/// (@ref MobileLane) tracks the frame due by the next set against the grid
-/// and hands that send its placed frames as fillers (the set's `"mobile"`
-/// row); its summary and counts follow the cameras'.
+/// The codec stream is made before the cameras open, so a bad
+/// `source.calibration` file, a port in use, a rerun onto an existing stream,
+/// or a PLY that is its file or the CSV's under another name, is refused
+/// before any camera opens; a stream that codes no set is removed again.
+/// Each set is coded at its time, on the clock the stream's session names
+/// (@ref live_session), and `codec.sweep` then sweeps the codec over the last
+/// grid. With `source.audio`, the mic opens before the GPU, its track joins
+/// the session, and it records from when the cameras stream (@ref AudioFeed),
+/// its counters beside theirs; with `output.serve`, the viewers get its track
+/// with the frames. With `source.mobile` (@ref check_mobile first), the
+/// phone's session opens after the GPU, a live one waited for, and after each
+/// set's send its lane (@ref MobileLane) tracks the frame due by the next set
+/// against the grid and hands that send its placed frames as fillers (the
+/// set's `"mobile"` row); its summary and counts follow the cameras'.
 /// operation=stream polls, counts and releases each set, with no GPU
 /// preparation, fusion or mesh, so the run measures the cameras' stream and
 /// decode alone.
@@ -161,12 +161,12 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
       opt.output.serve != 0) {
     const codec_stream::CodecOutputs outputs =
         vgrid_example::set_codec_outputs(opt);
+    VKC_ASSIGN(
+        const vgrid::stream::Session session,
+        live_session(program, opt, host_clock, mic ? &mic->info() : nullptr));
     VKC_ASSIGN(codec_stream::CodecStream made,
-               codec_stream::CodecStream::create(
-                   device, allocator, encoder,
-                   live_session(program, opt, host_clock,
-                                mic ? &mic->info() : nullptr),
-                   outputs));
+               codec_stream::CodecStream::create(device, allocator, encoder,
+                                                 session, outputs));
     stream.emplace(std::move(made));
     VKC_ASSIGN(vgrid_example::CodecReport rows,
                vgrid_example::CodecReport::create(
