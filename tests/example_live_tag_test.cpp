@@ -49,8 +49,9 @@
 //   every frame is paired unregistered. A session with no picture track is
 //   refused, naming source.mobile_registration. Where no decoder path
 //   opens, that case skips, unless VS_TEST_HEVC_BACKEND promises one.
-// - open_mobile_lane on a phone dialling over loopback, as a file's: its
-//   server, reading notes, reads what the lane tells it.
+// - open_mobile_lane on a phone dialling over loopback, on the same world:
+//   its server, reading notes, reads what the lane tells it. That case skips
+//   as the file's does.
 
 #include <atomic>
 #include <chrono>
