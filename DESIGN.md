@@ -1263,7 +1263,9 @@ track names that time's clock (`live_session`): the host's system clock
 do, else clock domain 1, the cameras' own. Each program says which before
 its cameras open (`fuse_orbbec`'s `orbbec_on_host_clock`; `fuse_realsense`'s
 and `fuse_decklink`'s always the host's), and the run checks the opened cameras against it
-(`on_host_clock`).
+(`on_host_clock`). The session states the world's up from `source.calibration`'s
+file (`live_up`, `stream::Session::up`): a tag's +z, a sensor's or no file's -y,
+and unknown for cameras posed in a world the file does not name.
 With `source.audio`, which the core allows only with a stream and every
 camera on the host's clock, the run records a mic beside the cameras
 (`live_audio.hpp`). `open_audio` opens the input before the GPU: sensor's
@@ -1280,7 +1282,7 @@ The mic's counters follow the cameras', with what the stream, finished
 first, wrote and dropped of its chunks. With `output.serve`, grid's server
 serves both tracks, as the file records them, except the audio past the last
 set, which a viewer may miss as the stream finishes. With no mic, the session
-and its bytes are as before audio.
+and its bytes hold no trace of audio.
 A run that fails part-way still finishes its stream and
 reports the frames it coded; one that coded no set leaves none.
 The report's bitrate is at `source.fps`, and `codec.sweep` sweeps the last
@@ -1402,7 +1404,7 @@ multi-keyframe post-scan atlas, which the multi-view path can carry.
 
 **On `fuse_orbbec`'s stream** (the 2026-10-20 entry): a capture-volume
 crop (`fusion.max_depth_m` is the limit there is), raw RGBD recording and
-replay, colour, an upright world, and the session's calibration
+replay, colour, and the session's calibration
 (`codec_session` leaves it out). With
 `output.csv` or `codec.sweep` the stream still decodes each frame inside the
 set loop: on

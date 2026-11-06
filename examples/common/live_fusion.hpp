@@ -161,12 +161,12 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
       opt.output.serve != 0) {
     const codec_stream::CodecOutputs outputs =
         vgrid_example::set_codec_outputs(opt);
+    VKC_ASSIGN(
+        const vgrid::stream::Session session,
+        live_session(program, opt, host_clock, mic ? &mic->info() : nullptr));
     VKC_ASSIGN(codec_stream::CodecStream made,
-               codec_stream::CodecStream::create(
-                   device, allocator, encoder,
-                   live_session(program, opt, host_clock,
-                                mic ? &mic->info() : nullptr),
-                   outputs));
+               codec_stream::CodecStream::create(device, allocator, encoder,
+                                                 session, outputs));
     stream.emplace(std::move(made));
     VKC_ASSIGN(vgrid_example::CodecReport rows,
                vgrid_example::CodecReport::create(
