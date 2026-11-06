@@ -79,10 +79,11 @@ int sent_sets() {
 }
 
 // The up of a run's world, from what its calibration file says the world is:
-// a tag's +z; a sensor's own -y; nothing where cameras are posed in a world
-// the file does not name; and -y where each frame stays in its own camera's
-// frame, with no file. The file's read error comes back, through live_session
-// too, and live_session states the up.
+// a tag's +z; a sensor's own -y; nothing where any camera is posed in a world
+// the file does not name, as one picked out of a list with lenses alone for the
+// rest; and -y where each frame stays in its own camera's frame, with no file.
+// The file's read error comes back, through live_session too, and live_session
+// states the up.
 int live_ups() {
   const vkc::test::Scratch scratch("recon_example_fuse_sender_");
   const auto file = [&scratch](const char* name) {
@@ -118,6 +119,8 @@ int live_ups() {
   camera::ArrayCalibration lenses;
   lenses.sensors.push_back({"rig-0", std::nullopt, {}, {}, {}, 0.0});
   CHECK(write("unposed.json", lenses).ok());
+  lenses.sensors.push_back({"rig-1", camera::Mat4d(1.0), {}, {}, {}, 0.0});
+  CHECK(write("one_posed.json", lenses).ok());
   CHECK(vkc::write_file(file("version1.json"),
                         R"({"device_calibration": {"rig-0": {"pose":
                             {"rvec": [0, 0, 0], "tvec": [0, 0, 0]}}}})",
@@ -130,6 +133,7 @@ int live_ups() {
   CHECK(says("", kMinusY));
   CHECK(says(file("version1.json"), kUnknown));
   CHECK(says(file("unnamed.json"), kUnknown));
+  CHECK(says(file("one_posed.json"), kUnknown));
 
   volumetric_kit::core::config::Config opt;
   opt.source.calibration = file("missing.json");

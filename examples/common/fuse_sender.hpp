@@ -44,8 +44,8 @@ inline constexpr std::uint16_t kAudioTrack = 1;
 ///         - a sensor's world: its colour camera's image up, -y (x right, y
 ///           down, z forward), upright when that camera is mounted level and
 ///           the right way up, not for one turned on its side;
-///         - cameras posed in a world the file does not name (version 1, or no
-///           `world`): all zero, unknown.
+///         - any camera posed in a world the file does not name (version 1, or
+///           no `world`): all zero, unknown.
 ///
 ///         With no file each frame stays in its own camera's frame: -y, and
 ///         -y too for a file that poses no sensor, which `SensorArray::open`

@@ -14,9 +14,9 @@
 // stops the mic, and reports its counters and what the stream wrote and
 // dropped of its chunks. A mic whose drain fails ends the audio there, warned
 // once, and the frames go on. With no mic the feed does nothing, and the file
-// is byte for byte the one the session before audio writes. With
-// output.serve, on 127.0.0.1 as a live run serves, a viewer that joined
-// before the first frame gets the session with the mic's track and the
+// is byte for byte the one the session before audio, with the world's up,
+// writes. With output.serve, on 127.0.0.1 as a live run serves, a viewer that
+// joined before the first frame gets the session with the mic's track and the
 // file's records as it holds them, both tracks, every one up to the last
 // frame's pts, then the end. open_audio opens
 // nothing for an empty source.audio, and a build without the microphone

@@ -689,7 +689,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   with `fusion.dynamic: true`, as its stream template sets), in the world
   the calibration defines: no upright transform, crop, raw recording or
   colour yet. *Amended 2026-10-20:* `fuse_orbbec` fuses Dynamic by default
-  too (core #45).
+  too (core #45). *Amended 2026-11-05:* the stream now names its up (the
+  2026-11-05 entry); the geometry stays in the calibration's world.
 - [**2026-10-21**](https://github.com/taojin-6/volumetric_kit_grid/blob/main/DECISIONS.md#2026-10-21--the-vrst-chunks-in-memory-are-public-chunkencoder-frames-what-streamwriter-writes-by-the-record-rules-it-now-holds-and-chunkparser-reads-bytes-as-they-arrive-through-streamreaders-checks-amends-the-2026-10-12-container-entry) —
   The `.vrst` chunks in memory are public (`stream/chunks.hpp`), so a second
   tier, networking next, writes and reads the format without stream's
@@ -1069,11 +1070,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   the next set's predicted time, at most 3 fillers a send, a split at a loss
   of 100 ms or more, fill in a fixed tint of its tier. Its log and one
   summary in `examples/common`; the bench waits for a rig model it can read.
-- [**2026-11-05**](#2026-11-05--a-live-stream-states-the-worlds-up-from-its-calibration-file-a-sensors-world-is-that-cameras-own-image-up) —
+- [**2026-11-05**](#2026-11-05--a-live-stream-states-the-worlds-up-from-its-calibration-file-a-sensors-world-is-that-cameras-own-image-up-amends-the-2026-10-20-entry) —
   A live stream states the world's up from `source.calibration`'s file
   (`live_up`): a tag's +z; a sensor's world, or no file, that colour camera's
   -y; unknown where the file poses cameras in a world it does not name.
-  `codec_replica` states +z.
+  `codec_replica` states +z (amends the 2026-10-20 entry).
 
 ## Decision record
 
@@ -4999,12 +5000,14 @@ scene, frame by frame, without colour for now. Core 0.13.0 opens the
   +Y down and on its side for a camera mounted on its side, and a tag's
   world is z-up (the 2026-10-18 entry). Turning a world upright is later
   work, on the writer's side or the player's. No crop:
-  `fusion.max_depth_m` is the limit there is.
+  `fusion.max_depth_m` is the limit there is. *Amended 2026-11-05:* the
+  stream now names its up (the 2026-11-05 entry); the geometry stays in the
+  calibration's world.
 - **Numbered by the run, timed by the set**, so a set the loop missed is a
   gap in pts, not in numbers, and a clock stepping back does not end the
   run.
 - **Deferred**, with the rest in DESIGN's Next work: a crop, raw
-  recording, colour and an upright world.
+  recording and colour.
 
 **Validation.** `recon_example_set_codec` codes nine sets of two fake
 cameras, read through a `SensorArray` and prepared on the GPU, into a
@@ -6429,7 +6432,7 @@ jobs at 88-100%, so device times are an upper bound; raw logs in the PR).
   times the synthetic one (9.31 against 8.26 ms a fit). The allocator grows
   by 149 MB.
 
-### 2026-11-05 — A live stream states the world's up from its calibration file; a sensor's world is that camera's own image up.
+### 2026-11-05 — A live stream states the world's up from its calibration file; a sensor's world is that camera's own image up (amends the 2026-10-20 entry).
 
 **Context.** grid's `Session::up` lets a viewer keep the floor down with
 nothing to set, and only the sender knows its world. The session is made before
@@ -6458,9 +6461,9 @@ Femto rig's poses.
   rig has used a tag's world since 2026-10-30, so its stream takes +z anyway.
 
 **Verification.** `example_fuse_sender_test` covers each kind of file and the
-read error through `live_session`, which is the wiring, as nothing runs
-`run_live_fusion` in CI. `example_codec_replica_run.cmake` reads the header of
-the stream it writes.
+read error through `live_session`; `run_live_fusion`'s use of it only compiles,
+as nothing runs that run in CI. `example_codec_replica_run.cmake` reads the
+header of the stream it writes.
 
 ## Measured lessons
 
