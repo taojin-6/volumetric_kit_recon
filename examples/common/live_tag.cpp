@@ -76,7 +76,6 @@ struct TagWatch::State {
   // The searcher's alone (the thread, or see() without it).
   std::vector<Still> stills;
   std::uint64_t stills_epoch = 0;
-  bool registered = false;
 
   // Shared, under the mutex.
   std::mutex mutex;
@@ -84,6 +83,8 @@ struct TagWatch::State {
   std::optional<Candidate> box;
   Counts counts;
   TagNews news;
+  // Set with its hold's news. The searcher, its one writer, reads it bare.
+  bool registered = false;
   vkc::Status error;  // the thread's, until taken
   bool dead = false;  // the thread stopped at an error
   bool stopping = false;
@@ -102,7 +103,7 @@ struct TagWatch::State {
   };
 
   // The hold of `held` solved: refused, passed, or the session's
-  // registration. Nothing shared is touched: the caller publishes both at
+  // registration. Nothing shared is written: the caller publishes both at
   // once, so a take never gets the one without the other.
   Solved solve(const std::vector<Still>& held) {
     Solved out;
@@ -157,7 +158,6 @@ struct TagWatch::State {
     }
     hold.use = TagHold::Use::Registered;
     hold.tracking_to_world = fit.tracking_to_world;
-    registered = true;
     out.registered = std::move(reg).value();
     return out;
   }
@@ -224,7 +224,10 @@ struct TagWatch::State {
     std::lock_guard<std::mutex> lock(mutex);
     ++counts.holds;
     if (solved.hold.use == TagHold::Use::Refused) ++counts.refused;
-    if (solved.registered) news.registered = std::move(solved.registered);
+    if (solved.registered) {
+      news.registered = std::move(solved.registered);
+      registered = true;
+    }
     news.holds.push_back(std::move(solved.hold));
     return {};
   }
@@ -331,13 +334,16 @@ vkc::Status TagWatch::see(const sensor::RgbdFrame& frame) try {
   State& s = *state_;
   const std::uint64_t pts = frame.timestamp_ns;
   if (!s.first_pts) s.first_pts = pts;
+  std::unique_lock<std::mutex> lock(s.mutex);
+  ++s.counts.seen;
   // Sums, not differences, so a frame time before the first frame's or the
-  // last candidate's is no candidate.
+  // last candidate's is no candidate; nor is the last candidate's own.
   const bool candidate =
       device_picture(frame.color) &&
       camera::check_rigid(frame.color_to_world).ok() &&
       pts >= *s.first_pts + kSettleNs &&
-      (!s.last_candidate || pts >= *s.last_candidate + kTagEveryNs);
+      (!s.last_candidate ||
+       pts >= *s.last_candidate + (s.registered ? kTagEveryNs : 1));
   Candidate c;
   if (candidate) {
     s.last_candidate = pts;
@@ -348,8 +354,6 @@ vkc::Status TagWatch::see(const sensor::RgbdFrame& frame) try {
     c.epoch = s.epoch;
   }
   if (s.options.background) {
-    std::lock_guard<std::mutex> lock(s.mutex);
-    ++s.counts.seen;
     if (candidate && !s.dead) {
       if (s.box) ++s.counts.replaced;  // the one it held is let go
       s.box = std::move(c);
@@ -357,12 +361,9 @@ vkc::Status TagWatch::see(const sensor::RgbdFrame& frame) try {
     }
     return {};
   }
-  {
-    std::lock_guard<std::mutex> lock(s.mutex);
-    ++s.counts.seen;
-  }
+  lock.unlock();
   vkc::Status searched = candidate ? s.search(std::move(c)) : vkc::Status{};
-  std::lock_guard<std::mutex> lock(s.mutex);
+  lock.lock();
   s.published = s.counts;
   return searched;
 } catch (const std::bad_alloc&) {

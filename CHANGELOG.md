@@ -20,7 +20,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`examples/common/live_tag.hpp`, in a build with `-DVR_WITH_CALIB=ON`): a
   phone given with no `source.mobile_registration` is read with its
   pictures, and a `TagWatch` finds the calibration world's tag in its
-  frames (at most 5 Hz, on its own thread, OpenCV's pool set to one thread:
+  frames (each one until the session registers, then at most 5 Hz for the
+  log, on its own thread, OpenCV's pool set to one thread:
   the luma copied by sensor's `PictureReadback`, searched and solved by
   calib's `detect_tag`, `tracked_world_from_tag` and `register_tracked`, at
   the tag's printed edge; each hold handed over with its registration). A

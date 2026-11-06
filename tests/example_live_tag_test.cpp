@@ -10,9 +10,14 @@
 // - Six stills register: the registration validates, names the session and
 //   the sensor, and places a still's camera where its picture has it, within
 //   1 cm / 0.5 deg.
-// - The gates: no candidate before the settle or within 200 ms of the last;
-//   no hold from 5 stills or across a split; a still older than the span
-//   drops out; two prints in view are no still.
+// - The gates: no candidate before the settle, with no picture, a pose not
+//   rigid, or a frame time that repeats or goes back; no hold from 5 stills
+//   or across a split; a still older than the span drops out; two prints in
+//   view are no still.
+// - The cadence, inline and on the watch's thread: at 10 Hz and closer, every
+//   frame until the session registers, then one per 200 ms.
+// - A tag found only in bursts that a search at 5 Hz finds one short of a hold
+//   registers.
 // - A camera moving at 1 m/s or turning at 90 deg/s is searched as often as
 //   one held still, and registers as well.
 // - A hold with one still's pose 10 cm off is refused (poor_fit) and
@@ -258,7 +263,7 @@ int test_registers(vkc::test::GpuContext& gpu, const Pictures& pics) {
   CHECK(news->holds.size() == 1);
   const TagHold& h = news->holds[0];
   CHECK(h.use == TagHold::Use::Registered && h.stills == 6);
-  CHECK(h.first_pts_ns == pts(20) && h.last_pts_ns == pts(30));
+  CHECK(h.first_pts_ns == pts(20) && h.last_pts_ns == pts(25));
   CHECK(h.miss.empty() && h.reason.empty() && h.rms_px < 2.0);
   CHECK(std::abs(h.range_m - kHeight) < 0.01 && h.off_normal_deg < 1.0);
   CHECK(news->registered.has_value());
@@ -271,47 +276,132 @@ int test_registers(vkc::test::GpuContext& gpu, const Pictures& pics) {
   std::printf("registered: %.2f mm / %.3f deg from the truth\n", mm, deg);
   CHECK(mm < 10.0 && deg < 0.5);
   const TagWatch::Counts& c = (*w)->counts();
-  CHECK(c.seen == 31 && c.candidates == 6 && c.stills == 6 && c.holds == 1 &&
+  CHECK(c.seen == 31 && c.candidates == 8 && c.stills == 8 && c.holds == 1 &&
         c.refused == 0 && c.replaced == 0 && c.failed == 0);
   return 0;
 }
 
 int test_gates(vkc::test::GpuContext& gpu, const Pictures& pics) {
-  // None before the settle, then one every 200 ms (above), none from 5.
+  // None before the settle, then each frame, no hold from 5.
   auto settle = watch(gpu, false);
   CHECK(settle.ok());
   CHECK(show(**settle, 0, 19, pics.tag) == 0);
   CHECK((*settle)->counts().candidates == 0);
-  CHECK(show(**settle, 20, 28, pics.tag) == 0);
+  CHECK(show(**settle, 20, 24, pics.tag) == 0);
   CHECK((*settle)->counts().stills == 5 && (*settle)->counts().holds == 0);
+  // No picture, or a pose not rigid: seen, no candidate. Nor a frame time
+  // that repeats the last candidate's or goes back.
+  sensor::RgbdFrame no_picture = shown(25, above(0.0, 0.0), pics.tag);
+  no_picture.color = {};
+  CHECK((*settle)->see(no_picture).ok());
+  sensor::RgbdFrame not_rigid = shown(25, above(0.0, 0.0), pics.tag);
+  not_rigid.color_to_world[0][0] = 2.0;
+  CHECK((*settle)->see(not_rigid).ok());
+  CHECK(show(**settle, 24, 24, pics.tag) == 0);
+  CHECK(show(**settle, 23, 23, pics.tag) == 0);
+  CHECK((*settle)->counts().seen == 29 && (*settle)->counts().candidates == 5 &&
+        (*settle)->counts().holds == 0);
   // A split ends the hold being gathered: stills at 2.0-2.4 s, then from
-  // 2.6 s, the frame after it.
+  // 2.5 s, the frame after it.
   auto split = watch(gpu, false);
   CHECK(split.ok());
-  CHECK(show(**split, 0, 25, pics.tag) == 0);
+  CHECK(show(**split, 0, 24, pics.tag) == 0);
   (*split)->split();
-  CHECK(show(**split, 26, 33, pics.tag) == 0);
-  CHECK((*split)->counts().stills == 7 && (*split)->counts().holds == 0);
-  CHECK(show(**split, 34, 37, pics.tag) == 0);
+  CHECK(show(**split, 25, 29, pics.tag) == 0);
+  CHECK((*split)->counts().stills == 10 && (*split)->counts().holds == 0);
+  CHECK(show(**split, 30, 30, pics.tag) == 0);
   auto after = (*split)->take();
   CHECK(after.ok() && after->holds.size() == 1);
-  CHECK(after->holds[0].first_pts_ns == pts(26));
+  CHECK(after->holds[0].first_pts_ns == pts(25));
   // A still more than 3 s older than the newest drops out.
   auto span = watch(gpu, false);
   CHECK(span.ok());
   CHECK(show(**span, 0, 20, pics.tag) == 0);
-  CHECK(show(**span, 21, 55, pics.blank) == 0);
-  CHECK(show(**span, 56, 64, pics.tag) == 0);
+  CHECK(show(**span, 56, 60, pics.tag) == 0);
   CHECK((*span)->counts().stills == 6 && (*span)->counts().holds == 0);
-  CHECK(show(**span, 65, 66, pics.tag) == 0);
+  CHECK(show(**span, 61, 61, pics.tag) == 0);
   auto dropped = (*span)->take();
   CHECK(dropped.ok() && dropped->holds.size() == 1);
   CHECK(dropped->holds[0].first_pts_ns == pts(56));
   // Two prints in view: searched, no still.
   auto two = watch(gpu, false);
   CHECK(two.ok());
-  CHECK(show(**two, 0, 30, pics.two) == 0);
-  CHECK((*two)->counts().candidates == 6 && (*two)->counts().stills == 0);
+  CHECK(show(**two, 0, 22, pics.two) == 0);
+  CHECK((*two)->counts().candidates == 3 && (*two)->counts().stills == 0);
+  return 0;
+}
+
+// Frames `gap` apart from the end of the settle, on each thread: every one a
+// candidate through the hold's six, then one per 200 ms for the next second.
+// Each search is waited for, so none is replaced and each frame's cadence is
+// that of the registration already made.
+int test_cadence(vkc::test::GpuContext& gpu, const Pictures& pics) {
+  const struct {
+    std::uint64_t gap;
+    std::uint64_t after;  // candidates in the second after the hold
+  } kPaces[] = {{100 * kMs, 5}, {33 * kMs, 4}, {10 * kMs, 5}};
+  for (const bool background : {false, true}) {
+    for (const auto& pace : kPaces) {
+      auto w = watch(gpu, background);
+      CHECK(w.ok());
+      CHECK(show(**w, 0, 0, pics.tag) == 0);
+      std::uint64_t holds = 0;
+      std::uint64_t expected = 0;
+      std::uint64_t last = 0;
+      const std::uint64_t start = pts(20);
+      const std::uint64_t frames = 6 + kS / pace.gap;
+      for (std::uint64_t k = 0; k < frames; ++k) {
+        sensor::RgbdFrame f = shown(0, above(0.0, 0.0), pics.tag);
+        f.timestamp_ns = start + k * pace.gap;
+        CHECK((*w)->see(f).ok());
+        if (k < 6 || f.timestamp_ns >= last + 200 * kMs) {
+          ++expected;
+          last = f.timestamp_ns;
+        }
+        const auto until =
+            std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        for (;;) {
+          auto news = (*w)->take();
+          CHECK(news.ok() && news->failures.empty());
+          holds += news->holds.size();
+          if ((*w)->counts().candidates >= expected) break;
+          CHECK(std::chrono::steady_clock::now() < until);
+        }
+        CHECK((*w)->counts().candidates == expected);
+      }
+      const TagWatch::Counts& c = (*w)->counts();
+      std::printf("cadence: %llu ms apart, %s: %llu searched of %llu\n",
+                  static_cast<unsigned long long>(pace.gap / kMs),
+                  background ? "thread" : "inline",
+                  static_cast<unsigned long long>(c.candidates),
+                  static_cast<unsigned long long>(c.seen));
+      CHECK(c.candidates == 6 + pace.after && c.replaced == 0 && holds == 1);
+    }
+  }
+  return 0;
+}
+
+// The finds of a hand-held walk at 10 Hz, its frames 14-22, 24, 25, 52-55,
+// 58-61, 64 and 65: searching every frame past the settle gathers a hold at
+// 52-59. At 5 Hz, frames 20, 22, ... find 5 of the 6 a hold needs at 52-64,
+// and the first burst ages out of the span, so it would never register.
+int test_bursts(vkc::test::GpuContext& gpu, const Pictures& pics) {
+  const std::pair<std::size_t, std::size_t> kFinds[] = {
+      {14, 22}, {24, 25}, {52, 55}, {58, 61}, {64, 65}};
+  auto w = watch(gpu, false);
+  CHECK(w.ok());
+  std::size_t next = 0;
+  for (const auto& [first, last] : kFinds) {
+    if (first > next) CHECK(show(**w, next, first - 1, pics.blank) == 0);
+    CHECK(show(**w, first, last, pics.tag) == 0);
+    next = last + 1;
+  }
+  auto news = (*w)->take();
+  CHECK(news.ok() && news->failures.empty());
+  CHECK(news->holds.size() == 1 && news->registered);
+  const TagHold& h = news->holds[0];
+  CHECK(h.use == TagHold::Use::Registered);
+  CHECK(h.first_pts_ns == pts(52) && h.last_pts_ns == pts(59));
   return 0;
 }
 
@@ -334,13 +424,13 @@ int test_moving(vkc::test::GpuContext& gpu) {
     CHECK(news.ok() && news->failures.empty() && news->holds.size() == 1);
     const TagHold& h = news->holds[0];
     CHECK(h.use == TagHold::Use::Registered && news->registered);
-    CHECK(h.first_pts_ns == pts(20) && h.last_pts_ns == pts(30));
+    CHECK(h.first_pts_ns == pts(20) && h.last_pts_ns == pts(25));
     const auto [mm, deg] = off_truth(news->registered->tracking_to_world);
     std::printf("%s: RMS %.2f px, %.2f mm / %.3f deg from the truth\n",
                 turning ? "turning" : "moving", h.rms_px, mm, deg);
     CHECK(h.rms_px < 2.0 && mm < 10.0 && deg < 0.5);
     const TagWatch::Counts& c = (*w)->counts();
-    CHECK(c.seen == 31 && c.candidates == 6 && c.stills == 6);
+    CHECK(c.seen == 31 && c.candidates == 8 && c.stills == 8);
   }
   return 0;
 }
@@ -349,7 +439,7 @@ int test_moving(vkc::test::GpuContext& gpu) {
 vkc::Result<TagNews> refused_then_passed(vkc::test::GpuContext& gpu,
                                          const Pictures& pics) {
   VKC_ASSIGN(std::unique_ptr<TagWatch> w, watch(gpu, false));
-  for (std::size_t i = 0; i <= 54; ++i) {
+  for (std::size_t i = 0; i <= 43; ++i) {
     const bool off = i == 24;  // a still
     VKC_TRY(w->see(shown(i, above(off ? 0.1 : 0.0, 0.0), pics.tag)));
   }
@@ -364,8 +454,9 @@ int test_refused_then_passed(vkc::test::GpuContext& gpu, const Pictures& pics) {
   CHECK(bad.use == TagHold::Use::Refused && bad.miss == "poor_fit");
   CHECK(!bad.reason.empty() && same(bad.tracking_to_world, camera::Mat4d(1.0)));
   CHECK(news->holds[1].use == TagHold::Use::Registered);
-  CHECK(news->holds[1].first_pts_ns == pts(32));
+  CHECK(news->holds[1].first_pts_ns == pts(26));
   CHECK(news->holds[2].use == TagHold::Use::Passed);
+  CHECK(news->holds[2].first_pts_ns == pts(33));
   CHECK(news->registered && same(news->registered->tracking_to_world,
                                  news->holds[1].tracking_to_world));
   // Bit for bit again.
@@ -385,7 +476,8 @@ int test_background(vkc::test::GpuContext& gpu) {
   {
     auto w = watch(gpu, true);
     CHECK(w.ok());
-    for (std::size_t i = 0; i <= 30; ++i) {
+    // Frames 20-25, candidates all: no hold can come before the last.
+    for (std::size_t i = 0; i <= 25; ++i) {
       auto picture = on_device(gpu, host);
       CHECK(picture.ok());
       held.push_back(picture->image[0]);
@@ -408,7 +500,7 @@ int test_background(vkc::test::GpuContext& gpu) {
     std::printf("background: %llu searched, %llu replaced\n",
                 static_cast<unsigned long long>(c.candidates),
                 static_cast<unsigned long long>(c.replaced));
-    CHECK(c.seen == 31 && holds == (c.candidates == 6 ? 1u : 0u));
+    CHECK(c.seen == 26 && holds == (c.candidates == 6 ? 1u : 0u));
     for (const auto& p : held) CHECK(p.expired());
   }
   // Destroyed with a candidate boxed, or being searched: joined, let go.
@@ -416,7 +508,7 @@ int test_background(vkc::test::GpuContext& gpu) {
   {
     auto w = watch(gpu, true);
     CHECK(w.ok());
-    for (std::size_t i = 0; i <= 20; ++i) {
+    for (std::size_t i = 0; i <= 22; ++i) {
       auto picture = on_device(gpu, host);
       CHECK(picture.ok());
       held.push_back(picture->image[0]);
@@ -445,10 +537,10 @@ int test_background_news(vkc::test::GpuContext& gpu, const Pictures& pics) {
       got = got || hold;
       return 0;
     };
-    std::uint64_t candidates = 0;  // frames 20, 22, ..., 30
-    for (std::size_t i = 0; i <= 30; ++i) {
+    std::uint64_t candidates = 0;  // frames 20-25
+    for (std::size_t i = 0; i <= 25; ++i) {
       CHECK((*w)->see(shown(i, above(0.0, 0.0), pics.tag)).ok());
-      if (i >= 20 && i % 2 == 0) ++candidates;
+      if (i >= 20) ++candidates;
       const auto until =
           std::chrono::steady_clock::now() + std::chrono::seconds(20);
       for (;;) {
@@ -633,18 +725,18 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
   CHECK(ran.ok());
   const std::unique_ptr<vr_example::MobileLane>& lane = ran->lane;
   const std::string& report = ran->report;
-  // Frames 0-30 came before the registration (the hold of 2.0-3.0 s, taken
-  // in the gap after frame 30's): never tracked.
+  // Frames 0-25 came before the registration (the hold of 2.0-2.5 s, taken
+  // in the gap after frame 25's): never tracked.
   const vr_example::MobileLane::Counts& c = lane->counts();
-  CHECK(c.unregistered == 31 && c.paired == 29 && ran->fillers > 0);
+  CHECK(c.unregistered == 26 && c.paired == 34 && ran->fillers > 0);
   for (const vr_test::ScriptedRecord& r : *ran->rig_fits) {
-    CHECK(r.pts.front() >= pts(31));
+    CHECK(r.pts.front() >= pts(26));
   }
-  // Candidates every 200 ms from 2.0 s: holds at 2.0-3.0, 3.2-4.2 and
-  // 4.4-5.4 s, two stills left over.
-  CHECK(report.find("tag: 20 searched, 20 stills, 3 holds (0 refused)") !=
+  // Six candidates to it, then one every 200 ms: holds at 2.7-3.7 and
+  // 3.9-4.9 s, five stills left over.
+  CHECK(report.find("tag: 23 searched, 23 stills, 3 holds (0 refused)") !=
         std::string::npos);
-  CHECK(report.find("registered at 3.0 s, 31 frames before it") !=
+  CHECK(report.find("registered at 2.5 s, 26 frames before it") !=
         std::string::npos);
   // The registration on disk, and the run placed by it.
   const std::filesystem::path written = dir / "registration.json";
@@ -661,7 +753,7 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
     CHECK(mm < 0.01 && deg < 0.001);
     ++tracked;
   }
-  CHECK(tracked == 29);
+  CHECK(tracked == 34);
   auto read = vr_example::read_track_log(dir.string());
   CHECK(read.ok() && read->source.registration == written.string());
   const std::vector<std::string> rows = lines(dir / "tags.csv");
@@ -694,14 +786,14 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
 }
 
 // Records 25 and 26 lost (300 ms, a loss): the lane splits the watch, so the
-// stills of 2.0-2.4 s are let go, and the hold is 2.7-3.7 s, registered at
-// 3.7 s (across the loss it would have been 2.0-3.1 s, at 3.1 s).
+// stills of 2.0-2.4 s are let go, and the hold is 2.7-3.2 s, registered at
+// 3.2 s (across the loss it would have been 2.0-2.7 s, at 2.7 s).
 int test_lane_loss(vkc::test::GpuContext& gpu, const Pictures& pics) {
   auto ran = run_lane(gpu, std::make_unique<TagPhone>(45, pics.tag, 25, 2), "");
   CHECK(ran.ok());
-  CHECK(ran->report.find("tag: 12 searched, 12 stills, 1 holds (0 refused)") !=
+  CHECK(ran->report.find("tag: 17 searched, 17 stills, 2 holds (0 refused)") !=
         std::string::npos);
-  CHECK(ran->report.find("registered at 3.7 s, 36 frames before it") !=
+  CHECK(ran->report.find("registered at 3.2 s, 31 frames before it") !=
         std::string::npos);
   return 0;
 }
@@ -715,7 +807,7 @@ int test_lane_background(vkc::test::GpuContext& gpu, const Pictures& pics,
                       dir.string(), /*background=*/true);
   CHECK(ran.ok());
   const vr_example::MobileLane::Counts& c = ran->lane->counts();
-  CHECK(c.unregistered >= 31 && c.unregistered + c.paired == 60);
+  CHECK(c.unregistered >= 26 && c.unregistered + c.paired == 60);
   CHECK(c.paired > 0 && ran->fillers > 0);
   CHECK(ran->report.find("registered at ") != std::string::npos);
   auto reg =
@@ -924,6 +1016,8 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   const Pictures pics{*tag, *blank, *two};
   CHECK(test_registers(gpu, pics) == 0);
   CHECK(test_gates(gpu, pics) == 0);
+  CHECK(test_cadence(gpu, pics) == 0);
+  CHECK(test_bursts(gpu, pics) == 0);
   CHECK(test_moving(gpu) == 0);
   CHECK(test_refused_then_passed(gpu, pics) == 0);
   CHECK(test_background(gpu) == 0);
