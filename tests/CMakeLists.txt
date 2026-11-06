@@ -349,7 +349,7 @@ endif()
 # the test (link_dialler.hpp), depth alone: frames equal the file's, the
 # recording reads back, a reconnect, another session refused, three failures end
 # the stream (and the cap's window), the poll's bound, a record the recording
-# refuses, listen's refusals, and session_check's pass. Host only.
+# refuses, listen's refusals, session_check's pass, and say. Host only.
 if(VR_BUILD_EXAMPLES)
   add_executable(recon_example_link_listen_test example_link_listen_test.cpp)
   target_link_libraries(
@@ -410,13 +410,14 @@ if(VR_BUILD_EXAMPLES)
   # moved and turned by OpenCV's warp for a moving camera, searched, gated and
   # solved by calib; the lane registered by it, on scripted fitters; and
   # open_mobile_lane on a session of sensor's committed H.265 clips
-  # (VS_TEST_DATA_DIR), decoded on this machine's hardware.
+  # (VS_TEST_DATA_DIR), decoded on this machine's hardware, and on a phone that
+  # dials over loopback, which reads what the lane tells it.
   if(VR_WITH_CALIB)
     add_executable(recon_example_live_tag_test example_live_tag_test.cpp)
     target_link_libraries(
       recon_example_live_tag_test
       PRIVATE vr_example_mobile opencv_imgproc opencv_objdetect
-              volumetric_kit::core_test_policy)
+              volumetric_kit::core_net volumetric_kit::core_test_policy)
     target_compile_definitions(recon_example_live_tag_test
                                PRIVATE VR_HEVC_DATA="${VS_TEST_DATA_DIR}/hevc")
     vr_target_warnings(recon_example_live_tag_test)

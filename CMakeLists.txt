@@ -126,15 +126,16 @@ find_package(Vulkan REQUIRED)
 # no option of their own (fuse_realsense builds only with sensor_realsense, and
 # even without FFS with its RealSenseStereo, which 0.7.0 brought; it runs FFS
 # only with sensor_ffs, which 0.8.0 brought); the oldest grid is
-# VR_GRID_MIN_VERSION: 0.14.0, whose Session::up the live examples and
-# codec_replica state; 0.12.0 brought the TrackKind::RgbdDepth RgbdStreamSensor
-# reads and the three-run payloads its tests write, 0.6.0 the StreamServer
-# serving the live examples' Audio track with the frames, 0.5.0 CodecStream
-# writing it (TrackKind::Audio, 0.4.0) muxed by pts, and 0.3.0 codec_outputs
-# passing output.max_viewers to the server.
+# VR_GRID_MIN_VERSION: 0.15.0, whose StreamClient::send_note the phone lane
+# tells its phone through; 0.14.0 brought the Session::up the live examples and
+# codec_replica state, 0.12.0 the TrackKind::RgbdDepth RgbdStreamSensor reads
+# and the three-run payloads its tests write, 0.6.0 the StreamServer serving the
+# live examples' Audio track with the frames, 0.5.0 CodecStream writing it
+# (TrackKind::Audio, 0.4.0) muxed by pts, and 0.3.0 codec_outputs passing
+# output.max_viewers to the server.
 set(VR_CORE_MIN_VERSION 0.49.0)
 set(VR_SENSOR_MIN_VERSION 0.40.0)
-set(VR_GRID_MIN_VERSION 0.14.0)
+set(VR_GRID_MIN_VERSION 0.15.0)
 add_subdirectory(third_party)
 # The tag is found in the phone's pictures, which only sensor's video decoders
 # read: refused here rather than once a phone has dialled.

@@ -167,6 +167,7 @@ struct TagWatch::State {
     vkc::Status searched = search_one(std::move(c));
     std::lock_guard<std::mutex> lock(mutex);
     ++counts.candidates;
+    counts.gathered = static_cast<std::uint32_t>(stills.size());
     return searched;
   }
 
@@ -177,6 +178,12 @@ struct TagWatch::State {
     if (c.epoch != stills_epoch) {
       stills.clear();  // a loss since the stills gathered
       stills_epoch = c.epoch;
+    }
+    // A still older than the span drops out of the hold being gathered, here
+    // so the count falls with the tag out of view. Frame times only rise, so
+    // it would drop at the next find anyway.
+    while (!stills.empty() && c.pts - stills.front().pts > kHoldSpanNs) {
+      stills.erase(stills.begin());
     }
     vkc::Result<sensor::PictureView> view =
         readback->read(c.picture, sensor::PictureReadback::Planes::Luma);
@@ -210,10 +217,6 @@ struct TagWatch::State {
     {
       std::lock_guard<std::mutex> lock(mutex);
       ++counts.stills;
-    }
-    // A still older than the span drops out of the hold being gathered.
-    while (!stills.empty() && c.pts - stills.front().pts > kHoldSpanNs) {
-      stills.erase(stills.begin());
     }
     stills.push_back({c.pts, c.model, c.cam_to_tracking, *searched->found});
     if (stills.size() < kHoldStills) return {};

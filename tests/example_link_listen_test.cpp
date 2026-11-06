@@ -29,7 +29,14 @@
 //   the right writer after it is taken, and alone it is named when the wait
 //   ends.
 // - session_check's pass (link/session_check.hpp, SessionReport::ok).
+// - say, on a writer's server that reads notes: notes said from another thread
+//   while frames flow reach it, the newest last, and every frame comes; a line
+//   over the limit goes unsaid and the stream goes on. No say waits, with a
+//   poll waiting on a silent socket or no poll at all. A later connection gets
+//   the newest with no new say, a refused one gets none, and a writer that
+//   closes while notes flow counts one failure. A file's say does nothing.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -62,7 +69,9 @@ namespace vkc = volumetric_kit::core;
 namespace sensor = volumetric_kit::sensor;
 namespace stream = volumetric_kit::grid::stream;
 namespace testing = volumetric_kit::sensor::testing;
+namespace gnet = volumetric_kit::grid::networking;
 using Code = vkc::Status::Code;
+using Tone = gnet::ViewerNote::Tone;
 using vr_example::link::RgbdStreamSensor;
 using vr_test::Dialler;
 using vr_test::PatternFrames;
@@ -571,6 +580,235 @@ int test_refusals(const vkc::test::Scratch& scratch) {
   return 0;
 }
 
+// Whether the writer's server reads `line` as its newest note within kWait.
+bool heard(Dialler& d, const std::string& line, Tone tone = Tone::Good) {
+  return vr_test::wait_for([&] {
+    const std::optional<gnet::ViewerNote> note = d.server().newest_note();
+    return note && note->line == line && note->tone == tone;
+  });
+}
+
+// Polls `s` until `until` holds or kWait has passed, its frames let go.
+void poll_until(RgbdStreamSensor& s, const std::atomic<bool>& until) {
+  const auto end = vr_test::Clock::now() + kWait;
+  while (!until.load() && vr_test::Clock::now() < end) (void)s.poll();
+}
+
+// Notes said from another thread while frames flow: the newest reaches the
+// writer's server last and every frame comes, in order. A line over the limit
+// goes unsaid, and the stream goes on.
+int test_say_while_frames_flow() {
+  const PatternFrames p = vr_test::pattern_frames(vr_test::phone_info(), 30);
+  const std::uint16_t port = vkc::test::closed_port();
+  std::atomic<bool> polled{false};
+  std::atomic<bool> done{false};
+  bool sent = false;
+  std::atomic<bool> heard_last{false};
+  std::thread writer([&] {
+    auto d = Dialler::dial(vr_test::session_of(p.info), port, true);
+    if (!d.ok()) return;
+    bool all = true;
+    for (std::size_t i = 0; i < p.frames.size(); ++i) {
+      all = all && publish(**d, p, i).ok();
+    }
+    if (!vr_test::wait_for([&] { return polled.load(); })) return;
+    heard_last = heard(**d, "the last", Tone::Caution);
+    sent = all && vr_test::wait_for([&] { return done.load(); });
+  });
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> live = listen(port);
+  CHECK(live.ok());
+  RgbdStreamSensor& s = *live.value();
+  CHECK(s.start().ok());
+  s.say({Tone::Neutral, std::string(gnet::kMaxNoteLineBytes + 1, 'x'), {}});
+  std::atomic<bool> stop{false};
+  std::uint64_t says = 0;
+  std::thread sayer([&] {
+    while (!stop.load()) {
+      s.say({Tone::Good, "note " + std::to_string(says++), {}});
+      std::this_thread::yield();
+    }
+    s.say({Tone::Caution, "the last", {}});
+  });
+  const Frames frames = poll_frames(s, 30);
+  stop = true;
+  sayer.join();
+  polled = true;
+  poll_until(s, heard_last);
+  done = true;
+  writer.join();
+  std::printf("said %llu notes while 30 frames came\n",
+              static_cast<unsigned long long>(says));
+  CHECK(sent && heard_last.load() && says > 0);
+  CHECK(frames.size() == 30);
+  for (std::size_t i = 0; i < frames.size(); ++i) {
+    CHECK(frames[i].sequence == i);
+  }
+  CHECK(own_depth(frames));
+  CHECK(s.link_stats().failures == 0 && s.link_stats().connections == 1);
+  return 0;
+}
+
+// A say returns while a poll waits on a silent socket, the poll's whole time
+// spent there, and with no poll at all, when no pass would ever take it.
+int test_say_never_waits() {
+  const std::uint16_t port = vkc::test::closed_port();
+  std::atomic<bool> done{false};
+  std::atomic<bool> polled{false};
+  std::atomic<bool> heard_last{false};
+  std::thread writer([&] {
+    auto d =
+        Dialler::dial(vr_test::session_of(vr_test::phone_info()), port, true);
+    if (!d.ok()) return;
+    if (!vr_test::wait_for([&] { return polled.load(); })) return;
+    heard_last = heard(**d, "the last");
+    (void)vr_test::wait_for([&] { return done.load(); });
+  });
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> live = listen(port);
+  CHECK(live.ok());
+  RgbdStreamSensor& s = *live.value();
+  CHECK(s.start().ok());
+  // No poll: on a thread, so a say that waits fails here, and the polls below
+  // end it.
+  std::atomic<bool> said{false};
+  std::thread alone([&] {
+    s.say({Tone::Good, "no poll", {}});
+    said = true;
+  });
+  const bool returned = vr_test::wait_for([&] { return said.load(); });
+  std::atomic<bool> stop{false};
+  std::thread poller([&] {
+    while (!stop.load()) (void)s.poll();
+  });
+  alone.join();
+  // A poll waits kPollWait, so a say that waited on one takes as long: the
+  // median holds against a busy machine's slow says.
+  std::vector<vr_test::Clock::duration> took;
+  for (int i = 0; i < 25; ++i) {
+    const auto start = vr_test::Clock::now();
+    s.say({Tone::Good, "note", {}});
+    took.push_back(vr_test::Clock::now() - start);
+  }
+  std::nth_element(took.begin(), took.begin() + 12, took.end());
+  const auto median = took[12];
+  s.say({Tone::Good, "the last", {}});
+  polled = true;
+  (void)vr_test::wait_for([&] { return heard_last.load(); });
+  stop = true;
+  poller.join();
+  done = true;
+  writer.join();
+  CHECK(returned && heard_last.load());
+  CHECK(median < RgbdStreamSensor::kPollWait / 4);
+  return 0;
+}
+
+// The newest note goes to a later connection with no new say, and none to a
+// refused one.
+int test_say_connections() {
+  const sensor::SensorInfo info = vr_test::phone_info();
+  const std::uint16_t port = vkc::test::closed_port();
+  std::atomic<bool> first_heard{false};
+  std::atomic<bool> second_heard{false};
+  bool foreign_let_go = false;
+  bool foreign_told = false;
+  std::atomic<bool> done{false};
+  std::thread writer([&] {
+    {
+      auto d = Dialler::dial(vr_test::session_of(info), port, true);
+      if (!d.ok()) return;
+      first_heard = heard(**d, "newest");
+    }  // the writer's connection drops
+    {
+      auto d = Dialler::dial(vr_test::session_of(info, 0x6c), port, true);
+      if (!d.ok()) return;
+      foreign_let_go = vr_test::wait_for([&] {
+        foreign_told = foreign_told || (*d)->server().newest_note().has_value();
+        return (*d)->server().viewers() == 0;
+      });
+    }
+    auto d = Dialler::dial(vr_test::session_of(info), port, true);
+    if (!d.ok()) return;
+    second_heard = heard(**d, "newest");
+    (void)vr_test::wait_for([&] { return done.load(); });
+  });
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> live = listen(port);
+  CHECK(live.ok());
+  RgbdStreamSensor& s = *live.value();
+  CHECK(s.start().ok());
+  s.say({Tone::Good, "older", {}});
+  s.say({Tone::Good, "newest", {}});
+  poll_until(s, second_heard);
+  const RgbdStreamSensor::LinkStats link = s.link_stats();
+  done = true;
+  writer.join();
+  CHECK(first_heard.load() && second_heard.load());
+  CHECK(foreign_let_go && !foreign_told);
+  CHECK(link.connections == 2 && link.refused == 1 && link.failures == 1);
+  return 0;
+}
+
+// A writer that closes while notes flow is one failure, and the says after it,
+// with no connection to tell, change nothing.
+int test_say_at_a_close() {
+  const PatternFrames p = vr_test::pattern_frames(vr_test::phone_info(), 4);
+  const std::uint16_t port = vkc::test::closed_port();
+  std::atomic<std::size_t> taken{0};
+  bool sent = false;
+  std::thread writer([&] {
+    auto d = Dialler::dial(vr_test::session_of(p.info), port, true);
+    if (!d.ok()) return;
+    bool all = true;
+    for (std::size_t i = 0; i < p.frames.size(); ++i) {
+      all = all && publish(**d, p, i).ok();
+    }
+    sent = all && vr_test::wait_for([&] { return taken.load() >= 4; });
+  });  // closes as the thread ends, the notes still flowing
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> live = listen(port);
+  CHECK(live.ok());
+  RgbdStreamSensor& s = *live.value();
+  CHECK(s.start().ok());
+  std::atomic<bool> stop{false};
+  std::thread sayer([&] {
+    for (std::uint64_t i = 0; !stop.load(); ++i) {
+      s.say({Tone::Good, "note " + std::to_string(i), {}});
+      std::this_thread::yield();
+    }
+  });
+  const Frames frames = poll_frames(s, 4, &taken);
+  const auto end = vr_test::Clock::now() + kWait;
+  while (s.link_stats().connected && vr_test::Clock::now() < end) {
+    (void)s.poll();
+  }
+  for (int i = 0; i < 3; ++i) (void)s.poll();  // no second failure
+  stop = true;
+  sayer.join();
+  writer.join();
+  CHECK(sent && frames.size() == 4);
+  const RgbdStreamSensor::LinkStats link = s.link_stats();
+  CHECK(!link.connected && link.connections == 1 && link.failures == 1);
+  CHECK(!s.exhausted());
+  return 0;
+}
+
+// A file has no writer: a say does nothing, and its frames are as ever.
+int test_say_to_a_file(const vkc::test::Scratch& scratch) {
+  const PatternFrames p = vr_test::pattern_frames(vr_test::phone_info(), 3);
+  const std::string path = (scratch.path / "say.vrst").string();
+  CHECK(write_file(path, p).ok());
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> opened =
+      RgbdStreamSensor::open_file(path, {});
+  CHECK(opened.ok());
+  RgbdStreamSensor& s = *opened.value();
+  s.say({Tone::Good, "before the start", {}});
+  CHECK(s.start().ok());
+  s.say({Tone::Good, "while it plays", {}});
+  const Frames frames = poll_frames(s, ~std::size_t{0});
+  CHECK((sequences(frames) == std::vector<std::uint64_t>{0, 1, 2}));
+  CHECK(s.exhausted() && s.stats().failed == 0);
+  CHECK(s.link_stats().connections == 0);
+  return 0;
+}
+
 // session_check's pass: a frame came, the contract held, and every frame
 // whose depth names an index showed its own picture.
 int test_report_ok() {
@@ -603,6 +841,11 @@ int main() {
   if (test_start_mid_session() != 0) return 1;
   if (test_recording_refused(scratch) != 0) return 1;
   if (test_refusals(scratch) != 0) return 1;
+  if (test_say_while_frames_flow() != 0) return 1;
+  if (test_say_never_waits() != 0) return 1;
+  if (test_say_connections() != 0) return 1;
+  if (test_say_at_a_close() != 0) return 1;
+  if (test_say_to_a_file(scratch) != 0) return 1;
   if (test_report_ok() != 0) return 1;
   std::printf("rgbd stream sensor listen tests passed\n");
   return 0;

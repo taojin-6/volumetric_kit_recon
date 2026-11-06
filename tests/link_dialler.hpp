@@ -183,16 +183,19 @@ inline bool wait_for(
 
 // A writer that dials 127.0.0.1:`port`, as an iPad's does: its server binds
 // nothing, keys on a join (replay_gop false), and the socket it dials is its
-// one viewer. It dials until the listener is there.
+// one viewer, whose notes it reads with `read_notes`. It dials until the
+// listener is there.
 class Dialler {
  public:
   static vkc::Result<std::unique_ptr<Dialler>> dial(
       const stream::Session& session, std::uint16_t port,
+      bool read_notes = false,
       std::chrono::milliseconds limit = std::chrono::seconds(5)) {
     gnet::ServerOptions options;
     options.listen = false;
     options.replay_gop = false;
     options.max_viewers = 1;
+    options.read_notes = read_notes;
     VKC_ASSIGN(std::unique_ptr<gnet::StreamServer> server,
                gnet::StreamServer::start(session, options));
     const Clock::time_point end = Clock::now() + limit;

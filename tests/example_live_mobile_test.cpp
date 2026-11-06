@@ -34,6 +34,9 @@
 //   the interface's queue (a poll the newest, a drain every frame oldest
 //   first, a full queue letting its oldest go); an inner error and the end
 //   come through; stop joins while the inner poll waits.
+// - What the phone is told: lane_note's every line and tone, in order, its 3 s
+//   to the nanosecond, and note_due's rate, with no device. A lane with no tag
+//   tells nothing, whatever it is given.
 
 #include <algorithm>
 #include <atomic>
@@ -72,6 +75,7 @@ namespace track = volumetric_kit::recon::track;
 namespace tsdf = volumetric_kit::recon::tsdf;
 namespace sender = volumetric_kit::recon::sender;
 namespace vol = volumetric_kit::grid::volume;
+namespace gnet = volumetric_kit::grid::networking;
 using volumetric_kit::recon::Mat4f;
 using volumetric_kit::recon::Vec4f;
 using vr_example::MobileLane;
@@ -250,7 +254,8 @@ vkc::Result<Lane> make_lane(const Env& env,
                             std::unique_ptr<sensor::IRgbdSensor> phone,
                             ScriptedFitter::Script rig,
                             ScriptedFitter::Script track_script,
-                            const std::string& dir = {}) {
+                            const std::string& dir = {},
+                            std::function<void(gnet::ViewerNote)> say = {}) {
   Lane out;
   auto r = std::make_unique<ScriptedFitter>(std::move(rig));
   auto t = std::make_unique<ScriptedFitter>(std::move(track_script));
@@ -267,7 +272,7 @@ vkc::Result<Lane> make_lane(const Env& env,
              vr_example::TrackLog::open(dir, *tracker, {}));
   VKC_ASSIGN(out.lane, MobileLane::create(env.gpu.device, env.gpu.allocator,
                                           std::move(phone), std::move(tracker),
-                                          std::move(log)));
+                                          std::move(log), {}, std::move(say)));
   return out;
 }
 
@@ -703,6 +708,73 @@ int test_check_and_empty(const Env& env, const std::filesystem::path& dir) {
   return 0;
 }
 
+bool reads(const gnet::ViewerNote& note, gnet::ViewerNote::Tone tone,
+           const char* line) {
+  if (note.tone == tone && note.line == line) return true;
+  std::fprintf(stderr, "reads \"%s\" at tone %d, not \"%s\" at %d\n",
+               note.line.c_str(), int(note.tone), line, int(tone));
+  return false;
+}
+
+// Every line and tone, in order, by hand. No device.
+int test_lane_note() {
+  using Tone = gnet::ViewerNote::Tone;
+  using Status = MobileLane::Status;
+  using vr_example::lane_note;
+  using vr_example::note_due;
+  const std::uint64_t t = 100 * kS;
+  CHECK(reads(lane_note(Status{}, t), Tone::Neutral, "Looking for the tag"));
+  CHECK(
+      reads(lane_note(Status{false, 1, 0}, t), Tone::Good, "Tag seen: 1 of 6"));
+  CHECK(
+      reads(lane_note(Status{false, 5, 0}, t), Tone::Good, "Tag seen: 5 of 6"));
+  // A refusal reads for 3 s of set time, to the nanosecond, over the count,
+  // which then reads, or nothing does; and for a set time before it.
+  const Status refused{false, 2, t};
+  const char* const kRefused = "Tag refused, trying again";
+  CHECK(reads(lane_note(refused, t), Tone::Caution, kRefused));
+  CHECK(reads(lane_note(refused, t + 3 * kS - 1), Tone::Caution, kRefused));
+  CHECK(reads(lane_note(refused, t - kS), Tone::Caution, kRefused));
+  CHECK(reads(lane_note(refused, t + 3 * kS), Tone::Good, "Tag seen: 2 of 6"));
+  CHECK(reads(lane_note(Status{false, 0, t}, t + 3 * kS), Tone::Neutral,
+              "Looking for the tag"));
+  // Registered reads over all of it, and stays.
+  const char* const kFound = "Tag found, registered";
+  CHECK(reads(lane_note(Status{true, 0, 0}, t), Tone::Good, kFound));
+  CHECK(reads(lane_note(Status{true, 4, t}, t), Tone::Good, kFound));
+  // The first, a change of line or tone, and once a second, to the nanosecond.
+  const gnet::ViewerNote now = lane_note(Status{}, t);
+  CHECK(note_due(now, std::nullopt, 0));
+  CHECK(!note_due(now, now, 0));
+  CHECK(!note_due(now, now, kS - 1));
+  CHECK(note_due(now, now, kS));
+  gnet::ViewerNote other = now;
+  other.line += ".";
+  CHECK(note_due(other, now, 0));
+  other = now;
+  other.tone = Tone::Caution;
+  CHECK(note_due(other, now, 0));
+  other = now;
+  other.received = std::chrono::steady_clock::now();  // not on the wire
+  CHECK(!note_due(other, now, 0));
+  return 0;
+}
+
+// A lane with no tag has no search to tell of.
+int test_no_tag_tells_nothing(const Env& env) {
+  std::size_t told = 0;
+  auto made =
+      make_lane(env, std::make_unique<FakePhone>(ten_hz(5)),
+                anchors_when([](std::uint64_t) { return true; }, Mat4f(1.0f)),
+                anchors_when([](std::uint64_t) { return true; }, Mat4f(1.0f)),
+                {}, [&told](gnet::ViewerNote) { ++told; });
+  CHECK(made.ok());
+  CHECK(run(env, *made->lane, 15).ok());
+  CHECK(made->lane->close().ok());
+  CHECK(made->lane->counts().paired > 0 && told == 0);
+  return 0;
+}
+
 // A sensor whose poll waits, as a live link's does, up to 20 ms for the
 // frames the test lets through; an error on cue.
 class GatedSensor final : public sensor::IRgbdSensor {
@@ -866,6 +938,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_pairing(env) == 0);
   CHECK(test_live_backlog(env) == 0);
   CHECK(test_check_and_empty(env, scratch.path / "check") == 0);
+  CHECK(test_no_tag_tells_nothing(env) == 0);
   CHECK(test_background() == 0);
   std::puts("recon_example_live_mobile: OK");
   return 0;
@@ -874,6 +947,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
 }  // namespace
 
 int main() {
+  if (test_lane_note() != 0) return 1;
   return vkc::test::run_on_gpu(volumetric_kit::recon::device_requirements(),
                                gpu_main);
 }

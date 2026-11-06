@@ -81,7 +81,7 @@
 /// @endcode
 ///
 /// @warning Not thread-safe: open, start, poll, drain and stop from one
-///          thread.
+///          thread; @ref RgbdStreamSensor::say from any.
 
 #include <array>
 #include <chrono>
@@ -94,12 +94,14 @@
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/fwd.hpp"
+#include "volumetric_kit/grid/networking/stream_server.hpp"
 #include "volumetric_kit/sensor/camera/tracked_registration.hpp"
 #include "volumetric_kit/sensor/rgbd_frame.hpp"
 #include "volumetric_kit/sensor/rgbd_sensor.hpp"
 
 namespace vr_example::link {
 
+namespace gnet = volumetric_kit::grid::networking;
 namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 
@@ -327,6 +329,16 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   /// @return The session's id (grid's `Session::id`): the file's, or the
   ///         first live session's, which every later connection must match.
   const std::array<std::uint8_t, 16>& session_id() const noexcept;
+
+  /// @brief Tell a live writer @p note, up the socket it dialled (grid's
+  ///        `StreamClient::send_note`): the newest wins, sent on the polling
+  ///        thread's next pass, and again to each later connection of the
+  ///        session. A file has no writer: nothing happens.
+  ///
+  /// Never waits, from any thread: one lock, held for a move, with no socket
+  /// call under it. A note no writer can take goes unsaid: the stream goes on.
+  /// @param note  Its tone and its line (grid's `kMaxNoteLineBytes` at most).
+  void say(gnet::ViewerNote note) noexcept;
 
  private:
   struct State;  // the records' source, its place, the decoder, the join

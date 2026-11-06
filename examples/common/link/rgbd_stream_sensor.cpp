@@ -15,6 +15,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <string>
@@ -53,7 +54,6 @@ namespace vr_example::link {
 namespace {
 
 namespace stream = volumetric_kit::grid::stream;
-namespace gnet = volumetric_kit::grid::networking;
 namespace net = volumetric_kit::core::net;
 namespace wire = volumetric_kit::sensor::wire;
 namespace hevc = volumetric_kit::sensor::hevc;
@@ -265,7 +265,8 @@ vkc::Status check_registration(const sensor::camera::TrackedRegistration& reg,
 
 // One session's records over a live link, across its writer's connections:
 // the listener, the connection, the session the first one brought, the
-// records taken on each track, the recording and the failure cap.
+// records taken on each track, the recording, the failure cap and what the
+// writer is told. All on the polling thread, but for `say`.
 class Link {
  public:
   Link(std::unique_ptr<net::Listener> listener, std::string name)
@@ -357,6 +358,7 @@ class Link {
         VKC_TRY(accept(deadline));
         if (!client_) return false;
       }
+      send_note();
       const vkc::Result<bool> read =
           client_->next(left(deadline), record, payload);
       if (!read.ok()) {
@@ -434,6 +436,12 @@ class Link {
   bool ended() const noexcept { return ended_; }
   const RgbdStreamSensor::LinkStats& stats() const noexcept { return stats_; }
 
+  // From any thread: the note the polling thread's next pass takes.
+  void say(gnet::ViewerNote note) noexcept {
+    std::lock_guard<std::mutex> lock(said_mutex_);
+    said_ = std::move(note);
+  }
+
  private:
   struct Pending {
     stream::Record record;
@@ -462,11 +470,30 @@ class Link {
     return {};
   }
 
-  // The connection brought the session: its records count from now on.
+  // The connection brought the session: its records count from now on, and it
+  // is told the newest note, as a client is one connection.
   void join() {
     accepted_ = true;
     stats_.connected = true;
     ++stats_.connections;
+    note_unsent_ = newest_note_.has_value();
+  }
+
+  // The newest note said, to a connection that brought the session. Whatever
+  // send_note returns touches no connection, and what fails on the socket the
+  // read reports, so a note never costs the stream.
+  void send_note() {
+    {
+      std::lock_guard<std::mutex> lock(said_mutex_);
+      if (said_) {
+        newest_note_ = std::move(said_);
+        said_.reset();
+        note_unsent_ = true;
+      }
+    }
+    if (!note_unsent_ || !accepted_) return;
+    note_unsent_ = false;
+    (void)client_->send_note(*newest_note_);
   }
 
   void refuse(const std::string& why) {
@@ -516,6 +543,12 @@ class Link {
   bool ended_ = false;
   vkc::Status error_;  // the recording's, returned once
   RgbdStreamSensor::LinkStats stats_;
+  // What `say` left, until a pass takes it: the only state another thread
+  // touches, under a lock of its own.
+  std::mutex said_mutex_;
+  std::optional<gnet::ViewerNote> said_;
+  std::optional<gnet::ViewerNote> newest_note_;
+  bool note_unsent_ = false;
 };
 
 }  // namespace
@@ -847,6 +880,10 @@ const RgbdStreamSensor::LinkStats& RgbdStreamSensor::link_stats()
 const std::array<std::uint8_t, 16>& RgbdStreamSensor::session_id()
     const noexcept {
   return state_->session;
+}
+
+void RgbdStreamSensor::say(gnet::ViewerNote note) noexcept {
+  if (state_->link) state_->link->say(std::move(note));
 }
 
 vkc::Status RgbdStreamSensor::set_queue_depth(std::size_t frames) {

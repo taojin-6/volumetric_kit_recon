@@ -8,6 +8,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **a live phone is told how the tag search goes**, in one line of
+  words up the socket it dialled: `lane_note` holds every word (`MobileLane::Status`
+  its one input), `note_due` the rate (on a change and at least once a second),
+  and `RgbdStreamSensor::say` sends it from any thread, never waiting
+  (grid's `StreamClient::send_note`), and again to each later connection. A
+  lane placed by a registration file, and one reading a file, says nothing.
+  `TagWatch::Counts::gathered` is the count toward a hold; a still now leaves
+  the hold being gathered at any search past its span, found or not, which
+  changes no hold.
 - `examples`: **the live runs and `codec_replica` state the world's up** in
   their stream's session (`stream::Session::up`), so a viewer keeps the floor
   down with nothing to set. `live_up` (`examples/common/fuse_sender.hpp`) takes
@@ -213,6 +222,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **recon pins grid 0.15.0** (grid #24's merge, `af45973`; was 0.14.0,
+  `368e111`), and the floor rises to it for `StreamClient::send_note`. The core
+  and sensor stay, so no workflow pin moves.
 - build: **recon pins grid 0.14.0** (grid #23's merge, `368e111`; was 0.12.0,
   `17d48f3`), and the floor rises to it for `Session::up`. 0.13.0 replaces
   mesh conversion calls recon does not make. The core and sensor stay, so no

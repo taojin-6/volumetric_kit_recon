@@ -1075,6 +1075,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   (`live_up`): a tag's +z; a sensor's world, or no file, that colour camera's
   -y; unknown where the file poses cameras in a world it does not name.
   `codec_replica` states +z (amends the 2026-10-20 entry).
+- [**2026-11-05**](#2026-11-05--a-live-phone-is-told-how-the-tag-search-goes-in-words-up-the-socket-it-dialled) —
+  A live phone is told how the tag search goes, in words up the socket it
+  dialled: one function holds them, tag words only, on a change and once a
+  second; the polling thread sends, and no note reaches the frame path.
 
 ## Decision record
 
@@ -6464,6 +6468,35 @@ Femto rig's poses.
 read error through `live_session`; `run_live_fusion`'s use of it only compiles,
 as nothing runs that run in CI. `example_codec_replica_run.cmake` reads the
 header of the stream it writes.
+
+### 2026-11-05 — A live phone is told how the tag search goes, in words up the socket it dialled.
+
+**Context.** The search runs on the server, so the person aiming the phone
+cannot tell whether the tag was seen or the session registered. grid 0.15.0
+carries a viewer's note up the socket it reads from (grid's 2026-11-05 notes
+entry).
+
+**Decision.**
+- *Words on the wire, not typed state.* `lane_note` holds every word, so a new
+  word needs no build on the phone, which can show a state and not act on it.
+- *Tag words only.* No words for the rig's lock: a frame is placed or dropped
+  seconds after its capture, so a live line cannot say what becomes of the
+  frame in view.
+- *On a change and at least once a second of set time*, so a phone can tell a
+  stalled server. The count changes at most once a phone frame, so nothing else
+  limits the rate.
+- *The polling thread sends.* A `StreamClient` is one thread's, so `say` leaves
+  the note under a lock of its own and the next pass sends it, within a poll's
+  wait. A send's result is ignored: a read fails a connection, and a note never
+  does.
+- *The count ages at every search*, not only at a find, so it falls as sightings
+  pass the span with the tag out of view. Frame times only rise, so no hold
+  changes. A falling count is true, and shows. With no frames, nothing ages it.
+
+**Verification.** `example_live_mobile_test` holds each line and the rate;
+`example_live_tag_test` what a lane tells, and a phone's server reading it from
+`open_mobile_lane` over loopback; `example_link_listen_test` `say`'s threads and
+connections.
 
 ## Measured lessons
 

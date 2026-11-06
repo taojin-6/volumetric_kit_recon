@@ -1161,7 +1161,8 @@ without `VS_WITH_FFMPEG`) refuses one.
 Live, `RgbdStreamSensor::listen` takes the same records from a writer that
 dials one numeric address of this host (core's `net::Listener`, grid's
 `StreamClient::adopt`), on the polling thread; its header holds the link's
-rules (refusals, reconnects, repeats, the failure cap and the recording).
+rules (refusals, reconnects, repeats, the failure cap and the recording), and
+`say` tells the writer one line of words up the same socket, from any thread.
 `tools/session_check`, built with the tests, prints what
 `link/session_check.hpp` finds of a file or a link (README, "Checking a
 phone's stream").
@@ -1171,8 +1172,9 @@ puts such a sensor beside a live run's cameras (`source.mobile`): after each
 set's send, `MobileLane::next` tracks the phone's record due by the next set
 on `lane_tracking()` in one batch, waited on in the gap, and hands the next
 send the frames the `Tracker` placed as fillers of their tier. Its rules
-(pairing, the drain cap, splits, the tint) are the header's; why, the
-2026-11-04 entry. Its log (`track_log.hpp`) is a `Tracker`'s steps as CSVs
+(pairing, the drain cap, splits, the tint, what a phone is told) are the
+header's; why, the 2026-11-04 and 2026-11-05 entries. Its log
+(`track_log.hpp`) is a `Tracker`'s steps as CSVs
 and a TUM pose file a chain, which `read_track_log` reads back and
 `summarize` turns into every metric of a run, once.
 

@@ -22,10 +22,12 @@
 ///
 /// **Holds.** @ref kHoldStills stills within @ref kHoldSpanNs, with no
 /// @ref TagWatch::split between them, are a hold; its stills are then spent,
-/// and a still older than the span drops out of the one being gathered.
+/// and at each search, the tag found or not, a still older than the span drops
+/// out of the one being gathered (@ref TagWatch::Counts::gathered).
 /// calib's `tracked_world_from_tag` solves it, ARKit's +y up, at the edge of
 /// the world's tag (`AprilTagWorld::size_m`: the printed edge), and its gates
-/// pass or refuse it. The first hold that passes registers the session
+/// pass or refuse it (@ref TagHold::Use). The first hold that passes registers
+/// the session
 /// (`register_tracked`, in memory: @ref TagNews::registered). Later holds
 /// that pass are reported, never applied. A search or a solve that calib or
 /// OpenCV refuses, or a picture the copy cannot read, is reported, never
@@ -165,6 +167,10 @@ class TagWatch {
     /// Searches calib or OpenCV refused, and pictures the copy could not
     /// read.
     std::uint64_t failed = 0;
+    /// Stills gathered toward the next hold, of @ref kHoldStills: back to 0
+    /// when a hold is solved or at the search after a split, and falling as
+    /// the oldest leaves the span.
+    std::uint32_t gathered = 0;
   };
 
   /// @return OK when this build registers by the tag and @p world is the

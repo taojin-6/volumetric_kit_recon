@@ -51,6 +51,12 @@
 /// is printed with its gap from the rig chain and logged, never applied. Both
 /// gaps are @ref pose_gap at the newest paired frame's camera.
 ///
+/// **What the phone is told.** A live phone searching by the tag is told how
+/// the search goes, in one line of words for a person to read (@ref lane_note),
+/// up the socket it dialled (`link::RgbdStreamSensor::say`), on a change and at
+/// least every @ref kNoteAtLeastNs, so it can tell a stalled run from a steady
+/// one. A lane placed by a registration file, or reading a file, says nothing.
+///
 /// **The log** has no `arkit_raw` row live: the wire carries no log of the
 /// device's removed map steps. A replay that has one gives it to its log
 /// (`RunSource::device_steps`).
@@ -62,7 +68,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -72,6 +80,7 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/grid/networking/stream_server.hpp"
 #include "volumetric_kit/grid/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/sender/fuse_inputs.hpp"
 #include "volumetric_kit/recon/track/tracker.hpp"
@@ -80,6 +89,7 @@
 namespace vr_example {
 
 namespace config = volumetric_kit::core::config;
+namespace gnet = volumetric_kit::grid::networking;
 namespace sensor = volumetric_kit::sensor;
 namespace track = volumetric_kit::recon::track;
 namespace vkc = volumetric_kit::core;
@@ -87,6 +97,12 @@ namespace vkc = volumetric_kit::core;
 /// Fillers fused a set, at most: the frames a gap placed beyond it wait for
 /// the sets after.
 inline constexpr std::size_t kDrainCap = 3;
+
+/// At least one note a second, in set time, changed or not.
+inline constexpr std::uint64_t kNoteAtLeastNs = 1'000'000'000;
+
+/// How long a refused hold's words show, in set time.
+inline constexpr std::uint64_t kRefusedShownNs = 3'000'000'000;
 
 /// The phone's queue (`IRgbdSensor::set_queue_depth`): 6 s of a 10 Hz
 /// phone, its oldest let go past it.
@@ -162,6 +178,14 @@ class MobileLane {
     std::uint64_t unregistered = 0;
   };
 
+  /// @brief Where the tag search stands, for a person (@ref lane_note).
+  struct Status {
+    bool registered = false;     ///< By the tag's first hold that passed.
+    std::uint32_t gathered = 0;  ///< @ref TagWatch::Counts::gathered.
+    /// The set time of the newest refused hold; 0 for none.
+    std::uint64_t refused_ns = 0;
+  };
+
   /// @param device     The run's device; it and @p allocator outlive the lane.
   /// @param phone      The phone, not started: its queue is set and it is
   ///                   started at the first @ref next. Null makes the empty
@@ -176,13 +200,17 @@ class MobileLane {
   ///                   as the phone was opened. Destroyed before the phone
   ///                   stops (its thread may hold a picture of the phone's
   ///                   decoder).
+  /// @param say        With @p tags, told @ref lane_note after a gap when
+  ///                   @ref note_due says so, on the lane's thread; it must
+  ///                   not wait. Empty, or without them: told nothing.
   /// @return The lane; `Status::Code::InvalidArgument` for a phone without a
   ///         tracker or a log; or the prep's error.
   static vkc::Result<std::unique_ptr<MobileLane>> create(
       vkc::Device& device, vkc::Allocator& allocator,
       std::unique_ptr<sensor::IRgbdSensor> phone,
       std::unique_ptr<track::Tracker> tracker, std::unique_ptr<TrackLog> log,
-      std::unique_ptr<TagWatch> tags = {});
+      std::unique_ptr<TagWatch> tags = {},
+      std::function<void(gnet::ViewerNote)> say = {});
   ~MobileLane();
   MobileLane(const MobileLane&) = delete;
   MobileLane& operator=(const MobileLane&) = delete;
@@ -230,6 +258,21 @@ class MobileLane {
   std::unique_ptr<State> state_;
 };
 
+/// @brief The one line a person reads of the tag search, every word of it, by
+///        the first that holds: registered, a hold refused within
+///        @ref kRefusedShownNs, stills gathered, still looking.
+/// @param status  Where the search stands.
+/// @param set_ns  The set it is said at, on the rig's clock.
+/// @return The line and its tone.
+gnet::ViewerNote lane_note(const MobileLane::Status& status,
+                           std::uint64_t set_ns);
+
+/// @return Whether @p now goes out, @p since_ns of set time after @p last did:
+///         with no last, on a change, or at @ref kNoteAtLeastNs.
+bool note_due(const gnet::ViewerNote& now,
+              const std::optional<gnet::ViewerNote>& last,
+              std::uint64_t since_ns);
+
 /// @brief The run's lane: with `source.mobile` its session -- a file, or the
 ///        phone dialling `tcp://ADDRESS:PORT`, waited for here up to 5
 ///        minutes (a Ctrl+C ends the wait with the empty lane) and polled in
@@ -239,7 +282,8 @@ class MobileLane {
 ///        Placed by `source.mobile_registration`, read depth alone; or
 ///        without one by the origin tag, read with its pictures: a
 ///        @ref TagWatch in `source.calibration`'s world, on its own thread
-///        (every lane runs beside a live rig). A file read so decodes its
+///        (every lane runs beside a live rig), a live phone told how the
+///        search goes. A file read so decodes its
 ///        pictures in @ref MobileLane::next, on the set loop (about 1 ms at
 ///        p95 a gap, measured on an RTX 5090): a replay's cost, not a live
 ///        run's, whose phone decodes on its poll thread. With

@@ -35,13 +35,13 @@ endif()
 # StreamClient, and its pictures on sensor_video where sensor builds it. The key
 # gate is sensor_video_syntax's, which sensor_wire brings. session_check's
 # checks (link/session_check.hpp) read the pattern with sensor_prep's
-# PatternReader.
+# PatternReader. grid_networking is PUBLIC for the ViewerNote its header names.
 add_library(vr_example_link STATIC link/rgbd_stream_sensor.cpp)
 target_link_libraries(
   vr_example_link
   PUBLIC vr_example_common volumetric_kit::sensor_wire
-         volumetric_kit::grid_stream
-  PRIVATE volumetric_kit::grid_networking volumetric_kit::core_net)
+         volumetric_kit::grid_stream volumetric_kit::grid_networking
+  PRIVATE volumetric_kit::core_net)
 if(TARGET volumetric_kit::sensor_video)
   target_link_libraries(vr_example_link PRIVATE volumetric_kit::sensor_video)
   target_compile_definitions(vr_example_link PRIVATE VR_EXAMPLE_LINK_VIDEO=1)
