@@ -283,13 +283,13 @@ bool note_due(const gnet::ViewerNote& now,
 ///        without one by the origin tag, read with its pictures: a
 ///        @ref TagWatch in `source.calibration`'s world, on its own thread
 ///        (every lane runs beside a live rig), a live phone told how the
-///        search goes. A file read so decodes its
-///        pictures in @ref MobileLane::next, on the set loop (about 1 ms at
-///        p95 a gap, measured on an RTX 5090): a replay's cost, not a live
-///        run's, whose phone decodes on its poll thread. With
-///        `diagnostics.track_log`, a live phone is recorded there
-///        (`phone.vrst`), and the tag's registration is written beside it
-///        (`registration.json`), so the run replays.
+///        search goes. A file read so decodes its pictures in
+///        @ref MobileLane::next, on the set loop (about 1 ms at p95 a gap,
+///        measured on an RTX 5090): a replay's cost, not a live run's, whose
+///        phone decodes on its poll thread. With `diagnostics.track_log`, a
+///        live phone is recorded there (`phone.vrst`), and the tag's
+///        registration is written beside it (`registration.json`), so the run
+///        replays.
 /// @return The lane; @ref check_mobile's refusal, before any wait; with the
 ///         tag, `Status::Code::InvalidArgument` before any wait for a
 ///         `diagnostics.track_log` that holds a `registration.json` already

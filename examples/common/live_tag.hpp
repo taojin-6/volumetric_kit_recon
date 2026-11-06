@@ -27,10 +27,9 @@
 /// calib's `tracked_world_from_tag` solves it, ARKit's +y up, at the edge of
 /// the world's tag (`AprilTagWorld::size_m`: the printed edge), and its gates
 /// pass or refuse it (@ref TagHold::Use). The first hold that passes registers
-/// the session
-/// (`register_tracked`, in memory: @ref TagNews::registered). Later holds
-/// that pass are reported, never applied. A search or a solve that calib or
-/// OpenCV refuses, or a picture the copy cannot read, is reported, never
+/// the session (`register_tracked`, in memory: @ref TagNews::registered). Later
+/// holds that pass are reported, never applied. A search or a solve that calib
+/// or OpenCV refuses, or a picture the copy cannot read, is reported, never
 /// fatal.
 ///
 /// **Threads.** With @ref TagWatch::Options::background, the copy, the search
