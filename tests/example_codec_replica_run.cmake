@@ -62,4 +62,16 @@ endforeach()
 if(NOT EXISTS "${WORK_DIR}/wall.vrst")
   message(FATAL_ERROR "No stream: ${output}")
 endif()
+# The stream states a Replica world's up: a session header of 72 bytes, its up
+# at byte 52 as three little-endian binary32s, +z.
+file(
+  READ "${WORK_DIR}/wall.vrst" header
+  LIMIT 72
+  HEX)
+string(SUBSTRING "${header}" 8 8 header_bytes)
+string(SUBSTRING "${header}" 104 24 up)
+if(NOT header_bytes STREQUAL "48000000" OR NOT up STREQUAL
+                                           "00000000000000000000803f")
+  message(FATAL_ERROR "Not a session header naming +z: ${header}")
+endif()
 file(REMOVE_RECURSE "${WORK_DIR}")

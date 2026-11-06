@@ -8,6 +8,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **the live runs and `codec_replica` state the world's up** in
+  their stream's session (`stream::Session::up`), so a viewer keeps the floor
+  down with nothing to set. `live_up` (`examples/common/fuse_sender.hpp`) takes
+  it from `source.calibration`'s file: a tag's world +z; a sensor's world, or
+  no file, -y, that colour camera's image up; cameras posed in a world the file
+  does not name unknown, whose stream's header stays as it was. `codec_replica`
+  states +z (`kReplicaUp`). `live_session` returns a `Result` with that file's
+  read error, so a bad file is refused before the stream's file and port exist.
 - `examples`: **a live phone registered by the origin tag**
   (`examples/common/live_tag.hpp`, in a build with `-DVR_WITH_CALIB=ON`): a
   phone given with no `source.mobile_registration` is read with its
@@ -204,6 +212,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **recon pins grid 0.14.0** (grid #23's merge, `368e111`; was 0.12.0,
+  `17d48f3`), and the floor rises to it for `Session::up`. 0.13.0 replaces
+  mesh conversion calls recon does not make. The core and sensor stay, so no
+  workflow pin moves.
 - build: **recon pins core 0.49.0** (core #99's merge, `947fe19`; was
   0.43.0), and CI takes the core's actions at the new pin. 0.44.0-0.48.0
   change nothing recon calls but `source.mobile`'s address reasons, the net

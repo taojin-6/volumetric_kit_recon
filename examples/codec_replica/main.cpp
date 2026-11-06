@@ -40,6 +40,7 @@
 #include "volumetric_kit/grid/eval/mesh_distance.hpp"
 #include "volumetric_kit/grid/mesh/marching_cubes.hpp"
 #include "volumetric_kit/grid/mesh_io/ply_writer.hpp"
+#include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/recon/sender/set_sender.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
@@ -91,12 +92,12 @@ vkc::Status run(const Options& opt) {
              mesh::MarchingCubes::create(device, allocator));
   const codec_stream::CodecOutputs outputs =
       vgrid_example::codec_outputs(opt.output);
+  vgrid::stream::Session session = vgrid_example::codec_session(
+      "codec_replica", {vgrid_example::kNominalFps, 1});
+  session.up = vr_example::kReplicaUp;
   VKC_ASSIGN(codec_stream::CodecStream stream,
-             codec_stream::CodecStream::create(
-                 device, allocator, config,
-                 vgrid_example::codec_session("codec_replica",
-                                              {vgrid_example::kNominalFps, 1}),
-                 outputs));
+             codec_stream::CodecStream::create(device, allocator, config,
+                                               session, outputs));
   VKC_ASSIGN(
       vgrid_example::CodecReport report,
       vgrid_example::CodecReport::create(opt.output.csv, outputs.stream,

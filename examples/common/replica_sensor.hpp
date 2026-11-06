@@ -15,6 +15,7 @@
 /// would a camera's (`sensor::GpuFramePrep`), and never learns whether its
 /// frames came off a disk or a sensor.
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <limits>
@@ -31,6 +32,9 @@ namespace vr_example {
 
 namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
+
+/// The up of a Replica sequence's world (its traj.txt as read): +z.
+inline constexpr std::array<float, 3> kReplicaUp{0.0f, 0.0f, 1.0f};
 
 /// @brief A Replica-SLAM RGB-D sequence -- `<scene>/results/frameNNNNNN.jpg` +
 ///        `depthNNNNNN.png`, per-frame poses in `<scene>/traj.txt`, intrinsics
