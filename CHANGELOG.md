@@ -212,7 +212,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- build: **recon pins grid 0.14.0** (grid #23, `1bf8226`; was 0.12.0,
+- build: **recon pins grid 0.14.0** (grid #23's merge, `368e111`; was 0.12.0,
   `17d48f3`), and the floor rises to it for `Session::up`. 0.13.0 replaces
   mesh conversion calls recon does not make. The core and sensor stay, so no
   workflow pin moves.
