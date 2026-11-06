@@ -659,9 +659,11 @@ int test_say_never_waits() {
     auto d =
         Dialler::dial(vr_test::session_of(vr_test::phone_info()), port, true);
     if (!d.ok()) return;
-    if (!vr_test::wait_for([&] { return polled.load(); })) return;
+    // Past the wait below, so a say that waits fails there, its pass still to
+    // come.
+    (void)vr_test::wait_for([&] { return polled.load(); }, 3 * kWait);
     heard_last = heard(**d, "the last");
-    (void)vr_test::wait_for([&] { return done.load(); });
+    (void)vr_test::wait_for([&] { return done.load(); }, 3 * kWait);
   });
   vkc::Result<std::unique_ptr<RgbdStreamSensor>> live = listen(port);
   CHECK(live.ok());
@@ -676,20 +678,27 @@ int test_say_never_waits() {
   });
   const bool returned = vr_test::wait_for([&] { return said.load(); });
   std::atomic<bool> stop{false};
+  std::atomic<std::uint64_t> polls{0};
   std::thread poller([&] {
-    while (!stop.load()) (void)s.poll();
+    while (!stop.load()) {
+      (void)s.poll();
+      ++polls;
+    }
   });
   alone.join();
-  // A poll waits kPollWait, so a say that waited on one takes as long: the
-  // median holds against a busy machine's slow says.
+  // Each say just as a poll is under way, kPollWait on the silent socket, as
+  // one that waited on it would take most of that. The median holds against a
+  // busy machine's slow says.
   std::vector<vr_test::Clock::duration> took;
-  for (int i = 0; i < 25; ++i) {
+  for (int i = 0; i < 9; ++i) {
+    const std::uint64_t seen = polls.load();
+    (void)vr_test::wait_for([&] { return polls.load() > seen; });
     const auto start = vr_test::Clock::now();
     s.say({Tone::Good, "note", {}});
     took.push_back(vr_test::Clock::now() - start);
   }
-  std::nth_element(took.begin(), took.begin() + 12, took.end());
-  const auto median = took[12];
+  std::nth_element(took.begin(), took.begin() + 4, took.end());
+  const auto median = took[4];
   s.say({Tone::Good, "the last", {}});
   polled = true;
   (void)vr_test::wait_for([&] { return heard_last.load(); });
@@ -697,8 +706,12 @@ int test_say_never_waits() {
   poller.join();
   done = true;
   writer.join();
+  std::printf("a say's median beside a waiting poll: %lld us\n",
+              static_cast<long long>(
+                  std::chrono::duration_cast<std::chrono::microseconds>(median)
+                      .count()));
+  CHECK(median < RgbdStreamSensor::kPollWait / 2);
   CHECK(returned && heard_last.load());
-  CHECK(median < RgbdStreamSensor::kPollWait / 4);
   return 0;
 }
 
@@ -841,8 +854,9 @@ int main() {
   if (test_start_mid_session() != 0) return 1;
   if (test_recording_refused(scratch) != 0) return 1;
   if (test_refusals(scratch) != 0) return 1;
-  if (test_say_while_frames_flow() != 0) return 1;
+  // First of them: a say that waits fails here, and would hang the others.
   if (test_say_never_waits() != 0) return 1;
+  if (test_say_while_frames_flow() != 0) return 1;
   if (test_say_connections() != 0) return 1;
   if (test_say_at_a_close() != 0) return 1;
   if (test_say_to_a_file(scratch) != 0) return 1;
