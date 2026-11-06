@@ -10,13 +10,15 @@
 ///
 /// **Stills.** The lane shows the watch each frame it pairs, in the phone's
 /// own (ARKit's) world, before it lets the frame's picture go (@ref
-/// TagWatch::see). A frame is a candidate when it is @ref kSettleNs past the
-/// first frame shown (ARKit settling) and at least @ref kTagEveryNs of frame
-/// time after the last candidate, however fast its camera moves: the hold's
-/// gates refuse a wrong pose, and the rig chain's fits correct a rough one
-/// (live_mobile.hpp). A candidate's Y plane is copied to the host (sensor's
-/// `PictureReadback`, `Planes::Luma`) and searched for calib's `kOriginTag`
-/// (`detect_tag`): a still when the picture holds exactly one print of it.
+/// TagWatch::see). A frame @ref kSettleNs past the first frame shown (ARKit
+/// settling) is a candidate, however fast its camera moves: the hold's gates
+/// refuse a wrong pose, and the rig chain's fits correct a rough one
+/// (live_mobile.hpp). Until the session has registered, that is every frame,
+/// so a tag found only now and then still gathers a hold. After it, one per
+/// @ref kTagEveryNs of frame time, for the later holds' log alone. A
+/// candidate's Y plane is copied to the host (sensor's `PictureReadback`,
+/// `Planes::Luma`) and searched for calib's `kOriginTag` (`detect_tag`): a
+/// still when the picture holds exactly one print of it.
 ///
 /// **Holds.** @ref kHoldStills stills within @ref kHoldSpanNs, with no
 /// @ref TagWatch::split between them, are a hold; its stills are then spent,
@@ -79,7 +81,7 @@ namespace vkc = volumetric_kit::core;
 inline constexpr std::size_t kHoldStills = 6;
 /// A hold's span, its first still's frame time to its last's, at most.
 inline constexpr std::uint64_t kHoldSpanNs = 3'000'000'000;
-/// A candidate per this much frame time, at most: 5 Hz.
+/// Once registered, a candidate per this much frame time, at most: 5 Hz.
 inline constexpr std::uint64_t kTagEveryNs = 200'000'000;
 /// No candidate before this much frame time after the first frame shown.
 inline constexpr std::uint64_t kSettleNs = 2'000'000'000;
