@@ -8,6 +8,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **`fuse_render` runs in CI** (`recon_fuse_render_run`, the
+  viewer leg): two frames of the wall `recon_fuse_replica_run` fuses, textured
+  with the second, rendered to a 320x200 PNG. The test reads the size from the
+  PNG's header, and the pixels drawn from `fuse_render`, which now prints them
+  (`drew N of M pixels`, those more than a code from the clear colour): at
+  least a twentieth of the frame, and not all of it. Under
+  `VKC_TEST_VALIDATION` (or `VKC_TEST_SYNC_VALIDATION`) the loader forces the
+  validation layer on, and the test fails if the loader's log does not show it
+  in both instances or it reports an error. A hang fails in 300 s.
+  `fuse_render`'s gfx half is one `render()`; its errors print as before.
 - `examples`: **many phones' sessions on one address**
   (`RgbdStreamSensor::Door`, `examples/common/link/rgbd_stream_sensor.hpp`):
   `Door::open` binds the address and returns, a bind it cannot make an
@@ -252,6 +262,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **the live examples link one bundle** (`vr_example_live`,
+  `examples/common/CMakeLists.txt`, which says why each library is on it):
+  `fuse_orbbec`, `fuse_realsense` and `fuse_decklink` link it and their camera,
+  FFS depth and the DeckLink camera through `vr_example_ffs` and
+  `vr_example_decklink`. The set of libraries each links is unchanged; a build
+  with DeckLink and FFS no longer names `sensor_stereo` twice on the link line.
+  The tests `examples/` and the viewer add skip on 77 and fail after 300 s, as
+  `tests/`'s do (`recon_example_viewer_atlas` keeps its 30 s), and the Replica
+  run scripts end a program that hangs after 240 s and fail with what it
+  printed, never taking it for the no-device skip.
 - `examples`: **the phone lane holds sessions**
   (`examples/common/live_mobile.hpp`): `MobileLane::add` joins one phone's
   session (`SessionParts`: its sensor, tracker, log and watch, a presence and
@@ -569,6 +589,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   position**, where it gave its cell's, so shading no longer jumps at cell
   faces; positions and triangles are unchanged. It came with the grid 0.3.0
   pin above (grid 0.2.1, grid #5).
+
+### Removed
+
+- `examples`: **dead and duplicated code.** `send_set`'s overload without
+  fillers (callers pass `{}`), `AudioFeed::lost`, which nothing read, and
+  `free_due`, `apply_orbbec_config` and `print_orbbec_camera`, each folded
+  into its one caller. `codec_replica`'s own 16,384 buckets go too: its grid
+  starts at `fusion_buckets`' default, as the live runs' does, the same count
+  at 1 cm and coarser, a finer grid up to 4x larger (65,536 buckets at 5 mm
+  and finer), and a device that caps it no longer logs a warning. The Orbbec
+  and RealSense reports share `exposure_text` (`live_sets.hpp`). Tests:
+  `recon_example_live_sets` (`exposure_text`), `recon_sender_set_sender`.
 
 ### Fixed
 

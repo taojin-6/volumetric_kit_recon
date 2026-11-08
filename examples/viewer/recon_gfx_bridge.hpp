@@ -86,12 +86,6 @@ inline gassets::Mesh to_gfx_mesh(const rmesh::Mesh& mesh) {
 
   gassets::Mesh out;
   out.name = "recon_reconstruction";
-  // TODO(examples): two passes over the same bytes -- resize()
-  // value-initializes every gfx Vertex (it carries default member initializers)
-  // and the memcpy then overwrites all of it, ~50 MB each on a 790k-vertex room
-  // scan. std::vector has no resize-without-init, so one pass needs either a
-  // different container or a strict-aliasing-shaky reinterpret_cast of the
-  // source range; seam B deletes the copy outright, which is the real fix.
   out.vertices.resize(mesh.vertices.size());
   if (!mesh.vertices.empty()) {
     // The void* says the bulk copy is meant: both layouts are trivially

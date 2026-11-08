@@ -32,8 +32,10 @@
 //     releases a generation once every frame that drew it has retired, which
 //     begin_frame's wait for the frame slot's last frame says. No semaphore
 //     crosses this seam: the extract is gated on the host.
-//   * visibility -- the fuse thread blocks on its dispatch's fence inside
-//     submit_single_time before it publishes anything, and gfx's later
+//   * visibility -- the fuse thread blocks on each dispatch's fence before it
+//     publishes anything (grid's extract_device submits with
+//     CommandBatch::submit_async and waits in PendingBatch::wait; the texture
+//     pass that rewrites uv0 waits in CommandBatch::submit), and gfx's later
 //     vkQueueSubmit makes those device writes visible to the draw, so no
 //     barrier is recorded here. Note what this does NOT rest on: recon's
 //     dispatch barrier names DRAW_INDIRECT unconditionally but VERTEX_INPUT
@@ -915,8 +917,8 @@ int run(GLFWwindow* window, const Options& opt) {
           // the CPU either.
           //
           // No barrier is recorded here, and the reason is the fence + submit
-          // chain, not the barrier scope: recon's extract blocks on its own
-          // fence inside submit_single_time -- an availability operation
+          // chain, not the barrier scope: grid's extract blocks on its own
+          // fence in PendingBatch::wait -- an availability operation
           // covering every device write it made -- before the mesh is
           // published at all, and this thread's vkQueueSubmit then makes those
           // writes visible to the draw. recon's dispatch barrier does also

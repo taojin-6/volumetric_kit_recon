@@ -2,15 +2,16 @@
 # Copyright (c) 2026 Tao Jin
 
 # The recon -> gfx reconstruction viewer examples: fuse_render (headless colour
-# PNG) and fuse_viewer (live window). This directory is the ONE place recon's
-# examples link the renderer sibling volumetric_kit_gfx -- pulled here (never in
-# the tiers) and only under VR_BUILD_VIEWER, so recon's library and default
-# build stay renderer-independent (the 2026-07-07 decision amendment in
-# DECISIONS.md).
+# PNG), fuse_viewer (live window) and rig_viewer (a live Orbbec rig). This
+# directory is the ONE place recon's examples link the renderer sibling
+# volumetric_kit_gfx -- pulled here (never in the tiers) and only under
+# VR_BUILD_VIEWER, so recon's library and default build stay
+# renderer-independent (the 2026-07-07 decision amendment in DECISIONS.md).
 #
 # Because it is that seam, it is also the thing most likely to drift out of
-# build unnoticed -- and did, until a dedicated build-only macOS CI leg
-# (.github/workflows/viewer.yml) started compiling both targets on every PR.
+# build unnoticed -- and did, until the macOS viewer CI leg
+# (.github/workflows/viewer.yml) started building these targets on every PR; it
+# also runs their headless tests.
 
 include(FetchContent)
 
@@ -30,37 +31,17 @@ set(VG_WITH_GLFW
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  # Must stay at or past gfx #88: before it, vg_embed_shaders left one glslc
-  # rule reachable from two unrelated targets, so `make -j` ran it twice at once
-  # and truncated the .spv -- "Invalid SPIR-V magic number",
-  # nondeterministically. A warm build tree hides it by skipping shader
-  # compilation entirely, which is why it only surfaced once CI started
-  # discarding stale trees.
-  #
-  # And at or past gfx #93, which decodes a negative uv0 as the carried
-  # coordinate `-uv - 1` rather than substituting (0, 0). This floor is a
-  # RENDERING one, not a compile one, and it is the only one here that fails
-  # silently. The texture tier now decides visibility per vertex, so a triangle
-  # may mix a textured vertex with a carried one -- the all-three-vertices gate
-  # that made such a triangle impossible is gone. Against gfx #92 the carried
-  # vertices forward (0, 0), so frag_uv interpolates from a real coordinate to
-  # the atlas origin and smears the corner of the camera image across the face,
-  # along every occlusion silhouette and the whole frustum boundary. Both viewer
-  # examples draw that on default flags; nothing in CI catches it, since this
-  # leg builds them and does not render.
-  #
-  # And at or past gfx #133, which adds gfx_glfw (above). A compile floor.
-  #
-  # And at or past gfx #144, which shows ImGui's colours as authored on the
-  # default _SRGB swapchain; before it the panels were encoded twice and drew
-  # washed out. A rendering floor, and the newest, so it covers the older ones;
-  # recon_example_viewer_pass checks it.
-  #
-  # And at or past gfx #172, whose kHybridMeshCullBackFaces and
-  # kHybridMeshWireframe the View options draw with. A compile floor. #173 makes
-  # the wireframe the edges alone, hidden ones removed.
-  #
-  # It refuses a core older than 0.20.0 (gfx's VG_VKC_MIN_VERSION).
+  # Floors, newest first (CHANGELOG and this pin's git history record each
+  # move). gfx #172: the View options' kHybridMeshCullBackFaces and
+  # kHybridMeshWireframe (compile; #173 draws the wireframe as its visible edges
+  # alone). gfx #144: ImGui's colours as authored on the _SRGB swapchain, not
+  # washed out (rendering; recon_example_viewer_pass checks it). gfx #93: a
+  # negative uv0 decodes as the carried coordinate -uv - 1; against #92 a
+  # triangle mixing textured and carried vertices smears the atlas origin across
+  # its face, along every occlusion silhouette, on default flags. That floor
+  # fails silently: recon_fuse_render_run counts the pixels drawn, not their
+  # colours (DECISIONS 2026-08-11). gfx refuses a core older than 0.20.0
+  # (VG_VKC_MIN_VERSION).
   GIT_TAG ffc1a17a3d14aeb546e5484067dbf0160e76c60c # gfx main, #173's merge
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
@@ -96,6 +77,22 @@ target_link_libraries(fuse_render PRIVATE ${_viewer_recon_libs}
                                           ${_viewer_gfx_libs} Vulkan::Vulkan)
 target_include_directories(fuse_render PRIVATE ${_viewer_common_inc})
 vr_target_warnings(fuse_render)
+# fuse_render on a device: two frames of recon_fuse_replica_run's wall, the
+# sensor package's JPEG fixture for colour, rendered to a PNG. A hang fails in
+# 300 s, as tests/'s do.
+if(VR_BUILD_TESTS)
+  add_test(
+    NAME recon_fuse_render_run
+    COMMAND
+      ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:fuse_render>
+      -DCOLOR=${VS_TEST_DATA_DIR}/jpeg/patches_256x144.jpg
+      -DDEPTH=${PROJECT_SOURCE_DIR}/tests/data/replica/depth_1m_256x144.png
+      -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fuse-render-run -P
+      ${PROJECT_SOURCE_DIR}/tests/example_fuse_render_run.cmake)
+  set_tests_properties(
+    recon_fuse_render_run PROPERTIES SKIP_REGULAR_EXPRESSION
+                                     "skipping: no Vulkan device" TIMEOUT 300)
+endif()
 
 # The atlas both live viewers draw with (viewer_atlas.hpp), on a headless gfx
 # device. Defined here, where gfx is fetched. Skips with no device under the
@@ -178,7 +175,6 @@ if(VR_BUILD_TESTS)
   vr_target_warnings(recon_example_viewer_pass_test)
   add_test(NAME recon_example_viewer_pass
            COMMAND recon_example_viewer_pass_test)
-  set_tests_properties(recon_example_viewer_pass PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # fuse_viewer: the live window -- fuses on a background thread, draws the
@@ -191,15 +187,16 @@ target_link_libraries(
   fuse_viewer PRIVATE ${_viewer_recon_libs} volumetric_kit::gfx_glfw
                       volumetric_kit::gfx_pipelines Vulkan::Vulkan)
 target_include_directories(fuse_viewer PRIVATE ${_viewer_common_inc})
-# Both viewer examples carry the project's warning policy, like every other
+# The viewer examples carry the project's warning policy, like every other
 # first-party target -- they are our code, and the overlay/panel logic is where
 # a stale format specifier or an unused capture would otherwise go unseen.
 #
-# These targets are the one place recon's code meets gfx's API, so they are
-# covered by their own CI leg (.github/workflows/viewer.yml) -- build-only on
-# macOS, since the live viewer needs a window and both examples need a dataset
-# CI does not carry. Added after that gap let a real recon/gfx API mismatch
-# reach `main` unbuilt.
+# These targets are the one place recon's code meets gfx's API, so they have
+# their own CI leg (.github/workflows/viewer.yml), added after a real recon/gfx
+# API mismatch reached `main` unbuilt: it builds them on macOS and runs the
+# headless tests above, fuse_render on a two-frame wall among them, and their
+# config entries; the live viewers need a window and a dataset or a rig CI does
+# not carry.
 vr_target_warnings(fuse_viewer)
 
 # rig_viewer: fuse_viewer's sibling for a live, synced rig of Orbbec cameras,
@@ -217,4 +214,9 @@ if(TARGET volumetric_kit::sensor_orbbec)
             volumetric_kit::gfx_pipelines Vulkan::Vulkan)
   target_include_directories(rig_viewer PRIVATE ${_viewer_common_inc})
   vr_target_warnings(rig_viewer)
+endif()
+
+# Last, so every test above takes examples/'s skip code and timeout.
+if(VR_BUILD_TESTS)
+  vr_example_test_limits()
 endif()

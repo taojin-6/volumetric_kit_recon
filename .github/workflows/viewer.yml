@@ -14,7 +14,8 @@ name: viewer (reusable)
 # seam between recon and gfx that drifts. Their headless tests do run: the
 # atlas both live viewers draw with and the render pass they record, each on a
 # headless device, the device they adopt, rig_viewer's end-of-run report, and
-# each viewer's config entry, which returns before any window.
+# each viewer's config entry, which returns before any window. fuse_render,
+# which needs no window, fuses two frames of a wall and renders it to a PNG.
 # The Orbbec SDK is installed too, so rig_viewer is compiled with the other
 # two.
 on:
@@ -111,9 +112,9 @@ jobs:
             recon_example_viewer_atlas_test recon_example_viewer_device_test \
             recon_example_viewer_pass_test recon_example_viewer_rig_report_test
 
-      # The viewers' headless tests, on the core's test policy as in
-      # _build.yml's Test step: a device and the validation layer required.
-      # None opens a window.
+      # The viewers' headless tests and fuse_render's run, on the core's test
+      # policy as in _build.yml's Test step: a device and the validation layer
+      # required. None opens a window.
       - name: Test viewer examples
         env:
           VKC_REQUIRE_VULKAN_DEVICE: '1'
@@ -123,4 +124,4 @@ jobs:
           export VK_LAYER_PATH="${prefix}/share/vulkan/explicit_layer.d"
           export DYLD_LIBRARY_PATH="${prefix}/lib"
           ctest --test-dir build --output-on-failure --no-tests=error \
-            -R '^recon_(example_viewer_|(fuse_render|fuse_viewer|rig_viewer)_config_entry$)'
+            -R '^recon_(example_viewer_|fuse_render_run$|(fuse_render|fuse_viewer|rig_viewer)_config_entry$)'

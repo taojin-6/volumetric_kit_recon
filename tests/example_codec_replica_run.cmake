@@ -5,7 +5,8 @@
 # example_fuse_replica_run.cmake's), each coded into a .vrst, an I-frame and
 # three P-frames. It prints the per-set table, P-frame and I-frame sets apart,
 # and writes the stream. Skips with no Vulkan device unless
-# VKC_REQUIRE_VULKAN_DEVICE is set.
+# VKC_REQUIRE_VULKAN_DEVICE is set. A run that hangs is ended after 240 s,
+# inside the test's 300, and fails with what it printed.
 
 file(REMOVE_RECURSE "${WORK_DIR}")
 file(MAKE_DIRECTORY "${WORK_DIR}/wall/results")
@@ -29,9 +30,14 @@ file(
 execute_process(
   COMMAND "${PROGRAM}" --config "${WORK_DIR}/run.json"
   WORKING_DIRECTORY "${WORK_DIR}"
+  TIMEOUT 240
   RESULT_VARIABLE result
   OUTPUT_VARIABLE output
   ERROR_VARIABLE error)
+# A hang fails whatever it printed, so it is never taken for the skip below.
+if(result MATCHES "timeout")
+  message(FATAL_ERROR "The run hung: ${result}: ${output}${error}")
+endif()
 if(NOT result EQUAL 0)
   if(error MATCHES "Vulkan|vkCreate|physical device|VK_ERROR"
      AND "$ENV{VKC_REQUIRE_VULKAN_DEVICE}" STREQUAL "")

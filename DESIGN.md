@@ -1096,13 +1096,18 @@ holds each frame as recorded, colour included.
 ## Examples
 
 (`examples/`.) Every example that fuses prepares its frames on the GPU
-(`sensor::GpuFramePrep`) and fuses them through `tsdf::Fuser`, by
-`examples/common/fuse_frame.hpp`'s `fuse_set`, which hands each
-`DeviceFrame` over with its encoding declaration and prints what a set did
-to the grid (a grow, a declined one, blocks left out), into the grid
-`tsdf::create_fusion_grid` makes; `codec_mesh` converts into
-`volume::block_grid_params`' layout too.
-`fuse_set`'s caller names the integration mode, the one `fusion.dynamic`
+(`sensor::GpuFramePrep`) and fuses them through `tsdf::Fuser` into the grid
+`tsdf::create_fusion_grid` makes (`volume::block_grid_params`' layout, which
+grid's `codec_mesh` converts into too). The senders, `codec_replica` and the
+live loop of `fuse_orbbec`, `fuse_realsense` and `fuse_decklink`
+(`live_fusion.hpp`), fuse through `sender::SetSender`, configured by
+`fuse_sender.hpp`'s `sender_config` (the live loop sends each set through
+`send_set.hpp`'s `send_set`); `fuse_replica` and the viewers
+through `examples/common/fuse_frame.hpp`'s `fuse_set`. Either way each
+`DeviceFrame` goes over with its encoding declaration (`sender::fuse_inputs`)
+and what a set did to the grid (a grow, a declined one, blocks left out) is
+printed (`print_fuse_report`).
+The caller names the integration mode, the one `fusion.dynamic`
 selects (`integration_mode`): `Classic` unless set, except in
 `fuse_orbbec`, `fuse_realsense`, `fuse_decklink` and `rig_viewer`, whose
 default is `Dynamic`; `rig_viewer`'s View panel switches it as the rig
@@ -1205,12 +1210,13 @@ into every metric of a run, once.
 Every example reads a scenario with `--config path.json`; `--help` prints
 that entry point. The optional core `config` tier owns the JSON format, typed
 settings, application defaults and static input validation. Each example
-uses `core::config::Config` directly. `examples/common/config.hpp` handles
-startup and diagnostics, and `replica_config.hpp`, `orbbec_config.hpp` and
-`codec_config.hpp` only copy validated settings into runtime API types and
-attach resources, except that the codec's rules stay the codec's:
+uses `core::config::Config` directly. recon's examples link grid's example
+helpers (`grid_example_common`): its `config.hpp` handles startup and
+diagnostics, and recon's `replica_config.hpp` and `orbbec_config.hpp`
+and grid's `codec_config.hpp` only copy validated settings into runtime API
+types and attach resources, except that the codec's rules stay the codec's:
 `encoder_config` maps `codec.quantization_table` to the weights
-(`codec_quantization.hpp`, the tables' one home), and before GPU setup
+(grid's `codec_quantization.hpp`, the tables' one home), and before GPU setup
 refuses what `EncoderConfig::validate` refuses: a step out of the codec's
 bounds, or a segment or update size past the longest. No local parser, flag
 registration or config validator remains.
@@ -1222,7 +1228,7 @@ refuses explicit fusion, codec or output settings for that operation before
 setup.
 Calibration and SDK sync files stay in their domain formats and are referenced
 by scenario paths. Device and camera capability checks remain in their runtime
-APIs. Stage rows print through one table,
+APIs. Stage rows print through one table, grid's
 `stage_table.hpp`. Reports live beside the helpers rather than in a `main`:
 `fuse_replica`'s extract reports and `fusion.dirty_every` survey in
 `remesh_report.hpp`, the viewers' panels in `viewer_panels.hpp`,

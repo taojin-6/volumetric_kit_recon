@@ -58,8 +58,6 @@ namespace sender = volumetric_kit::recon::sender;
 
 namespace {
 
-constexpr std::int32_t kBuckets = 16384;  // the fusion grid's; it grows
-
 using Options = vgrid_example::config::Config;
 
 vkc::Status run(const Options& opt) {
@@ -82,9 +80,8 @@ vkc::Status run(const Options& opt) {
 
   const float voxel = opt.fusion.voxel_size_m;
   const float trunc = opt.fusion.truncation_m;
-  VKC_ASSIGN(
-      vgrid::volume::VoxelBlockGrid volume,
-      vr::tsdf::create_fusion_grid(device, allocator, voxel, trunc, kBuckets));
+  VKC_ASSIGN(vgrid::volume::VoxelBlockGrid volume,
+             vr::tsdf::create_fusion_grid(device, allocator, voxel, trunc));
   VKC_ASSIGN(vr::tsdf::Fuser fuser, vr::tsdf::Fuser::create(device, allocator));
   VKC_ASSIGN(sensor::GpuFramePrep prep,
              sensor::GpuFramePrep::create(device, allocator));
