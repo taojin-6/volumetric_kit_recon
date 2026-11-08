@@ -333,9 +333,9 @@ print are grid's ([its live streaming](https://github.com/taojin-6/volumetric_ki
 With `source.mobile` `tcp://ADDRESS:PORT`
 ([fuse_orbbec_phone.json](config/examples/fuse_orbbec_phone.json)), the rig
 never waits for a phone. The run prints `phones: listening on tcp://A:P for
-one phone at a time, placed by the tag; the rig fuses alone until one joins`
-and opens the cameras; an address it cannot bind yet (not this host's, in
-use) is warned of, again each minute, and tried every 2 s. A setting under
+up to 4 phones at once, placed by the tag; the rig fuses alone until one
+joins` and opens the cameras; an address it cannot bind yet (not this host's,
+in use) is warned of, again each minute, and tried every 2 s. A setting under
 which no phone can be taken says so on that line, and every phone is turned
 away, not the run.
 
@@ -343,19 +343,28 @@ away, not the run.
   set, hears "Looking for the tag", shows the origin tag, hears "Tag found,
   registered", and its fill appears seconds later. The console prints
   `phones: 01 77b0e412 (arkit) from 10.8.0.23:50211 joined by the tag; 1 of
-  1`.
+  4`.
 - **Leaving.** Disconnect, a lock, a force-quit or lost Wi-Fi never touch the
   rig. After 30 s without a connection (about 40 s after a lock or a lost
   Wi-Fi, since the rig's link notices a silent phone only after its 10 s idle
   limit), the session retires: what it held decided, its fill fused, its log
   closed, its slot free. The console says when it goes away and when it
   retires. Back within that time, it is the same session, still registered.
+- **Several phones.** Up to four at once (provisional until a lab run
+  measures them), each its own session, joining at a set of its own. They
+  share the gap after each set: one phone's fit runs a gap, the others' wait
+  a gap or more, taking turns, and under load the rig's sets come first, so
+  their fill may come late (one fit a second at most is tried anyway, to see
+  whether the load has passed); a run that defers more than half their
+  frames over 10 s says so. A fifth is refused when it connects: it shows
+  Retrying, redials each second and joins once a slot frees. A phone
+  already in the run always gets back in.
 - **Switching.** A relaunch or another device is a new session, registered by
-  the tag again. One phone at a time for now, and the old session holds the
-  slot for its grace: Disconnect the old device first. The new one shows
-  Retrying, redials each second and joins about 30 s after the old one
-  disconnected (about 40 s after a lock or a lost Wi-Fi). While the old one
-  stays connected, the new one waits.
+  the tag again. At four, the old session holds its slot for its grace:
+  Disconnect the old device first. The new one shows Retrying, redials each
+  second and joins about 30 s after the old one disconnected (about 40 s
+  after a lock or a lost Wi-Fi). While the old one stays connected, the new
+  one waits.
 
 `diagnostics.track_log` keeps a directory a session (`NN-<sensor>-<hex8>`, its
 log and recording, which replays as a file), `sessions.csv` and `door.csv`,

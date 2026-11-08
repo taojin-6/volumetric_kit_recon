@@ -9,9 +9,10 @@
 ///        cameras do not see.
 ///
 /// After each set's send, in the gap before the next set, each of the lane's
-/// sessions takes its phone's record due by the predicted next set's time,
-/// prepares it and runs every fit due at it (`track::Tracker` on
-/// @ref lane_tracking) in one batch, waited on there; then the lane hands the
+/// sessions takes its phone's record due by the predicted next set's time;
+/// the gap's scheduler (below) has it prepare that record and run every fit
+/// due at it (`track::Tracker` on @ref lane_tracking) in one batch of its
+/// own, or puts the record back for a later gap; then the lane hands the
 /// next send up to @ref kDrainCap of the frames the trackers have placed, as
 /// fillers (`sender::Filler`, @ref to_filler). A tracker holds a frame on the
 /// device until a fit has placed it, Anchored or between two Anchored fits
@@ -35,7 +36,41 @@
 /// fused averages depend on it. A session keeps at most @ref kPlacedCap placed
 /// frames waiting, its oldest let go past it. A filler the send would refuse
 /// (@ref check_filler), which would refuse the whole set, is let go. The rules
-/// below are each session's own.
+/// below are each session's own; the gap's scheduler is the lane's.
+///
+/// **The gap's scheduler.** A gap runs in this order: a session joins (one
+/// the source made, a gap at most, and those added since the last gap); each
+/// session does its host work (its presence, its watch's news, its record
+/// due, as paired below); then each record is classed, before anything of it
+/// is shown to a watch or tracked: by the tag, not yet registered (shown to
+/// its watch alone), a prep (no fit due) or a hop (placed, and a fit due at
+/// it, `Tracker::fit_due`). One hop runs a gap, of all the sessions': the one
+/// whose hop has waited the most gaps, ties taken in turn: the turn moves to
+/// the session after the winner only in a gap two or more hops contest, so
+/// phones whose hops keep falling in the same gaps take the first place in
+/// turn, period by period. A record not run goes back to the front of its
+/// session's records, its split and its watch's sight of it untaken, and
+/// counts a deferral (@ref MobileLane::Counts::deferred); a newer record due
+/// before it runs takes its place, as any older one due is passed by, and a
+/// hop stays due at it. The records taken are each prepared and recorded into
+/// their session's own batch, submitted in join order and then waited in
+/// join order, so the sessions' preps overlap one another and the hop. A live
+/// lane reads its gap's @ref GapBudget: with an end, the hop runs only if now
+/// plus @ref HopEstimate's p90 is by it, and once past it the preps go back
+/// too (@ref MobileLane::Counts::over_budget): the rig's sets come before a
+/// phone's fill. So that the estimate, fed only by hops that run, is never
+/// stuck above every gap's room, a budget that has held hops back for
+/// @ref kHopProbeNs of set time with none run has the next gap not yet past
+/// its end run its hop whatever the estimate says: a probe, one a second at
+/// most, which may overrun its gap; one that ends by the gap's end replaces
+/// every sample longer than that gap's room (@ref HopEstimate::probed). A
+/// file's lane reads no budget, whatever it is given, and `run_live_fusion`
+/// gives one to a live lane alone (@ref MobileLane::live); with none (a
+/// file's run, the tests' `GapBudget{}`) nothing but a second hop in one gap
+/// goes back, so a replay repeats, and one phone defers nothing. Over each
+/// @ref kDeferralWindowNs of set time in which more than half the records
+/// classed a prep or a hop went back, the lane prints a warning with the
+/// estimate and the last room.
 ///
 /// **Coming and going** (a session with a presence,
 /// @ref MobileLane::SessionParts::presence: a live phone's). Its stages are
@@ -169,6 +204,7 @@
 /// run keeps one flat log in D. An empty D writes nothing: no directory,
 /// recording or row, and every summary still prints.
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -224,10 +260,28 @@ inline constexpr std::uint64_t kSplitGapNs = 100'000'000;
 
 /// A live run's phones at once, at most: each session from its arrival at
 /// the door until its sensor is destroyed (`link::DoorOptions::max_sessions`).
-/// Code, not configuration, as @ref lane_tracking is.
-/// TODO: 4, once the gap's scheduler runs one hop a gap among them and a lab
-/// run measures them (the multi-phone plan's next PR).
-inline constexpr std::size_t kMaxPhones = 1;
+/// Code, not configuration, as @ref lane_tracking is: past it a new session
+/// is refused silently and joins once a slot frees. Four, as the gap's
+/// scheduler runs one hop a gap among them.
+/// TODO: the lab run at one, two and four phones under load (PERF.md, PH1)
+/// confirms four or lowers it.
+inline constexpr std::size_t kMaxPhones = 4;
+
+/// The hops a live gap's guard estimates the next by (@ref HopEstimate).
+inline constexpr std::size_t kHopSamples = 32;
+
+/// What each of them is until a hop takes its place: the guard's seed
+/// (@ref LaneOptions::hop_seed's default).
+inline constexpr std::chrono::nanoseconds kHopSeed{20'000'000};
+
+/// How long, in set time, a live lane's budget may hold its hops back with
+/// none run before a gap not yet past its end runs one whatever the estimate
+/// says (a probe, @ref HopEstimate::probed), so the estimate learns again.
+inline constexpr std::uint64_t kHopProbeNs = 1'000'000'000;
+
+/// The set time over which the share of records put back is warned of, past
+/// half of those classed a prep or a hop.
+inline constexpr std::uint64_t kDeferralWindowNs = 10'000'000'000;
 
 /// How long a live session may go without a connection, in set time, before
 /// it retires: @ref LaneOptions::grace_ns's default.
@@ -253,6 +307,10 @@ struct LaneOptions {
   /// a session of it retired for an error of its own or was not opened:
   /// doubled with each repeat of that id, 32 times this at most; positive.
   std::chrono::milliseconds error_back_off{10'000};
+  /// What the gap's guard estimates a hop at until hops take its place
+  /// (@ref HopEstimate): each of its samples at the start; positive. A test
+  /// sets it to reach the guard's branches with no hop that slow.
+  std::chrono::nanoseconds hop_seed = kHopSeed;
   /// Where `sessions.csv` goes (D, above), made with its directory at its
   /// first row, never over one already there: one that cannot be made is
   /// printed, and none written. Empty writes none. @ref open_mobile_lane
@@ -264,11 +322,43 @@ struct LaneOptions {
 /// @brief What a gap may spend.
 struct GapBudget {
   /// The steady time the gap ends by: when the set loop's set came, plus the
-  /// rig's period, less 3 ms. A live run gives it; empty, no limit, as a
-  /// file's run and the tests take it. Not read yet.
-  /// TODO: past it, the gap's scheduler defers a hop (the multi-phone plan's
-  /// next PR); one phone defers nothing.
+  /// rig's period, less 3 ms. A live lane reads it (the gap's scheduler,
+  /// above): its hop runs only if now plus @ref HopEstimate's p90 is by it,
+  /// or as a probe (@ref kHopProbeNs), and once past it the preps wait too.
+  /// Empty, no limit. `run_live_fusion` gives it to a live lane alone
+  /// (@ref MobileLane::live), and a file's lane (@ref MobileLane::create's
+  /// first form) reads none, whatever it is given, so a replay repeats.
   std::optional<std::chrono::steady_clock::time_point> gap_end;
+};
+
+/// @brief What a hop costs a live gap, by which its guard decides
+///        (@ref GapBudget): the 90th percentile, by nearest rank (the 29th
+///        of 32), of the last @ref kHopSamples hops' wall times, each of the
+///        32 the seed until a hop takes its place, oldest first. A hop's wall
+///        time runs from the gap's choice to its last batch waited. A value.
+class HopEstimate {
+ public:
+  /// @brief Every sample @p seed.
+  /// @param seed  What a hop is taken to cost before one ran; positive.
+  explicit HopEstimate(std::chrono::nanoseconds seed = kHopSeed) noexcept;
+  /// @brief A hop's wall time, in place of the oldest sample.
+  void add(std::chrono::nanoseconds wall) noexcept;
+  /// @brief A probe's wall time (a hop run whatever the estimate said), in
+  ///        place of the oldest sample. One that ended within @p room, the
+  ///        time its gap had left at the choice, shows the estimate stale:
+  ///        every sample longer than @p room becomes @p wall first, so the
+  ///        next gap with that room runs its hop. One that did not is a
+  ///        sample as @ref add takes it.
+  /// @param wall  The probe's wall time.
+  /// @param room  Its gap's end less its choice.
+  void probed(std::chrono::nanoseconds wall,
+              std::chrono::nanoseconds room) noexcept;
+  /// @return The estimate.
+  std::chrono::nanoseconds p90() const noexcept;
+
+ private:
+  std::array<std::chrono::nanoseconds, kHopSamples> samples_{};
+  std::size_t next_ = 0;  // the oldest
 };
 
 /// The colour fill of each tier fuses with, as a prepared frame's colour word
@@ -353,6 +443,13 @@ class MobileLane {
     std::uint64_t shed = 0;
     /// Placed, then let go as the send would refuse it (@ref check_filler).
     std::uint64_t unfit = 0;
+    /// Records the gap's scheduler put back for a later gap, each time one
+    /// went back (one put back twice counts twice): a hop past the gap's
+    /// one, or a hop or a prep a live gap's budget held back.
+    std::uint64_t deferred = 0;
+    /// Of @ref deferred, those the budget held back (@ref GapBudget): a hop
+    /// its estimate did not fit, or any past the gap's end.
+    std::uint64_t over_budget = 0;
   };
 
   /// @brief Where the tag search stands, for a person (@ref lane_note).
@@ -491,8 +588,9 @@ class MobileLane {
   /// @param options    The grace, the settle, the back-off and the log's
   ///                   directory.
   /// @return The lane, @ref enabled; `Status::Code::InvalidArgument` for a
-  ///         settle of 0 or not below the grace, or a back-off not positive;
-  ///         `Status::Code::IoError` for a reaper's thread that cannot start.
+  ///         settle of 0 or not below the grace, or a back-off or a hop's
+  ///         seed not positive; `Status::Code::IoError` for a reaper's thread
+  ///         that cannot start.
   static vkc::Result<std::unique_ptr<MobileLane>> create(
       vkc::Device& device, vkc::Allocator& allocator,
       std::unique_ptr<SessionSource> source, LaneOptions options);
@@ -513,15 +611,21 @@ class MobileLane {
 
   /// @brief After a set's send: a session the source has ready, if one is,
   ///        and those added since the last gap join (@ref add); each joined
-  ///        session's presence is read (above); then each, in join order,
-  ///        takes its record due by @p next_set_ns, prepares it and records
-  ///        its due fits against @p grid as the set left it, in one batch of
-  ///        its own, waited on here, then judges, places and logs. Once a
-  ///        session's phone is exhausted, its tracker is flushed and what it
-  ///        placed still drains; a session that retired then leaves.
+  ///        session's presence is read and its record due by
+  ///        @p next_set_ns taken (above); then the gap's scheduler (above)
+  ///        classes the records, keeps one hop of them all and, within a
+  ///        live lane's @p budget, the preps, and puts the rest back; each
+  ///        record kept
+  ///        is prepared and its due fits recorded against @p grid as the set
+  ///        left it, in one batch of its session's own, the batches
+  ///        submitted in join order and then waited here in join order, each
+  ///        session then judging, placing and logging. Once a session's
+  ///        phone is exhausted, its tracker is flushed and what it placed
+  ///        still drains; a session that retired then leaves.
   /// @param grid         The run's model, not written until this returns.
   /// @param next_set_ns  The next set's predicted time, on the rig's clock.
-  /// @param budget       What the gap may spend (@ref GapBudget).
+  /// @param budget       What the gap may spend (@ref GapBudget); a file's
+  ///                     lane reads none.
   /// @return The next send's fillers, at most @ref kDrainCap, one a session
   ///         in turn (above), each session's oldest first; a frame the prep
   ///         or the tracker refuses is passed over and counted, as is a
@@ -545,6 +649,11 @@ class MobileLane {
   ///         none, or one with a session; not the empty lane.
   bool enabled() const noexcept;
 
+  /// @return Whether the lane is live (@ref create's second form): the one
+  ///         whose gaps read a @ref GapBudget, which `run_live_fusion` gives
+  ///         it alone; a file's lane, or the empty lane, reads none.
+  bool live() const noexcept;
+
   /// @return What the lane's sessions did so far, together.
   Counts counts() const noexcept;
 
@@ -556,9 +665,11 @@ class MobileLane {
   ///         phone's counters, in join order, those that left included, each
   ///         named by its ordinal and name when there are more than one or
   ///         the lane is live, a session that came and went with its join
-  ///         and its leave in seconds of set time from the lane's first gap;
-  ///         a live lane's totals and its source's lines after; empty for the
-  ///         empty lane.
+  ///         and its leave in seconds of set time from the lane's first
+  ///         gap, and its deferrals (those of the budget among them); a
+  ///         live lane's totals, its gap's deferrals, probes, hop estimate
+  ///         (@ref HopEstimate) and last budgeted gap's room once a session
+  ///         joined, and its source's lines after; empty for the empty lane.
   std::string report() const;
 
   /// @return The first session's log, as @ref SessionView::log; null for the

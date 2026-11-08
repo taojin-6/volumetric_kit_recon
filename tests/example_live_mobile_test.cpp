@@ -573,7 +573,7 @@ int test_check_and_empty(const Env& env, const std::filesystem::path& dir) {
   CHECK(unbound.ok());
   auto live_lane =
       vr_example::open_mobile_lane(*unbound, env.gpu.device, env.gpu.allocator);
-  CHECK(live_lane.ok() && (*live_lane)->enabled());
+  CHECK(live_lane.ok() && (*live_lane)->enabled() && (*live_lane)->live());
   CHECK((*live_lane)->next(env.grid, 2 * kS).ok());
   CHECK((*live_lane)->report().find("phones: not listening: ") !=
         std::string::npos);
@@ -586,7 +586,7 @@ int test_check_and_empty(const Env& env, const std::filesystem::path& dir) {
   // The empty lane: no phone, nothing done.
   auto empty =
       vr_example::open_mobile_lane(*rig, env.gpu.device, env.gpu.allocator);
-  CHECK(empty.ok() && !(*empty)->enabled());
+  CHECK(empty.ok() && !(*empty)->enabled() && !(*empty)->live());
   auto none = (*empty)->next(env.grid, 2 * kS);
   CHECK(none.ok() && none->empty());
   CHECK((*empty)->report().empty() && (*empty)->log() == nullptr);

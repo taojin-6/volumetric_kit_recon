@@ -107,6 +107,33 @@ bool note_due(const gnet::ViewerNote& now,
          since_ns >= kNoteAtLeastNs;
 }
 
+HopEstimate::HopEstimate(std::chrono::nanoseconds seed) noexcept {
+  samples_.fill(seed);
+}
+
+void HopEstimate::add(std::chrono::nanoseconds wall) noexcept {
+  samples_[next_] = wall;
+  next_ = (next_ + 1) % kHopSamples;
+}
+
+void HopEstimate::probed(std::chrono::nanoseconds wall,
+                         std::chrono::nanoseconds room) noexcept {
+  if (wall <= room) {
+    for (std::chrono::nanoseconds& s : samples_) {
+      if (s > room) s = wall;
+    }
+  }
+  add(wall);
+}
+
+std::chrono::nanoseconds HopEstimate::p90() const noexcept {
+  // Nearest rank: the ceil(0.9 n)-th smallest.
+  constexpr std::size_t kRank = (kHopSamples * 9 + 9) / 10 - 1;
+  std::array<std::chrono::nanoseconds, kHopSamples> sorted = samples_;
+  std::nth_element(sorted.begin(), sorted.begin() + kRank, sorted.end());
+  return sorted[kRank];
+}
+
 namespace {
 
 // What the run's settings refuse of any phone, a file's or a live one's.
@@ -302,7 +329,7 @@ using Stage = MobileLane::Stage;
 
 // `c` counted into `to`, field by field: a field added to Counts is added
 // here too, or this fails.
-static_assert(sizeof(MobileLane::Counts) == 13 * sizeof(std::uint64_t),
+static_assert(sizeof(MobileLane::Counts) == 15 * sizeof(std::uint64_t),
               "add_to sums every field of MobileLane::Counts");
 void add_to(MobileLane::Counts& to, const MobileLane::Counts& c) {
   to.polled += c.polled;
@@ -318,7 +345,28 @@ void add_to(MobileLane::Counts& to, const MobileLane::Counts& c) {
   to.unregistered += c.unregistered;
   to.shed += c.shed;
   to.unfit += c.unfit;
+  to.deferred += c.deferred;
+  to.over_budget += c.over_budget;
 }
+
+// What the gap's scheduler classes a session's record as, before anything of
+// it is shown or tracked.
+enum class Kind : std::uint8_t {
+  None,          // nothing due, or the session is not to pair this gap
+  Unregistered,  // by the tag, not yet registered: shown to its watch alone
+  Prep,          // placed, no fit due
+  Hop,           // placed, a fit due
+};
+
+// A session's record prepared and its fits recorded into a batch of its own,
+// submitted and not yet waited: the batch, its pending submit and the step.
+struct InFlight {
+  InFlight(vkc::Device& device, vkc::Allocator& allocator)
+      : batch(device, allocator) {}
+  vkc::CommandBatch batch;
+  track::PendingStep step;
+  vkc::PendingBatch pending;  // last: it goes first, waiting for its work
+};
 
 // Whether `s` is the device's loss, the one error a lane returns.
 bool device_lost(const vkc::Status& s) {
@@ -426,8 +474,13 @@ struct PhoneSession {
   std::uint64_t said_ns = 0;
   // The frames placed, not yet handed to a send: kPlacedCap at most.
   std::deque<sender::Filler> queue;
-  // The records taken from the phone, oldest first, not yet due.
+  // The records taken from the phone, oldest first, not yet due, or put back
+  // by the gap's scheduler.
   std::deque<sensor::RgbdFrame> held;
+  // The record due this gap, taken by its host work and not yet paired.
+  std::optional<sensor::RgbdFrame> due;
+  // The gaps the hop due now has waited for the gap's one hop.
+  std::uint32_t waited = 0;
   // The phone's time less the rig's: pinned by the first take's newest
   // record, moved on by a live take's (take_records).
   std::optional<std::int64_t> offset;
@@ -718,9 +771,36 @@ struct PhoneSession {
     return due;
   }
 
-  // A frame paired: shown to the tag's watch, then tracked once placed. Every
-  // loss before it is one split (no frame between them was paired).
-  vkc::Status paired(const vol::VoxelBlockGrid& grid, sensor::RgbdFrame frame) {
+  // What the record due is to the gap's scheduler: shown to the watch alone
+  // before the tag registers the session; else a hop where the tracker would
+  // fit at it (a split's flush first leaves its hops as they are), a prep
+  // where not.
+  Kind classify() const {
+    if (!due) return Kind::None;
+    if (!placed) return Kind::Unregistered;
+    return tracker->fit_due(due->timestamp_ns) ? Kind::Hop : Kind::Prep;
+  }
+
+  // The record due put back, first, for a later gap: nothing of it shown or
+  // tracked, so its split and its watch's sight of it wait with it; by the
+  // gap's budget, or by the one hop a gap.
+  void defer(bool by_budget) {
+    held.push_front(std::move(*due));
+    due.reset();
+    ++counts.deferred;
+    if (by_budget) ++counts.over_budget;
+  }
+
+  // The record due paired: shown to the tag's watch, then, once placed,
+  // prepared and its due fits recorded in one batch of its own, submitted
+  // and not waited (finish waits); after a loss, the tracker flushed first.
+  // Every loss before it is one split (no frame between them was paired).
+  // Nothing in flight: one shown to the watch alone, or passed over.
+  vkc::Result<std::unique_ptr<InFlight>> begin(
+      const vol::VoxelBlockGrid& grid) {
+    VKC_CHECK(due.has_value(), "MobileLane: a session begun with nothing due");
+    sensor::RgbdFrame frame = std::move(*due);
+    due.reset();
     bool split = false;
     while (!splits.empty() && splits.front() <= frame.timestamp_ns) {
       splits.pop_front();
@@ -730,21 +810,13 @@ struct PhoneSession {
     newest_tracking = frame.color_to_world;
     if (tags && !watch_failed) {
       if (split) tags->split();
-      VKC_TRY(tags->see(frame));  // before track_one lets its picture go
+      VKC_TRY(tags->see(frame));  // before its picture is let go below
     }
     if (!placed) {
       ++counts.unregistered;  // nothing tracked before the tag
-      return {};
+      return std::unique_ptr<InFlight>();
     }
     if (tags) frame.color_to_world = tracking_to_world * frame.color_to_world;
-    return track_one(grid, std::move(frame), split);
-  }
-
-  // One phone frame: prepared and its due fits recorded in one batch,
-  // waited on here, then judged, placed and logged; after a loss, the
-  // tracker flushed first.
-  vkc::Status track_one(const vol::VoxelBlockGrid& grid,
-                        sensor::RgbdFrame frame, bool split) {
     if (split) {
       ++counts.splits;
       take(tracker->flush());
@@ -753,45 +825,53 @@ struct PhoneSession {
     frame.color = {};
     frame.color_packed = nullptr;
     frame.color_bitstream = {};
-    vkc::CommandBatch batch(*device, *allocator);
-    batch.time(*timer);
+    auto f = std::make_unique<InFlight>(*device, *allocator);
+    f->batch.time(*timer);
     vkc::StageMetrics& rows = log->rows();
     vkc::Result<sensor::DeviceFrame> prepared =
-        prep->record(batch, frame, &rows);
+        prep->record(f->batch, frame, &rows);
     if (!prepared.ok()) {
       if (prepared.status().domain() != vkc::Status::Code::InvalidArgument) {
         return prepared.status();
       }
       passed_over(prepared.status());
-      return {};
+      return std::unique_ptr<InFlight>();
     }
     vkc::Result<track::PendingStep> step =
-        tracker->record(batch, grid, std::move(*prepared), &rows);
+        tracker->record(f->batch, grid, std::move(*prepared), &rows);
     if (!step.ok()) {
       if (step.status().domain() != vkc::Status::Code::InvalidArgument) {
         return step.status();
       }
       passed_over(step.status());
-      return {};  // the batch goes unsubmitted, the prep's slot with it
+      // The batch goes unsubmitted, the prep's slot with it.
+      return std::unique_ptr<InFlight>();
     }
+    f->step = *step;
+    vkc::Result<vkc::PendingBatch> submitted = f->batch.submit_async({}, {});
+    if (!submitted.ok()) {
+      tracker->abandon(f->step);  // none of it runs
+      return submitted.status();
+    }
+    f->pending = std::move(submitted).value();
+    return f;
+  }
+
+  // `f`'s batch waited, then its step judged, placed and logged.
+  vkc::Status finish(InFlight& f) {
+    vkc::StageMetrics& rows = log->rows();
     vkc::Status ran;
     {
-      vkc::Result<vkc::PendingBatch> submitted = batch.submit_async({}, {});
-      if (submitted.ok()) {
-        {
-          vkc::WaitScope wait(&rows, "wait: mobile");
-          ran = submitted->wait();
-        }
-        if (ran.ok()) rows.merge_device(submitted->device_rows());
-      } else {
-        ran = submitted.status();
-      }
-    }  // a failed batch is out of flight once its pending batch is gone
+      vkc::WaitScope wait(&rows, "wait: mobile");
+      ran = f.pending.wait();
+    }
     if (!ran.ok()) {
-      tracker->abandon(*step);
+      f.pending = vkc::PendingBatch();  // out of flight once it is gone
+      tracker->abandon(f.step);
       return ran;
     }
-    VKC_ASSIGN(const track::TrackStep done, tracker->finish(*step));
+    rows.merge_device(f.pending.device_rows());
+    VKC_ASSIGN(const track::TrackStep done, tracker->finish(f.step));
     ++counts.paired;
     take(done);
     return {};
@@ -815,6 +895,7 @@ struct PhoneSession {
     }
     leave_reason = std::move(why);
     stage.store(Stage::Retiring, std::memory_order_release);
+    due.reset();
     if (comes_and_goes()) {
       std::printf("phones: %s retires: %s\n", label().c_str(),
                   leave_reason.c_str());
@@ -824,13 +905,12 @@ struct PhoneSession {
     return device_lost(news) ? news : vkc::Status{};
   }
 
-  // A gap, joined and not retired: its presence (one that comes and goes),
-  // the watch's news, then the record due by the set at `next_set_ns`
-  // paired; the phone's end ends it, and retires one that comes and goes, as
-  // the grace does. An error returned is the session's own, for the lane to
-  // retire it by, or the device's loss.
-  vkc::Status gap(const vol::VoxelBlockGrid& grid, std::uint64_t next_set_ns,
-                  const LaneOptions& options) {
+  // A gap's host work, joined and not retired: its presence (one that comes
+  // and goes), the watch's news, then the record due by the set at
+  // `next_set_ns` taken (`due`), for the gap's scheduler. One that comes and
+  // goes may retire here (the grace), with nothing due. An error returned is
+  // the session's own, for the lane to retire it by, or the device's loss.
+  vkc::Status host(std::uint64_t next_set_ns, const LaneOptions& options) {
     set_ns = next_set_ns;
     if (comes_and_goes()) {
       const bool here = presence();
@@ -866,21 +946,25 @@ struct PhoneSession {
       }
     }
     VKC_TRY(take_news());
-    std::optional<sensor::RgbdFrame> due = pair(next_set_ns);
+    due = pair(next_set_ns);
     if (!lost.ok()) return lost;
-    if (due) VKC_TRY(paired(grid, std::move(*due)));
-    if (held.empty() && phone->exhausted()) {
-      // A file's end: what it placed still drains, and it leaves at the
-      // close.
-      return retire(comes_and_goes() ? "its stream ended" : "its file ended");
-    }
     return {};
+  }
+
+  // After the gap's batches: the phone's end, nothing held or put back,
+  // retires the session, as the grace does; a file's places what it holds,
+  // which still drains, and leaves at the close. Only the device's loss
+  // returns.
+  vkc::Status at_end() {
+    if (!held.empty() || !phone->exhausted()) return {};
+    return retire(comes_and_goes() ? "its stream ended" : "its file ended");
   }
 
   // Retired: the phone's queue taken and let go, its decoded pictures with
   // it, and nothing paired. Only the device's loss returns.
   vkc::Status discard() {
     held.clear();
+    due.reset();
     std::vector<sensor::RgbdFrame> got;
     if (!phone || !started) return {};
     const vkc::Status st = phone->drain(&got);
@@ -933,6 +1017,11 @@ struct PhoneSession {
     if (c.unfit != 0) {
       out += "  " + std::to_string(c.unfit) +
              " placed the send would refuse, the first: " + first_unfit + "\n";
+    }
+    if (c.deferred != 0) {
+      out += "  " + std::to_string(c.deferred) +
+             " deferred to a later gap (one hop a gap; " +
+             std::to_string(c.over_budget) + " by the gap's budget)\n";
     }
     if (comes_and_goes() && !leave_reason.empty()) {
       const auto in = [origin_ns](std::uint64_t ns) {
@@ -1185,6 +1274,20 @@ struct MobileLane::State {
   // The sessions whose own error was printed, by id (or name), the oldest
   // forgotten past 64.
   std::deque<std::string> warned;
+  // The gap's scheduler: the session the next contested tie for the hop
+  // starts at; what a live gap's hop costs; the set of the first gap whose
+  // budget held a hop back since a hop last ran, the probes run and the
+  // newest budgeted gap's room; and, over the deferral window from its set,
+  // the records classed a prep or a hop and those of them put back.
+  std::size_t hop_next = 0;
+  HopEstimate hop_cost;
+  std::optional<std::uint64_t> held_since;
+  std::uint64_t probes = 0;
+  std::optional<std::chrono::nanoseconds> last_room;
+  std::optional<std::uint64_t> window_ns;
+  std::uint64_t window_classed = 0;
+  std::uint64_t window_deferred = 0;
+  std::uint64_t window_over_budget = 0;
 
   State() = default;
   // The source closed and the reaper's jobs done before the sessions go.
@@ -1274,6 +1377,167 @@ struct MobileLane::State {
       told(error);
     }
     return s.retire("its error: " + error.message());
+  }
+
+  // The gap's work (live_mobile.hpp, the gap's scheduler): each session in
+  // the run does its host work, a retiring one's phone queue let go; each
+  // record due is classed; one hop of them all is kept and, within a live
+  // lane's `given` budget, every prep, the rest put back; the records kept
+  // are begun in join order and finished in join order; each session's own
+  // error is contained once every batch is waited; then each phone's end.
+  // Only the device's loss returns, or a file's session's own error.
+  vkc::Status gap(const vol::VoxelBlockGrid& grid, std::uint64_t next_set_ns,
+                  const GapBudget& given) {
+    // A file's lane reads no budget, so a replay repeats.
+    const GapBudget budget = live ? given : GapBudget{};
+    const std::size_t n = sessions.size();
+    std::vector<bool> paired(n, false);  // its host work done, still in it
+    for (std::size_t i = 0; i < n; ++i) {
+      PhoneSession& s = *sessions[i];
+      if (s.active()) {
+        const vkc::Status hosted = s.host(next_set_ns, options);
+        VKC_TRY(contain(s, hosted));
+        paired[i] = hosted.ok() && s.active();  // not retired at its grace
+      } else if (s.stage.load(std::memory_order_acquire) == Stage::Retiring) {
+        s.set_ns = next_set_ns;
+        if (s.comes_and_goes()) VKC_TRY(s.discard());
+      }
+    }
+    // Classed before anything of a record is shown or tracked, so one put
+    // back keeps its split and its watch's sight of it.
+    std::vector<Kind> kind(n, Kind::None);
+    std::size_t hops = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+      if (paired[i]) kind[i] = sessions[i]->classify();
+      if (kind[i] == Kind::Hop) ++hops;
+    }
+    // One hop: the longest waited, ties in turn from hop_next; with a
+    // budget's end, only if the estimate ends it by then (or as a probe, the
+    // budget having held hops back kHopProbeNs with none run), and the preps
+    // only before that end.
+    const std::chrono::steady_clock::time_point chose =
+        std::chrono::steady_clock::now();
+    bool late = false;
+    bool hop_fits = true;
+    bool probe = false;
+    if (budget.gap_end) {
+      last_room = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          *budget.gap_end - chose);
+      late = chose > *budget.gap_end;
+      hop_fits = chose + hop_cost.p90() <= *budget.gap_end;
+      if (!hop_fits && !late && hops != 0 && held_since &&
+          next_set_ns >= *held_since + kHopProbeNs) {
+        hop_fits = probe = true;
+      }
+    }
+    std::size_t hop = n;  // none
+    for (std::size_t k = 0; hop_fits && k < n; ++k) {
+      const std::size_t i = (hop_next + k) % n;
+      if (kind[i] == Kind::Hop &&
+          (hop == n || sessions[i]->waited > sessions[hop]->waited)) {
+        hop = i;
+      }
+    }
+    if (hop == n && hops != 0 && !held_since) held_since = next_set_ns;
+    for (std::size_t i = 0; i < n; ++i) {
+      const bool hop_back = kind[i] == Kind::Hop && i != hop;
+      const bool prep_back = kind[i] == Kind::Prep && late;
+      if (kind[i] == Kind::Hop || kind[i] == Kind::Prep) ++window_classed;
+      if (!hop_back && !prep_back) continue;
+      const bool by_budget = prep_back || !hop_fits;
+      if (hop_back) ++sessions[i]->waited;
+      sessions[i]->defer(by_budget);
+      kind[i] = Kind::None;
+      ++window_deferred;
+      if (by_budget) ++window_over_budget;
+    }
+    // Each kept record's batch submitted in join order, then each waited in
+    // join order; an error is contained once none is in flight.
+    struct Run {
+      PhoneSession* session = nullptr;
+      std::unique_ptr<InFlight> flight;
+      vkc::Status error;
+      bool hop = false;
+    };
+    std::vector<Run> runs;
+    for (std::size_t i = 0; i < n; ++i) {
+      if (kind[i] == Kind::None) continue;
+      Run r;
+      r.session = sessions[i].get();
+      r.hop = i == hop;
+      vkc::Result<std::unique_ptr<InFlight>> begun = r.session->begin(grid);
+      if (begun.ok()) {
+        r.flight = std::move(begun).value();
+      } else {
+        r.error = begun.status();
+      }
+      runs.push_back(std::move(r));
+    }
+    bool hop_ran = false;
+    for (Run& r : runs) {
+      if (!r.flight) continue;
+      r.error = r.session->finish(*r.flight);
+      r.flight.reset();
+      hop_ran = hop_ran || (r.hop && r.error.ok());
+    }
+    // A hop that ran: its wall time a sample, its session's wait over, and,
+    // where two or more contested the gap, the turn moved on past it. One
+    // chosen and not run (its frame passed over, or an error) keeps both.
+    if (hop_ran) {
+      const auto wall = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - chose);
+      if (probe) {
+        ++probes;
+        hop_cost.probed(wall, *last_room);
+      } else {
+        hop_cost.add(wall);
+      }
+      held_since.reset();
+      sessions[hop]->waited = 0;
+      if (hops > 1) hop_next = hop + 1;
+    }
+    for (Run& r : runs) VKC_TRY(contain(*r.session, r.error));
+    for (std::size_t i = 0; i < n; ++i) {
+      if (paired[i] && sessions[i]->active()) {
+        VKC_TRY(contain(*sessions[i], sessions[i]->at_end()));
+      }
+    }
+    note_deferrals(next_set_ns);
+    return {};
+  }
+
+  // A warning for each deferral window, from the first gap's set, in which
+  // more than half the records classed a prep or a hop were put back: how
+  // many by the budget, the estimate and the newest budgeted gap's room, so
+  // too many phones reads apart from a rig too slow for their hops.
+  void note_deferrals(std::uint64_t set_ns) {
+    if (!window_ns) window_ns = set_ns;
+    if (set_ns < *window_ns + kDeferralWindowNs) return;
+    if (2 * window_deferred > window_classed) {
+      std::fprintf(stderr,
+                   "warning: phones: %llu of %llu records deferred over %.0f s "
+                   "of sets (%llu by the gap's budget, the rest one hop a "
+                   "gap; a hop estimated at %.1f ms, the last gap's room "
+                   "%s); their fill comes late or not at all\n",
+                   static_cast<unsigned long long>(window_deferred),
+                   static_cast<unsigned long long>(window_classed),
+                   double(set_ns - *window_ns) * 1e-9,
+                   static_cast<unsigned long long>(window_over_budget),
+                   double(hop_cost.p90().count()) * 1e-6, room_text().c_str());
+    }
+    window_ns = set_ns;
+    window_classed = 0;
+    window_deferred = 0;
+    window_over_budget = 0;
+  }
+
+  // The newest budgeted gap's room, for a person: "none" without a budget.
+  std::string room_text() const {
+    if (!last_room) return "none";
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.1f ms",
+                  double(last_room->count()) * 1e-6);
+    return buf;
   }
 
   // A filler coloured by its tier's tint, through a colour camera of its
@@ -1401,10 +1665,17 @@ vkc::Result<std::unique_ptr<MobileLane>> MobileLane::create(
         std::to_string(options.error_back_off.count()) +
         " ms, which must be positive");
   }
+  if (options.hop_seed.count() <= 0) {
+    return vkc::Status::invalid_argument(
+        "MobileLane::create: a hop's seed of " +
+        std::to_string(options.hop_seed.count()) +
+        " ns, which must be positive");
+  }
   auto s = std::make_unique<State>();
   s->device = &device;
   s->allocator = &allocator;
   s->live = true;
+  s->hop_cost = HopEstimate(options.hop_seed);
   s->source = std::move(source);
   // sessions.csv, made at its first row, never over one there.
   std::string csv_path;
@@ -1473,7 +1744,6 @@ vkc::Status MobileLane::add(SessionParts parts) {
 vkc::Result<std::vector<sender::Filler>> MobileLane::next(
     const vol::VoxelBlockGrid& grid, std::uint64_t next_set_ns,
     GapBudget budget) {
-  (void)budget;  // TODO: the gap's scheduler reads it (live_mobile.hpp)
   State& st = *state_;
   std::vector<sender::Filler> out;
   if (st.closed) return out;
@@ -1491,14 +1761,7 @@ vkc::Result<std::vector<sender::Filler>> MobileLane::next(
     }
   }
   VKC_TRY(st.adopt(next_set_ns));
-  for (const std::unique_ptr<PhoneSession>& s : st.sessions) {
-    if (s->active()) {
-      VKC_TRY(st.contain(*s, s->gap(grid, next_set_ns, st.options)));
-    } else if (s->stage.load(std::memory_order_acquire) == Stage::Retiring) {
-      s->set_ns = next_set_ns;
-      if (s->comes_and_goes()) VKC_TRY(s->discard());
-    }
-  }
+  VKC_TRY(st.gap(grid, next_set_ns, budget));
   VKC_TRY(st.drain(&out));
   for (const std::unique_ptr<PhoneSession>& s : st.sessions) {
     if (s->active()) s->tell();
@@ -1551,6 +1814,8 @@ vkc::Status MobileLane::close() {
 bool MobileLane::enabled() const noexcept {
   return state_->live || !state_->sessions.empty();
 }
+
+bool MobileLane::live() const noexcept { return state_->live; }
 
 MobileLane::Counts MobileLane::counts() const noexcept {
   Counts total;
@@ -1622,7 +1887,21 @@ std::string MobileLane::report() const {
   char label[96];
   std::snprintf(label, sizeof(label), "mobile, %u session(s), %zu left",
                 static_cast<unsigned>(st.joins), left);
-  out += counts_line(label, counts(), phones, waiting);
+  const Counts total = counts();
+  out += counts_line(label, total, phones, waiting);
+  if (st.joins != 0) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  "  the gap: %llu deferred (%llu by its budget), %llu "
+                  "probe(s); a hop estimated at %.1f ms (p90 of the last "
+                  "%zu), the last gap's room %s\n",
+                  static_cast<unsigned long long>(total.deferred),
+                  static_cast<unsigned long long>(total.over_budget),
+                  static_cast<unsigned long long>(st.probes),
+                  double(st.hop_cost.p90().count()) * 1e-6, kHopSamples,
+                  st.room_text().c_str());
+    out += buf;
+  }
   if (st.source) out += st.source->report();
   return out;
 }

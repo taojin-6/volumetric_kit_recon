@@ -1078,7 +1078,16 @@ entries relevant to your task; later amendments supersede earlier rules.
   oldest let go; a filler the send would refuse is let go. *Amended again
   2026-11-08:* phones join and leave a live run (that entry); pinned once,
   logged once and summarized once per session, and a live run's refusals
-  turn its phones away.
+  turn its phones away. *Amended a third time 2026-11-08:* *one queue, in
+  the gap* is the gap's scheduler for up to four phones: each record classed
+  before it is shown or tracked, one hop a gap across phones (the longest
+  waited, then in turn, the turn moved by a contest), the rest put back; the
+  batches submitted, then waited, in join order; a live lane's hop only if
+  its p90 ends by the gap's end, or as a probe once hops were held back 1 s
+  (which may make a set late: for the owner), its preps only before that
+  end; the gap's end given to a live lane alone, a file's reading none. No
+  track-tier `reserve()`, though the plan's 2 ms bar is crossed (for the
+  owner). The lab cost at one, two and four phones is owed.
 - [**2026-11-05**](#2026-11-05--a-live-stream-states-the-worlds-up-from-its-calibration-file-a-sensors-world-is-that-cameras-own-image-up-amends-the-2026-10-20-entry) —
   A live stream states the world's up from `source.calibration`'s file
   (`live_up`): a tag's +z; a sensor's world, or no file, that colour camera's
@@ -1095,7 +1104,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   phone turned away is told nothing.
 - [**2026-11-08**](#2026-11-08--phones-join-and-leave-a-live-run-one-door-for-the-run-a-lane-per-session-and-the-rig-never-depends-on-a-phone-amends-the-2026-11-04-and-2026-11-05-phone-entries) —
   Phones join and leave a live run: one door for the run, newest connection
-  wins, a session past the cap (1, then 4) refused silently, a lane per
+  wins, a session past the cap (4, provisional) refused silently, a lane per
   session Away, settled at 7 s and retired at 30 s of set time, opened and
   let go off the set loop. The rig never waits for or depends on a phone: a
   bind that fails is retried every 2 s, a setting that rules phones out turns
@@ -6433,6 +6442,127 @@ until the scheduler. The rig's evidence below (its digests with the lane
 compiled in) was taken with no door listening; it is to be taken again with
 the door listening and no phone, and the cost at one, two and four phones.
 
+*Amended a third time 2026-11-08* (up to four phones): *one queue, in the
+gap* (owner E) is the gap's scheduler, and `kMaxPhones` is 4 (the
+2026-11-08 entry). Each gap, a session joins (one a gap from the live
+source; those added join together, so a test picks their gap); each session
+does its host work and takes its record due; each record is classed before
+anything of it is shown to a watch or tracked: by the tag and not yet
+registered (shown to its watch alone, never put back), a prep (no fit due)
+or a hop (placed, `Tracker::fit_due`). One hop runs a gap across phones, the
+one that has waited the most gaps; ties go in turn, and the turn moves past
+the winner only in a gap two or more hops contest. A hop chosen that does
+not run (its frame passed over, an error) keeps its wait and the turn. A hop
+not run goes back to the front of its session's records and counts a
+deferral, and a newer record due before it runs takes its place, as `pair`
+passes any older one by, the hop due at it still. The kept records' batches
+are submitted in join order, then waited in join order: each fitter owns its
+caster and view, each session its batch, timer and rows.
+
+`run_live_fusion` gives a live lane its gap's `GapBudget` (its end: the
+set's arrival plus the period, less 3 ms) and a file's lane none, which
+would read none whatever it were given. With an end, the hop runs only if now plus the p90 of the last 32 hop wall times
+(each seeded at 20 ms; a hop's from the choice to its gap's last wait) is by
+it, and once past it the preps go back too: the rig's sets come before a
+phone's fill. Once the budget has held hops back for 1 s of set time with
+none run, the next gap not yet past its end runs its hop whatever the
+estimate says: a probe. A probe that ends within its gap's room (the end
+less the choice) replaces every sample longer than that room with its own
+time; one that does not is a sample as any. `Counts::over_budget` counts the
+records the budget put back, apart from those one hop a gap did. A 10 s
+window of sets in which more than half the records classed went back prints
+a warning with the share the budget's, the estimate and the last room; the
+report adds the probes. With no end (a file's run, the tests' `GapBudget{}`)
+only a second hop in one gap goes back: replays repeat, and one phone defers
+nothing. The drain is as it was, 3 fillers a send in all.
+- *One hop a gap*: a hop's batch is the gap's dear part (below: 7.9-8.5 ms
+  of device time a chain on the loaded 5090; about 20 ms of wall time for
+  both chains on the idle M5 Max), so N phones' hops must not stack. The
+  worst gap is one phone's hop gap plus N - 1 preps, overlapped.
+- *Classed first*: pairing pops a record's splits and shows it to its watch,
+  so a record put back after that would lose its split (the plan's review).
+- *Most waited, then in turn, the turn moved by a contest*: a phone behind
+  goes before one that just ran. Phones whose hops keep falling in the same
+  gaps (a few phones' clocks 0.5 s apart stay so for minutes) take the
+  first place in turn, period by period: with three, each waits 0, 1 and 2
+  gaps over three periods, and each passes as many records by. Rejected:
+  moving the turn after every hop that ran, as first written; the loser's
+  hop, run alone a gap later, handed the turn back to the earliest joiner,
+  a fixed priority by join order under which the last of four aligned
+  phones lost records every period and the first none (the review's model:
+  0, 0, 10 and 20 of 100 skipped). Also rejected: the plan's "most
+  deferrals" as every deferral a session ever had, since a long history
+  would win long after it caught up; the count is the gaps its hop due has
+  waited.
+- *A seeded ring and a probe*: the estimate learns only from hops that run.
+  From an empty ring a single slow first hop would hold the p90 above every
+  gap's room for good; seeded, four slow hops are needed, but four are
+  enough: a burst of other jobs' load on the 5090, or four late joiners'
+  fifth hops (below), and no hop would run again, at one phone too, where
+  every one ran before this. The probe bounds that: the estimate is back
+  within the room one probe after the load passes. While the load lasts, a
+  probe a second at most may make its set late by the hop's excess over the
+  room: a departure from the plan's "it never delays rig sets", for the
+  owner to confirm, against phones whose fill stops for the rest of the
+  run. The seed is covered the same way: a rig whose every gap has under
+  20 ms of room learns its own hop. Rejected: forgetting
+  samples after 10 s of sets (one phone's 20 hops in 10 s leave seeds in
+  the ring, so a seed above the room still holds every hop back); letting
+  each held-back gap lower its oldest sample to its room (short rooms drag
+  the estimate below the hop, which then overruns gap after gap).
+- *A live lane's alone*: `run_live_fusion` gives the gap's end to a live
+  lane alone (`MobileLane::live`), and a file's lane reads none, whatever it
+  is given; so a file phone beside a live rig pairs as recorded, and its
+  replay repeats. As first written, the run gave every lane the end and the
+  lane read it on any (the review).
+- *What a phone pays*: a hop put back runs at the next gap on its record,
+  unless a newer record came due first. At 25 fps, four phones' hops take 4
+  of the 12.5 gaps a 0.5 s hop has. At 10 Hz sets five phones on one clock
+  fill every gap and pass records by for good. Four lane cases ran phones on
+  one clock and now stagger their clocks a record apart, so their hops fall
+  in different gaps: the sessions test's queue cap (also 12.5 Hz sets) and
+  two alike, its turn given away, and the phones test's drain once retired
+  (also 12.5 Hz sets). Each passed the first version only because the first
+  joiner always went first.
+- *No track-tier `reserve()`, against the plan's bar*: the plan wanted one
+  if a late joiner's first fit cost over 2 ms, and both readings of that bar
+  are crossed. On the idle M5 Max (Release, MoltenVK; a throwaway probe of
+  `lane_tracking()`'s real fitters on 256x192 frames of a 1 cm room at
+  10 Hz, four runs, wall time only, the probe not in the tree), a late
+  joiner's first fit (K = 1) takes 3.9 ms; its stack grows over its first
+  five hops (K = 1, 5, 10, 15, 20: 3.9, 8.9-9.1, 13.6-14.0, 18.0-18.8 and
+  22.0-22.7 ms), each growth reallocating and rebuilding every pyramid, and
+  the fifth, at the full 44 MiB, is 2.3-2.6 ms over a steady hop
+  (19.6-20.3 ms), once a session, as the first phone's is at one phone. Not
+  added, for the owner to confirm: the first fit is a fifth of the steady
+  hop the guard budgets for; the fifth hop's excess sits within the gap
+  end's 3 ms margin on the idle M5 Max, though nearly all of it; and four
+  joiners' fifth hops, four slow samples in one ring, can now hold the p90
+  up for a probe's second at most. How much of that excess a reserve made
+  on the opener would remove (the allocation's share against the
+  pyramids') is not measured. If the 5090 shows that hop past its gap,
+  next is a fitter sized to `kMaxFitFrames` when the opener makes it, or
+  the fitter's own `TODO:` (keep the committed entries when the stack
+  grows).
+
+Evidence so far is the tests': two phones on one clock get one hop a gap,
+the first place by turns, and fits within one of each other over 10 s;
+three phones replay identically, each put back as often as the others; a
+live gap end already past runs no hop, puts its prep back and keeps the
+split, while a file's lane given that end pairs as with none; with the
+estimate above every room, the hop goes back and the preps pair, the
+budget's deferrals alone, until a probe a second of sets later brings the
+estimate down; an end an hour off defers nothing; the estimator's host case
+(seeded, ranked, a probe that fits and one that does not); four live phones
+join and a fifth is refused, then joins once one left
+(`example_live_phones_test`, `example_live_tag_test`,
+`example_live_sessions_test`). **Owed:** the lab run at one, two and four
+phones under load at 25 fps (send plus gap at p50, p95 and p99, sets past
+40 ms, the deferral share and the budget's part of it, the probes and the
+sets they made late, the estimate against the rooms, allocator growth a
+phone, CPU, concurrent decoders), PERF.md's PH1; `kMaxPhones` may fall
+with it.
+
 **Context.** The track tier places a phone's frames against the rig's model
 and the source byte lets them fill only where the rig does not see (both
 2026-11-03). `source.mobile` names a recorded session or a phone that dials
@@ -6655,13 +6785,15 @@ capture as running from the start.
   so the cap of 3 failures in 10 s still measures drops; it ends that session
   alone, whose id then cools down 10 s. At most 8 connections wait for their
   session, 2 a peer, for 3 s.
-- *Silent refusal past the cap.* `kMaxPhones` is 1 here and 4 with the gap's
-  scheduler, once a lab run measures them. A new session past it is closed
-  right after its session's chunk, which the iPad's writer counts as a dial
-  that failed: it shows Retrying, redials each second and joins once a slot
-  frees. A held session's reconnect always gets through. Rejected: holding a
-  refused connection 2 s, after which the writer resets its failures and
-  streams on; a waiting room, or a reason sent, both a typed message.
+- *Silent refusal past the cap.* `kMaxPhones` was 1 here; it is 4 with the
+  gap's scheduler (the 2026-11-04 entry's third amendment), provisional
+  until the lab run at one, two and four phones, which may lower it (owner:
+  four phones). A new session past it is closed right after its session's
+  chunk, which the iPad's writer counts as a dial that failed: it shows
+  Retrying, redials each second and joins once a slot frees. A held
+  session's reconnect always gets through. Rejected: holding a refused
+  connection 2 s, after which the writer resets its failures and streams
+  on; a waiting room, or a reason sent, both a typed message.
 - *A lane per session, its life in set time,* so tests and replays repeat.
   Away from the first gap that reads it unconnected; settled at 7 s (the
   tracker flushed once: its 5 s hold and its 2 s window, so no frame then
@@ -6673,9 +6805,9 @@ capture as running from the start.
   stays Live 1 s, as its poll thread takes the connection after the start,
   then is Away from the join. Within the grace it is the same session, its
   registration kept; after, a new one that registers again, under a new
-  ordinal and directory. With one phone at a time, a new device waits
-  (Retrying) while the old session holds the slot: about 30 s after the old
-  one disconnects, 40 s after a lock. Retired, it pairs and says nothing,
+  ordinal and directory. At the cap, a new device waits (Retrying) while
+  the old session holds its slot: about 30 s after the old one disconnects,
+  40 s after a lock. Retired, it pairs and says nothing,
   its phone's queue is let go each gap, and what it placed still drains.
 - *Each session's mobile index* is (its join's ordinal − 1) mod 63, past any
   a session still holds, taken at its join (the source byte's 63 a class).
@@ -6729,9 +6861,10 @@ phone writing nothing, the layout and `run.csv`'s keys, a second run into
 the directory taking its phone unlogged, an address held by another socket
 then bound, settings that turn phones away, a rejoin, an empty log, a
 failing session kept away and its back-off doubled); `example_live_tag_test`
-a second session refused at the cap and joining as a new one once the first
-left, and the reaper letting a watch on its thread go with nothing said
-after the phone stopped. The watch-before-phone order is `let_go`'s and runs
+a session past the cap refused and joining as a new one once the first
+left (a second at a cap of one; since the scheduler, a fifth beside four),
+and the reaper letting a watch on its thread go with nothing said after the
+phone stopped. The watch-before-phone order is `let_go`'s and runs
 under the sanitizers; no public call observes it. Not run yet, on the lab
 rig: 300 sets' grid digests and the send's p50 with the door listening and
 no phone; on an iPad, a join after 2 minutes, locks of 20 and 60 s, a

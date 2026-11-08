@@ -116,7 +116,7 @@ and its counters at the end. It needs a build with sensor's microphone driver
 
 `source.mobile` adds phones to `fuse_orbbec`'s rig: a recorded session's
 `.vrst`, or `tcp://ADDRESS:PORT`, one of this host's addresses, where phones
-dial in, each session its own, joining and leaving while the rig runs
+dial in and leave, up to four at once, each its own session, as the rig runs
 (README, "A phone in a live run"). The rig never waits for a phone: the
 cameras open at once, an address the run cannot bind yet is warned of and
 tried again every 2 s, and a setting under which no phone can be taken
