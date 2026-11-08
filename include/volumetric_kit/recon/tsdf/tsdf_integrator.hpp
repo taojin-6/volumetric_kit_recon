@@ -135,6 +135,11 @@ enum class FrameRole : std::uint32_t {
   /// past the band goes in at a sample's weight, only into fill holding
   /// weight. It fuses no rim distance, and returns past
   /// @ref FillRule::max_depth_m are no return.
+  ///
+  /// These rules read the voxel's tier, never its index, so several mobile
+  /// sensors' fill meets them alike: the byte stays the index whose sample
+  /// started the voxel (or restarted it), no filler vetoes another, and the
+  /// cap is the voxel's, whichever sensors built its weight.
   Filler = 1,
 };
 

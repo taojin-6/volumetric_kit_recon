@@ -10,6 +10,14 @@
 //   fill, neither writes a fixed camera's voxel, and a filler's free space
 //   goes only into fill of its tier or below; its weight stops at the cap
 //   and is never lowered; returns past 3 m fill nothing;
+// - two phones, mobile indices 0 and 1, each way, in one set and a set
+//   each: the rules read the tier, never the index. Same-tier samples
+//   average, to the weighted mean, and keep the first writer's byte; an
+//   Anchored sample restarts the other phone's unanchored fill as its own;
+//   an Unanchored frame leaves the other phone's anchored fill alone; a
+//   filler's free space wears down the other phone's fill of its tier or
+//   below, and vetoes nothing; the cap is the voxel's, whichever phones
+//   built its weight;
 // - each veto: a fixed band leaves fill as the fixed frame alone leaves it;
 //   a fixed camera seeing past a filler's face keeps only its free side; a
 //   fixed camera's holes and an occluded fixed camera veto nothing;
@@ -273,6 +281,274 @@ int tier_case(vkc::test::GpuContext& gpu) {
   return 0;
 }
 
+// Two phones' frames, in the list's order: all in one set, or a set each.
+vkc::Status fuse_phones(Rig& rig, const std::vector<tsdf::FrameInput>& frames,
+                        bool one_set) {
+  if (one_set) return fuse(rig, frames);
+  for (const tsdf::FrameInput& f : frames) {
+    VKC_TRY(fuse(rig, {f}));
+  }
+  return {};
+}
+
+// Whether two rigs hold the same grid, bit for bit, the byte too.
+bool same_rigs(vkc::test::GpuContext& gpu, Rig& x, Rig& y) {
+  if (!vgrid_test::same_grids(gpu, x.grid, y.grid)) return false;
+  auto vx = read_voxels(gpu, x.grid);
+  auto vy = read_voxels(gpu, y.grid);
+  return vx.ok() && vy.ok() && same_sources(vx.value(), vy.value());
+}
+
+// Two phones, mobile indices 0 and 1, from the origin. The rules read the
+// byte's tier, never its index, so each holds across phones as for one; in
+// one set the fillers fuse in the list's order (FrameRole::Filler).
+int two_phone_case(vkc::test::GpuContext& gpu) {
+  const float w = 1.0f / ((kFace - 0.03f) * (kFace - 0.03f));
+  const float cap = 0.5f * kMaxWeight;
+  const sensor::DepthCameraParams c = camera();
+  const std::vector<float> depth = face_depth();
+  // Each phone's Anchored frame of the face alone, one set.
+  std::vector<Rig> alone;
+  alone.reserve(2);
+  for (const std::uint32_t index : {0u, 1u}) {
+    auto rig = make_rig(gpu);
+    CHECK(rig.ok() &&
+          fuse(rig.value(), {filler(depth, c, kAnchored, index)}).ok());
+    alone.push_back(std::move(rig.value()));
+  }
+  {
+    // Same tier: the second phone, its face a voxel further, averages in:
+    // each interior voxel is the weighted mean of the two frames' grids
+    // alone, the weights summed, and keeps the first writer's byte,
+    // whichever index that is; one set is a set each, bit for bit. 1e-6 m
+    // is rounding; a sample left out moves the mean by half a voxel.
+    const std::vector<float> further = face_depth(kFace + kVoxel);
+    auto far_alone = make_rig(gpu);
+    CHECK(far_alone.ok() &&
+          fuse(far_alone.value(), {filler(further, c, kAnchored, 1)}).ok());
+    auto vnear = read_voxels(gpu, alone[0].grid);
+    auto vfar = read_voxels(gpu, far_alone->grid);
+    CHECK(vnear.ok() && vfar.ok());
+    for (const tsdf::FillTier t : {kAnchored, kUnanchored}) {
+      for (const std::uint32_t first : {0u, 1u}) {
+        const std::vector<tsdf::FrameInput> frames{
+            filler(depth, c, t, first), filler(further, c, t, 1u - first)};
+        auto x = make_rig(gpu);
+        auto y = make_rig(gpu);
+        CHECK(x.ok() && y.ok());
+        CHECK(fuse_phones(x.value(), frames, true).ok());
+        CHECK(fuse_phones(y.value(), frames, false).ok());
+        CHECK(same_rigs(gpu, x.value(), y.value()));
+        auto v = read_voxels(gpu, x->grid);
+        CHECK(v.ok() && byte_weight_mismatches(v.value()) == 0);
+        const Census cv = census(v.value(), tsdf::mobile_source(first, t));
+        CHECK(cv.n > 500 && cv.with_byte == cv.n);
+        CHECK(cv.most > w && cv.most <= 2.0f * w * 1.0001f);
+        const std::vector<std::size_t> in_near =
+            match(v.value(), vnear.value());
+        const std::vector<std::size_t> in_far = match(v.value(), vfar.value());
+        std::size_t n = 0, mean = 0;
+        for (std::size_t k = 0; k < v->index.size(); ++k) {
+          if (!interior(v->world[k])) continue;
+          const std::size_t i = v->index[k];
+          const std::size_t jn = in_near[k];
+          const std::size_t jf = in_far[k];
+          CHECK(jn != kNone && jf != kNone);
+          const float wn = vnear->weight[jn];
+          const float wf = vfar->weight[jf];
+          CHECK(wn > 0.0f && wf > 0.0f);
+          const float s =
+              (vnear->tsdf[jn] * wn + vfar->tsdf[jf] * wf) / (wn + wf);
+          const bool averaged = std::fabs(v->tsdf[i] - s) <= 1e-6f &&
+                                std::fabs(v->weight[i] - (wn + wf)) <= 1e-6f;
+          ++n;
+          mean += averaged ? 1 : 0;
+        }
+        std::printf(
+            "two phones, %s, faces a voxel apart, phone %u first: %zu of %zu "
+            "the weighted mean\n",
+            t == kAnchored ? "Anchored" : "Unanchored", first, mean, n);
+        CHECK(n > 500 && mean == n);
+      }
+    }
+  }
+  {
+    // An Anchored sample restarts the other phone's unanchored fill, two
+    // samples of it, as its own anchored fill: the grid is its frame's
+    // alone, bit for bit.
+    for (const bool one_set : {true, false}) {
+      for (const std::uint32_t a : {0u, 1u}) {
+        const std::uint32_t u = 1u - a;
+        auto x = make_rig(gpu);
+        CHECK(x.ok());
+        const std::vector<tsdf::FrameInput> unanchored{
+            filler(depth, c, kUnanchored, u), filler(depth, c, kUnanchored, u)};
+        const tsdf::FrameInput anchored = filler(depth, c, kAnchored, a);
+        if (one_set) {
+          CHECK(fuse(x.value(), {unanchored[0], unanchored[1], anchored}).ok());
+        } else {
+          CHECK(fuse_phones(x.value(), unanchored, false).ok());
+          auto before = read_voxels(gpu, x->grid);
+          CHECK(before.ok());
+          const Census cb =
+              census(before.value(), tsdf::mobile_source(u, kUnanchored));
+          CHECK(cb.n > 500 && cb.with_byte == cb.n && cb.most > w);
+          CHECK(fuse(x.value(), {anchored}).ok());
+        }
+        CHECK(same_rigs(gpu, x.value(), alone[a]));
+        auto v = read_voxels(gpu, x->grid);
+        CHECK(v.ok());
+        const Census cv = census(v.value(), tsdf::mobile_source(a, kAnchored));
+        CHECK(cv.n > 500 && cv.with_byte == cv.n);
+      }
+    }
+  }
+  {
+    // An Unanchored frame writes none of the other phone's anchored fill:
+    // the grid is the Anchored frame's alone.
+    for (const bool one_set : {true, false}) {
+      for (const std::uint32_t a : {0u, 1u}) {
+        auto x = make_rig(gpu);
+        CHECK(x.ok());
+        CHECK(fuse_phones(x.value(),
+                          {filler(depth, c, kAnchored, a),
+                           filler(depth, c, kUnanchored, 1u - a)},
+                          one_set)
+                  .ok());
+        CHECK(same_rigs(gpu, x.value(), alone[a]));
+      }
+    }
+  }
+  {
+    // Free space, each way: phone b sees past phone a's face to a wall. Its
+    // free space wears down a's fill of its tier or below, averaging in and
+    // keeping a's byte, and leaves anchored fill alone from an Unanchored
+    // frame; it fills its own wall. One set is a set each, bit for bit,
+    // though the two frames allocate different blocks.
+    const std::vector<float> wall = face_depth(kWall);
+    for (const std::uint32_t a : {0u, 1u}) {
+      const std::uint32_t b = 1u - a;
+      for (const tsdf::FillTier first : {kUnanchored, kAnchored}) {
+        auto ref = make_rig(gpu);
+        CHECK(ref.ok() && fuse(ref.value(), {filler(depth, c, first, a)}).ok());
+        auto vref = read_voxels(gpu, ref->grid);
+        CHECK(vref.ok());
+        for (const tsdf::FillTier then : {kUnanchored, kAnchored}) {
+          const bool carves = first == kUnanchored || then == kAnchored;
+          const std::vector<tsdf::FrameInput> frames{filler(depth, c, first, a),
+                                                     filler(wall, c, then, b)};
+          auto x = make_rig(gpu);
+          auto y = make_rig(gpu);
+          CHECK(x.ok() && y.ok());
+          CHECK(fuse_phones(x.value(), frames, true).ok());
+          CHECK(fuse_phones(y.value(), frames, false).ok());
+          CHECK(same_rigs(gpu, x.value(), y.value()));
+          auto v = read_voxels(gpu, x->grid);
+          CHECK(v.ok() && byte_weight_mismatches(v.value()) == 0);
+          const std::vector<std::size_t> in_ref =
+              match(v.value(), vref.value());
+          std::size_t n = 0, kept = 0, moved = 0;
+          for (std::size_t k = 0; k < v->index.size(); ++k) {
+            if (!interior(v->world[k])) continue;
+            const std::size_t i = v->index[k];
+            const std::size_t j = in_ref[k];
+            CHECK(j != kNone);
+            ++n;
+            kept += v->source[i] == tsdf::mobile_source(a, first) ? 1 : 0;
+            moved += v->tsdf[i] != vref->tsdf[j] ? 1 : 0;
+          }
+          const Census at_wall =
+              census(v.value(), tsdf::mobile_source(b, then), kWall);
+          std::printf(
+              "two phones, free space of phone %u's %s over phone %u's %s "
+              "fill: %zu of %zu moved, %zu of %zu kept the byte; %zu written "
+              "at the wall\n",
+              b, then == kAnchored ? "Anchored" : "Unanchored", a,
+              first == kAnchored ? "anchored" : "unanchored", moved, n, kept, n,
+              at_wall.with_byte);
+          CHECK(n > 500 && kept == n && moved == (carves ? n : 0));
+          CHECK(at_wall.n > 500 && at_wall.with_byte == at_wall.n);
+        }
+      }
+    }
+    // Listed first in one set, phone b's free space meets no weight, and
+    // phone a's face then fills its whole band, the back too: a filler that
+    // sees past another's face vetoes none of it.
+    for (const std::uint32_t a : {0u, 1u}) {
+      auto va = read_voxels(gpu, alone[a].grid);
+      CHECK(va.ok());
+      for (const tsdf::FillTier then : {kUnanchored, kAnchored}) {
+        auto x = make_rig(gpu);
+        CHECK(x.ok());
+        CHECK(fuse(x.value(), {filler(wall, c, then, 1u - a),
+                               filler(depth, c, kAnchored, a)})
+                  .ok());
+        auto v = read_voxels(gpu, x->grid);
+        CHECK(v.ok());
+        const std::vector<std::size_t> in_alone = match(v.value(), va.value());
+        std::size_t n = 0;
+        for (std::size_t k = 0; k < v->index.size(); ++k) {
+          if (!interior(v->world[k])) continue;
+          const std::size_t i = v->index[k];
+          const std::size_t j = in_alone[k];
+          CHECK(j != kNone);
+          ++n;
+          CHECK(v->tsdf[i] == va->tsdf[j] && v->weight[i] == va->weight[j] &&
+                v->source[i] == tsdf::mobile_source(a, kAnchored));
+        }
+        CHECK(n > 500);
+      }
+    }
+  }
+  {
+    // The cap: twelve rounds of both phones stop at it, one set a set each
+    // bit for bit; and once either phone alone has brought a voxel to it,
+    // the other's samples add no weight there.
+    const std::vector<tsdf::FrameInput> both{filler(depth, c, kAnchored, 0),
+                                             filler(depth, c, kAnchored, 1)};
+    auto x = make_rig(gpu);
+    auto y = make_rig(gpu);
+    CHECK(x.ok() && y.ok());
+    for (int round = 0; round < 12; ++round) {
+      CHECK(fuse_phones(x.value(), both, true).ok());
+      CHECK(fuse_phones(y.value(), both, false).ok());
+    }
+    CHECK(same_rigs(gpu, x.value(), y.value()));
+    auto v = read_voxels(gpu, x->grid);
+    CHECK(v.ok());
+    const Census cv = census(v.value(), kA);
+    CHECK(cv.n > 500 && cv.with_byte == cv.n && cv.most == cap);
+
+    for (const std::uint32_t a : {0u, 1u}) {
+      auto z = make_rig(gpu);
+      CHECK(z.ok());
+      for (int set = 0; set < 20; ++set) {
+        CHECK(fuse(z.value(), {both[a]}).ok());
+      }
+      auto before = read_voxels(gpu, z->grid);
+      CHECK(before.ok());
+      for (int set = 0; set < 4; ++set) {
+        CHECK(fuse(z.value(), {both[1u - a]}).ok());
+      }
+      auto after_cap = read_voxels(gpu, z->grid);
+      CHECK(after_cap.ok());
+      std::size_t at_cap = 0;
+      for (const std::size_t i : after_cap->index) {
+        CHECK(after_cap->weight[i] <= cap &&
+              after_cap->source[i] == at(before->source, i));
+        if (at(before->weight, i) == cap) {
+          ++at_cap;
+          CHECK(after_cap->weight[i] == cap);
+        }
+      }
+      std::printf("two phones, the cap: %zu voxels at it before phone %u\n",
+                  at_cap, 1u - a);
+      CHECK(at_cap > 500);
+    }
+  }
+  return 0;
+}
+
 // Each veto, fixed camera 0 at the origin beside the filler.
 int veto_case(vkc::test::GpuContext& gpu) {
   const sensor::DepthCameraParams f = camera();
@@ -501,6 +777,7 @@ int refusal_case(vkc::test::GpuContext& gpu) {
 
 int gpu_main(vkc::test::GpuContext& gpu) {
   if (tier_case(gpu) != 0) return 1;
+  if (two_phone_case(gpu) != 0) return 1;
   if (veto_case(gpu) != 0) return 1;
   if (invariant_case(gpu) != 0) return 1;
   if (refusal_case(gpu) != 0) return 1;

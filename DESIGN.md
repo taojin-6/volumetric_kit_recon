@@ -839,6 +839,8 @@ own voxels cost one load there, and writes it only into a voxel at weight
 fill kernel, the integrate body built as `VR_TSDF_FILL`); their veto reads
 each fixed depth at the voxel's nearest pixel, from one buffer a gather
 kernel stacks for the set, so a set with no filler records none of it.
+The rules read the byte's tier, never its index, so several phones' fill in
+one grid meets them alike (that entry, amended 2026-11-08).
 `rig_cast()` and `tracking_cast()` filter grid's `RayCaster` on the byte.
 
 `Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). A set

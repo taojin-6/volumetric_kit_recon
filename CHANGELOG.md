@@ -295,6 +295,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (0.40.0) takes the noise ARKit's driver states, so the floor rises to
   0.40.0: the lane's tracker refuses a frame whose noise is unknown. The
   core stays at 0.43.0, above the 0.41.0 sensor needs, and grid at 0.12.0.
+- `tsdf`: **several phones' fill in one grid meets the fill rules across
+  them**, stated and pinned (`recon_tsdf_filler`, mobile indices 0 and 1,
+  each way, in one set and a set each): the rules read the byte's tier,
+  never its index. Same-tier samples average and keep the byte of the sample
+  that started the voxel; an Anchored sample restarts either phone's
+  unanchored fill as its own where its weight is at most the cap; a filler's
+  free space wears down either phone's fill of its tier or below and vetoes
+  nothing; an Unanchored frame leaves either phone's anchored fill alone; the
+  cap is the voxel's. `tracking_cast()`'s anchored fill is every phone's, and
+  a phone's index is to be (its join ordinal - 1) mod 63, skipping one a
+  live session holds (DECISIONS.md, 2026-11-03, amended 2026-11-08). Nothing
+  fuses differently.
 - `track`: **`Tracker::flush` may be followed by more frames**: the chains
   keep their judges and hops, and a frame after it is fitted and placed by
   fits after it alone. The lane splits so at a loss.
