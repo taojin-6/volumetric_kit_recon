@@ -270,6 +270,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   filler the send would refuse is let go instead of ending the run.
   `tests/fake_phone.hpp` holds the lane tests' phones, and
   `recon_example_live_sessions` tests the sessions.
+- `examples`: **session_check's checks live with the tool**
+  (`tools/session_check/session_check.hpp`; was `examples/common/link/`),
+  behind `vr_session_check`, an INTERFACE target on `vr_example_link` and
+  `core_net` that the tool and the link tests link. `Address` and
+  `parse_address` are gone: `--listen` and the colour test's
+  `VR_TEST_SESSION_CHECK` read their address with core's
+  `net::parse_host_port`, so **both are slightly stricter**: a port with a
+  leading zero (`10.8.0.1:09123`) or a second ':' is refused rather than
+  read, with core's reason: `session_check` prints it before its usage (exit
+  2), the colour test in its FAIL line (exit 1).
+  `recon_session_check_listen_zero` and `recon_session_check_listen_colon`
+  test the refusal.
 - build: **recon pins grid 0.15.0** (grid #24's merge, `af45973`; was 0.14.0,
   `368e111`), and the floor rises to it for `StreamClient::send_note`. The core
   and sensor stay, so no workflow pin moves.

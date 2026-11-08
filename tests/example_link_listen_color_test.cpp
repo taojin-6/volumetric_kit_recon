@@ -7,7 +7,7 @@
 // the family's test pattern of its frame's index, coded in the test by
 // sensor's HevcEncoder on this machine's hardware (VideoToolbox, NVENC) from
 // targets written on the device, each depth the same index's pattern depth.
-// session_check's checks (examples/common/link/session_check.hpp) read both
+// session_check's checks (tools/session_check/session_check.hpp) read both
 // indices on the device.
 // - Every frame carries its own picture over the link. A colour record the
 //   decode refuses makes the reader let the connection go (one failure), and
@@ -46,9 +46,10 @@
 #include <vector>
 
 #include "link/rgbd_stream_sensor.hpp"
-#include "link/session_check.hpp"
 #include "link_dialler.hpp"
+#include "session_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/net/address.hpp"
 #include "volumetric_kit/core/net/dial.hpp"
 #include "volumetric_kit/core/testing/net_loopback.hpp"
 #include "volumetric_kit/core/testing/scratch_dir.hpp"
@@ -446,15 +447,18 @@ int gpu_main(Gpu& gpu) {
     }
   }
   if (const char* to = std::getenv("VR_TEST_SESSION_CHECK"); to && *to) {
-    const std::optional<vr_example::link::Address> address =
-        vr_example::link::parse_address(to);
+    const vkc::Result<vkc::net::HostPort> address =
+        vkc::net::parse_host_port(to, 0);
     const char* frames = std::getenv("VR_TEST_SESSION_FRAMES");
     const std::optional<long> count =
         frames && *frames ? vr_example::link::count_of(frames) : 300L;
-    if (!address || !count) {
+    if (!address.ok() || !count) {
+      const std::string why =
+          address.ok() ? std::string() : "; " + address.status().message();
       std::fprintf(stderr,
                    "FAIL: VR_TEST_SESSION_CHECK=<ipv4>:<port>, "
-                   "VR_TEST_SESSION_FRAMES=<count>\n");
+                   "VR_TEST_SESSION_FRAMES=<count>%s\n",
+                   why.c_str());
       return 1;
     }
     return send_to(gpu, address->host, address->port,

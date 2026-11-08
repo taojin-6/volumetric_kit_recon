@@ -158,7 +158,7 @@ if(VR_BUILD_EXAMPLES AND EXISTS
                          "${CMAKE_CURRENT_SOURCE_DIR}/examples/CMakeLists.txt")
   add_subdirectory(examples)
   # session_check, a session checked by hand on the examples' link, built with
-  # the tests (tools/session_check).
+  # the tests, whose link tests share its checks (tools/session_check).
   if(VR_BUILD_TESTS)
     add_subdirectory(tools/session_check)
   endif()

@@ -350,12 +350,12 @@ endif()
 # recording reads back, a reconnect, another session refused, three failures end
 # the stream (and the cap's window), the poll's bound, a record the recording
 # refuses, listen's refusals, session_check's pass, and say. Host only.
+# vr_session_check (tools/session_check, defined after this directory) brings
+# vr_example_link, with grid_networking, and core_net; linked alone, Apple's ld
+# sees no library twice.
 if(VR_BUILD_EXAMPLES)
   add_executable(recon_example_link_listen_test example_link_listen_test.cpp)
-  target_link_libraries(
-    recon_example_link_listen_test
-    PRIVATE vr_example_link volumetric_kit::grid_networking
-            volumetric_kit::core_net)
+  target_link_libraries(recon_example_link_listen_test PRIVATE vr_session_check)
   vr_target_warnings(recon_example_link_listen_test)
   add_test(NAME recon_example_link_listen
            COMMAND recon_example_link_listen_test)
@@ -380,17 +380,16 @@ endif()
 
 # Live with its pictures: the test pattern coded in the test by sensor's
 # HevcEncoder, each frame's indices read on the device by session_check's checks
-# (link/session_check.hpp), a picture the decode refuses ending a connection,
-# and the recording read back; the file says what it covers. It skips without
-# hardware coding both ways, unless VS_TEST_HEVC_BACKEND promises it; without
+# (vr_session_check), a picture the decode refuses ending a connection, and the
+# recording read back; the file says what it covers. It skips without hardware
+# coding both ways, unless VS_TEST_HEVC_BACKEND promises it; without
 # sensor_video it checks nothing more.
 if(VR_BUILD_EXAMPLES)
   add_executable(recon_example_link_listen_color_test
                  example_link_listen_color_test.cpp)
   target_link_libraries(
     recon_example_link_listen_color_test
-    PRIVATE vr_example_link volumetric_kit::grid_networking
-            volumetric_kit::core_net volumetric_kit::core_test_policy)
+    PRIVATE vr_session_check volumetric_kit::core_test_policy)
   if(TARGET volumetric_kit::sensor_video_testing)
     target_link_libraries(recon_example_link_listen_color_test
                           PRIVATE volumetric_kit::sensor_video_testing)
@@ -460,8 +459,9 @@ if(VR_BUILD_EXAMPLES)
 endif()
 
 # session_check's command line (tools/session_check): usage, for no source and
-# for a live option given a file, and a file that is not there named in its
-# refusal.
+# for a live option given a file; a --listen address core's parse_host_port
+# refuses (a port with a leading zero, a second ':') named before the usage; and
+# a file that is not there named in its refusal.
 if(VR_BUILD_EXAMPLES)
   add_test(NAME recon_session_check_usage COMMAND recon_session_check)
   add_test(NAME recon_session_check_usage_wait COMMAND recon_session_check
@@ -469,6 +469,18 @@ if(VR_BUILD_EXAMPLES)
   set_tests_properties(
     recon_session_check_usage recon_session_check_usage_wait
     PROPERTIES PASS_REGULAR_EXPRESSION "usage: session_check")
+  add_test(NAME recon_session_check_listen_zero
+           COMMAND recon_session_check --listen 127.0.0.1:09123)
+  set_tests_properties(
+    recon_session_check_listen_zero
+    PROPERTIES PASS_REGULAR_EXPRESSION
+               "session_check: --listen: \"09123\" .*usage: session_check")
+  add_test(NAME recon_session_check_listen_colon COMMAND recon_session_check
+                                                         --listen a:b:9123)
+  set_tests_properties(
+    recon_session_check_listen_colon
+    PROPERTIES PASS_REGULAR_EXPRESSION
+               "session_check: --listen: \"a:b:9123\" .*usage: session_check")
   add_test(NAME recon_session_check_missing
            COMMAND recon_session_check "${CMAKE_CURRENT_BINARY_DIR}/none.vrst")
   set_tests_properties(

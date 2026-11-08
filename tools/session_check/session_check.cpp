@@ -6,9 +6,9 @@
 // the pictures on this machine's GPU, joins each to its depth
 // (link/rgbd_stream_sensor.hpp), checks on the device that each frame's
 // picture carries its depth's pattern index, and prints counts, times and
-// rgbd_breach (link/session_check.hpp). A poll's error is printed and the run
-// goes on. A live stream has no end of its own (a writer's finish reads as a
-// drop): --frames, --seconds or Ctrl-C ends it, and the report still prints.
+// rgbd_breach (session_check.hpp). A poll's error is printed and the run goes
+// on. A live stream has no end of its own (a writer's finish reads as a drop):
+// --frames, --seconds or Ctrl-C ends it, and the report still prints.
 // Exit 0 when SessionReport::ok() (a frame came, the frame contract holds,
 // every frame whose depth names an index shows its own picture) and no poll
 // failed; 2 for a command line it does not take. It writes nothing.
@@ -16,6 +16,9 @@
 //   session_check <session.vrst> [--sensor <id>] [--depth-only]
 //   session_check --listen <ipv4>:<port> [--wait <s>] [--frames <n>]
 //                 [--seconds <s>] [--sensor <id>] [--depth-only]
+//
+// The address is read by core's net::parse_host_port, a port required; one it
+// refuses is named with its reason before the usage.
 
 #include <chrono>
 #include <cstdint>
@@ -23,11 +26,13 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "interrupt.hpp"
 #include "link/rgbd_stream_sensor.hpp"
-#include "link/session_check.hpp"
+#include "session_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/net/address.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
@@ -36,12 +41,13 @@
 namespace {
 
 namespace vkc = volumetric_kit::core;
+namespace net = volumetric_kit::core::net;
 namespace sensor = volumetric_kit::sensor;
 namespace link = vr_example::link;
 
 struct Args {
   std::string file;
-  std::optional<link::Address> listen;
+  std::optional<net::HostPort> listen;
   std::string sensor;
   bool depth_only = false;
   std::optional<long> wait_s;  // --listen only: 300 unless set
@@ -67,8 +73,13 @@ std::optional<Args> parse(int argc, char** argv) {
     if (arg == "--depth-only") {
       a.depth_only = true;
     } else if (arg == "--listen" && has_value) {
-      a.listen = link::parse_address(argv[++i]);
-      if (!a.listen) return std::nullopt;
+      vkc::Result<net::HostPort> at = net::parse_host_port(argv[++i], 0);
+      if (!at.ok()) {
+        std::fprintf(stderr, "session_check: --listen: %s\n",
+                     at.status().message().c_str());
+        return std::nullopt;
+      }
+      a.listen = std::move(at).value();
     } else if (arg == "--sensor" && has_value) {
       a.sensor = argv[++i];
     } else if ((arg == "--wait" || arg == "--frames" || arg == "--seconds") &&
