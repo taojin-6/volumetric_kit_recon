@@ -36,31 +36,34 @@ Baseline: `main` at `36b6d86` (2026-09-30).
 ## The path today
 
 For one set of four cameras, one iteration of `rig_viewer`'s fuse thread
-(`examples/viewer/rig_viewer.cpp:1270`), at the baseline. P1 has since made
-allocate, compaction and integrate one submit each per set, P2 frame prep,
-and P6's first step the three one submit on a live grid; see their rows.
+(`fuse_thread` in `examples/viewer/rig_viewer.cpp`), at the baseline; the
+code column names where each piece lives today, or what replaced it. P1
+has since made allocate, compaction and integrate one submit each per set,
+P2 frame prep, and P6's first step the three one submit on a live grid; see
+their rows.
 Since 2026-10-06 the compaction keeps only the blocks the set's frusta
 reach, so integrate scales with them rather than the map.
 
 | stage | code | submits | order | read back |
 |---|---|---|---|---|
-| decode | `hevc_color.cpp`, `cuda_pictures.cpp`, `pixel_buffer_importer.mm` | own thread per camera | ahead of the poll | nothing |
-| frame prep | `prepare_set`, `gpu_frame_prep.cpp:640` | 1 per camera | parallel threads | nothing |
-| allocate | `allocate_from_depth` → `dispatch_with_retry`, `voxel_hash_map.cpp:376` | 1 per retry round, per camera | serial | failure tally, heap counter |
-| compaction | `compact_active_blocks_on_device`, `tsdf_integrator.cpp:314` | 1 per camera | serial | active count |
-| integrate | `tsdf_integrator.cpp:411` | 1 per camera | serial | nothing |
-| extract compaction | `compact_active_blocks_in_frusta_on_device` on the render camera's frustum, `rig_viewer.cpp:1289` | 1 per remesh | serial | active count |
-| extract | `marching_cubes.cpp:1455` | 1 (2 on a refit) | serial | nothing: its results land in a ring slot |
-| texture | `projective_texturer.cpp:737` | 1 | serial | nothing |
+| decode | sensor's `hevc_color.cpp`, `cuda_pictures.cpp`, `pixel_buffer_importer.mm` | own thread per camera | ahead of the poll | nothing |
+| frame prep | `prepare_set` (`SensorArray::process` since P2), sensor's `GpuFramePrep` | 1 per camera | parallel threads | nothing |
+| allocate | grid's `VoxelHashMap::allocate_from_depth` → `dispatch_with_retry` | 1 per retry round, per camera | serial | failure tally, heap counter |
+| compaction | `compact_active_blocks_on_device`, from `TsdfIntegrator::integrate` (at the baseline; today grid's `VoxelHashMap::record_compaction` in the set's batch, P1) | 1 per camera | serial | active count |
+| integrate | `TsdfIntegrator::integrate`'s dispatch | 1 per camera | serial | nothing |
+| extract compaction | `compact_active_blocks_in_frusta_on_device` on the render camera's frustum, `SharedView::extract` (`viewer_common.hpp`) | 1 per remesh | serial | active count |
+| extract | grid's `MarchingCubes::extract_device` | 1 (2 on a refit) | serial | nothing: its results land in a ring slot |
+| texture | `ProjectiveTexturer::texture` | 1 | serial | nothing |
 | atlas copy and draw | `LiveAtlas::commit` (`viewer_atlas.hpp`), gfx's frame | gfx's own | render thread | nothing |
 
-Every submit waits on its fence (`device.cpp:710`), so the GPU idles while
-the host records the next one. Fusion is **one set of kernels per camera**.
-Only texturing takes all the cameras in one dispatch.
+Every submit waits on its fence (the core's `Device::submit_single_time`),
+so the GPU idles while the host records the next one. Fusion is **one set
+of kernels per camera**. Only texturing takes all the cameras in one
+dispatch.
 
-The senders, fuse_orbbec and codec_replica, record a coded set into two
-batches since 2026-10-25 (P6); each waits once, and every count stays on
-the device:
+The senders, codec_replica and the live loop (fuse_orbbec, fuse_realsense,
+fuse_decklink), record a coded set into two batches since 2026-10-25 (P6);
+each waits once, and every count stays on the device:
 
 | batch | code | records | read back |
 |---|---|---|---|
@@ -198,13 +201,14 @@ is measured.
 > a second dispatch a camera: 1.22 → 1.92 ms of integrate a 4-camera set on
 > the M5 Max (synthetic). The looping kernel would make it one pass again.
 
-- **Problem.** `rig_viewer.cpp:1323` loops over the cameras through
-  `fuse_frame` (`examples/common/fuse_device_frame.hpp`), and per camera:
+- **Problem.** `rig_viewer`'s fuse thread loops over the cameras through
+  `fuse_frame` (`examples/common/fuse_device_frame.hpp` until 2026-10-07),
+  and per camera:
   - `allocate_band` runs `allocate_from_depth`: at least one submit and
     wait;
-  - `integrate` compacts the whole map (`tsdf_integrator.cpp:314`): a
-    submit and a wait;
-  - `integrate` then dispatches (`:411`): another.
+  - `integrate` compacts the whole map (`compact_active_blocks_on_device`):
+    a submit and a wait;
+  - `integrate` then dispatches: another.
 
   That is at least 12 serial waits and 4 whole-table compactions, and every
   camera reads and writes every active voxel's `tsdf`, `weight` and `color`.
@@ -217,8 +221,8 @@ is measured.
     order and carries its `tsdf`, `weight` and colour in registers, so it
     reads and writes memory once.
   - `fuse_set` in `examples/common/fuse_frame.hpp` (`fuse_device_frame.hpp`
-    until 2026-10-07), used by `rig_viewer`, `fuse_orbbec` and, since then,
-    the Replica examples.
+    until 2026-10-07), used by `rig_viewer`, `fuse_replica` and the other
+    viewers; the senders fuse through `sender::SetSender` (P6).
 - **Binding N buffers.** Use descriptor arrays with dynamic indexing
   (`shaderStorageBufferArrayDynamicIndexing`, an optional core 1.0 feature).
   - `Device::create` does not enable it today; see the reasoning at
@@ -606,9 +610,12 @@ improvement awaits measurement; the figures below describe the original GC.
 
 ### D2 — Put `--show-sources`' buffers on the device
 
-- **Problem.** `rig_viewer.cpp:956-986` makes host-visible buffers that gfx
-  copies into the atlas on every remesh: ~133 MB over PCIe at 4K on a
-  discrete GPU. It is a debug view.
+> **Landed (#130)** as below: one device-local buffer a camera, filled on
+> the device (`ensure_solid` in `rig_viewer.cpp`).
+
+- **Problem.** `rig_viewer`'s colour-by-camera view made host-visible
+  buffers that gfx copied into the atlas on every remesh: ~133 MB over PCIe
+  at 4K on a discrete GPU. It is a debug view.
 - **Change.** Make them device-local and fill each once with
   `vkCmdFillBuffer`, since the solid colour is one 4-byte word.
 
