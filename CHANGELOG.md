@@ -558,6 +558,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   faces; positions and triangles are unchanged. It came with the grid 0.3.0
   pin above (grid 0.2.1, grid #5).
 
+### Removed
+
+- `examples`: **dead and duplicated code.** `send_set`'s overload without
+  fillers (callers pass `{}`), `AudioFeed::lost`, which nothing read, and
+  `free_due`, `apply_orbbec_config` and `print_orbbec_camera`, each folded
+  into its one caller. `codec_replica`'s own 16,384 buckets go too: its grid
+  starts at `fusion_buckets`' default, as the live runs' does, the same count
+  at 1 cm and coarser, a finer grid up to 4x larger (65,536 buckets at 5 mm
+  and finer), and a device that caps it no longer logs a warning. The Orbbec
+  and RealSense reports share `exposure_text` (`live_sets.hpp`). Tests:
+  `recon_example_live_sets` (`exposure_text`), `recon_sender_set_sender`.
+
 ### Fixed
 
 - `examples`: **a hand-held phone registers by the origin tag**: `TagWatch`

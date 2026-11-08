@@ -89,12 +89,6 @@ inline vkc::Status fuse_set(
   return {};
 }
 
-/// @return Whether `fusion.free_after`'s pass is due after @p sets fused
-///         sets: every @p free_after of them; never at 0.
-inline bool free_due(std::uint64_t sets, int free_after) {
-  return free_after > 0 && sets % static_cast<std::uint64_t>(free_after) == 0;
-}
-
 /// @brief `fusion.free_after`'s pass, run after each fused set: every
 ///        @p free_after sets, free the blocks of @p grid that neither an
 ///        allocation nor an observed voxel has stamped for more than
@@ -113,7 +107,9 @@ inline void free_stale_blocks_every(vgrid::volume::VoxelBlockGrid& grid,
                                     std::uint64_t sets, int free_after,
                                     const char* program,
                                     vkc::StageMetrics* metrics) {
-  if (!free_due(sets, free_after)) return;
+  if (free_after <= 0 || sets % static_cast<std::uint64_t>(free_after) != 0) {
+    return;
+  }
   const vkc::Result<std::uint32_t> freed =
       grid.free_stale_blocks(static_cast<std::uint32_t>(free_after), metrics);
   if (!freed) {

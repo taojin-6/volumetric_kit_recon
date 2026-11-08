@@ -42,11 +42,10 @@
 // fuses it. A filler where no camera sees fills there alone, every other
 // voxel as the call without fillers writes it, and a Classic sender refuses
 // it. The sets go out as the live examples send them
-// (examples/common/send_set.hpp), through the call with no fillers, which the
-// call without them is. A set whose pictures carry ready values
-// (YuvImage::ready) the host sets later is published, its front batch having
-// waited for them on the device, only once all are set. On a grid holding a
-// sphere, with no frames to fuse, a sender's frames are the file
+// (examples/common/send_set.hpp), with no fillers. A set whose pictures carry
+// ready values (YuvImage::ready) the host sets later is published, its front
+// batch having waited for them on the device, only once all are set. On a grid
+// holding a sphere, with no frames to fuse, a sender's frames are the file
 // CodecStream::code writes, byte for byte, frames the decoder refuses and one
 // out of order included. The device part skips with no device.
 
@@ -507,8 +506,8 @@ int code_sets(vkc::test::GpuContext& gpu, const Fusion& fusion,
       CHECK(prepared.ok() && prepared->timestamp_ns == set_time(s));
       const std::uint64_t pts_ns =
           std::max(prepared->timestamp_ns, coded ? coded->last_pts_ns() : 0);
-      auto done = vr_example::send_set(*out, front, *prepared, std::move(*set),
-                                       s, pts_ns, &logged.rows,
+      auto done = vr_example::send_set(*out, front, *prepared, {},
+                                       std::move(*set), s, pts_ns, &logged.rows,
                                        [&logged] { logged.published(); });
       if (!done.ok()) {
         std::fprintf(stderr, "set %zu: %s\n", s,
@@ -811,8 +810,8 @@ int keyed_sets(vkc::test::GpuContext& gpu, const Keyed& run,
       CHECK(prepared.ok());
       const std::uint64_t pts_ns =
           std::max(prepared->timestamp_ns, coded->last_pts_ns());
-      auto sent = vr_example::send_set(*out, front, *prepared, std::move(*set),
-                                       s, pts_ns);
+      auto sent = vr_example::send_set(*out, front, *prepared, {},
+                                       std::move(*set), s, pts_ns);
       CHECK(sent.ok() && sent->coded.has_value());
       fused_again = sent->fused.redone;
     } else {
@@ -928,8 +927,8 @@ int moved_from(vkc::test::GpuContext& gpu) {
     auto prepared = array.record_process(front, *set, nullptr);
     CHECK(prepared.ok());
     sender::SetSender& out = s == 0 ? *left : *moved;
-    auto sent = vr_example::send_set(out, front, *prepared, std::move(*set), s,
-                                     prepared->timestamp_ns);
+    auto sent = vr_example::send_set(out, front, *prepared, {}, std::move(*set),
+                                     s, prepared->timestamp_ns);
     if (s == 0) {
       CHECK(sent.status().domain() == vkc::Status::Code::InvalidArgument);
       CHECK(made->coded() == 0 && made->player() == nullptr);
@@ -973,8 +972,8 @@ int unstated_noise(vkc::test::GpuContext& gpu) {
     CHECK(prepared.ok() && prepared->frames.size() == 2);
     CHECK(prepared->frames[0]->depth_noise == vr_test::kFemtoNoise);
     CHECK(prepared->frames[1]->depth_noise == sensor::DepthNoise{});
-    auto sent = vr_example::send_set(*out, front, *prepared, std::move(*set), 0,
-                                     prepared->timestamp_ns);
+    auto sent = vr_example::send_set(
+        *out, front, *prepared, {}, std::move(*set), 0, prepared->timestamp_ns);
     if (dynamic) {
       CHECK(sent.status().domain() == vkc::Status::Code::InvalidArgument);
       const std::string& why = sent.status().message();
@@ -993,8 +992,7 @@ int unstated_noise(vkc::test::GpuContext& gpu) {
 // filler of mobile sensor 2 fills there (its byte kMobileBit | 3) and leaves
 // every voxel the set's cameras wrote as the call without fillers writes
 // them, bit for bit; a Classic sender refuses the set with its filler before
-// coding it. The call with no fillers is the one without them: every other
-// case here sends through it (send_set.hpp).
+// coding it. Every other case here sends with none (send_set.hpp).
 int fillers_case(vkc::test::GpuContext& gpu) {
   namespace tsdf = vr::tsdf;
   namespace vol = vgrid::volume;
@@ -1163,8 +1161,8 @@ int ready_waits(vkc::test::GpuContext& gpu) {
     before_b = published.load();
     set_b = ready[1]->signal(2).ok();
   });
-  auto sent = vr_example::send_set(*out, front, *prepared, std::move(*set), 0,
-                                   set_time(0), nullptr,
+  auto sent = vr_example::send_set(*out, front, *prepared, {}, std::move(*set),
+                                   0, set_time(0), nullptr,
                                    [&published] { published.store(true); });
   host.join();
   CHECK(set_a && set_b);

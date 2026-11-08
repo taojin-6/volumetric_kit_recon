@@ -4,13 +4,9 @@
 #pragma once
 
 /// @file examples/common/orbbec_config.hpp
-/// @brief fuse_orbbec's scenario: what it refuses, and its validated camera
-///        settings with the runtime decoder resources attached.
+/// @brief fuse_orbbec's scenario as the Orbbec driver's stream settings.
 
 #include "config.hpp"
-#include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/core/vulkan/allocator.hpp"
-#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/sensor/orbbec/orbbec_stream.hpp"
 
 namespace vr_example {
@@ -34,20 +30,6 @@ inline volumetric_kit::sensor::OrbbecStreamOptions orbbec_stream_options(
   streams.min_depth = settings.fusion.min_depth_m;
   streams.max_depth = settings.fusion.max_depth_m;
   return streams;
-}
-
-/// @brief Attach decoder resources owned by the running application.
-/// @param settings A configuration validated for this application by core.
-/// @param device Decoder device, kept alive by the application.
-/// @param allocator Decoder allocator, kept alive by the application.
-/// @param streams Destination runtime stream options.
-inline void apply_orbbec_config(
-    const config::Config& settings, const volumetric_kit::core::Device& device,
-    volumetric_kit::core::Allocator& allocator,
-    volumetric_kit::sensor::OrbbecStreamOptions& streams) {
-  streams = orbbec_stream_options(settings);
-  streams.device = &device;
-  streams.allocator = &allocator;
 }
 
 }  // namespace vr_example

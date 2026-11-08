@@ -3,10 +3,11 @@
 
 // The live examples' array (examples/common/live_sets.hpp), which fuse_orbbec,
 // fuse_realsense and fuse_decklink report through: the array's counters and
-// each camera's line, a camera model's part of it and its lens's name, and the
-// array's clock; fuse_decklink's camera report and depth noise
-// (examples/common/decklink_camera.hpp); and, where the RealSense driver is
-// built, fuse_realsense's camera report (examples/common/realsense_camera.hpp).
+// each camera's line, a camera model's part of it, its lens's name and its
+// colour exposure's part, and the array's clock; fuse_decklink's camera report
+// and depth noise (examples/common/decklink_camera.hpp); and, where the
+// RealSense driver is built, fuse_realsense's camera report
+// (examples/common/realsense_camera.hpp).
 // Host only: the sensors are fakes, the array opened with no device.
 
 #include <cmath>
@@ -24,6 +25,7 @@
 #include "volumetric_kit/core/testing/test_check.hpp"
 #include "volumetric_kit/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/sensor/camera/camera_model.hpp"
+#include "volumetric_kit/sensor/camera/color_controls.hpp"
 #include "volumetric_kit/sensor/frame/depth_noise.hpp"
 #include "volumetric_kit/sensor/rgbd_frame.hpp"
 #include "volumetric_kit/sensor/rgbd_sensor.hpp"
@@ -123,6 +125,14 @@ int summary() {
   lens = {};
   lens.k5 = -2e-3;
   CHECK(std::string(vr_example::lens_name(lens)) == "rational");
+  // A colour exposure as the camera read it back, or none: auto exposure.
+  sensor::SensorInfo info;
+  CHECK(vr_example::exposure_text(info) == ", auto exposure");
+  camera::ColorControls lock;
+  lock.exposure = 167;
+  lock.gain = 60;
+  info.color_controls = lock;
+  CHECK(vr_example::exposure_text(info) == ", exposure 167 gain 60");
   return 0;
 }
 

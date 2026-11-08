@@ -54,11 +54,6 @@ inline std::string orbbec_camera_report(
   const sensor::camera::Mat4d pose = posed != nullptr && posed->color_to_world
                                          ? *posed->color_to_world
                                          : sensor::camera::Mat4d(1.0);
-  const std::string exposure =
-      sensor.color_controls
-          ? ", exposure " + std::to_string(sensor.color_controls->exposure) +
-                " gain " + std::to_string(sensor.color_controls->gain)
-          : std::string(", auto exposure");
   char at[96];
   std::snprintf(at, sizeof at, ", at (%.3f, %.3f, %.3f) m\n", pose[3].x,
                 pose[3].y, pose[3].z);
@@ -66,19 +61,9 @@ inline std::string orbbec_camera_report(
          info.firmware_version + ", " + info.connection_type + " " +
          info.ip_address + ", sync " + sensor::to_string(info.sync_mode) +
          ", " + sensor::to_string(sensor.clock) + " clock\n" + "  colour" +
-         camera_summary(*sensor.color, info.color_lens_model) + exposure + at +
-         "  depth" + camera_summary(*sensor.depth, info.depth_lens_model) +
-         "\n";
-}
-
-/// @brief Print an opened camera's @ref orbbec_camera_report.
-inline void print_orbbec_camera(
-    const sensor::OrbbecSensor& opened,
-    const sensor::camera::ArrayCalibration& calibration) {
-  std::fputs(
-      orbbec_camera_report(opened.device_info(), opened.info(), calibration)
-          .c_str(),
-      stdout);
+         camera_summary(*sensor.color, info.color_lens_model) +
+         exposure_text(sensor) + at + "  depth" +
+         camera_summary(*sensor.depth, info.depth_lens_model) + "\n";
 }
 
 /// @brief The camera a single-camera run opens: @p serial, which
@@ -128,7 +113,9 @@ open_orbbec_cameras(const config::Config& opt,
                     const sensor::camera::ArrayCalibration& calibration,
                     const vkc::Device& device, vkc::Allocator& allocator) {
   sensor::OrbbecSensor::Options o;
-  apply_orbbec_config(opt, device, allocator, o);
+  static_cast<sensor::OrbbecStreamOptions&>(o) = orbbec_stream_options(opt);
+  o.device = &device;
+  o.allocator = &allocator;
   o.color_controls = calibration.color_controls;
   std::vector<std::unique_ptr<sensor::IRgbdSensor>> sensors;
   const auto t_open = std::chrono::steady_clock::now();
@@ -145,8 +132,11 @@ open_orbbec_cameras(const config::Config& opt,
   }
   for (const std::unique_ptr<sensor::IRgbdSensor>& opened : sensors) {
     // Every camera here is an OrbbecSensor.
-    print_orbbec_camera(static_cast<const sensor::OrbbecSensor&>(*opened),
-                        calibration);
+    const auto& camera = static_cast<const sensor::OrbbecSensor&>(*opened);
+    std::fputs(
+        orbbec_camera_report(camera.device_info(), camera.info(), calibration)
+            .c_str(),
+        stdout);
   }
   if (opt.source.sync_config.empty() &&
       sensors[0]->info().role == sensor::SyncRole::Secondary) {
