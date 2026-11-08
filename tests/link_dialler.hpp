@@ -8,6 +8,10 @@
 // as an iPad's does (grid's StreamServer with listen false, core::net::dial,
 // add_viewer), each frame's colour record, if any, before its depth record.
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -191,13 +195,8 @@ class Dialler {
       const stream::Session& session, std::uint16_t port,
       bool read_notes = false,
       std::chrono::milliseconds limit = std::chrono::seconds(5)) {
-    gnet::ServerOptions options;
-    options.listen = false;
-    options.replay_gop = false;
-    options.max_viewers = 1;
-    options.read_notes = read_notes;
     VKC_ASSIGN(std::unique_ptr<gnet::StreamServer> server,
-               gnet::StreamServer::start(session, options));
+               gnet::StreamServer::start(session, serving(read_notes)));
     const Clock::time_point end = Clock::now() + limit;
     for (;;) {
       vkc::Result<vkc::UniqueFd> fd = volumetric_kit::core::net::dial(
@@ -209,6 +208,43 @@ class Dialler {
       if (Clock::now() >= end) return fd.status();
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+  }
+
+  // As dial, once, its socket bound to `from` before it connects: a numeric
+  // IPv4 address of this host other than 127.0.0.1, a second peer for a
+  // reader on 127.0.0.1 (127.0.0.2 on Linux; macOS gives loopback no other
+  // address, and a LAN one serves).
+  static vkc::Result<std::unique_ptr<Dialler>> dial_from(
+      const stream::Session& session, std::uint16_t port,
+      const std::string& from, bool read_notes = false) {
+    VKC_ASSIGN(std::unique_ptr<gnet::StreamServer> server,
+               gnet::StreamServer::start(session, serving(read_notes)));
+    VKC_ASSIGN(vkc::UniqueFd fd, connect_from(from, port));
+    VKC_TRY(server->add_viewer(std::move(fd)));
+    return std::unique_ptr<Dialler>(new Dialler(std::move(server)));
+  }
+
+  // A blocking connection to 127.0.0.1:`port` from `from` (above).
+  static vkc::Result<vkc::UniqueFd> connect_from(const std::string& from,
+                                                 std::uint16_t port) {
+    vkc::UniqueFd fd(::socket(AF_INET, SOCK_STREAM, 0));
+    sockaddr_in local{};
+    local.sin_family = AF_INET;
+    if (!fd.valid() ||
+        ::inet_pton(AF_INET, from.c_str(), &local.sin_addr) != 1 ||
+        ::bind(fd.get(), reinterpret_cast<const sockaddr*>(&local),
+               sizeof local) != 0) {
+      return vkc::Status::io_error("Dialler: cannot bind " + from);
+    }
+    sockaddr_in to{};
+    to.sin_family = AF_INET;
+    to.sin_port = htons(port);
+    to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (::connect(fd.get(), reinterpret_cast<const sockaddr*>(&to),
+                  sizeof to) != 0) {
+      return vkc::Status::io_error("Dialler: cannot connect from " + from);
+    }
+    return fd;
   }
 
   // A key on track 0 waits until the reader has sent the last key's records
@@ -234,6 +270,16 @@ class Dialler {
  private:
   explicit Dialler(std::unique_ptr<gnet::StreamServer> server)
       : server_(std::move(server)) {}
+
+  // An iPad's writer's server: no listener, a key on a join, one viewer.
+  static gnet::ServerOptions serving(bool read_notes) {
+    gnet::ServerOptions options;
+    options.listen = false;
+    options.replay_gop = false;
+    options.max_viewers = 1;
+    options.read_notes = read_notes;
+    return options;
+  }
   std::unique_ptr<gnet::StreamServer> server_;
 };
 

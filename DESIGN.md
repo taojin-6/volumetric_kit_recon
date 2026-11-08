@@ -1167,6 +1167,21 @@ dials one numeric address of this host (core's `net::Listener`, grid's
 `StreamClient::adopt`), on the polling thread; its header holds the link's
 rules (refusals, reconnects, repeats, the failure cap and the recording), and
 `say` tells the writer one line of words up the same socket, from any thread.
+`RgbdStreamSensor::Door` holds such an address for a whole run, on a thread of
+its own, and routes each connection by its session's id and every byte of its
+`VRST` chunk: a held session's reconnect to that session's `SessionHandle`, at
+the cap too; a new session, with a slot free, to an `Arrival` that `admit`
+makes a sensor of its own, the decoder opened off the door's thread, and
+unrecorded rather than refused where its recording cannot be made; anything
+else (the cap reached, an id cooling down after its failure cap or its decoder,
+one remembered as refused for what its session is) is closed right after its
+session's chunk, never an error. The handle carries the newest connection, the
+session's presence and the note for its writer, so another thread watches and
+tells the session without touching the sensor. A newer connection takes the
+place of the one read, from the same peer at once and from another after a
+second of silence, neither a failure; the failure cap ends that session alone,
+and its slot frees when its sensor goes. Nothing in the live runs opens a door
+yet.
 `tools/session_check`, built with the tests, prints what
 `link/session_check.hpp` finds of a file or a link (README, "Checking a
 phone's stream").

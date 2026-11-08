@@ -8,6 +8,32 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **many phones' sessions on one address**
+  (`RgbdStreamSensor::Door`, `examples/common/link/rgbd_stream_sensor.hpp`):
+  `Door::open` binds the address and returns, a bind it cannot make an
+  `IoError` that a later open can retry; a thread of its own accepts for the
+  whole run and routes each connection by its session's id and `VRST` bytes.
+  A held session's reconnect goes to its `SessionHandle`, at the cap too; a new
+  one, with a slot free (`DoorOptions::max_sessions`), waits as an `Arrival`
+  until `admit` opens it as a sensor of its own, the decoder made off the
+  door's thread, and a recording it cannot make leaves that sensor
+  unrecorded, the error logged and polled once; the cap reached, a held id's
+  other bytes, an id cooling down 10 s after its failure cap or its decoder,
+  or one whose session `admit` refused for what it is (`InvalidArgument`:
+  its tracks, their params; not what the caller's options ask of it) is
+  closed right after its session's chunk, logged once an id a spell (until
+  it arrives, or 30 s unrefused) and counted (`Door::Stats`), never an
+  error. Connections waiting for their session are at most 8, 2 a peer, the
+  oldest let go, for at most 3 s. A slot frees once its session's sensor is
+  destroyed, or its arrival, unadmitted, which ends with the door. A door's
+  sensor takes its connections from the handle: a newer one takes the place
+  of the one read, from the same peer at once and from another after
+  `kSupersedeSilence` (1 s) of silence, counted in `LinkStats::superseded`,
+  not as a failure, and the failure cap ends that session alone. The handle
+  (`RgbdStreamSensor::handle`, also `listen`'s) carries the session's presence
+  (`connected`, `ended` and why) and its note box (`say`) for any thread, and
+  may outlive the sensor. Nothing in the live runs opens a door yet;
+  `listen` is unchanged.
 - `track`: **`Tracker::fit_due` says whether a record would fit the driver**,
   before it records: the hop rule on the frames' clock, by the steps finished
   so far, so a hop whose step was abandoned, or dropped by a refused finish,

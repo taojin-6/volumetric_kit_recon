@@ -5,9 +5,9 @@
 
 /// @file examples/common/link/failure_cap.hpp
 /// @brief When a live link's failures end its stream
-///        (`RgbdStreamSensor::listen`): at @ref kLinkFailures within
-///        @ref kLinkFailureWindow, so drops spread over a long take never add
-///        up to an end.
+///        (`RgbdStreamSensor::listen`, or a door's session, that one alone):
+///        at @ref kLinkFailures within @ref kLinkFailureWindow, so drops
+///        spread over a long take never add up to an end.
 ///
 /// @code
 /// link::FailureCap cap;
