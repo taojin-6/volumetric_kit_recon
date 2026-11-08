@@ -274,6 +274,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `live_mobile_internal.hpp`, and `polled_in_background` to
   `polled_sensor.hpp`, which `live_mobile.hpp` includes. No public signature
   or behaviour changes.
+- `examples`: `track_log.hpp` forward-declares `TagHold` and no longer
+  includes `live_tag.hpp`: include it to use the hold.
 - build: **recon pins sensor 0.48.0 at the head of sensor's
   `ci/orbbec-tool-cache`** (`174c845`, to move to that PR's merge; was 0.43.0,
   sensor #51's merge, `1c5dd48`), and CI takes its actions there: **the

@@ -63,7 +63,6 @@
 #include <utility>
 #include <vector>
 
-#include "live_tag.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
@@ -73,6 +72,8 @@ namespace vr_example {
 
 namespace track = volumetric_kit::recon::track;
 namespace vkc = volumetric_kit::core;
+
+struct TagHold;  // live_tag.hpp
 
 /// @brief A map step the device took out of its pose chain: from @ref pts_ns
 ///        on, its own pose is `raw_from_sent * sent` (cumulative).

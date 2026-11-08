@@ -15,6 +15,7 @@
 #include <system_error>
 #include <utility>
 
+#include "live_tag.hpp"
 #include "volumetric_kit/recon/version.hpp"
 
 namespace vr_example {

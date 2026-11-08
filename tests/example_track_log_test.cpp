@@ -38,6 +38,7 @@
 #include <utility>
 #include <vector>
 
+#include "live_tag.hpp"
 #include "scripted_fitter.hpp"
 #include "track_log.hpp"
 #include "track_scenes.hpp"

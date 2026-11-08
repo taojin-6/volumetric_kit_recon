@@ -401,12 +401,8 @@ class DoorSource final : public MobileLane::SessionSource {
             ? std::string(" for one phone at a time")
             : " for up to " + std::to_string(kMaxPhones) + " phones at once";
     if (plan_.registration) {
-      char hex[9];
-      const std::array<std::uint8_t, 16>& id = plan_.registration->session;
-      std::snprintf(hex, sizeof(hex), "%02x%02x%02x%02x", id[0], id[1], id[2],
-                    id[3]);
-      out += std::string(", session ") + hex + " placed by " +
-             plan_.registration_path;
+      out += ", session " + hex32(plan_.registration->session).substr(0, 8) +
+             " placed by " + plan_.registration_path;
       out += plan_.tag ? std::string(", any other by the tag")
                        : ", any other turned away: " + plan_.no_tag;
     } else {
