@@ -64,6 +64,11 @@
 /// that have come, on the same thread, and waits up to
 /// @ref RgbdStreamSensor::kPollWait for more while no frame is whole.
 ///
+/// **Many sessions on one address.** A @ref RgbdStreamSensor::Door listens
+/// for a whole run and routes each connection by the session it brings: each
+/// session it admits is a sensor of its own, read live as above, its
+/// reconnects handed to it through its @ref SessionHandle.
+///
 /// @code
 /// link::RgbdStreamSensor::Options options;
 /// VKC_ASSIGN(options.registration,
@@ -81,13 +86,16 @@
 /// @endcode
 ///
 /// @warning Not thread-safe: open, start, poll, drain and stop from one
-///          thread; @ref RgbdStreamSensor::say from any.
+///          thread; @ref RgbdStreamSensor::say and the @ref SessionHandle
+///          from any.
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -95,6 +103,7 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/fwd.hpp"
 #include "volumetric_kit/grid/networking/stream_server.hpp"
+#include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/sensor/camera/tracked_registration.hpp"
 #include "volumetric_kit/sensor/rgbd_frame.hpp"
 #include "volumetric_kit/sensor/rgbd_sensor.hpp"
@@ -103,11 +112,100 @@ namespace vr_example::link {
 
 namespace gnet = volumetric_kit::grid::networking;
 namespace sensor = volumetric_kit::sensor;
+namespace stream = volumetric_kit::grid::stream;
 namespace vkc = volumetric_kit::core;
+
+/// @brief How a @ref RgbdStreamSensor::Door admits: how many sessions it
+///        holds, and the limits that keep strays from holding it.
+struct DoorOptions {
+  /// Sessions held at once, each from its arrival until its sensor is
+  /// destroyed; at least 1. A new session past them is refused.
+  std::size_t max_sessions = 1;
+  /// Connections waiting for their session at once; at least 1. One more
+  /// lets the oldest go.
+  std::size_t max_pending = 8;
+  /// Of them, from one peer address; at least 1. One more lets that peer's
+  /// oldest go.
+  std::size_t max_pending_per_peer = 2;
+  /// The longest a connection may take to bring its session; positive.
+  std::chrono::milliseconds handshake{3000};
+  /// How long a session that ended by its failure cap or its decoder leaves
+  /// its id refused, from when its sensor is destroyed; 0 or more.
+  std::chrono::milliseconds cool_down{10'000};
+  /// The ids remembered as refused, each a session
+  /// @ref RgbdStreamSensor::Door::admit refused for what it is; past them the
+  /// oldest is forgotten.
+  std::size_t max_remembered = 256;
+  /// How long an id refused must go unrefused for its next refusal to be
+  /// logged again, its reason the same; 0 or more, 0 logging each one.
+  std::chrono::milliseconds quiet{30'000};
+};
+
+/// @brief A session a @ref RgbdStreamSensor::Door holds, shared by the door,
+///        the session's sensor and whoever watches it or tells its writer
+///        notes: the newest connection the door routed to it, waiting for
+///        the sensor; its presence; and the note for its writer.
+///
+/// The door makes one for each new session and hands it out with the
+/// session's @ref RgbdStreamSensor::Door::Arrival; the sensor admitted from
+/// it takes the connections the door routes to it from then on. A copy may
+/// outlive the sensor and the door: it reads as ended once the sensor goes,
+/// or, never admitted, once the arrival or the door does, and a note said to
+/// it goes nowhere. @ref RgbdStreamSensor::listen's sensor has one of its own,
+/// for its presence and its notes (@ref RgbdStreamSensor::handle).
+///
+/// Thread-safe: every call from any thread, and none waits on a socket.
+class SessionHandle {
+ public:
+  /// @brief Why a session's stream ended.
+  enum class End : std::uint8_t {
+    None,        ///< It has not.
+    FailureCap,  ///< Three failures within 10 s (link/failure_cap.hpp).
+    Decoder,     ///< Its pictures' decoder failed for good.
+    Closed,      ///< Its sensor was destroyed, or never made.
+  };
+
+  SessionHandle(const SessionHandle&) = delete;
+  SessionHandle& operator=(const SessionHandle&) = delete;
+
+  /// @return Whether a connection of the session is read now: from when its
+  ///         sensor takes one until it lets it go.
+  bool connected() const noexcept;
+
+  /// @return Why the stream ended, the first reason; End::None while it
+  ///         goes on.
+  End ended() const noexcept;
+
+  /// @brief Tell the session's writer @p note: the newest wins, sent on its
+  ///        sensor's polling thread's next pass, and again to each later
+  ///        connection of the session (@ref RgbdStreamSensor::say).
+  ///
+  /// Never waits: one lock, held for a move, with no socket call under it.
+  /// A note no writer can take goes unsaid, as one said once the sensor is
+  /// gone.
+  /// @param note  Its tone and its line (grid's `kMaxNoteLineBytes` at most).
+  void say(gnet::ViewerNote note) noexcept;
+
+ protected:
+  /// @brief Not connected, not ended, no note.
+  SessionHandle() = default;
+  /// @brief Not virtual: a handle is only ever made as the link's own kind,
+  ///        which `std::shared_ptr` deletes as made.
+  ~SessionHandle() = default;
+
+  std::atomic<bool> connected_{false};  ///< What @ref connected says.
+  std::atomic<End> end_{End::None};     ///< What @ref ended says.
+  /// The note box: what @ref say left, until the sensor's next pass takes
+  /// it.
+  std::mutex said_mutex_;
+  std::optional<gnet::ViewerNote> said_;  ///< Under said_mutex_.
+};
 
 /// @brief One sensor of a `.vrst` session, read back (above).
 class RgbdStreamSensor final : public sensor::IRgbdSensor {
  public:
+  class Door;  // many sessions on one address, each its own sensor (below)
+
   /// @brief Which sensor, where its poses go, and where its pictures decode.
   struct Options {
     /// The sensor's id (`SensorInfo::id`); empty for a session's only one.
@@ -146,21 +244,27 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
     std::uint64_t before_ns = 0;
   };
 
-  /// @brief What a live link has seen since @ref listen.
+  /// @brief What a live link has seen since @ref listen, or since a
+  ///        @ref Door admitted its session.
   struct LinkStats {
     /// Connections that brought the session, the first one included.
     std::uint64_t connections = 0;
     /// Connections let go before any of their records was taken: before the
     /// first session, one whose session @ref open_file would refuse; after
     /// it, another session's; or one whose session did not come within the
-    /// idle limit (10 s). They do not count as failures.
+    /// idle limit (10 s). They do not count as failures. A door's session
+    /// has none: the door refuses before it (@ref Door::Stats::refused).
     std::uint64_t refused = 0;
     /// Connections of the session lost: closed or reset by the writer, idle
     /// past 10 s, a chunk that failed its check, or let go after a picture
     /// failed to decode. A writer that finishes its take is one too, since
-    /// its server sends no end. Three within 10 s end the stream
-    /// (link/failure_cap.hpp).
+    /// its server sends no end. Three within 10 s end the stream, a door's
+    /// session alone (link/failure_cap.hpp).
     std::uint64_t failures = 0;
+    /// A door's session: connections let go for a newer one the door routed
+    /// to it (@ref Door), the one being read or one still waiting. They do
+    /// not count as failures. Always 0 for @ref listen.
+    std::uint64_t superseded = 0;
     /// Records a writer sent again on a later connection (a seq not above
     /// the last one taken on its track), skipped unseen and unrecorded.
     std::uint64_t repeated = 0;
@@ -171,6 +275,10 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
 
   /// The longest a live @ref poll waits for records while no frame is whole.
   static constexpr std::chrono::milliseconds kPollWait{20};
+
+  /// How long a door's session's connection must have brought nothing for a
+  /// newer one from another peer address to take its place (@ref Door).
+  static constexpr std::chrono::milliseconds kSupersedeSilence{1000};
 
   /// @brief Read the sensor of the session at @p path.
   /// @return The sensor, not started; `Status::Code::InvalidArgument` for a
@@ -323,11 +431,14 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   ///         the picture track is not read.
   const std::vector<Skipped>& skipped_color() const noexcept;
 
-  /// @return The live link's counts since @ref listen; all 0 for a file.
+  /// @return The live link's counts since @ref listen, or since a @ref Door
+  ///         admitted its session; all 0 for a file. The polling thread's:
+  ///         another reads the session's presence through @ref handle.
   const LinkStats& link_stats() const noexcept;
 
-  /// @return The session's id (grid's `Session::id`): the file's, or the
-  ///         first live session's, which every later connection must match.
+  /// @return The session's id (grid's `Session::id`): the file's, the first
+  ///         live session's, which every later connection must match, or the
+  ///         one a @ref Door admitted.
   const std::array<std::uint8_t, 16>& session_id() const noexcept;
 
   /// @brief Tell a live writer @p note, up the socket it dialled (grid's
@@ -337,8 +448,15 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   ///
   /// Never waits, from any thread: one lock, held for a move, with no socket
   /// call under it. A note no writer can take goes unsaid: the stream goes on.
+  /// The same as @ref SessionHandle::say on @ref handle.
   /// @param note  Its tone and its line (grid's `kMaxNoteLineBytes` at most).
   void say(gnet::ViewerNote note) noexcept;
+
+  /// @return The live session's handle, for its presence and its notes from
+  ///         any thread, which may outlive the sensor: a @ref Door's for a
+  ///         session it admitted, or the link's own for @ref listen; null for
+  ///         a file.
+  std::shared_ptr<SessionHandle> handle() const noexcept;
 
  private:
   struct State;  // the records' source, its place, the decoder, the join
@@ -346,6 +464,182 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   explicit RgbdStreamSensor(std::unique_ptr<State> state);
 
   std::unique_ptr<State> state_;  // never null
+};
+
+/// @brief Writers' sessions on one address for a whole run, each its own
+///        sensor: the listener and its thread, which route each connection
+///        by the session it brings.
+///
+/// @ref open binds one numeric IPv4 address of this host, never the
+/// wildcard, and returns; from then on one thread accepts there (core's
+/// `net::Listener`, grid's `StreamClient::adopt`), until the door is
+/// destroyed. A connection waits for its session: at most
+/// @ref DoorOptions::max_pending at once and
+/// @ref DoorOptions::max_pending_per_peer from one address, one more letting
+/// the oldest go (@ref Stats::crowded), each read in turn without waiting,
+/// until its session's chunk has come or @ref DoorOptions::handshake has
+/// passed (@ref Stats::strays). Then it goes by the session's id (grid's
+/// `Session::id`) and every byte of its `VRST` chunk:
+/// - A held session's id and bytes: a reconnect, handed to its
+///   @ref SessionHandle at the cap too, which its sensor takes as its newest.
+/// - A held session's id with other bytes, or one whose stream has ended;
+///   an id cooling down, or remembered as refused: refused.
+/// - A new id with a slot free: the slot is the session's from then on, and
+///   its @ref Arrival waits for @ref take_arrival.
+/// - A new id with none free: refused.
+///
+/// A refused connection is closed right after its session's chunk, which a
+/// writer that redials takes as a dial that failed. It is counted
+/// (@ref Stats::refused) and logged once an id a spell, which lasts until
+/// that id arrives, is refused for another reason, or goes
+/// @ref DoorOptions::quiet unrefused; it is never an error.
+///
+/// A slot is held from the arrival until the session's sensor is destroyed,
+/// or its arrival is, unadmitted. A session that ended by its failure cap or
+/// its decoder (@ref SessionHandle::End) leaves its id refused for
+/// @ref DoorOptions::cool_down after; then the id arrives as a new session.
+/// A session @ref admit refused for what it is leaves its id remembered as
+/// refused.
+///
+/// **A door's session.** Its sensor reads as
+/// @ref RgbdStreamSensor::listen's does, but takes its connections from its
+/// @ref SessionHandle, each already checked: a record sent again is skipped,
+/// the recording is one file across every connection, and the failure cap
+/// ends that session alone. A newer connection takes the place of the one
+/// being read: from the same peer address at once, from another once the
+/// current one has brought nothing for
+/// @ref RgbdStreamSensor::kSupersedeSilence, as a writer that changed
+/// networks dials again only once it has lost its reader. Neither counts as
+/// a failure (@ref RgbdStreamSensor::LinkStats::superseded). With the door
+/// gone, it reads the connection it has.
+///
+/// @code
+/// VKC_ASSIGN(auto door, link::RgbdStreamSensor::Door::open(host, port));
+/// // the opener's thread
+/// while (running) {
+///   std::optional<link::RgbdStreamSensor::Door::Arrival> arrival =
+///       door->take_arrival(std::chrono::milliseconds(100));
+///   if (!arrival) continue;
+///   std::shared_ptr<link::SessionHandle> handle = arrival->handle;
+///   vkc::Result<std::unique_ptr<link::RgbdStreamSensor>> phone =
+///       door->admit(std::move(*arrival), options, record_path);
+///   if (!phone.ok()) continue;  // its slot is free again
+///   // poll *phone.value() on a thread of its own; handle->say from any
+/// }
+/// @endcode
+///
+/// @warning @ref take_arrival, @ref admit and @ref stats from any thread,
+///          none past the destructor.
+class RgbdStreamSensor::Door {
+ private:
+  struct Lease;  // a hold on a session's slot, which the door watches weakly
+
+ public:
+  /// @brief A new session's first connection, its slot held: for
+  ///        @ref admit, or dropped, which frees the slot.
+  struct Arrival {
+    /// @brief Holds nothing.
+    Arrival();
+    Arrival(Arrival&&);
+    Arrival& operator=(Arrival&&) = delete;
+    Arrival(const Arrival&) = delete;
+    Arrival& operator=(const Arrival&) = delete;
+    ~Arrival();
+
+    stream::Session session;  ///< What its connection brought.
+    std::string peer;         ///< The connection's peer, "a.b.c.d:port".
+    /// The session's, its connection waiting in it: the door routes the
+    /// session's reconnects to it from now on.
+    std::shared_ptr<SessionHandle> handle;
+    /// Holds the session's slot: a lease of the door's own kind, which no
+    /// one else can make or share; the arrival's, then its sensor's.
+    std::unique_ptr<Lease> slot;
+  };
+
+  /// @brief What the door has done since @ref open.
+  struct Stats {
+    std::uint64_t accepted = 0;  ///< Connections accepted.
+    /// Connections let go while waiting for their session, to make room
+    /// (@ref DoorOptions::max_pending, @ref DoorOptions::max_pending_per_peer).
+    std::uint64_t crowded = 0;
+    /// Connections let go before their session came: closed, reset, bytes
+    /// that are not a session's, or past @ref DoorOptions::handshake.
+    std::uint64_t strays = 0;
+    /// Connections closed right after their session's chunk (above).
+    std::uint64_t refused = 0;
+    std::uint64_t reconnects = 0;  ///< Connections routed to a held session.
+    std::uint64_t arrivals = 0;    ///< New sessions, each an @ref Arrival.
+    std::uint64_t admitted = 0;    ///< Arrivals @ref admit made a sensor of.
+    std::size_t held = 0;          ///< Sessions holding a slot now.
+  };
+
+  /// @brief Listen on @p host : @p port, one numeric IPv4 address of this
+  ///        host, never the wildcard, and return once bound, its thread
+  ///        accepting.
+  ///
+  /// Nothing is kept from a call that fails, so a later one can bind again.
+  /// @return The door; `Status::Code::InvalidArgument` for an empty,
+  ///         wildcard or non-numeric host, port 0, or a limit of
+  ///         @p options out of its range; `Status::Code::IoError` for an
+  ///         address that cannot be bound (in use, or not this host's), or a
+  ///         thread that cannot start; `Status::Code::OutOfMemory`. Messages
+  ///         begin `"RgbdStreamSensor::Door::open: "`.
+  static vkc::Result<std::unique_ptr<Door>> open(const std::string& host,
+                                                 std::uint16_t port,
+                                                 DoorOptions options = {});
+
+  /// @brief Stop accepting, the thread joined, the listener closed and the
+  ///        connections waiting let go, an arrival not admitted ended
+  ///        (@ref SessionHandle::End::Closed) with its connection. The
+  ///        sensors admitted read on.
+  ~Door();
+  Door(const Door&) = delete;
+  Door& operator=(const Door&) = delete;
+
+  /// @brief The next new session, waiting up to @p wait for one.
+  /// @param wait  The longest to wait; 0 or less takes one already there.
+  /// @return The session's arrival, or nothing by then.
+  std::optional<Arrival> take_arrival(std::chrono::milliseconds wait);
+
+  /// @brief A sensor of @p arrival 's session, read as @p options say, its
+  ///        connections the door's from then on (above): the session checked
+  ///        as @ref RgbdStreamSensor::open_file checks a file's, and with a
+  ///        device, its decoder made.
+  ///
+  /// @p arrival is consumed, even on a failure, which frees its slot.
+  /// With @p record_path, the session is recorded there as
+  /// @ref RgbdStreamSensor::listen records it. A recording that cannot be
+  /// made there (anything already at it, or `StreamWriter::create`'s error)
+  /// costs the session nothing: the error is logged, the sensor reads
+  /// unrecorded, and @ref RgbdStreamSensor::poll returns the error once, as
+  /// a write that fails.
+  /// @param arrival      An arrival of this door's @ref take_arrival.
+  /// @param options      Which sensor, where its poses go, where its
+  ///                     pictures decode.
+  /// @param record_path  Where to record the session; empty records nothing.
+  /// @return The sensor, not started; `Status::Code::InvalidArgument` for an
+  ///         arrival that is not this door's or was admitted, which is left
+  ///         as it was, or for a registration that holds for no session;
+  ///         @ref RgbdStreamSensor::open_file's errors for the session, such
+  ///         as `Status::Code::InvalidArgument` for one it refuses, and
+  ///         `Status::Code::Unsupported` for one this build or device cannot
+  ///         read. A refusal for what the session is (its tracks, their
+  ///         params) leaves its id remembered as refused; one for what
+  ///         @p options ask of it (a sensor it lacks or must name, a
+  ///         registration not for it, a decoder the device cannot make) does
+  ///         not. Messages begin `"RgbdStreamSensor::Door::admit: "`.
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> admit(
+      Arrival&& arrival, Options options, std::string record_path = {});
+
+  /// @return The counts since @ref open.
+  Stats stats() const;
+
+ private:
+  struct Impl;  // the listener, the thread, the sessions held, the arrivals
+
+  explicit Door(std::unique_ptr<Impl> impl) noexcept;
+
+  std::unique_ptr<Impl> impl_;  // never null
 };
 
 }  // namespace vr_example::link

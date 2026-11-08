@@ -361,6 +361,23 @@ if(VR_BUILD_EXAMPLES)
            COMMAND recon_example_link_listen_test)
 endif()
 
+# Many writers' sessions on one address (RgbdStreamSensor::Door), each dialled
+# as an iPad's writer dials (link_dialler.hpp), depth alone: two sessions at
+# once, a reconnect, a newer connection superseding from the same peer and,
+# after a second of silence, from another, the cap, a refusal logged once an id,
+# a remembered refusal, strays, the failure cap with its cool-down, presence
+# seen from another thread, say once the sensor is gone, and admit's refusals.
+# Host only.
+if(VR_BUILD_EXAMPLES)
+  add_executable(recon_example_link_door_test example_link_door_test.cpp)
+  target_link_libraries(
+    recon_example_link_door_test
+    PRIVATE vr_example_link volumetric_kit::grid_networking
+            volumetric_kit::core_net)
+  vr_target_warnings(recon_example_link_door_test)
+  add_test(NAME recon_example_link_door COMMAND recon_example_link_door_test)
+endif()
+
 # Live with its pictures: the test pattern coded in the test by sensor's
 # HevcEncoder, each frame's indices read on the device by session_check's checks
 # (link/session_check.hpp), a picture the decode refuses ending a connection,
