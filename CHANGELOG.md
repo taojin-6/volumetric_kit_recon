@@ -265,6 +265,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **the phone lane in files of its own** (`examples/common/`,
+  moved as is): `live_mobile.cpp` (was 2,673 lines, now 785) keeps the lane
+  and the gap's scheduler; a session's work and its leave (`PhoneSession`,
+  the reaper) go to `live_mobile_session.cpp`, the open path
+  (`check_mobile`, `open_mobile_lane`, a live run's door, opener and
+  back-off) to `live_mobile_open.cpp`, over the internal
+  `live_mobile_internal.hpp`, and `polled_in_background` to
+  `polled_sensor.hpp`, which `live_mobile.hpp` includes. No public signature
+  or behaviour changes.
+- `examples`: `track_log.hpp` forward-declares `TagHold` and no longer
+  includes `live_tag.hpp`: include it to use the hold.
 - build: **recon pins sensor 0.48.0 at the head of sensor's
   `ci/orbbec-tool-cache`** (`174c845`, to move to that PR's merge; was 0.43.0,
   sensor #51's merge, `1c5dd48`), and CI takes its actions there: **the

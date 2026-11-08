@@ -73,8 +73,12 @@ vr_target_warnings(vr_example_link)
 # The live runs' phone lane (live_mobile.hpp) and the tracking log it writes
 # (track_log.hpp): the phone's session read back (vr_example_link), prepared
 # (sensor_prep), tracked (recon_track) and handed to the sender as fill
-# (recon_sender).
-add_library(vr_example_mobile STATIC live_mobile.cpp track_log.cpp)
+# (recon_sender). The lane's sources share live_mobile_internal.hpp: the lane
+# and the gap's scheduler, a session's work and leave, and the open path.
+add_library(
+  vr_example_mobile STATIC
+  live_mobile.cpp live_mobile_open.cpp live_mobile_session.cpp
+  polled_sensor.cpp track_log.cpp)
 target_link_libraries(
   vr_example_mobile PUBLIC vr_example_link volumetric_kit::recon_track
                            volumetric_kit::recon_sender)
