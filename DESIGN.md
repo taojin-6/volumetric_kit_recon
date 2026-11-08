@@ -1190,8 +1190,8 @@ second of silence, neither a failure; the failure cap ends that session alone,
 and its slot frees when its sensor goes. Nothing in the live runs opens a door
 yet.
 `tools/session_check`, built with the tests, prints what
-`link/session_check.hpp` finds of a file or a link (README, "Checking a
-phone's stream").
+its `session_check.hpp` finds of a file or a link (README, "Checking a
+phone's stream"); the link tests run the same checks (`vr_session_check`).
 
 **The phone lane** (`examples/common/live_mobile.hpp`, `vr_example_mobile`)
 puts such sensors beside a live run's cameras (`source.mobile`). It holds

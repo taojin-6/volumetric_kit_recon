@@ -28,7 +28,7 @@
 //   listening. A session open_file would refuse is a connection refused:
 //   the right writer after it is taken, and alone it is named when the wait
 //   ends.
-// - session_check's pass (link/session_check.hpp, SessionReport::ok).
+// - session_check's pass (tools/session_check, SessionReport::ok).
 // - say, on a writer's server that reads notes: notes said from another thread
 //   while frames flow reach it, the newest last, and every frame comes. No say
 //   waits, with a poll waiting on a silent socket or no poll at all. A line
@@ -54,8 +54,8 @@
 
 #include "link/failure_cap.hpp"
 #include "link/rgbd_stream_sensor.hpp"
-#include "link/session_check.hpp"
 #include "link_dialler.hpp"
+#include "session_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/net/dial.hpp"
 #include "volumetric_kit/core/net/socket.hpp"

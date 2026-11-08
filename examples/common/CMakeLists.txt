@@ -56,9 +56,8 @@ endif()
 # track's records, in sensor's wire form (sensor_wire), through grid's
 # StreamReader or, live, a core::net::Listener's connections read by grid's
 # StreamClient, and its pictures on sensor_video where sensor builds it. The key
-# gate is sensor_video_syntax's, which sensor_wire brings. session_check's
-# checks (link/session_check.hpp) read the pattern with sensor_prep's
-# PatternReader. grid_networking is PUBLIC for the ViewerNote its header names.
+# gate is sensor_video_syntax's, which sensor_wire brings. grid_networking is
+# PUBLIC for the ViewerNote its header names.
 add_library(vr_example_link STATIC link/rgbd_stream_sensor.cpp)
 target_link_libraries(
   vr_example_link
