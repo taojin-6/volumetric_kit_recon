@@ -1195,7 +1195,9 @@ refused or superseded, with its session and peer; the live runs' phone lane
 keeps one door a run.
 `tools/session_check`, built with the tests, prints what
 its `session_check.hpp` finds of a file or a link (README, "Checking a
-phone's stream"); the link tests run the same checks (`vr_session_check`).
+phone's stream"); the link tests run the same checks (`vr_session_check`),
+a door's session with its pictures (`recon_example_link_door_color`) as
+listen's.
 
 **The phone lane** (`examples/common/live_mobile.hpp`, `vr_example_mobile`)
 puts such sensors beside a live run's cameras (`source.mobile`). It holds
@@ -1361,7 +1363,17 @@ stream is finished, its viewers closed, the cameras released and the PLY
 written. A second signal of the same kind ends the process.
 That run is `examples/common/live_fusion.hpp`'s `run_live_fusion`, which
 takes the program's camera opener, its cameras' clock and its counters, so
-it is the one loop of the three live programs that fuse to a PLY.
+it is the one loop of the three live programs that fuse to a PLY. It takes
+a caller's device and allocator too, which the programs leave to the run:
+`recon_example_live_fusion` runs it headless on core's test device and
+policy, its opener a fake camera that sees a wall and tells the array of
+each frame, its phones writers that dial loopback, and reads its stdout: a
+rig-only run, with and without a stream; a live address no phone dials (the
+cameras opening within a second of the listening line), one a phone joins
+once the sets run (the test's SIGINT, raised once the join is in
+`sessions.csv`, ending it after the set in hand), one another socket holds,
+and one Classic fusion turns phones away from. The rig runs its sets in
+each.
 **`fuse_realsense`** (`VS_WITH_REALSENSE`) is that run on one RealSense
 D400 camera (core's `FuseRealsense` profile), its depth the scenario's
 `source.depth`, chosen in the opener (`open_realsense_array`) alone, so the

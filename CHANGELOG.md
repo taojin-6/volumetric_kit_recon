@@ -8,6 +8,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **`run_live_fusion` runs headless in a test**
+  (`recon_example_live_fusion`, `examples/common/live_fusion.hpp`): the run
+  takes a caller's device and allocator (two trailing arguments; the three
+  programs leave them null, and the run makes its own after the mic, as
+  before), and `OpenArray` is a `std::function`, so a test's opener holds its
+  cameras. The test runs it on core's test device and policy, a fake camera
+  that sees a wall in place of a driver's discovery, and reads its stdout: 3
+  frames fused into the PLY, and coded into a stream; a live `source.mobile`
+  no phone dials (listening, the cameras opening within a second after), one
+  a phone joins once the sets run (the test's SIGINT, raised once the join is
+  in `sessions.csv`, ending it after the set in hand; the report counts the
+  phone), one whose address another socket holds (not listening), and Classic
+  fusion turning a phone away. The rig runs its sets in each.
+- `examples`: **a door's session with its pictures is tested**
+  (`recon_example_link_door_color`), as `recon_example_link_listen_color`
+  tests listen's: each frame's own picture, a picture the decode refuses
+  ending a connection, the reconnect going to the same session with no new
+  arrival, and the recording read back on the device; it skips where no
+  hardware coder opens. The two share `tests/link_pictures.hpp` (the pattern
+  coder, the colour record, the checks), so listen can go without losing
+  colour coverage.
 - `examples`: **`fuse_render` runs in CI** (`recon_fuse_render_run`, the
   viewer leg): two frames of the wall `recon_fuse_replica_run` fuses, textured
   with the second, rendered to a 320x200 PNG. The test reads the size from the

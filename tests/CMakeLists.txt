@@ -401,6 +401,28 @@ if(VR_BUILD_EXAMPLES)
            COMMAND recon_example_link_listen_color_test)
 endif()
 
+# A door's session live with its pictures, as the case above reads listen's
+# (link_pictures.hpp, which both share): each frame's own picture, a picture the
+# decode refuses ending a connection, the reconnect going to the same session,
+# and the recording read back. It skips as the case above does; without
+# sensor_video it checks nothing.
+if(VR_BUILD_EXAMPLES)
+  add_executable(recon_example_link_door_color_test
+                 example_link_door_color_test.cpp)
+  target_link_libraries(
+    recon_example_link_door_color_test PRIVATE vr_session_check
+                                               volumetric_kit::core_test_policy)
+  if(TARGET volumetric_kit::sensor_video_testing)
+    target_link_libraries(recon_example_link_door_color_test
+                          PRIVATE volumetric_kit::sensor_video_testing)
+    target_compile_definitions(recon_example_link_door_color_test
+                               PRIVATE VR_TEST_LINK_VIDEO=1)
+  endif()
+  vr_target_warnings(recon_example_link_door_color_test)
+  add_test(NAME recon_example_link_door_color
+           COMMAND recon_example_link_door_color_test)
+endif()
+
 # The live runs' phone lane (live_mobile.hpp) on a fake phone, its frames
 # prepared on the device and tracked by scripted fitters: tiers, one generation,
 # the wait and the drop, replays, the drain cap, the log, splits, pairing,
@@ -445,6 +467,19 @@ if(VR_BUILD_EXAMPLES)
   vr_target_warnings(recon_example_live_phones_test)
   add_test(NAME recon_example_live_phones
            COMMAND recon_example_live_phones_test)
+  # The live examples' run (live_fusion.hpp) headless on the test's device and
+  # policy, a fake camera in place of a driver's discovery: a rig-only run, with
+  # and without a stream; a live lane no phone dials, one a phone joins (the
+  # test's SIGINT, raised once the join is in sessions.csv, ends it), one whose
+  # address is held, and one Classic fusion turns phones away from.
+  add_executable(recon_example_live_fusion_test example_live_fusion_test.cpp)
+  target_link_libraries(
+    recon_example_live_fusion_test
+    PRIVATE vr_example_live volumetric_kit::core_net
+            volumetric_kit::core_test_policy)
+  vr_target_warnings(recon_example_live_fusion_test)
+  add_test(NAME recon_example_live_fusion
+           COMMAND recon_example_live_fusion_test)
   # The origin tag's watch (live_tag.hpp), with VR_WITH_CALIB: OpenCV's markers
   # pasted face-on into NV12 pictures on the device (sensor's nv12_picture.hpp),
   # moved and turned by OpenCV's warp for a moving camera, searched, gated and
