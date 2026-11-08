@@ -408,6 +408,12 @@ const std::vector<std::string>& Tracker::chains() const noexcept {
 
 const TrackerConfig& Tracker::config() const noexcept { return state_->config; }
 
+bool Tracker::fit_due(std::uint64_t timestamp_ns) const noexcept {
+  // The driver chains share one method, and a step records and finishes
+  // their fits together or drops them all: the first speaks for them.
+  return state_->chains.front().due(timestamp_ns);
+}
+
 core::Result<PendingStep> Tracker::record(
     core::CommandBatch& batch,
     const volumetric_kit::grid::volume::VoxelBlockGrid& model,

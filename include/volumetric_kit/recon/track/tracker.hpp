@@ -230,6 +230,17 @@ class VR_TRACK_API Tracker {
   const std::vector<std::string>& chains() const noexcept;
   /// @return The configuration this was created with.
   const TrackerConfig& config() const noexcept;
+  /// @param timestamp_ns  A frame's time, on the frames' clock.
+  /// @return Whether @ref record of a frame at @p timestamp_ns would record
+  ///         the driver chains' fits: at the first frame of each hop (every
+  ///         frame for a hop of 0), by the steps finished so far: a step
+  ///         abandoned, or dropped by a refused @ref finish (whichever
+  ///         fitters finished in it), counts for nothing, and one
+  ///         outstanding counts as though abandoned. So a dropped step's
+  ///         hop stays due, and after @ref flush the hops stay on the
+  ///         frames' clock. It says nothing of whether @ref record takes
+  ///         the frame, nor of which shadows fit at it.
+  bool fit_due(std::uint64_t timestamp_ns) const noexcept;
 
   /// @brief Hold @p frame, and record into @p batch, after its prep, every
   ///        fit due at it: the driver's chains first, in priority order,

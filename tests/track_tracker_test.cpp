@@ -15,7 +15,8 @@
 // own record, errors that leave nothing held, a refused finish that leaves no
 // fitter holding a record, abandon, flush, create's refusals); replays
 // repeat; a split (flush mid-run, then more frames: windows and placements
-// start again, the judge goes on); and corrected() moves both cameras.
+// start again, the judge goes on); fit_due against the driver's fits each
+// record runs; and corrected() moves both cameras.
 
 #include <algorithm>
 #include <cmath>
@@ -767,7 +768,8 @@ int test_see_through(const Env& env) {
 
 // A fitter that refuses its finish (its batch never ran) keeps its record,
 // as PointToPlane does; the Tracker drops the step with no fitter left
-// holding one, so the next records work. Either chain refusing.
+// holding one and its hop still due, so the next records work. Either chain
+// refusing.
 int test_finish_refused(const Env& env) {
   for (const std::size_t refusing : {std::size_t(0), std::size_t(1)}) {
     const track::TrackerConfig c = every_frame({"rig", "track"});
@@ -782,7 +784,8 @@ int test_finish_refused(const Env& env) {
                      t.record(batch, env.grid, frame_at(100 * kMs)));
       rig.fitters[refusing]->refuse_next_finish();
       CHECK(!t.finish(p).ok());
-      t.abandon(p);  // ignored: the step is gone
+      t.abandon(p);                 // ignored: the step is gone
+      CHECK(t.fit_due(100 * kMs));  // the dropped step's hop stays due
     }
     CHECK(!rig.fitters[0]->outstanding() && !rig.fitters[1]->outstanding());
     // The dropped frame's time records again, and the run goes on.
@@ -1099,6 +1102,101 @@ int test_split(const Env& env) {
   return 0;
 }
 
+// 12. fit_due says whether record() records the driver's fits: frame by frame
+// across hops, beside a shadow that fits at every frame; with a step
+// outstanding, as though abandoned; at an abandoned hop's next frame; on the
+// frames' clock after a flush (a frame in the last fit's hop is not due, as
+// it would be to a new tracker); at the next frame of a hop whose step a
+// refused finish dropped, though the first driver's fitter finished in it;
+// and at every frame for a hop of 0.
+int test_fit_due(const Env& env) {
+  track::TrackerConfig c;  // window_method: 2 s, hop 0.5 s
+  c.drivers = {{"rig", {}}, {"track", {}}};
+  c.shadows = {track::frame_method()};
+  const Script all = anchors_when([](auto) { return true; });
+  ASSIGN_OR_FAIL(Rig rig, make(c, {all, all, all}));
+  track::Tracker& t = *rig.tracker;
+  CHECK(t.fit_due(0) && t.fit_due(UINT64_MAX));  // before any fit
+  // 30 Hz from 1.03 s. The step at 2.03 s, the first of its hop, is
+  // abandoned; a flush after 2.597 s, then three frames lost, and 2.73 s
+  // lies in the hop of the fit at 2.53 s; the step at 3.03 s, the first of
+  // its hop, is dropped by the second driver's refused finish.
+  const std::uint64_t period = 33'333'333;
+  const auto frames = frames_every(1030 * kMs, period, 120);
+  const std::size_t abandoned = 30;       // 2.03 s
+  const std::size_t flushed = 47;         // 2.597 s
+  const std::size_t resumed = 51;         // 2.73 s
+  const std::size_t refused = 60;         // 3.03 s
+  std::optional<std::uint64_t> last_hop;  // the oracle: the hop rule
+  std::size_t fits = 0;
+  for (std::size_t i = 0; i < frames.size(); ++i) {
+    if (i > flushed && i < resumed) continue;
+    const std::uint64_t pts = frames[i].timestamp_ns;
+    const bool due = t.fit_due(pts);
+    CHECK(due == (!last_hop || pts / (500 * kMs) > *last_hop));
+    if (i == abandoned || i == abandoned + 1) CHECK(due);
+    if (i == refused || i == refused + 1) CHECK(due);
+    if (i == resumed) CHECK(!due);
+    const std::size_t before = rig.fitters[0]->log()->size();
+    vkc::CommandBatch batch(env.gpu.device, env.gpu.allocator);
+    ASSIGN_OR_FAIL(const track::PendingStep p,
+                   t.record(batch, env.grid, frames[i]));
+    // record() ran both driver chains' fits exactly where it was due.
+    const std::size_t ran = rig.fitters[0]->log()->size() - before;
+    CHECK(ran == (due ? 1u : 0u));
+    CHECK(rig.fitters[1]->log()->size() == rig.fitters[0]->log()->size());
+    CHECK(t.fit_due(pts) == due);  // outstanding: as though abandoned
+    if (i == abandoned) {
+      t.abandon(p);
+      CHECK(t.fit_due(pts) && t.fit_due(frames[i + 1].timestamp_ns));
+      continue;
+    }
+    if (i == refused) {
+      // The first driver's fitter finishes its fit, the second's refuses:
+      // the step is dropped, so its hop stays due.
+      rig.fitters[1]->refuse_next_finish();
+      CHECK(!t.finish(p).ok());
+      CHECK(rig.fitters[0]->log()->back().finished);
+      CHECK(rig.fitters[1]->log()->back().abandoned);
+      CHECK(t.fit_due(pts) && t.fit_due(frames[i + 1].timestamp_ns));
+      continue;
+    }
+    ASSIGN_OR_FAIL(const track::TrackStep s, t.finish(p));
+    std::size_t driver_fits = 0;
+    for (const track::ChainFit& f : s.fits) {
+      if (f.chain < 2) ++driver_fits;
+    }
+    CHECK(driver_fits == (due ? 2u : 0u));
+    CHECK(s.fits.size() == driver_fits + 1);  // the shadow, at every frame
+    if (due) {
+      last_hop = pts / (500 * kMs);
+      ++fits;
+    }
+    CHECK(!t.fit_due(pts));  // its own hop's fit is done, or was before
+    if (i == flushed) {
+      const bool next = t.fit_due(frames[resumed].timestamp_ns);
+      (void)t.flush();
+      CHECK(t.fit_due(frames[resumed].timestamp_ns) == next && !next);
+      CHECK(t.fit_due(3000 * kMs));  // the next hop's first frame
+    }
+  }
+  // A fit each hop from 1 s to 4.997 s, beside one abandoned and one refused.
+  CHECK(fits == 8 && rig.fitters[0]->log()->size() == 10);
+  CHECK(rig.fitters[0]->log()->at(2).abandoned);
+  CHECK(rig.fitters[0]->log()->at(5).finished);  // 3.03 s, its step dropped
+  // A hop of 0: every newer frame is due, the last fit's own frame is not.
+  ASSIGN_OR_FAIL(Rig each, make(every_frame({"rig"}), {all}));
+  for (std::uint64_t i = 0; i < 4; ++i) {
+    const std::uint64_t pts = i * 100 * kMs;
+    CHECK(each.tracker->fit_due(pts));
+    ASSIGN_OR_FAIL(const track::TrackStep s,
+                   step(env, *each.tracker, frame_at(pts)));
+    CHECK(s.fits.size() == 1);
+    CHECK(!each.tracker->fit_due(pts) && each.tracker->fit_due(pts + 1));
+  }
+  return 0;
+}
+
 int test_corrected() {
   const Mat4f pose = translate(1, 2, 3) * rotate_z(30);
   sensor::DeviceFrame f = frame_at(5, pose);
@@ -1156,6 +1254,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_abandon(env) == 0);
   CHECK(test_replay(env) == 0);
   CHECK(test_split(env) == 0);
+  CHECK(test_fit_due(env) == 0);
   CHECK(test_corrected() == 0);
   std::printf("track tracker: all cases passed\n");
   return 0;
