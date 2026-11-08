@@ -150,6 +150,12 @@ std::string run_csv(const TrackRun& run) {
   s += std::string("recon,") + volumetric_kit::recon::version_string() + "\n";
   s += "hold_ns," + num(run.hold_ns) + "\n";
   s += "tracking_to_world," + mat(run.source.tracking_to_world) + "\n";
+  s += "session_id," + one_line(run.source.session_id) + "\n";
+  s += "sensor," + one_line(run.source.sensor) + "\n";
+  s += "peer," + one_line(run.source.peer) + "\n";
+  s += "ordinal," + num(std::uint64_t{run.source.ordinal}) + "\n";
+  s += "mobile_index," + num(std::uint64_t{run.source.mobile_index}) + "\n";
+  s += "joined_set_ns," + num(run.source.joined_set_ns) + "\n";
   return s;
 }
 
@@ -506,6 +512,16 @@ vkc::Status TrackLog::registered(std::string registration,
   return vkc::Status::out_of_memory("TrackLog::registered");
 }
 
+vkc::Status TrackLog::joined(std::uint32_t ordinal, std::uint32_t index,
+                             std::uint64_t set_ns) {
+  State& s = *state_;
+  if (s.closed) return vkc::Status::invalid_argument("TrackLog: closed");
+  s.run.source.ordinal = ordinal;
+  s.run.source.mobile_index = index;
+  s.run.source.joined_set_ns = set_ns;
+  return {};
+}
+
 std::pair<double, double> pose_gap(const Mat4f& a, const Mat4f& b) {
   const double mm = glm::length(centre_of(a) - centre_of(b)) * 1e3;
   const double deg = angle_deg(rot_of(a) * glm::transpose(rot_of(b)));
@@ -517,19 +533,24 @@ vkc::Status TrackLog::close() try {
   if (s.closed) return {};
   s.closed = true;
   if (s.dir.empty()) return {};
+  // Each file written whatever another's write did; the first error returns.
+  vkc::Status first = write_text(s.dir / "run.csv", run_csv(s.run));
+  const auto keep = [&first](vkc::Status st) {
+    if (first.ok()) first = std::move(st);
+  };
   for (std::ofstream* f : {&s.frames, &s.fits, &s.fill, &s.rowsf, &s.tags}) {
     f->close();
-    if (!*f) return vkc::Status::io_error("TrackLog::close: a write failed");
+    if (!*f) keep(vkc::Status::io_error("TrackLog::close: a write failed"));
   }
   for (std::size_t c = 0; c < s.run.chains.size(); ++c) {
     std::vector<std::pair<std::uint64_t, Mat4f>> poses;
     for (const FrameRecord& f : s.run.frames) {
       if (f.chain == c) poses.emplace_back(f.pts_ns, world_pose(f));
     }
-    VKC_TRY(write_tum(s.dir / ("poses_" + s.run.chains[c].name + ".tum"),
-                      std::move(poses)));
+    keep(write_tum(s.dir / ("poses_" + s.run.chains[c].name + ".tum"),
+                   std::move(poses)));
   }
-  return {};
+  return first;
 } catch (const std::bad_alloc&) {
   return vkc::Status::out_of_memory("TrackLog::close");
 }
@@ -656,6 +677,9 @@ vkc::Result<TrackRun> read_track_log(const std::string& directory) try {
     run.source.session = value("session");
     run.source.registration = value("registration");
     run.source.device = value("device");
+    run.source.session_id = value("session_id");
+    run.source.sensor = value("sensor");
+    run.source.peer = value("peer");
     // Numbers: re-split the two numeric values.
     Csv nums;
     nums.name = csv.name;
@@ -670,6 +694,23 @@ vkc::Result<TrackRun> read_track_log(const std::string& directory) try {
     run.source.tracking_to_world = t.m4();
     VKC_TRY(hold.status());
     VKC_TRY(t.status());
+    // The lane's join: 0 in a log written before run.csv named it.
+    std::uint64_t join[3] = {0, 0, 0};
+    const char* const join_keys[3] = {"ordinal", "mobile_index",
+                                      "joined_set_ns"};
+    for (int k = 0; k < 3; ++k) {
+      const std::string text = value(join_keys[k]);
+      if (text.empty()) continue;
+      Csv one;
+      one.name = csv.name;
+      one.rows.push_back({text});
+      Fields f(one, 0);
+      join[k] = f.u64();
+      VKC_TRY(f.status());
+    }
+    run.source.ordinal = static_cast<std::uint32_t>(join[0]);
+    run.source.mobile_index = static_cast<std::uint32_t>(join[1]);
+    run.source.joined_set_ns = join[2];
   }
   {
     VKC_ASSIGN(const Csv csv, read_csv(dir / "chains.csv", 22));

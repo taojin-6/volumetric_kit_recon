@@ -14,6 +14,7 @@
 #include <deque>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iterator>
 #include <map>
@@ -114,6 +115,9 @@ constexpr std::chrono::milliseconds kAcceptRetry{10};
 constexpr std::chrono::milliseconds kDoorAccept{5};
 // The ids a door keeps the last refusal it logged of, the oldest forgotten.
 constexpr std::size_t kSaidIds = 256;
+// door.csv's rows a session's handle keeps for the door, the oldest let go:
+// past it the door is gone, or its thread has stalled.
+constexpr std::size_t kHandleRows = 64;
 
 // What the join holds, at most, of each kind: depth frames waiting for their
 // pictures, pictures waiting for their depth records, and access units sent
@@ -266,6 +270,24 @@ std::string hex8(const std::array<std::uint8_t, 16>& id) {
   return hex(id).substr(0, 8);
 }
 
+// The system clock now, in nanoseconds: door.csv's time.
+std::uint64_t now_ns() {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now().time_since_epoch())
+          .count());
+}
+
+// One door.csv row, its reason on one line.
+std::string door_row(std::uint64_t time_ns, const char* event,
+                     const std::array<std::uint8_t, 16>& id,
+                     const std::string& peer, std::string why) {
+  std::replace(why.begin(), why.end(), '\n', ' ');
+  std::replace(why.begin(), why.end(), '\r', ' ');
+  return std::to_string(time_ns) + "," + event + "," + hex(id) + "," + peer +
+         "," + why + "\n";
+}
+
 // A wait on a condition variable, held to an hour: wait_for would overflow
 // at milliseconds::max(), which left() gives for no deadline.
 std::chrono::milliseconds bounded(std::chrono::milliseconds wait) {
@@ -291,6 +313,13 @@ vkc::Status check_registration(const sensor::camera::TrackedRegistration& reg,
 struct Taken {
   stream::Record record;
   std::vector<std::uint8_t> payload;
+};
+
+// A connection let go for a newer one, as door.csv's row names it.
+struct Superseded {
+  std::uint64_t time_ns = 0;
+  std::string peer;
+  std::string why;
 };
 
 // A connection that brought its session, as a door hands it to the session's
@@ -319,10 +348,26 @@ class SharedSession final : public SessionHandle {
       }
       older = std::move(newest_);
       newest_ = std::move(connection);
+      if (older) {
+        keep_row(older->peer, "a newer connection came while it waited");
+      }
     }
     if (older) replaced_.fetch_add(1, std::memory_order_relaxed);
     offered_.notify_one();
     return nullptr;
+  }
+
+  // The sensor's: the connection from `peer` it read was let go for a newer
+  // one, a door.csv row for the door.
+  void superseded(const std::string& peer, const std::string& why) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    keep_row(peer, why);
+  }
+
+  // The door's: the connections superseded since the last take.
+  std::deque<Superseded> take_rows() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::exchange(rows_, {});
   }
 
   // The sensor's: the newest connection, waiting up to `wait` for one; null
@@ -373,9 +418,17 @@ class SharedSession final : public SessionHandle {
   }
 
  private:
+  // Under mutex_: a superseded row kept for the door, the oldest let go past
+  // kHandleRows.
+  void keep_row(const std::string& peer, const std::string& why) {
+    if (rows_.size() >= kHandleRows) rows_.pop_front();
+    rows_.push_back({now_ns(), peer, why});
+  }
+
   mutable std::mutex mutex_;
   std::condition_variable offered_;
   std::unique_ptr<Connection> newest_;  // under mutex_
+  std::deque<Superseded> rows_;         // under mutex_
   std::atomic<std::uint64_t> replaced_{0};
 };
 
@@ -624,20 +677,22 @@ class Link {
 
   // A door's: a newer connection it routed takes the place of the one being
   // read, one from the same peer address at once, one from another once this
-  // one has brought nothing for kSupersedeSilence. Not a failure.
-  // TODO: door.csv's row for each connection superseded, with its peer: this
-  // runs on the polling thread and door.csv is the door's thread's alone, so
-  // the rows go back to it, through a queue on the SharedSession, say.
+  // one has brought nothing for kSupersedeSilence. Not a failure; a door.csv
+  // row, which the handle keeps for the door's thread.
   void supersede() {
     if (!client_) return;
     const std::optional<std::uint32_t> from = handle_->waiting_from();
     if (!from) return;
-    if (*from != address_ &&
+    const bool same_peer = *from == address_;
+    if (!same_peer &&
         Clock::now() - heard_ < RgbdStreamSensor::kSupersedeSilence) {
       return;
     }
     inform("RgbdStreamSensor: " + name_ + ": a newer connection takes " +
            peer_ + "'s place");
+    handle_->superseded(peer_, same_peer ? "a newer connection from its address"
+                                         : "a newer connection from another "
+                                           "address, after a silence");
     let_go();
     ++superseded_;
     count_superseded();
@@ -1096,7 +1151,8 @@ struct RgbdStreamSensor::Door::Impl {
 
   Impl() = default;
   // An arrival not admitted ends with the door, its connection let go; a
-  // session admitted reads on.
+  // session admitted reads on. door.csv takes the rows left, the thread
+  // gone.
   ~Impl() {
     {
       std::lock_guard<std::mutex> lock(mutex);
@@ -1104,12 +1160,15 @@ struct RgbdStreamSensor::Door::Impl {
     }
     arrived.notify_all();
     if (thread.joinable()) thread.join();
-    std::lock_guard<std::mutex> lock(mutex);
-    for (Held& h : held) {
-      if (!h.claimed || h.slot.expired()) {
-        h.handle->end(SessionHandle::End::Closed);
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      for (Held& h : held) {
+        if (!h.claimed || h.slot.expired()) {
+          h.handle->end(SessionHandle::End::Closed);
+        }
       }
     }
+    write_rows(/*last=*/true);
   }
   Impl(const Impl&) = delete;
   Impl& operator=(const Impl&) = delete;
@@ -1128,6 +1187,27 @@ struct RgbdStreamSensor::Door::Impl {
   void route(Waiting waiting, std::optional<Taken> first);
   void stray(const Waiting& waiting, const std::string& why);
   void refuse(const std::string& peer, const Id& id, const std::string& why);
+  // Under mutex: a door.csv row, for the thread to write.
+  void row_locked(const char* event, const Id& id, const std::string& peer,
+                  const std::string& why) {
+    if (writing) rows.push_back(door_row(now_ns(), event, id, peer, why));
+  }
+  // Under mutex: each held session's superseded connections, as rows.
+  void take_superseded_locked() {
+    for (Held& h : held) {
+      for (Superseded& r : h.handle->take_rows()) {
+        if (!writing) continue;
+        rows.push_back(
+            door_row(r.time_ns, "superseded", h.id, r.peer, std::move(r.why)));
+      }
+    }
+  }
+  // The thread's, or once it is gone (`last`) the destructor's, with the
+  // superseded rows still held: the rows waiting, written and flushed, the
+  // file made with its header at the first (never over anything there); a
+  // file that cannot be made or a write that fails is logged once, and the
+  // file goes.
+  void write_rows(bool last = false);
 
   // Under mutex: the session held under `id`, if one is; how many hold a
   // slot.
@@ -1151,6 +1231,9 @@ struct RgbdStreamSensor::Door::Impl {
   std::unique_ptr<net::Listener> listener;
   std::deque<Waiting> pending;
   std::deque<Said> said;
+  // door.csv, made at its first row: the thread's, and the destructor's
+  // once the thread is gone.
+  std::ofstream csv;
 
   // Shared with take_arrival, admit and stats.
   mutable std::mutex mutex;
@@ -1160,7 +1243,9 @@ struct RgbdStreamSensor::Door::Impl {
   std::deque<Arrival> arrivals;       // under mutex
   std::deque<std::pair<Id, Clock::time_point>> cooling;  // until; under mutex
   std::deque<std::pair<Id, std::string>> remembered;     // and why; under mutex
-  Stats stats;                                           // under mutex
+  std::deque<std::string> rows;  // door.csv's, waiting; under mutex
+  bool writing = false;  // door.csv is wanted and has not failed; under mutex
+  Stats stats;           // under mutex
 
   std::thread thread;  // started last, by open
 };
@@ -1171,6 +1256,7 @@ void RgbdStreamSensor::Door::Impl::run() noexcept {
       reap();
       accept();
       read_pending();
+      write_rows();
     } catch (const std::exception& e) {
       // Out of memory, as a rule: the connections waiting go, and the door
       // goes on.
@@ -1190,6 +1276,7 @@ void RgbdStreamSensor::Door::Impl::reap() {
 }
 
 void RgbdStreamSensor::Door::Impl::reap_locked(Clock::time_point now) {
+  take_superseded_locked();  // before a held session it frees goes
   for (auto it = held.begin(); it != held.end();) {
     if (!it->slot.expired()) {
       ++it;
@@ -1282,6 +1369,36 @@ void RgbdStreamSensor::Door::Impl::read_pending() {
   }
 }
 
+void RgbdStreamSensor::Door::Impl::write_rows(bool last) {
+  std::deque<std::string> taken;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (last) take_superseded_locked();
+    taken.swap(rows);
+    if (!writing) return;  // door.csv went, or was never wanted
+  }
+  if (taken.empty()) return;
+  const auto give_up = [&](const std::string& why) {
+    warn("RgbdStreamSensor::Door: " + name + ": " + options.csv + ": " + why);
+    csv.close();
+    std::lock_guard<std::mutex> lock(mutex);
+    writing = false;
+  };
+  if (!csv.is_open()) {
+    std::error_code ignored;
+    if (std::filesystem::exists(
+            std::filesystem::symlink_status(options.csv, ignored))) {
+      give_up("something is already there; the door writes no door.csv");
+      return;
+    }
+    csv.open(options.csv, std::ios::binary | std::ios::trunc);
+    csv << "time_ns,event,session,peer,reason\n";
+  }
+  for (const std::string& r : taken) csv << r;
+  csv.flush();
+  if (!csv) give_up("a write failed; the door writes no more of it");
+}
+
 void RgbdStreamSensor::Door::Impl::stray(const Waiting& waiting,
                                          const std::string& why) {
   vkc::log_message(vkc::LogLevel::Debug, "vr",
@@ -1340,6 +1457,8 @@ void RgbdStreamSensor::Door::Impl::route(Waiting waiting,
             std::to_string(options.cool_down.count()) + " ms";
     } else if (remembered_as != remembered.end()) {
       why = "refused before: " + remembered_as->second;
+    } else if (options.screen && !(why = options.screen(session)).empty()) {
+      ++stats.screened;
     } else if (holding() >= options.max_sessions) {
       why = std::to_string(options.max_sessions) + " session(s) held, the most";
     } else {
@@ -1373,11 +1492,8 @@ void RgbdStreamSensor::Door::Impl::refuse(const std::string& peer, const Id& id,
   {
     std::lock_guard<std::mutex> lock(mutex);
     ++stats.refused;
+    row_locked("refused", id, peer, why);
   }
-  // TODO: door.csv's row for each refused connection, with its peer, written
-  // here on the door's thread once the live runs keep a door; and one for
-  // each superseded (Link::supersede, and a waiting one route's offer
-  // replaces).
   // Logged once an id a spell, until it arrives, is refused for another
   // reason or goes options.quiet unrefused: a writer that redials each
   // second is named once.
@@ -1438,6 +1554,8 @@ RgbdStreamSensor::Door::open(const std::string& host, std::uint16_t port,
   impl->name = name;
   impl->options = options;
   impl->listener = std::move(listening).value();
+  // door.csv is made at its first row, by the thread.
+  impl->writing = !options.csv.empty();  // before the thread, which reads it
   try {
     impl->thread = std::thread([door = impl.get()] { door->run(); });
   } catch (const std::system_error& e) {
@@ -1496,15 +1614,18 @@ vkc::Result<std::unique_ptr<RgbdStreamSensor>> RgbdStreamSensor::Door::admit(
   // From here the arrival is consumed: a failure frees its slot, and a
   // session refused for what it is leaves its id remembered.
   const auto failed = [&](vkc::Status why, bool remember) {
-    if (remember && d.options.max_remembered != 0) {
-      // Its reason as the door's refusals name it, after the session.
-      std::string reason = why.message();
-      if (reason.rfind(where + ": ", 0) == 0) reason.erase(0, where.size() + 2);
+    // Its reason as the door's refusals name it, after the session.
+    std::string reason = why.message();
+    if (reason.rfind(where + ": ", 0) == 0) reason.erase(0, where.size() + 2);
+    {
       std::lock_guard<std::mutex> lock(d.mutex);
-      if (d.remembered.size() >= d.options.max_remembered) {
-        d.remembered.pop_front();
+      d.row_locked("refused", arrival.session.id, arrival.peer, reason);
+      if (remember && d.options.max_remembered != 0) {
+        if (d.remembered.size() >= d.options.max_remembered) {
+          d.remembered.pop_front();
+        }
+        d.remembered.emplace_back(arrival.session.id, std::move(reason));
       }
-      d.remembered.emplace_back(arrival.session.id, std::move(reason));
     }
     handle->end(SessionHandle::End::Closed);
     arrival.handle.reset();

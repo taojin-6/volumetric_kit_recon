@@ -433,6 +433,19 @@ if(VR_BUILD_EXAMPLES)
   vr_target_warnings(recon_example_live_sessions_test)
   add_test(NAME recon_example_live_sessions
            COMMAND recon_example_live_sessions_test)
+  # Phones that come and go: fake phones added with a presence (leave, the
+  # settle and the grace, fill draining once retired, a return, containment) and
+  # open_mobile_lane on loopback, phones dialling as an iPad's writer does,
+  # placed by a registration (the layout, the bind retried, settings that turn
+  # phones away, a rejoin, an empty log).
+  add_executable(recon_example_live_phones_test example_live_phones_test.cpp)
+  target_link_libraries(
+    recon_example_live_phones_test
+    PRIVATE vr_example_mobile volumetric_kit::grid_networking
+            volumetric_kit::core_net volumetric_kit::core_test_policy)
+  vr_target_warnings(recon_example_live_phones_test)
+  add_test(NAME recon_example_live_phones
+           COMMAND recon_example_live_phones_test)
   # The origin tag's watch (live_tag.hpp), with VR_WITH_CALIB: OpenCV's markers
   # pasted face-on into NV12 pictures on the device (sensor's nv12_picture.hpp),
   # moved and turned by OpenCV's warp for a moving camera, searched, gated and

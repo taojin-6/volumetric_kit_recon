@@ -1075,7 +1075,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   summary in `examples/common`; the bench waits for a rig model it can read.
   *Amended 2026-11-08:* the lane holds sessions; the 3 a send are in all, one
   a session in turn in join order; a session keeps at most 40 waiting, its
-  oldest let go; a filler the send would refuse is let go.
+  oldest let go; a filler the send would refuse is let go. *Amended again
+  2026-11-08:* phones join and leave a live run (that entry); pinned once,
+  logged once and summarized once per session, and a live run's refusals
+  turn its phones away.
 - [**2026-11-05**](#2026-11-05--a-live-stream-states-the-worlds-up-from-its-calibration-file-a-sensors-world-is-that-cameras-own-image-up-amends-the-2026-10-20-entry) —
   A live stream states the world's up from `source.calibration`'s file
   (`live_up`): a tag's +z; a sensor's world, or no file, that colour camera's
@@ -1085,6 +1088,18 @@ entries relevant to your task; later amendments supersede earlier rules.
   A live phone is told how the tag search goes, in words up the socket it
   dialled: one function holds them, tag words only, on a change and once a
   second; the polling thread sends, and no note reaches the frame path.
+  *Amended 2026-11-08:* notes are each session's, said through its handle; a
+  phone turned away is told nothing.
+- [**2026-11-08**](#2026-11-08--phones-join-and-leave-a-live-run-one-door-for-the-run-a-lane-per-session-and-the-rig-never-depends-on-a-phone-amends-the-2026-11-04-and-2026-11-05-phone-entries) —
+  Phones join and leave a live run: one door for the run, newest connection
+  wins, a session past the cap (1, then 4) refused silently, a lane per
+  session Away, settled at 7 s and retired at 30 s of set time, opened and
+  let go off the set loop. The rig never waits for or depends on a phone: a
+  bind that fails is retried every 2 s, a setting that rules phones out turns
+  them away, a track log it cannot write leaves them unlogged, and only the
+  device's loss ends the run; a phone that fails of its own is kept away
+  for a back-off. A directory a session in the track log. Reverses "the rig
+  never fuses alone".
 
 ## Decision record
 
@@ -6399,6 +6414,17 @@ is to measure it. A filler the send would refuse (an index of 63 or more, a
 camera not finite) is let go before it, since it would refuse the whole
 set. What else changes per session is the multi-phone work's to record.
 
+*Amended again 2026-11-08* (phones join and leave a live run, that entry):
+*pinned once* now holds per session, at its join; *the log and its one
+summary* are one a session, in a directory of its own, beside the run's
+`sessions.csv`; *refused beside FFS depth and under Classic fusion* holds for
+a file, and live those settings, as every refusal of a phone, turn its phones
+away and the rig runs. *One queue, in the gap* stands: each session's batch
+is waited in the gap in join order; the gap's budget is passed and not read
+until the scheduler. The rig's evidence below (its digests with the lane
+compiled in) was taken with no door listening; it is to be taken again with
+the door listening and no phone, and the cost at one, two and four phones.
+
 **Context.** The track tier places a phone's frames against the rig's model
 and the source byte lets them fill only where the rig does not see (both
 2026-11-03). `source.mobile` names a recorded session or a phone that dials
@@ -6542,6 +6568,147 @@ entry).
 `example_live_tag_test` what a lane tells, and a phone's server reading it from
 `open_mobile_lane` over loopback; `example_link_listen_test` `say`'s threads and
 connections.
+
+*Amended 2026-11-08* (phones join and leave a live run, the next entry): the
+notes are each session's, its own words and rate, said through the session's
+handle (`link::SessionHandle::say`), never its sensor, so the reaper may let
+the sensor go on a thread of its own. *Tag words only* stands: a phone
+refused at the door is told nothing, its writer showing Retrying as for any
+failed dial; a waiting room or a refusal's reason would need a typed message.
+
+### 2026-11-08 — Phones join and leave a live run: one door for the run, a lane per session, and the rig never depends on a phone (amends the 2026-11-04 and 2026-11-05 phone entries).
+
+**Context.** The owner: "Orbbec capture should always start running, with or
+without phone. iOS should be optional, when it connects it fills in missing
+regions in the model, but the orbbec should not depend on iOS." Until now a
+live run waited up to 5 minutes for one phone before its cameras opened,
+failed when none came or when it sent no pictures, refused before anything
+opened under any setting the phone could not run with, and read one session
+(`listen`). The link's rules lived only in its header, `failure_cap.hpp` and
+the CHANGELOG; this is their first dated record. Core #101 documents
+`source.mobile`'s address as one that phones dial in to, each session its
+own, joining and leaving up to a number the consumer sets, and the rig's
+capture as running from the start.
+
+**Decision.** The rules are `live_mobile.hpp`'s and the door's
+(`link/rgbd_stream_sensor.hpp`); here, why.
+- *The rig never waits for or depends on a phone.* `open_mobile_lane` returns
+  at once and the cameras open; a Ctrl+C depends on them alone. An address
+  the door cannot bind at the start (not this host's yet, in use, its
+  interface down) is warned of and bound again every 2 s off the set loop,
+  printed once it takes; the report says `phones: not listening: <reason>` if
+  it never does. Owner, over the plan's fail-fast: a mistyped address costs a
+  warning, never a rig run.
+- *What rules phones out turns them away, not the run.* Classic fusion, FFS
+  depth, `operation: "stream"`, no tag registration (this build or this
+  world) and no registration, a device that cannot run the fitters (one
+  frame prep and the fitters made and let go as the lane opens, which also
+  warms the pipeline cache). The start line says why; each phone is refused
+  at the door as one past the cap, logged once a spell and counted in
+  `door.csv` and the report. A registration that cannot be read is warned of
+  and names no session, so each is placed as any other (below). A file
+  keeps its refusals: a replay asked for that file. A scenario core's load
+  refuses still fails there.
+- *A track log the run cannot write leaves phones unlogged, never turned
+  away*: one an earlier run logged into (its `sessions.csv` or `door.csv`, a
+  `NN-<sensor>-<hex8>` directory with a log, recording or registration in
+  it, a flat `registration.json` or `phone.vrst`), or one that cannot be
+  made, is warned of at the start and named in the report, and nothing is
+  written there; the phones join and fuse. The log never changes what is
+  taken, as it never changes what fuses; under the old rule the run failed
+  at the start, where the operator saw it, and under the new one a turned
+  away phone would only have shown Retrying all run. `sessions.csv` and
+  `door.csv` are made at their first row, so a run no phone dialled, or one
+  that failed before its cameras, leaves the directory as it was.
+- *One door for the run* routes each connection by its session's id and
+  every byte of its `VRST` chunk. The newest connection wins: from the same
+  peer at once, from another once the one read has brought nothing for 1 s,
+  since a writer that changed networks dials again only once it lost its
+  reader, and one that streams sends at 10 Hz. A supersede is not a failure,
+  so the cap of 3 failures in 10 s still measures drops; it ends that session
+  alone, whose id then cools down 10 s. At most 8 connections wait for their
+  session, 2 a peer, for 3 s.
+- *Silent refusal past the cap.* `kMaxPhones` is 1 here and 4 with the gap's
+  scheduler, once a lab run measures them. A new session past it is closed
+  right after its session's chunk, which the iPad's writer counts as a dial
+  that failed: it shows Retrying, redials each second and joins once a slot
+  frees. A held session's reconnect always gets through. Rejected: holding a
+  refused connection 2 s, after which the writer resets its failures and
+  streams on; a waiting room, or a reason sent, both a typed message.
+- *A lane per session, its life in set time,* so tests and replays repeat.
+  Away from the first gap that reads it unconnected; settled at 7 s (the
+  tracker flushed once: its 5 s hold and its 2 s window, so no frame then
+  shares a fit or an interpolation with a later one, and nothing places
+  differently); retired at 30 s, about 40 s after a lock, since the rig's
+  link notices a silent phone only after its 10 s idle limit (grid's
+  `StreamClient`); or at its stream's end (the cap, the decoder), an error
+  of its own, or the run's end. One not yet seen connected since its join
+  stays Live 1 s, as its poll thread takes the connection after the start,
+  then is Away from the join. Within the grace it is the same session, its
+  registration kept; after, a new one that registers again, under a new
+  ordinal and directory. With one phone at a time, a new device waits
+  (Retrying) while the old session holds the slot: about 30 s after the old
+  one disconnects, 40 s after a lock. Retired, it pairs and says nothing,
+  its phone's queue is let go each gap, and what it placed still drains.
+- *Each session's mobile index* is (its join's ordinal − 1) mod 63, past any
+  a session still holds, taken at its join (the source byte's 63 a class).
+- *Off the set loop.* The opener's thread admits a session (its decoder made
+  there, never on the door's thread, so one slow decoder never stalls the
+  routing of another phone) and makes its watch, prep, timer, fitters,
+  tracker and log: the core's device takes submits from any thread, and VMA
+  and the pipeline cache are synchronized inside. The lane joins one a gap.
+  The reaper's thread lets a session go releasing first (its watch, its
+  phone, which frees the slot, its tracker, prep and timer), reporting after
+  (its log closed, its summary, its `sessions.csv` row), so one slow summary
+  never holds a slot. It alone writes `sessions.csv`; the door's thread alone
+  `door.csv`. The lane reads presence and says notes through the session's
+  handle, never its sensor.
+- *Error scope.* Of a live session, only the device's loss comes out of the
+  lane, the opener's and the phone's poll's included. A session's own error
+  retires it alone, printed once its id; out of memory also pauses
+  admissions a minute. Its id is then kept from the door for a back-off,
+  10 s doubling with each repeat to 320 s, as is one the opener could not
+  open: a phone whose error recurs would otherwise be made a session (a
+  decoder, a watch, fitters, a directory) every second or two for the whole
+  run. A log's, a registration file's or a recording's write error is
+  printed once, as the log never changes what fuses. A refusal is never an
+  error. Before, a phone's start error, a log write or a watch's error ended
+  the run. A file's session keeps the old scope: its error ends the run, as
+  a replay asked for that file and a script gates on its exit.
+- *Placement per session.* `source.mobile_registration` places the one
+  session it names, depth alone; any other is placed by the origin tag where
+  the build and the calibration's world allow, else turned away.
+- *A directory a session.* `D/sessions.csv`, `D/door.csv` and
+  `D/NN-<sensor>-<hex8>/`, NN the join's ordinal, so a rejoin never writes
+  over its first life; `run.csv` gains `session_id`, `sensor`, `peer`,
+  `ordinal`, `mobile_index` and `joined_set_ns` at version 1, whose reader
+  passes by a key it does not know. Each session replays alone as a file,
+  joined at the first gap. A file's run keeps its flat log; an empty D
+  writes nothing.
+- *`listen` keeps its first session* for single-writer tools
+  (`session_check`).
+- *The rig fuses alone while it listens*, reversing core 0.42.0's migration
+  note as recon read it (the 0.43.0 pin's "the rig never fuses alone in a
+  run that asked for it"). The start line, each join and leave, and the
+  report make it visible.
+
+**Verification.** `example_link_door_test` holds the door, its screen and
+`door.csv` (made at its first row); `example_live_phones_test` the lifecycle
+through `MobileLane::add` (the settle at 7 s and the retire at 30 s to the
+gap, fill draining once retired, a return within the grace a split,
+containment with its hearer told, the device's loss, a file's error ending
+it) and the live lane on loopback (open within a second, a run with no
+phone writing nothing, the layout and `run.csv`'s keys, a second run into
+the directory taking its phone unlogged, an address held by another socket
+then bound, settings that turn phones away, a rejoin, an empty log, a
+failing session kept away and its back-off doubled); `example_live_tag_test`
+a second session refused at the cap and joining as a new one once the first
+left, and the reaper letting a watch on its thread go with nothing said
+after the phone stopped. The watch-before-phone order is `let_go`'s and runs
+under the sanitizers; no public call observes it. Not run yet, on the lab
+rig: 300 sets' grid digests and the send's p50 with the door listening and
+no phone; on an iPad, a join after 2 minutes, locks of 20 and 60 s, a
+relaunch, Disconnect then Connect, and another device.
 
 ## Measured lessons
 

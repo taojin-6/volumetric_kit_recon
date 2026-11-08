@@ -86,11 +86,14 @@ using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
 /// grid. With `source.audio`, the mic opens before the GPU, its track joins
 /// the session, and it records from when the cameras stream (@ref AudioFeed),
 /// its counters beside theirs; with `output.serve`, the viewers get its track
-/// with the frames. With `source.mobile` (@ref check_mobile first), the
-/// phone's session opens after the GPU, a live one waited for, and after each
-/// set's send its lane (@ref MobileLane) tracks the frame due by the next set
-/// against the grid and hands that send its placed frames as fillers (the
-/// set's `"mobile"` row); its summary and counts follow the cameras'.
+/// with the frames. With `source.mobile` (@ref check_mobile first, which
+/// refuses only a file's), its lane opens after the GPU (@ref MobileLane):
+/// a file's session, or a live address it listens on, returning at once, so
+/// the cameras open whether or not a phone ever dials, and a phone that
+/// cannot be taken is turned away, not the run. After each set's send the
+/// lane tracks each session's frame due by the next set against the grid and
+/// hands that send its placed frames as fillers (the set's `"mobile"` row);
+/// its summaries and counts follow the cameras'.
 /// operation=stream polls, counts and releases each set, with no GPU
 /// preparation, fusion or mesh, so the run measures the cameras' stream and
 /// decode alone.
@@ -183,8 +186,9 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
     }
   }
 
-  // The phone, with source.mobile: its session's file, or a live phone waited
-  // for here, before the cameras stream; without it, the empty lane.
+  // The phones, with source.mobile: a session's file, or a live address,
+  // bound or binding, that phones join and leave while the cameras run; it
+  // returns at once and never waits for a phone. Without it, the empty lane.
   VKC_ASSIGN(const std::unique_ptr<MobileLane> mobile,
              open_mobile_lane(opt, device, allocator));
 
@@ -264,6 +268,9 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
     while (!sets.done()) {
       SetLog::Set& s = log.begin();
       VKC_ASSIGN(sensor::FrameSet set, sets.next(&s.rows));
+      // When this set came: the phone lane's gap ends a period after it,
+      // less 3 ms of margin.
+      const auto set_came = std::chrono::steady_clock::now();
       print_first_frame_age(*array, sets, set);
       s.arrived(set.arrival_ns, host_clock ? set.timestamp_ns : 0);
       // A set's stages run here, in turn, on its frames; operation=stream runs
@@ -297,14 +304,19 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
         fill.clear();  // lets the phone's frames go
         VKC_TRY(report_sent(sent, sets.sets() - 1, program, s,
                             report ? &*report : nullptr));
-        // The gap before the next set: the phone's frame due by then,
+        // The gap before the next set: each phone's frame due by then,
         // tracked against the grid as this set left it, and the frames
-        // placed so far for the next send. The empty lane (no log) has no
-        // gap and no row.
-        if (mobile->log() != nullptr) {
+        // placed so far for the next send. A live lane runs a gap with no
+        // phone too, which checks for one joining; the empty lane has no gap
+        // and no row.
+        if (mobile->enabled()) {
           vkc::StageScope lane(s.rows, "mobile");
-          VKC_ASSIGN(fill,
-                     mobile->next(*volume, prepared.timestamp_ns + period_ns));
+          GapBudget budget;
+          budget.gap_end = set_came + std::chrono::nanoseconds(period_ns) -
+                           std::chrono::milliseconds(3);
+          VKC_ASSIGN(
+              fill,
+              mobile->next(*volume, prepared.timestamp_ns + period_ns, budget));
         }
       } else {
         s.published();  // operation=stream: polled and released only

@@ -37,21 +37,32 @@
 //   counted unregistered and never tracked; after it they are tracked at the
 //   registration's placement; run.csv names registration.json, which reads
 //   back, tags.csv holds each hold; a second run into the same directory is
-//   refused before any wait. A loss in the phone's records splits the
+//   refused as it opens. A loss in the phone's records splits the
 //   watch: no hold spans it. With the watch on its own thread, as
 //   open_mobile_lane makes it, the lane registers and places the same way.
 // - What the lane tells: looking, the count, a refusal, registered, in that
 //   order, on a change and at least once a second; given no one to tell, it
 //   runs the same.
+// - A session that comes and goes (a live lane's, given a presence), placed
+//   by the tag on its own thread: once it is gone past the grace, the reaper
+//   lets it go, its phone stopped (the watch-before-phone step run, under the
+//   sanitizers in CI; the order itself is let_go's, which no public call
+//   observes), and nothing is said to it once its phone has stopped.
 // - open_mobile_lane on a session file of sensor's H.265 patch clips (no
 //   tag), on the tag's world with no registration: the pictures decode on
 //   this machine's hardware, the watch searches them on its own thread, and
 //   every frame is paired unregistered. A session with no picture track is
 //   refused, naming source.mobile_registration. Where no decoder path
 //   opens, that case skips, unless VS_TEST_HEVC_BACKEND promises one.
-// - open_mobile_lane on a phone dialling over loopback, on the same world:
-//   its server, reading notes, reads what the lane tells it. That case skips
-//   as the file's does.
+// - open_mobile_lane on a live address, on the same world, returns within a
+//   second with no phone; a phone dialling over loopback joins while the
+//   sets run, and its server, reading notes, reads what the lane tells it. A
+//   second phone (another session) is refused while the first holds the one
+//   slot; once the first has left past its grace, the second joins as a new
+//   session (ordinal 2, a directory of its own, a watch of its own that
+//   tells it it looks for the tag). sessions.csv holds both joins and
+//   leaves, door.csv the refusal. That case skips where no decoder path
+//   opens, unless VS_TEST_HEVC_BACKEND promises one.
 
 #include <atomic>
 #include <chrono>
@@ -61,6 +72,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <glm/gtc/matrix_transform.hpp>
 #include <memory>
 #include <opencv2/core.hpp>
@@ -684,7 +696,13 @@ class TagPhone final : public sensor::IRgbdSensor {
   const sensor::SensorInfo& info() const noexcept override { return info_; }
   vkc::Status set_queue_depth(std::size_t) override { return {}; }
   vkc::Status start() override { return {}; }
-  void stop() noexcept override {}
+  void stop() noexcept override {
+    if (stopped_) *stopped_ = true;
+  }
+  // Set once stop is called, from whichever thread calls it.
+  void stopped_to(std::shared_ptr<std::atomic<bool>> stopped) {
+    stopped_ = std::move(stopped);
+  }
   vkc::Result<std::optional<sensor::RgbdFrame>> poll() override {
     if (lost_ > 0 && next_ == lost_from_) next_ += lost_;
     if (next_ >= count_) return std::optional<sensor::RgbdFrame>{};
@@ -728,6 +746,7 @@ class TagPhone final : public sensor::IRgbdSensor {
   std::size_t next_ = 0;
   sensor::YuvImage picture_;
   sensor::SensorInfo info_;
+  std::shared_ptr<std::atomic<bool>> stopped_;
 };
 
 std::vector<std::string> lines(const std::filesystem::path& path) {
@@ -888,7 +907,7 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
   CHECK(rows[1].find(",registered,") != std::string::npos);
   CHECK(rows[2].find(",passed,") != std::string::npos &&
         rows[3].find(",passed,") != std::string::npos);
-  // A second run into the directory is refused before any wait.
+  // A second file run into the directory is refused as it opens.
   camera::ArrayCalibration array;
   array.sensors.push_back({"rig-0", camera::Mat4d(1.0), {}, {}, {}, 0.0});
   array.world = tag_world();
@@ -1162,65 +1181,174 @@ int test_open_file(vkc::test::GpuContext& gpu,
   return 0;
 }
 
-// A phone that dials the lane, its server reading notes, as a scanner's does:
-// what the lane tells it comes up the socket, with no frame needed. The lane's
-// sets run until it is heard.
+// The lane's gaps, 40 ms of set time apart from `*set`, until `done` or 8 s
+// of steady time; whether `done` came, every gap OK.
+bool run_until(vr_example::MobileLane& lane, const vol::VoxelBlockGrid& grid,
+               std::uint64_t* set, const std::function<bool()>& done) {
+  const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+  while (!done()) {
+    if (std::chrono::steady_clock::now() >= until) return false;
+    *set += 40 * kMs;
+    const vkc::Status ran = lane.next(grid, *set).status();
+    if (!ran.ok()) {
+      std::fprintf(stderr, "next: %s\n", ran.message().c_str());
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  return true;
+}
+
+// Whether `d`'s server reads "Looking for the tag", neutral, as its newest
+// note.
+bool told_to_look(vr_test::Dialler& d) {
+  const std::optional<gnet::ViewerNote> note = d.server().newest_note();
+  return note && note->line == "Looking for the tag" &&
+         note->tone == gnet::ViewerNote::Tone::Neutral;
+}
+
+// Phones that dial the lane, their servers reading notes, as a scanner's do:
+// what the lane tells one comes up the socket, with no frame needed. One
+// slot: a second session waits until the first has left.
 int test_open_live(vkc::test::GpuContext& gpu,
                    const std::filesystem::path& dir) {
+  using Stage = vr_example::MobileLane::Stage;
   std::filesystem::create_directories(dir);
-  const auto session = clip_session(true);
-  CHECK(session.ok());
+  const auto first = clip_session(true);
+  CHECK(first.ok());
+  stream::Session second = *first;  // a relaunch: another session's id
+  second.id[15] ^= 0xff;
   const std::uint16_t port = vkc::test::closed_port();
-  std::atomic<bool> heard{false};
-  std::atomic<bool> done{false};
-  gnet::ViewerNote note;  // read once heard
-  std::thread phone([&] {
-    auto d = vr_test::Dialler::dial(*session, port, /*read_notes=*/true);
-    if (!d.ok()) return;
-    (void)vr_test::wait_for([&] {
-      const std::optional<gnet::ViewerNote> newest =
-          (*d)->server().newest_note();
-      if (newest) {
-        note = *newest;
-        heard = true;
-      }
-      return heard.load() || done.load();
-    });
-    (void)vr_test::wait_for([&] { return done.load(); });
-  });
   auto opt = tag_scenario(dir, "tcp://127.0.0.1:" + std::to_string(port));
+  CHECK(opt.ok());
+  vr_example::LaneOptions options;
+  options.settle_ns = 500 * kMs;
+  options.grace_ns = kS;
+  const auto t0 = std::chrono::steady_clock::now();
   auto lane =
-      opt.ok() ? vr_example::open_mobile_lane(*opt, gpu.device, gpu.allocator)
-               : opt.status();
-  if (!lane.ok() && lane.status().domain() == vkc::Status::Code::Unsupported &&
+      vr_example::open_mobile_lane(*opt, gpu.device, gpu.allocator, options);
+  CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(1));
+  CHECK(lane.ok() && (*lane)->enabled());
+  auto grid =
+      tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64);
+  CHECK(grid.ok());
+  std::uint64_t set = kS;
+  auto a = vr_test::Dialler::dial(*first, port, /*read_notes=*/true);
+  CHECK(a.ok());
+  const bool joined = run_until(**lane, *grid, &set, [&] {
+    return !(*lane)->sessions().empty() && told_to_look(**a);
+  });
+  if (!joined && (*lane)->sessions().empty() &&
       !sensor::testing::hevc_decoder_promised()) {
-    std::printf(
-        "open_mobile_lane on a live phone: skipped, no decoder path: %s\n",
-        lane.status().message().c_str());
-    done = true;
-    phone.join();
+    std::printf("open_mobile_lane on a live phone: skipped, no decoder path\n");
+    std::fputs((*lane)->report().c_str(), stdout);
     return 0;
   }
-  vkc::Status ran = lane.status();
-  if (ran.ok()) {
-    auto grid =
-        tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64);
-    ran = grid.status();
-    const auto until =
-        std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    for (std::size_t i = 0;
-         ran.ok() && !heard.load() && std::chrono::steady_clock::now() < until;
-         ++i) {
-      ran = (*lane)->next(*grid, kS + (i + 1) * 40 * kMs).status();
-    }
-    if (ran.ok()) ran = (*lane)->close();
+  CHECK(joined);
+  vr_example::MobileLane::SessionView v = (*lane)->sessions().at(0);
+  CHECK(v.ordinal == 1 &&
+        v.placement == vr_example::MobileLane::Placement::Tag);
+  // The second, while the first holds the slot: refused, closed right after
+  // its session.
+  {
+    auto b = vr_test::Dialler::dial(second, port, true);
+    CHECK(b.ok() && (*b)->let_go());
   }
-  done = true;
-  phone.join();
-  if (!ran.ok()) std::fprintf(stderr, "FAIL: %s\n", ran.message().c_str());
-  CHECK(ran.ok() && heard.load());
-  CHECK(note.line == "Looking for the tag" &&
-        note.tone == gnet::ViewerNote::Tone::Neutral);
+  // The first goes; past its grace it leaves, and the second joins once it
+  // dials after that, told to look for the tag by a watch of its own.
+  a->reset();  // hung up
+  CHECK(run_until(**lane, *grid, &set, [&] {
+    return (*lane)->sessions().at(0).stage == Stage::Left;
+  }));
+  std::unique_ptr<vr_test::Dialler> b;
+  CHECK(run_until(**lane, *grid, &set, [&] {
+    if (!b || b->server().viewers() == 0) {  // refused, or not yet dialled
+      auto dialled = vr_test::Dialler::dial(second, port, true);
+      if (dialled.ok()) b = std::move(dialled).value();
+      return false;
+    }
+    return (*lane)->sessions().size() == 2 && told_to_look(*b);
+  }));
+  v = (*lane)->sessions().at(1);
+  CHECK(v.ordinal == 2 && v.stage == Stage::Live);
+  CHECK((*lane)->close().ok());
+  const std::string report = (*lane)->report();
+  std::fputs(report.c_str(), stdout);
+  CHECK(report.find("1 refused (0 turned away)") != std::string::npos);
+  const std::filesystem::path log = dir / "log";
+  for (const stream::Session& s : {*first, second}) {
+    const std::string hex8 = vr_test::hex_of(s.id).substr(0, 8);
+    const char* nn = &s == &second ? "02-ipad-" : "01-ipad-";
+    CHECK(std::filesystem::exists(log / (nn + hex8) / "phone.vrst"));
+  }
+  const std::vector<std::string> rows = lines(log / "sessions.csv");
+  CHECK(rows.size() == 5);
+  CHECK(rows[2].find(",away 1 s") != std::string::npos);
+  const std::vector<std::string> door = lines(log / "door.csv");
+  CHECK(door.size() >= 2 &&
+        door[1].find(",refused," + vr_test::hex_of(second.id) + ",") !=
+            std::string::npos &&
+        door[1].find("1 session(s) held") != std::string::npos);
+  return 0;
+}
+
+// A session that comes and goes, placed by the tag on the watch's thread:
+// gone past its grace, the reaper lets it go, the watch-before-phone step run
+// (its order is let_go's; the sanitizers watch the step), and nothing is
+// said once the phone has stopped.
+int test_retire_order(vkc::test::GpuContext& gpu, const Pictures& pics) {
+  using Stage = vr_example::MobileLane::Stage;
+  vr_example::LaneOptions options;
+  options.settle_ns = 500 * kMs;
+  options.grace_ns = kS;
+  auto lane = vr_example::MobileLane::create(gpu.device, gpu.allocator, nullptr,
+                                             options);
+  CHECK(lane.ok());
+  auto grid =
+      tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64);
+  CHECK(grid.ok());
+  std::vector<std::unique_ptr<track::IFitter>> fitters;
+  fitters.push_back(std::make_unique<vr_test::ScriptedFitter>(
+      vr_test::anchors_when([](std::uint64_t) { return true; }, Mat4f(1.0f))));
+  fitters.push_back(std::make_unique<vr_test::ScriptedFitter>(
+      vr_test::anchors_when([](std::uint64_t) { return false; }, Mat4f(1.0f))));
+  fitters.emplace_back();  // arkit
+  vr_example::MobileLane::SessionParts parts;
+  auto tracker =
+      track::Tracker::create(vr_example::lane_tracking(), std::move(fitters));
+  CHECK(tracker.ok());
+  parts.tracker = std::move(*tracker);
+  auto log = vr_example::TrackLog::open({}, *parts.tracker, {});
+  CHECK(log.ok());
+  parts.log = std::move(*log);
+  auto tags = watch(gpu, /*background=*/true);
+  CHECK(tags.ok());
+  parts.tags = std::move(*tags);
+  auto phone = std::make_unique<TagPhone>(60, pics.tag);
+  auto stopped = std::make_shared<std::atomic<bool>>(false);
+  phone->stopped_to(stopped);
+  parts.phone = std::move(phone);
+  auto here = std::make_shared<bool>(true);
+  auto told = std::make_shared<std::size_t>(0);
+  auto after_stop = std::make_shared<std::size_t>(0);
+  parts.presence = [here] { return *here; };
+  parts.say = [stopped, told, after_stop](gnet::ViewerNote) {
+    ++*told;
+    if (stopped->load()) ++*after_stop;
+  };
+  parts.name = "phone";
+  parts.placement = vr_example::MobileLane::Placement::Tag;
+  CHECK((*lane)->add(std::move(parts)).ok());
+  std::uint64_t set = kS;
+  CHECK(run_until(**lane, *grid, &set, [&] {
+    if (set >= 4 * kS) *here = false;
+    return (*lane)->sessions().at(0).stage == Stage::Left;
+  }));
+  // Gaps after it left say nothing to it either.
+  for (int i = 0; i < 10; ++i)
+    CHECK((*lane)->next(*grid, set += 40 * kMs).ok());
+  CHECK(stopped->load() && *told > 0 && *after_stop == 0);
+  CHECK((*lane)->close().ok());
   return 0;
 }
 
@@ -1247,6 +1375,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_lane_background(gpu, pics, scratch.path / "lane_background") == 0);
   CHECK(test_open_file(gpu, scratch.path / "file") == 0);
   CHECK(test_open_live(gpu, scratch.path / "live") == 0);
+  CHECK(test_retire_order(gpu, pics) == 0);
   std::puts("recon_example_live_tag: OK");
   return 0;
 }

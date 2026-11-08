@@ -94,6 +94,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -139,6 +140,17 @@ struct DoorOptions {
   /// How long an id refused must go unrefused for its next refusal to be
   /// logged again, its reason the same; 0 or more, 0 logging each one.
   std::chrono::milliseconds quiet{30'000};
+  /// What the caller cannot take, asked on the door's thread of each
+  /// connection whose id the door neither holds, cools down nor remembers,
+  /// before the cap: a reason refuses its session as the cap does
+  /// (@ref RgbdStreamSensor::Door::Stats::screened), and an empty one lets it
+  /// by. It must not wait, nor call the door. Empty: every session goes by.
+  std::function<std::string(const stream::Session&)> screen;
+  /// Where the door writes `door.csv` (@ref RgbdStreamSensor::Door), made at
+  /// its first row and never over anything already there, so a door that
+  /// refuses nothing writes nothing; empty writes none. One that cannot be
+  /// made is logged, and the door runs without it.
+  std::string csv;
 };
 
 /// @brief A session a @ref RgbdStreamSensor::Door holds, shared by the door,
@@ -484,6 +496,7 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
 ///   @ref SessionHandle at the cap too, which its sensor takes as its newest.
 /// - A held session's id with other bytes, or one whose stream has ended;
 ///   an id cooling down, or remembered as refused: refused.
+/// - A new id that @ref DoorOptions::screen gives a reason: refused.
 /// - A new id with a slot free: the slot is the session's from then on, and
 ///   its @ref Arrival waits for @ref take_arrival.
 /// - A new id with none free: refused.
@@ -512,6 +525,16 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
 /// networks dials again only once it has lost its reader. Neither counts as
 /// a failure (@ref RgbdStreamSensor::LinkStats::superseded). With the door
 /// gone, it reads the connection it has.
+///
+/// **`door.csv`** (@ref DoorOptions::csv), made at its first row: a header,
+/// then a row for each connection refused, by the door or by @ref admit, or
+/// superseded:
+/// `time_ns` (the system clock's), `event` (`refused`, `superseded`),
+/// `session` (its id, 32 hex digits), `peer` and `reason` (the rest of the
+/// line). The door's thread alone writes it, at the end of each pass and once
+/// more as the door goes; another thread's rows (@ref admit's, a sensor's
+/// supersedes) wait for it, and a sensor's left once the door is gone go
+/// unwritten.
 ///
 /// @code
 /// VKC_ASSIGN(auto door, link::RgbdStreamSensor::Door::open(host, port));
@@ -567,6 +590,8 @@ class RgbdStreamSensor::Door {
     std::uint64_t strays = 0;
     /// Connections closed right after their session's chunk (above).
     std::uint64_t refused = 0;
+    /// Of them, those @ref DoorOptions::screen gave a reason.
+    std::uint64_t screened = 0;
     std::uint64_t reconnects = 0;  ///< Connections routed to a held session.
     std::uint64_t arrivals = 0;    ///< New sessions, each an @ref Arrival.
     std::uint64_t admitted = 0;    ///< Arrivals @ref admit made a sensor of.
@@ -577,7 +602,8 @@ class RgbdStreamSensor::Door {
   ///        host, never the wildcard, and return once bound, its thread
   ///        accepting.
   ///
-  /// Nothing is kept from a call that fails, so a later one can bind again.
+  /// Nothing is kept from a call that fails, so a later one can bind again;
+  /// `door.csv` is made only at its first row.
   /// @return The door; `Status::Code::InvalidArgument` for an empty,
   ///         wildcard or non-numeric host, port 0, or a limit of
   ///         @p options out of its range; `Status::Code::IoError` for an

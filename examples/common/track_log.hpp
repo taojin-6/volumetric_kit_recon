@@ -18,7 +18,11 @@
 /// same value (a matrix is 16 numbers, column-major, a pose camera to world):
 /// - `run.csv`: `key,value` lines: `format` (`volumetric_kit.track_log`),
 ///   `version` (1), `session`, `registration`, `device`, `recon` (its
-///   version), `hold_ns` and `tracking_to_world` (16 numbers).
+///   version), `hold_ns`, `tracking_to_world` (16 numbers), and the lane's
+///   session: `session_id` (32 hex digits; empty for a file), `sensor`,
+///   `peer` (`a.b.c.d:port`; empty for a file), `ordinal`, `mobile_index`
+///   and `joined_set_ns` (0 until it joins). A reader of version 1 passes by
+///   a key it does not know, so a key added keeps the version.
 /// - `chains.csv`: per chain, in chain order: `name`, `role` (`driver` or
 ///   `shadow`), `fit` (`point_to_plane`, or `none`), `window_ns`, `hop_ns`,
 ///   `passes`, `initial_correction` and `seed` (the rest of the line).
@@ -88,6 +92,16 @@ struct RunSource {
   /// The device's removed map steps, oldest first; empty: none known, and
   /// the summary has no `arkit_raw` row.
   std::vector<DeviceStep> device_steps;
+  /// Its session's id, 32 hex digits; empty for none known (a file's).
+  std::string session_id;
+  std::string sensor;  ///< The phone's sensor id (`SensorInfo::id`).
+  /// Where a live phone dialled from, `a.b.c.d:port`; empty for a file.
+  std::string peer;
+  /// Its place in the lane's join order, from 1; 0 until it joins
+  /// (@ref TrackLog::joined).
+  std::uint32_t ordinal = 0;
+  std::uint32_t mobile_index = 0;   ///< Its mobile index, from its join.
+  std::uint64_t joined_set_ns = 0;  ///< The set it joined before; 0 until.
 };
 
 /// @brief A chain, as the run's files name it.
@@ -210,13 +224,25 @@ class TrackLog {
   vkc::Status registered(std::string registration,
                          const volumetric_kit::recon::Mat4f& tracking_to_world);
 
+  /// @brief The run's session joined the lane: `run.csv`'s `ordinal`,
+  ///        `mobile_index` and `joined_set_ns`, in @ref run now, and in the
+  ///        file at its next write (@ref registered, @ref close), so the
+  ///        join writes no file.
+  /// @param ordinal  Its place in the join order, from 1.
+  /// @param index    Its mobile index.
+  /// @param set_ns   The set it joined before, on the rig's clock.
+  /// @return OK; `Status::Code::InvalidArgument` once closed.
+  vkc::Status joined(std::uint32_t ordinal, std::uint32_t index,
+                     std::uint64_t set_ns);
+
   /// @return The run so far.
   const TrackRun& run() const noexcept;
 
   /// @return The directory it writes into; empty for none.
   const std::string& directory() const noexcept;
 
-  /// @brief Write the pose files and flush and close every file. Idempotent.
+  /// @brief Write `run.csv` again and the pose files, and flush and close
+  ///        every file, each whatever another's write did. Idempotent.
   /// @return OK, or the first write's failure.
   vkc::Status close();
 

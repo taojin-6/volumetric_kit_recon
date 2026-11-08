@@ -34,6 +34,12 @@
 // - admit's refusals: an arrival not this door's, nor another door's, nor
 //   one admitted. A recording it cannot make leaves the session unrecorded,
 //   its error polled once. A file has no handle.
+// - The screen refuses a new session it gives a reason, before the cap and
+//   counted as screened, never a held one's reconnect; door.csv holds a row
+//   for each refusal, the door's and admit's, and each connection
+//   superseded, with its session and peer; it is made at its first row, so
+//   a door that refuses nothing writes none, and never over a file already
+//   there.
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -46,6 +52,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -1224,6 +1231,100 @@ int test_door_gone() {
   return 0;
 }
 
+std::vector<std::string> lines_of(const std::filesystem::path& path) {
+  std::ifstream in(path);
+  std::vector<std::string> out;
+  for (std::string line; std::getline(in, line);) out.push_back(line);
+  return out;
+}
+
+// The screen, the cap and admit refuse; a reconnect supersedes; door.csv
+// holds each, in order, written by the door's thread, made at its first row.
+int test_screen_and_csv(const vkc::test::Scratch& scratch) {
+  const sensor::SensorInfo info = vr_test::phone_info();
+  const PatternFrames p = vr_test::pattern_frames(info, 2);
+  const stream::Session held = vr_test::session_of(info, 0x01);
+  const stream::Session screened = vr_test::session_of(info, 0x02);
+  const stream::Session over = vr_test::session_of(info, 0x03);
+  stream::Session no_depth = vr_test::session_of(info, 0x07);
+  no_depth.tracks[0].kind = stream::TrackKind::Geometry;
+  no_depth.tracks[0].params.clear();
+  const std::filesystem::path csv = scratch.path / "door.csv";
+  const std::uint16_t port = vkc::test::closed_port();
+  DoorOptions options;
+  options.csv = csv.string();
+  std::size_t asked = 0;  // the door's thread's, read once it is gone
+  options.screen = [&asked](const stream::Session& s) -> std::string {
+    ++asked;
+    return s.id[15] == 0x02 ? "not this one" : "";
+  };
+  std::unique_ptr<Door> door = open_door(port, options);
+  CHECK(door);
+  // admit's refusal, for what the session is.
+  {
+    auto d = Dialler::dial(no_depth, port);
+    CHECK(d.ok());
+    std::optional<Door::Arrival> arrival = door->take_arrival(kWait);
+    CHECK(arrival);
+    CHECK(!door->admit(std::move(*arrival), {}).ok());
+    CHECK(holds(*door, 0) && (*d)->let_go());
+  }
+  auto a = Dialler::dial(held, port);
+  CHECK(a.ok() && publish(**a, p, 0).ok());
+  std::unique_ptr<RgbdStreamSensor> s = admit_next(*door);
+  CHECK(s && s->start().ok() && poll_frames(*s, 1).size() == 1);
+  // The screen's, though a slot is held; then the cap's.
+  {
+    auto b = Dialler::dial(screened, port);
+    CHECK(b.ok() && (*b)->let_go());
+    auto c = Dialler::dial(over, port);
+    CHECK(c.ok() && (*c)->let_go());
+  }
+  Door::Stats stats = door->stats();
+  CHECK(stats.refused == 2 && stats.screened == 1 && stats.held == 1);
+  // A reconnect, at the cap, never screened: it supersedes the one read.
+  auto a2 = Dialler::dial(held, port);
+  CHECK(a2.ok() && publish(**a2, p, 1).ok());
+  CHECK(sequences(poll_frames(*s, 1)) == from_to(1, 1));
+  CHECK(s->link_stats().superseded == 1 && door->stats().reconnects == 1);
+  door.reset();       // its last rows written
+  CHECK(asked == 4);  // each new id: no_depth, held, screened, over
+  const std::vector<std::string> rows = lines_of(csv);
+  for (const std::string& r : rows) std::printf("door.csv: %s\n", r.c_str());
+  CHECK(rows.size() == 5 && rows[0] == "time_ns,event,session,peer,reason");
+  const auto row = [&](std::size_t k, const char* event,
+                       const stream::Session& session, const char* why) {
+    const std::string& r = rows[k];
+    const std::string id = vr_test::hex_of(session.id);
+    return r.find(std::string(",") + event + "," + id + ",127.0.0.1:") !=
+               std::string::npos &&
+           r.find(why) != std::string::npos;
+  };
+  CHECK(row(1, "refused", no_depth, ",no RgbdDepth track"));
+  CHECK(row(2, "refused", screened, ",not this one"));
+  CHECK(row(3, "refused", over, ",1 session(s) held, the most"));
+  CHECK(row(4, "superseded", held, ",a newer connection from its address"));
+  // A second door, refusing one, never writes over the first's file.
+  const std::uint16_t again_port = vkc::test::closed_port();
+  std::unique_ptr<Door> again = open_door(again_port, options);
+  CHECK(again);
+  {
+    auto b = Dialler::dial(screened, again_port);
+    CHECK(b.ok() && (*b)->let_go());
+  }
+  again.reset();
+  CHECK(lines_of(csv) == rows);
+  // A door that refuses nothing makes no door.csv.
+  const std::filesystem::path unused = scratch.path / "unused" / "door.csv";
+  std::filesystem::create_directories(unused.parent_path());
+  options.csv = unused.string();
+  std::unique_ptr<Door> quiet = open_door(vkc::test::closed_port(), options);
+  CHECK(quiet);
+  quiet.reset();
+  CHECK(!std::filesystem::exists(unused));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1246,6 +1347,7 @@ int main() {
   if (test_say_after() != 0) return 1;
   if (test_door_gone() != 0) return 1;
   if (test_admit_refusals(scratch) != 0) return 1;
+  if (test_screen_and_csv(scratch) != 0) return 1;
   std::printf("rgbd stream sensor door tests passed\n");
   return 0;
 }

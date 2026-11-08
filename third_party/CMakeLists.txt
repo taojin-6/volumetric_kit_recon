@@ -26,9 +26,10 @@ include(FetchContent)
 # checkouts at once with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core
 # checkout>. The core's tests and -Werror stay off in a subproject.
 #
-# The pin is core 0.49.0 (947fe19, core #99's merge: source.mobile_registration
-# optional and never defaulted, on 0.43.0's net tier, which grid 0.11.0 and
-# later network on), as are the Homebrew key action in
+# The pin is core 0.49.0 at core #101's merge (65af19c: source.mobile's docs for
+# phones that come and go, no code), on core #99's source.mobile_registration,
+# optional and never defaulted, and 0.43.0's net tier, which grid 0.11.0 and
+# later network on; as are the Homebrew key action in
 # .github/workflows/_build.yml and the workflow-trigger check in
 # .github/workflows/lint.yml; the vkc_require_core checks below say which core
 # each part needs. The tests are main()s of their own on the core's test
@@ -36,7 +37,7 @@ include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 947fe197290299d723dadf92a008ea06a40e87b7)
+  GIT_TAG 65af19c541c370bdd4bedeac2e7c9b211629763e)
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
   set(VKC_BUILD_TEST_SUPPORT ON)

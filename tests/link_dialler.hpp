@@ -105,6 +105,17 @@ inline stream::Session session_of(const sensor::SensorInfo& info,
   return session;
 }
 
+// A session id's 32 hex digits, as door.csv and sessions.csv write it.
+inline std::string hex_of(const std::array<std::uint8_t, 16>& id) {
+  constexpr char kDigits[] = "0123456789abcdef";
+  std::string out;
+  for (const std::uint8_t byte : id) {
+    out += kDigits[byte >> 4];
+    out += kDigits[byte & 0xf];
+  }
+  return out;
+}
+
 // Pattern frames: frame i's depth carries index `index(i)`, its plane at
 // floor 2, its pose and time its own.
 struct PatternFrames {

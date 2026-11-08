@@ -21,6 +21,7 @@ mesh-source notes are grid's ([its config/README.md](https://github.com/taojin-6
 | `fuse_orbbec` | [fuse_orbbec.json](examples/fuse_orbbec.json) | Live camera/rig to PLY |
 | `fuse_orbbec` | [codec_orbbec.json](examples/codec_orbbec.json) | Live rig coded set by set |
 | `fuse_orbbec` | [serve_orbbec.json](examples/serve_orbbec.json) | Live rig coded set by set, recorded and served live |
+| `fuse_orbbec` | [fuse_orbbec_phone.json](examples/fuse_orbbec_phone.json) | The same, phones joining and leaving it as fill |
 | `fuse_orbbec` | [stream_orbbec.json](examples/stream_orbbec.json) | Live stream/decode only |
 | `fuse_orbbec` | [readback_orbbec.json](examples/readback_orbbec.json) | Live stream with luma readback |
 | `fuse_orbbec` | [dump_orbbec.json](examples/dump_orbbec.json) | Live stream with readback, first sets' JPEGs and luma written |
@@ -113,23 +114,43 @@ and its counters at the end. It needs a build with sensor's microphone driver
 (README, "Optional: a microphone"). `output.stream` records its track and
 `output.serve` serves it, both with the frames.
 
-`source.mobile` adds a phone to `fuse_orbbec`'s rig: a recorded session's
-`.vrst`, or `tcp://ADDRESS:PORT`, one of this host's addresses, which the
-phone dials (the run waits for it before the cameras open). Its tracked world
-is placed by `source.mobile_registration`, or without one, a file's too, by
-the origin tag of `source.calibration`'s world, found in the phone's own
-pictures: until a hold of it registers the session nothing of the phone is
-fused (`examples/common/live_tag.hpp`), and a live phone is told how the search
-goes. That needs a build with `-DVR_WITH_CALIB=ON` (README, "Optional: the
-origin tag"). Its depth is tracked against the rig's model and fused as fill
-where the rig's cameras do not see, seconds after capture, teal where the rig
-alone placed it and orange elsewhere (`examples/common/live_mobile.hpp` has the
-rules). It needs Dynamic fusion (the default) and is not run beside FFS depth.
-`diagnostics.track_log` names a directory for its tracking log
-(`examples/common/track_log.hpp`), where a live phone is recorded (`phone.vrst`)
-and the tag's registration written (`registration.json`), so the run replays; a
-tag run refuses a directory that holds a registration already. The log's summary
-prints at the end either way.
+`source.mobile` adds phones to `fuse_orbbec`'s rig: a recorded session's
+`.vrst`, or `tcp://ADDRESS:PORT`, one of this host's addresses, where phones
+dial in, each session its own, joining and leaving while the rig runs
+(README, "A phone in a live run"). The rig never waits for a phone: the
+cameras open at once, an address the run cannot bind yet is warned of and
+tried again every 2 s, and a setting under which no phone can be taken
+(Classic fusion, FFS depth, `operation: "stream"`, no registration where the
+tag cannot place one) turns the phones away with a line saying why, not the
+run. A file is refused before anything opens under Classic fusion, beside
+FFS depth, with `operation: "stream"`, or with no registration where the tag
+cannot place it. A session's tracked world is placed by
+`source.mobile_registration`, live the one session whose id it names, or
+else by the origin tag of `source.calibration`'s world, found in the phone's
+own pictures: until a hold of it registers the session nothing of the phone
+is fused (`examples/common/live_tag.hpp`), and a live phone is told how the
+search goes. That needs a build with `-DVR_WITH_CALIB=ON` (README, "Optional:
+the origin tag"). Its depth is tracked against the rig's model and fused as
+fill where the rig's cameras do not see, seconds after capture, teal where
+the rig alone placed it and orange elsewhere (`examples/common/live_mobile.hpp`
+has the rules). It needs Dynamic fusion (the default) and is not run beside
+FFS depth. `diagnostics.track_log` names a directory for the tracking log
+(`examples/common/track_log.hpp`): a file's run writes it there, with the tag's
+registration (`registration.json`); a live run writes `sessions.csv` (each
+join and leave), `door.csv` (each connection refused or superseded) and a
+directory a session, `NN-<sensor>-<hex8>`, with its log, its recording
+(`phone.vrst`) and its registration, so each session replays as a file; the
+two CSVs are made at their first row. A tag file run refuses a directory
+that holds a registration already; a live run into one an earlier run
+logged into takes its phones all the same and writes nothing there, saying
+so at the start and in the report. The logs' summaries print either way.
+
+`fuse_orbbec_phone.json` is `serve_orbbec.json` with phones: they dial
+`tcp://10.8.0.1:7120` (the lab's, over its WireGuard: put one of your host's
+addresses), apart from the viewers' 47801, each placed by the origin tag of
+the calibration it expects at `rigs/lab/array_calibration.json` beside it, a
+directory a session under `results/phones`. Give each run its own
+`track_log`.
 
 `fuse_realsense` (core's FuseRealsense profile) fuses one RealSense camera's
 depth and its colour to the PLY at `output.path`, Dynamic by default as

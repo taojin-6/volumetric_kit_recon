@@ -48,7 +48,7 @@
 /// `Status::Code::Unsupported`.
 ///
 /// @code
-/// VKC_TRY(TagWatch::check(rig.world));  // before the wait for the phone
+/// VKC_TRY(TagWatch::check(rig.world));  // as the lane opens
 /// VKC_ASSIGN(std::unique_ptr<TagWatch> tags,
 ///            TagWatch::create(device, allocator,
 ///                             {id, session, rig.world, /*background=*/true}));
@@ -179,7 +179,8 @@ class TagWatch {
   ///         `source.mobile_registration`; `Status::Code::InvalidArgument`
   ///         for a world with no tag, another tag, a sensor beside it, or a
   ///         tag of no edge, naming `source.mobile_registration`. Cheap: the
-  ///         lane calls it before it waits for the phone.
+  ///         lane calls it as it opens, a live one turning its phones away
+  ///         for its refusal.
   static vkc::Status check(const sensor::camera::WorldFrame& world);
 
   /// @param device     The run's device; it and @p allocator outlive the
