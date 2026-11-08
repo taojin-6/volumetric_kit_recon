@@ -10,7 +10,6 @@
 ///        (`codec_config.hpp`, `codec_report.hpp`) include no fusion; this
 ///        header joins the two.
 
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -28,6 +27,7 @@
 #include "volumetric_kit/recon/sender/set_sender.hpp"
 #include "volumetric_kit/sensor/audio_sensor.hpp"
 #include "volumetric_kit/sensor/camera/array_calibration.hpp"
+#include "world_up.hpp"
 
 namespace vr_example {
 
@@ -38,31 +38,18 @@ namespace config = volumetric_kit::core::config;
 inline constexpr std::uint16_t kAudioTrack = 1;
 
 /// @return The up of the world a live run fuses in, as its stream states it
-///         (`stream::Session::up`), from `source.calibration`'s file:
-///         - a tag's world: +z, out of the tag's printed face, straight up for
-///           a tag laid face up on the floor;
-///         - a sensor's world: its colour camera's image up, -y (x right, y
-///           down, z forward), upright when that camera is mounted level and
-///           the right way up, not for one turned on its side;
-///         - any camera posed in a world the file does not name (version 1, or
-///           no `world`): all zero, unknown.
-///
-///         With no file each frame stays in its own camera's frame: -y, and
-///         -y too for a file that poses no sensor, which `SensorArray::open`
-///         then refuses. Or the file's read error.
+///         (`stream::Session::up`): @ref calibration_up of
+///         `source.calibration`'s file, a tag's +z, a sensor's -y, unknown for
+///         cameras posed in a world the file does not name. With no file each
+///         frame stays in its own camera's frame: -y, as for a file that poses
+///         no sensor, which `SensorArray::open` then refuses. Or the file's
+///         read error.
 inline vkc::Result<std::array<float, 3>> live_up(const config::Config& opt) {
   namespace camera = volumetric_kit::sensor::camera;
-  constexpr std::array<float, 3> kCameraUp{0.0f, -1.0f, 0.0f};
-  if (opt.source.calibration.empty()) return kCameraUp;
+  if (opt.source.calibration.empty()) return calibration_up({});
   VKC_ASSIGN(const camera::ArrayCalibration rig,
              camera::read_array_calibration(opt.source.calibration));
-  if (rig.world.apriltag) return std::array<float, 3>{0.0f, 0.0f, 1.0f};
-  const bool posed = std::any_of(rig.sensors.begin(), rig.sensors.end(),
-                                 [](const camera::SensorCalibration& s) {
-                                   return s.color_to_world.has_value();
-                                 });
-  if (posed && rig.world.sensor.empty()) return std::array<float, 3>{};
-  return kCameraUp;
+  return calibration_up(rig);
 }
 
 /// @return The session a live run's stream writes and serves: @p program's

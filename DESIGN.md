@@ -1313,7 +1313,8 @@ its cameras open (`fuse_orbbec`'s `orbbec_on_host_clock`; `fuse_realsense`'s
 and `fuse_decklink`'s always the host's), and the run checks the opened cameras against it
 (`on_host_clock`). The session states the world's up from `source.calibration`'s
 file (`live_up`, `stream::Session::up`): a tag's +z, a sensor's or no file's -y,
-and unknown for cameras posed in a world the file does not name.
+and unknown for cameras posed in a world the file does not name
+(`calibration_up`, `world_up.hpp`, the rule `rig_viewer` turns about too).
 With `source.audio`, which the core allows only with a stream and every
 camera on the host's clock, the run records a mic beside the cameras
 (`live_audio.hpp`). `open_audio` opens the input before the GPU: sensor's
@@ -1387,6 +1388,15 @@ on the GPU, and the atlas filled by
 device copies recorded in gfx's frame (the 2026-09-29 decision), and
 texturing a camera a set lacks from its last frame, a fallback view
 (`fusion.hold_ms`).
+Its view is gfx's `OrbitCamera` about the world's up (`viewer_orbit.hpp`):
+the calibration's (`calibration_up`), or the primary's image up where that is
+unknown, printed at the start. It starts upright around where the cameras'
+axes meet, the eye behind that point along the primary's optical axis (a
+primary looking along the up keeps its own picture); the left button orbits
+with no stop at the poles, the right pans the point at the target's depth
+under the pointer, both in window heights, the wheel zooms to 5 cm, and
+"orbit view" copies the home view back. Lit shading follows the eye, as the
+player's headlight does.
 `rig_viewer`'s panels show the newest set; its fuse thread also records every
 set into a `SetLog`, the newest 15,000 kept, which it prints at the end with
 the sets fused and the meshes drawn a second (each from its first to its

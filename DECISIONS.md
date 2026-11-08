@@ -1083,7 +1083,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   A live stream states the world's up from `source.calibration`'s file
   (`live_up`): a tag's +z; a sensor's world, or no file, that colour camera's
   -y; unknown where the file poses cameras in a world it does not name.
-  `codec_replica` states +z (amends the 2026-10-20 entry).
+  `codec_replica` states +z (amends the 2026-10-20 entry). *Amended
+  2026-11-08:* `rig_viewer`'s turntable turns about the same up
+  (`calibration_up`); unknown, the primary's image up; no override; no stop
+  at the poles; its light follows the eye, as the player's does.
 - [**2026-11-05**](#2026-11-05--a-live-phone-is-told-how-the-tag-search-goes-in-words-up-the-socket-it-dialled) —
   A live phone is told how the tag search goes, in words up the socket it
   dialled: one function holds them, tag words only, on a change and once a
@@ -6513,6 +6516,25 @@ jobs at 88-100%, so device times are an upper bound; raw logs in the PR).
   by 149 MB.
 
 ### 2026-11-05 — A live stream states the world's up from its calibration file; a sensor's world is that camera's own image up (amends the 2026-10-20 entry).
+
+*Amended 2026-11-08:* `rig_viewer`'s turntable, gfx's `OrbitCamera` (gfx
+#176), turns about the same up. One rule serves both: `calibration_up`
+(`examples/common/world_up.hpp`), which `live_up` reads, applied to the
+calibration `rig_viewer` has already read. Where that up is unknown, the view
+turns about the primary's image up, as it did before. There is no override.
+The player has one, and a rig on its side in a camera's world needs it
+(below), but here it would need a core config field. Turning about the
+primary's image up whatever the calibration states was rejected: on the lab
+rig, in a tag's world since 2026-10-30, it keeps the view on its side, 92
+degrees off +z. The eye passes over the poles with no stop, as gfx's and the
+player's do; the old stop at ±1.55 rad is one line
+(`set_elevation(std::clamp(...))`) if it is wanted back. The light follows
+the eye, as the player's does, from just above and left of it. The old light
+was fixed to the primary's axes and lit from its image down, which on an
+upright view lights from below. `example_viewer_orbit_test` covers the home
+view about any up, the primary's own picture at a pole, and the view before
+for no calibration; `example_fuse_sender_test` checks that `live_up` is
+`calibration_up` of the file.
 
 **Context.** grid's `Session::up` lets a viewer keep the floor down with
 nothing to set, and only the sender knows its world. The session is made before

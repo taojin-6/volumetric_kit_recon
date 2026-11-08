@@ -265,6 +265,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **`rig_viewer` turns about the world's up with gfx's
+  `OrbitCamera`** (`examples/viewer/viewer_orbit.hpp`). The up is the one the
+  stream states, now by one rule (`calibration_up`,
+  `examples/common/world_up.hpp`, which `live_up` reads): a tag's +z, a
+  sensor's or no file's -y; where the file names no world, the primary's image
+  up, the axis before. The run prints it (`view: about up (x, y, z)`). The
+  home view is around where the cameras look, from the primary's side, as
+  before, now upright (a primary looking along the up keeps its own picture):
+  on the lab rig, whose cameras lie on their sides, the floor is level, not on
+  its side; with no calibration it is the view before. The left button orbits
+  with no stop over the top (it stopped at 1.55 rad), half a turn a window
+  height; the right pans the point at the target's depth under the pointer;
+  the wheel zooms 0.9 a notch to 5 cm, as before. Lit shading takes the
+  player's headlight, from just above and left of the eye; it lit from the
+  primary's image down.
 - build: **the viewers pin gfx main at #176's merge** (`51a82ad`), whose
   OrbitCamera takes a settable world up and has no stop at the poles; #175
   changes only gfx's tests.

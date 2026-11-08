@@ -115,6 +115,19 @@ if(VR_BUILD_TESTS)
   set_tests_properties(recon_example_viewer_atlas
                        PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 
+  # rig_viewer's view (viewer_orbit.hpp): gfx's OrbitCamera about the world's
+  # up, its home view and its light. Host only.
+  add_executable(recon_example_viewer_orbit_test
+                 "${PROJECT_SOURCE_DIR}/tests/example_viewer_orbit_test.cpp")
+  target_link_libraries(
+    recon_example_viewer_orbit_test PRIVATE volumetric_kit::core_test_base
+                                            volumetric_kit::gfx_camera)
+  target_include_directories(recon_example_viewer_orbit_test
+                             PRIVATE ${_viewer_common_inc})
+  vr_target_warnings(recon_example_viewer_orbit_test)
+  add_test(NAME recon_example_viewer_orbit
+           COMMAND recon_example_viewer_orbit_test)
+
   # The device both live viewers adopt (viewer_common.hpp), for recon's and the
   # sensor package's requirements (examples/common/fuse_device.hpp). Host only.
   add_executable(recon_example_viewer_device_test

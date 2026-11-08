@@ -47,11 +47,17 @@
 //   rig_viewer --help
 //
 // Without source.calibration every camera sits at the world origin, which fuses
-// a rig of several into nonsense; the viewer says so and runs anyway. Drag with
-// the left button to orbit, the right to pan, and scroll to zoom; the View
-// panel switches shading, texturing and the viewpoint, and tunes the fusion
-// and texturing knobs below live. Closing the window, or Ctrl+C in the
-// terminal, stops the rig before the process ends.
+// a rig of several into nonsense; the viewer says so and runs anyway. The view
+// is gfx's OrbitCamera about the world's up, as the stream states it
+// (vr_example::calibration_up: a tag's +z, a sensor's or no file's -y), or the
+// primary's image up where the file names no world (viewer_orbit.hpp). It
+// starts upright, around where the cameras look, from the primary's side. Drag
+// with the left button to orbit about the up, with no stop over the top, the
+// right to pan, the point under the pointer staying there, and scroll to zoom;
+// the View panel's "orbit view" returns home. The panel also switches shading,
+// texturing and the viewpoint, and tunes the fusion and texturing knobs below
+// live. Closing the window, or Ctrl+C in the terminal, stops the rig before
+// the process ends.
 //
 // The panels show the newest set. At the end the run prints its rates, the
 // array's and each camera's counters, the atlas copies' device time and a
@@ -91,7 +97,9 @@
 #include "set_log.hpp"
 #include "viewer_atlas.hpp"
 #include "viewer_common.hpp"
+#include "viewer_orbit.hpp"
 #include "viewer_panels.hpp"  // draw_mesh_view
+#include "world_up.hpp"
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
@@ -118,6 +126,7 @@
 
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
+#include "volumetric_kit/gfx/camera/orbit_camera.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
@@ -171,53 +180,6 @@ std::uint32_t shading_flags(Shading shading) {
 }
 
 using Options = vgrid_example::config::Config;
-
-// A turntable around `target`, about the primary camera's image-up axis.
-// recon's world is the rig's, whose cameras follow OpenCV (+Y down), so gfx's
-// OrbitCamera -- which fixes world +Y as up -- would stand it on its head.
-struct OrbitView {
-  glm::vec3 target{0.0f};
-  glm::vec3 up{0.0f, -1.0f, 0.0f};
-  glm::vec3 forward{0.0f, 0.0f, 1.0f};
-  glm::vec3 right{1.0f, 0.0f, 0.0f};
-  float distance = 2.0f;
-  float azimuth = 0.0f;
-  float elevation = 0.0f;
-
-  // At azimuth = elevation = 0 the eye is `distance` behind the target along
-  // `forward`: where the primary camera looks from, when it looks at it.
-  glm::vec3 eye() const {
-    const glm::vec3 around =
-        std::cos(azimuth) * -forward + std::sin(azimuth) * right;
-    return target +
-           distance * (std::cos(elevation) * around + std::sin(elevation) * up);
-  }
-};
-
-// The point nearest every camera's optical axis in the least-squares sense --
-// where a rig built around a subject is looking. `fallback` when the axes are
-// (nearly) parallel, as one camera's always is, or meet behind any camera.
-glm::vec3 axes_meet(const std::vector<glm::mat4>& poses, glm::vec3 fallback) {
-  glm::mat3 a(0.0f);
-  glm::vec3 b(0.0f);
-  for (const glm::mat4& c2w : poses) {
-    const glm::vec3 d = glm::normalize(glm::vec3(c2w[2]));
-    const glm::mat3 away = glm::mat3(1.0f) - glm::outerProduct(d, d);
-    a += away;
-    b += away * glm::vec3(c2w[3]);
-  }
-  if (poses.size() < 2 || std::fabs(glm::determinant(a)) < 1e-6f) {
-    return fallback;
-  }
-  const glm::vec3 p = glm::inverse(a) * b;
-  for (const glm::mat4& c2w : poses) {
-    if (glm::dot(p - glm::vec3(c2w[3]), glm::normalize(glm::vec3(c2w[2]))) <
-        0.1f) {
-      return fallback;
-    }
-  }
-  return p;
-}
 
 // Scroll arrives through a callback; the render loop reads what built up.
 struct ScrollInput {
@@ -367,6 +329,12 @@ int run(GLFWwindow* window, const Options& opt) {
                 i == array.primary() ? " (primary)" : "", cam.size.width,
                 cam.size.height, at.x, at.y, at.z);
   }
+  // The up the view turns about: the calibration's, or the primary's image up
+  // where it names none.
+  const glm::vec3 up =
+      fuse_viewer::rig_up(vr_example::calibration_up(array_options.calibration),
+                          camera_poses[array.primary()]);
+  std::printf("view: about up (%.2f, %.2f, %.2f)\n", up.x, up.y, up.z);
   if (opt.source.calibration.empty() && cameras > 1) {
     std::fprintf(
         stderr,
@@ -557,26 +525,21 @@ int run(GLFWwindow* window, const Options& opt) {
   };
 
   // --- The view -------------------------------------------------------------
-  // Around where the cameras look, from the primary's side.
-  OrbitView home;
+  // Around where the cameras look, from the primary's side, upright about the
+  // world's up.
+  constexpr float kNear = 0.05f;  // the near plane, and the closest zoom
+  const vg::camera::OrbitCamera home = fuse_viewer::home_view(
+      camera_poses, array.primary(), up,
+      0.5f * (opt.fusion.min_depth_m + opt.fusion.max_depth_m));
   float vfov = 1.0f;
   {
-    const glm::mat4& c2w = camera_poses[array.primary()];
-    const glm::vec3 eye(c2w[3]);
-    home.forward = glm::normalize(glm::vec3(c2w[2]));
-    home.up = -glm::normalize(glm::vec3(c2w[1]));  // image up is -cameraY
-    home.right = glm::normalize(glm::cross(home.forward, home.up));
-    const float depth_mid =
-        0.5f * (opt.fusion.min_depth_m + opt.fusion.max_depth_m);
-    home.target = axes_meet(camera_poses, eye + home.forward * depth_mid);
-    home.distance = std::max(0.3f, glm::length(home.target - eye));
     const rcamera::CameraModel& cam = color_cameras[array.primary()];
     vfov = 2.0f *
            std::atan(
                static_cast<float>(cam.size.height) /
                (2.0f * std::max(1.0f, static_cast<float>(cam.intrinsics.fy))));
   }
-  OrbitView view = home;
+  vg::camera::OrbitCamera orbit = home;
   // Looking out of camera i, set by the View panel, until a drag orbits away.
   std::optional<std::size_t> from_camera;
   Shading shading = opt.render.shading;
@@ -1083,35 +1046,38 @@ int run(GLFWwindow* window, const Options& opt) {
     // --- Input: orbit, pan, zoom, unless a panel has the mouse -------------
     {
       const bool ui_mouse = overlay && ImGui::GetIO().WantCaptureMouse;
+      const bool left =
+          glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+      const bool right =
+          glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
       double x = 0.0, y = 0.0;
-      // Window coordinates, not glfw::cursor_in_framebuffer: framebuffer
-      // pixels would double orbit and pan speed on a HiDPI display.
+      int height = 0;
+      // Window points over the window's height in points: the viewport heights
+      // OrbitCamera's drags take, the same rate on a HiDPI display.
       glfwGetCursorPos(window, &x, &y);
-      const float dx = have_last ? static_cast<float>(x - last_x) : 0.0f;
-      const float dy = have_last ? static_cast<float>(y - last_y) : 0.0f;
+      glfwGetWindowSize(window, nullptr, &height);
+      glm::vec2 drag(0.0f);
+      if (have_last && height > 0) {
+        drag = glm::vec2(static_cast<float>(x - last_x),
+                         static_cast<float>(y - last_y)) /
+               static_cast<float>(height);
+      }
       last_x = x;
       last_y = y;
       have_last = true;
-      const glm::vec3 eye = view.eye();
-      const glm::vec3 look = glm::normalize(view.target - eye);
-      const glm::vec3 side = glm::normalize(glm::cross(look, view.up));
-      const glm::vec3 lift = glm::cross(side, look);
-      if (!ui_mouse &&
-          glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
-        view.azimuth -= dx * 0.005f;
-        view.elevation =
-            std::clamp(view.elevation + dy * 0.005f, -1.55f, 1.55f);
+      if (!ui_mouse && left) {
+        orbit.drag_orbit(drag);
         from_camera.reset();
       }
-      if (!ui_mouse &&
-          glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
-        view.target += (-dx * side + dy * lift) * view.distance * 0.0015f;
+      if (!ui_mouse && right) {
+        orbit.drag_pan(drag, vfov);
         from_camera.reset();
       }
       if (!ui_mouse && scroll.pending != 0.0) {
-        view.distance = std::max(
-            0.05f,
-            view.distance * std::pow(0.9f, static_cast<float>(scroll.pending)));
+        orbit.zoom(std::pow(vg::camera::OrbitCamera::kZoomPerNotch,
+                            static_cast<float>(scroll.pending)));
+        // The target stays past the near plane.
+        orbit.set_distance(std::max(kNear, orbit.distance()));
         from_camera.reset();
       }
       scroll.pending = 0.0;
@@ -1121,21 +1087,19 @@ int run(GLFWwindow* window, const Options& opt) {
     const float aspect = static_cast<float>(extent.width) /
                          static_cast<float>(std::max(1u, extent.height));
     const float far_plane =
-        2.0f * (view.distance + std::max(opt.fusion.max_depth_m, 1.0f));
-    glm::mat4 view_proj(1.0f);
+        2.0f * (orbit.distance() + std::max(opt.fusion.max_depth_m, 1.0f));
+    vg::camera::Camera cam;
     if (from_camera) {
       const glm::mat4& c2w = camera_poses[*from_camera];
       const glm::vec3 eye(c2w[3]);
-      view_proj = vg::camera::Camera::look_at_perspective(
-                      eye, eye + glm::vec3(c2w[2]), -glm::vec3(c2w[1]), vfov,
-                      aspect, 0.05f, far_plane)
-                      .view_proj();
+      cam = vg::camera::Camera::look_at_perspective(
+          eye, eye + glm::vec3(c2w[2]), -glm::vec3(c2w[1]), vfov, aspect, kNear,
+          far_plane);
     } else {
-      view_proj =
-          vg::camera::Camera::look_at_perspective(
-              view.eye(), view.target, view.up, vfov, aspect, 0.05f, far_plane)
-              .view_proj();
+      cam = orbit.to_camera(vfov, aspect, kNear, far_plane);
     }
+    const glm::mat4 view_proj = cam.view_proj();
+    const glm::vec3 light_dir = fuse_viewer::headlight(cam.view());
     shared_view.publish(view_proj);  // for the fuse thread to mesh
 
     if (overlay) {
@@ -1196,7 +1160,7 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         ImGui::Separator();
         if (ImGui::Button("orbit view")) {
-          view = home;
+          orbit = home;  // a reset is a copy
           from_camera.reset();
         }
         for (std::size_t i = 0; i < cameras; ++i) {
@@ -1223,7 +1187,7 @@ int run(GLFWwindow* window, const Options& opt) {
           vgp::HybridMeshFrame hybrid_frame;
           hybrid_frame.extent = extent;
           hybrid_frame.view_proj = view_proj;
-          hybrid_frame.light_dir = -view.up + 0.5f * view.right - view.forward;
+          hybrid_frame.light_dir = light_dir;
           hybrid_frame.flags =
               shading_flags(shading) | fuse_viewer::mesh_view_flags(mesh_view);
           hybrid_frame.atlas = atlas.use(render_frame.number);

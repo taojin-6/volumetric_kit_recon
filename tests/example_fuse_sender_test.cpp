@@ -3,7 +3,8 @@
 
 // A sender's set into the run's figures (examples/common/fuse_sender.hpp's
 // report_sent), the fusing half of example_codec_report_test.cpp; the world's
-// up a live run's calibration file names (live_up); and a live run's session
+// up a calibration names (world_up.hpp's calibration_up), and a live run's
+// calibration file (live_up), by the same rule; and a live run's session
 // (live_session), stating that up, with a mic's Audio track and without. Host
 // only.
 
@@ -29,6 +30,7 @@
 #include "volumetric_kit/recon/sender/set_sender.hpp"
 #include "volumetric_kit/sensor/audio_sensor.hpp"
 #include "volumetric_kit/sensor/camera/array_calibration.hpp"
+#include "world_up.hpp"
 
 namespace camera = volumetric_kit::sensor::camera;
 namespace codec = volumetric_kit::grid::codec;
@@ -78,12 +80,32 @@ int sent_sets() {
   return 0;
 }
 
-// The up of a run's world, from what its calibration file says the world is:
-// a tag's +z; a sensor's own -y; nothing where any camera is posed in a world
-// the file does not name, as one picked out of a list with lenses alone for the
-// rest; and -y where each frame stays in its own camera's frame, with no file.
-// The file's read error comes back, through live_session too, and live_session
-// states the up.
+// The up of a world, from what a calibration says it is: a tag's +z, the tag
+// winning over a sensor named too; a sensor's own -y, and -y for one posing no
+// sensor, an empty one too (no file); nothing where any camera is posed in a
+// world it does not name, one among lenses alone too.
+int calibration_ups() {
+  camera::ArrayCalibration rig;
+  CHECK(vr_example::calibration_up(rig) == kMinusY);
+  rig.sensors.push_back({"rig-0", std::nullopt, {}, {}, {}, 0.0});
+  CHECK(vr_example::calibration_up(rig) == kMinusY);
+  rig.sensors.push_back({"rig-1", camera::Mat4d(1.0), {}, {}, {}, 0.0});
+  CHECK(vr_example::calibration_up(rig) == kUnknown);
+  rig.world = {"rig-1", std::nullopt};
+  CHECK(vr_example::calibration_up(rig) == kMinusY);
+  rig.world.apriltag = camera::AprilTagWorld{"tag36h11", 0, 0.15};
+  CHECK(vr_example::calibration_up(rig) == kPlusZ);
+  rig.world.sensor.clear();
+  CHECK(vr_example::calibration_up(rig) == kPlusZ);
+  return 0;
+}
+
+// The up of a run's world, from what its calibration file says the world is,
+// by calibration_up of the file read: a tag's +z; a sensor's own -y; nothing
+// where any camera is posed in a world the file does not name, as one picked
+// out of a list with lenses alone for the rest; and -y where each frame stays
+// in its own camera's frame, with no file. The file's read error comes back,
+// through live_session too, and live_session states the up.
 int live_ups() {
   const vkc::test::Scratch scratch("recon_example_fuse_sender_");
   const auto file = [&scratch](const char* name) {
@@ -106,7 +128,12 @@ int live_ups() {
     opt.source.calibration = calibration;
     const vkc::Result<Up> got = vr_example::live_up(opt);
     const vkc::Result<stream::Session> session = session_for(calibration);
-    return got.ok() && *got == up && session.ok() && session->up == up;
+    const vkc::Result<camera::ArrayCalibration> rig =
+        calibration.empty()
+            ? vkc::Result<camera::ArrayCalibration>(camera::ArrayCalibration{})
+            : camera::read_array_calibration(calibration);
+    return got.ok() && *got == up && session.ok() && session->up == up &&
+           rig.ok() && vr_example::calibration_up(*rig) == up;
   };
 
   camera::ArrayCalibration array;
@@ -209,6 +236,7 @@ int audio_sessions() {
 
 int main() {
   CHECK(sent_sets() == 0);
+  CHECK(calibration_ups() == 0);
   CHECK(live_ups() == 0);
   CHECK(live_sessions() == 0);
   CHECK(audio_sessions() == 0);
