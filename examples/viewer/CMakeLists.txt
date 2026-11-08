@@ -32,17 +32,18 @@ FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
   # Floors, newest first (CHANGELOG and this pin's git history record each
-  # move). gfx #172: the View options' kHybridMeshCullBackFaces and
-  # kHybridMeshWireframe (compile; #173 draws the wireframe as its visible edges
-  # alone). gfx #144: ImGui's colours as authored on the _SRGB swapchain, not
-  # washed out (rendering; recon_example_viewer_pass checks it). gfx #93: a
-  # negative uv0 decodes as the carried coordinate -uv - 1; against #92 a
-  # triangle mixing textured and carried vertices smears the atlas origin across
-  # its face, along every occlusion silhouette, on default flags. That floor
-  # fails silently: recon_fuse_render_run counts the pixels drawn, not their
-  # colours (DECISIONS 2026-08-11). gfx refuses a core older than 0.20.0
-  # (VG_VKC_MIN_VERSION).
-  GIT_TAG ffc1a17a3d14aeb546e5484067dbf0160e76c60c # gfx main, #173's merge
+  # move). gfx #176: OrbitCamera's settable world up, with no stop at the poles
+  # (compile; rig_viewer's turntable is one). gfx #172: the View options'
+  # kHybridMeshCullBackFaces and kHybridMeshWireframe (compile; #173 draws the
+  # wireframe as its visible edges alone). gfx #144: ImGui's colours as authored
+  # on the _SRGB swapchain, not washed out (rendering; recon_example_viewer_pass
+  # checks it). gfx #93: a negative uv0 decodes as the carried coordinate
+  # (-uv-1); against #92 a triangle mixing textured and carried vertices smears
+  # the atlas origin across its face, along every occlusion silhouette, on
+  # default flags. That floor fails silently: recon_fuse_render_run counts the
+  # pixels drawn, not their colours (DECISIONS 2026-08-11). gfx refuses a core
+  # older than 0.20.0 (VG_VKC_MIN_VERSION).
+  GIT_TAG 51a82ada4f3b885c7e26ac1bc39e48644d55d2b6 # gfx main, #176's merge
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
@@ -113,6 +114,19 @@ if(VR_BUILD_TESTS)
   # Bound a regression that waits for a frame which was never submitted.
   set_tests_properties(recon_example_viewer_atlas
                        PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
+
+  # rig_viewer's view (viewer_orbit.hpp): gfx's OrbitCamera about the world's
+  # up, its home view and its light. Host only.
+  add_executable(recon_example_viewer_orbit_test
+                 "${PROJECT_SOURCE_DIR}/tests/example_viewer_orbit_test.cpp")
+  target_link_libraries(
+    recon_example_viewer_orbit_test PRIVATE volumetric_kit::core_test_base
+                                            volumetric_kit::gfx_camera)
+  target_include_directories(recon_example_viewer_orbit_test
+                             PRIVATE ${_viewer_common_inc})
+  vr_target_warnings(recon_example_viewer_orbit_test)
+  add_test(NAME recon_example_viewer_orbit
+           COMMAND recon_example_viewer_orbit_test)
 
   # The device both live viewers adopt (viewer_common.hpp), for recon's and the
   # sensor package's requirements (examples/common/fuse_device.hpp). Host only.
