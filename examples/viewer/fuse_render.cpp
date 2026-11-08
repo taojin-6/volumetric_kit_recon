@@ -20,9 +20,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -53,6 +55,7 @@
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/fusion_grid.hpp"
+#include "volumetric_kit/sensor/frame/color_space.hpp"
 #include "volumetric_kit/sensor/io/image_io.hpp"
 #include "volumetric_kit/sensor/prep/gpu_frame_prep.hpp"
 #include "volumetric_kit/sensor/rgbd_frame.hpp"
@@ -233,6 +236,145 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
   return recon;
 }
 
+// --- Render it to a PNG on gfx's own device (gfx side). ----------------------
+
+// The background. A float colour, so under the one colour rule it is LINEAR,
+// and the _SRGB target encodes it on clear -- these land at codes ~63/63/75 in
+// the PNG rather than the ~13/13/18 the same literals gave against the old
+// _UNORM target. Kept as written rather than re-darkened: it is the background
+// fuse_viewer has always drawn (its swapchain was already _SRGB with these very
+// values), so the two examples now agree instead of differing by an encode.
+constexpr float kClearColor[3] = {0.05f, 0.05f, 0.07f};
+
+// A create's result, its error prefixed with what was being created.
+template <typename T>
+vkc::Result<T> named(vkc::Result<T> made, std::string_view what) {
+  if (!made.ok()) return std::move(made).status().with_context(what);
+  return made;
+}
+
+// The pixels the draw covered: those more than a code from the clear colour's
+// sRGB encode in some channel, so the hardware's rounding of it counts none.
+std::size_t drawn_pixels(const std::uint8_t* rgba, std::size_t pixel_count) {
+  const std::uint32_t clear = sensor::pack_linear_to_srgb(
+      {kClearColor[0], kClearColor[1], kClearColor[2]});
+  std::size_t drawn = 0;
+  for (std::size_t p = 0; p < pixel_count; ++p) {
+    for (std::size_t c = 0; c < 3; ++c) {
+      const int code = static_cast<int>((clear >> (8 * c)) & 0xFFu);
+      if (std::abs(static_cast<int>(rgba[4 * p + c]) - code) > 1) {
+        ++drawn;
+        break;
+      }
+    }
+  }
+  return drawn;
+}
+
+// Render the reconstruction through view_proj and write it to output.path; the
+// pixels drawn, or the error, prefixed with the step that failed.
+vkc::Result<std::size_t> render(const Options& opt, const Reconstruction& recon,
+                                const glm::mat4& view_proj) {
+  // 2. gfx device (its own), offscreen target, hybrid-mesh pipeline.
+  vg::app::HeadlessAppConfig app_config;
+  app_config.app_name = "fuse_render";
+  VKC_ASSIGN(vg::app::HeadlessApp app,
+             named(vg::app::HeadlessApp::create(app_config), "HeadlessApp"));
+
+  vg::OffscreenTargetDesc td;
+  td.extent = {static_cast<std::uint32_t>(opt.window.width),
+               static_cast<std::uint32_t>(opt.window.height)};
+  // _SRGB, not _UNORM: this is a presentation site, and the only encode on the
+  // headless path. The mesh's vertex colors and the decoded atlas are LINEAR
+  // (the 2026-08-02 color-space decision), and the readback goes straight into
+  // a PNG, which every viewer reads as sRGB -- so nothing else would encode and
+  // the image would come out dark. The hardware does it here for free.
+  td.color_format = VK_FORMAT_R8G8B8A8_SRGB;
+  td.depth_format = VK_FORMAT_D32_SFLOAT;
+  VKC_ASSIGN(vg::OffscreenTarget target,
+             named(vg::OffscreenTarget::create(app.allocator(), td),
+                   "OffscreenTarget"));
+  VKC_ASSIGN(vgp::HybridMeshPipeline pipeline,
+             named(vgp::HybridMeshPipeline::create(
+                       app.device(), app.allocator(), target.layout()),
+                   "HybridMeshPipeline"));
+
+  // 3. Upload the mesh (recon -> gfx, via the host bridge).
+  const vg::assets::Mesh gfx_mesh = fuse_viewer::to_gfx_mesh(recon.mesh);
+  VKC_ASSIGN(vgp::GpuMesh gpu_mesh,
+             named(vgp::upload_mesh(app.device(), app.allocator(), gfx_mesh),
+                   "upload_mesh"));
+
+  // 4. Atlas: the keyframe's colour image where texturing ran (uv0 index into
+  // it), uploaded in the frame that draws it; else none, and the mesh draws in
+  // its vertex colour. The one frame is number 1 on a timeline of its own, so
+  // one frame is in flight: a ring of two, gfx's least, as it keeps a second
+  // image for the picture a discard restores.
+  VKC_ASSIGN(const vkc::TimelineSemaphore frames,
+             named(vkc::TimelineSemaphore::create(app.device()), "timeline"));
+  std::optional<vgp::StreamedAtlas> atlas;
+  if (!recon.atlas.empty()) {
+    VKC_ASSIGN(
+        atlas,
+        named(vgp::StreamedAtlas::create(
+                  pipeline, app.allocator(), frames,
+                  fuse_viewer::atlas_desc({recon.atlas_w, recon.atlas_h}, 1)),
+              "atlas"));
+  }
+
+  // 5. Render one frame to the offscreen target, then read it back.
+  const vgp::HybridMeshDraw draw{&gpu_mesh};
+  vgp::HybridMeshFrame frame;
+  frame.extent = td.extent;
+  frame.view_proj = view_proj;
+  frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
+  frame.flags = (opt.render.shading == vgrid_example::config::Shading::Lit)
+                    ? vgp::kHybridMeshLit
+                    : 0u;
+  frame.draws = &draw;
+  frame.draw_count = 1;
+
+  vkc::Status uploaded;
+  auto rendered = app.device().submit_pending(
+      [&](VkCommandBuffer cmd) {
+        if (atlas) {
+          uploaded =
+              atlas->record_upload(cmd, 1, recon.atlas.data(),
+                                   recon.atlas.size() * sizeof(std::uint32_t));
+          frame.atlas = atlas->use(1);
+        }
+        target.prepare(cmd);
+        const vg::RenderTarget rt = target.target();
+        vg::RenderTargetBeginInfo begin_info;
+        begin_info.clear_color.float32[0] = kClearColor[0];
+        begin_info.clear_color.float32[1] = kClearColor[1];
+        begin_info.clear_color.float32[2] = kClearColor[2];
+        begin_info.clear_color.float32[3] = 1.0f;
+        rt.begin(cmd, begin_info);
+        pipeline.submit(cmd, frame);
+        rt.end(cmd);
+        target.record_readback(cmd);
+      },
+      {}, {{&frames, 1}});
+  const vkc::Status done =
+      rendered.ok() ? rendered.value().wait() : rendered.status();
+  VKC_TRY((done.ok() ? uploaded : done).with_context("render"));
+
+  const auto* pixels = static_cast<const std::uint8_t*>(target.pixels());
+  if (pixels == nullptr) {
+    return vkc::Status::io_error("no readback pixels");
+  }
+  // gfx sizes the readback buffer to the target's extent at the RGBA8 texel
+  // size chosen above; it exposes no byte count of its own.
+  const VkExtent2D extent = target.extent();
+  const std::size_t pixel_count =
+      static_cast<std::size_t>(extent.width) * extent.height;
+  VKC_TRY(sensor::io::write_png_rgba8(opt.output.path, pixels, pixel_count * 4,
+                                      extent.width, extent.height)
+              .with_context("write PNG"));
+  return drawn_pixels(pixels, pixel_count);
+}
+
 }  // namespace
 
 int run_main(const Options& opt) {
@@ -295,138 +437,10 @@ int run_main(const Options& opt) {
             .view_proj();
   }
 
-  // 2. gfx device (its own), offscreen target, hybrid-mesh pipeline.
-  vg::app::HeadlessAppConfig app_config;
-  app_config.app_name = "fuse_render";
-  auto app_r = vg::app::HeadlessApp::create(app_config);
-  if (!app_r.ok()) {
-    std::fprintf(stderr, "HeadlessApp: %s\n", app_r.status().message().c_str());
-    return 1;
-  }
-  vg::app::HeadlessApp app = std::move(app_r).value();
-
-  vg::OffscreenTargetDesc td;
-  td.extent = {static_cast<std::uint32_t>(opt.window.width),
-               static_cast<std::uint32_t>(opt.window.height)};
-  // _SRGB, not _UNORM: this is a presentation site, and the only encode on the
-  // headless path. The mesh's vertex colors and the decoded atlas are LINEAR
-  // (the 2026-08-02 color-space decision), and the readback goes straight into
-  // a PNG, which every viewer reads as sRGB -- so nothing else would encode and
-  // the image would come out dark. The hardware does it here for free.
-  td.color_format = VK_FORMAT_R8G8B8A8_SRGB;
-  td.depth_format = VK_FORMAT_D32_SFLOAT;
-  auto target_r = vg::OffscreenTarget::create(app.allocator(), td);
-  if (!target_r.ok()) {
-    std::fprintf(stderr, "OffscreenTarget: %s\n",
-                 target_r.status().message().c_str());
-    return 1;
-  }
-  vg::OffscreenTarget target = std::move(target_r).value();
-
-  auto pipeline_result = vgp::HybridMeshPipeline::create(
-      app.device(), app.allocator(), target.layout());
-  if (!pipeline_result.ok()) {
-    std::fprintf(stderr, "HybridMeshPipeline: %s\n",
-                 pipeline_result.status().message().c_str());
-    return 1;
-  }
-  vgp::HybridMeshPipeline pipeline = std::move(pipeline_result).value();
-
-  // 3. Upload the mesh (recon -> gfx, via the host bridge).
-  const vg::assets::Mesh gfx_mesh = fuse_viewer::to_gfx_mesh(mesh);
-  auto gpu_r = vgp::upload_mesh(app.device(), app.allocator(), gfx_mesh);
-  if (!gpu_r.ok()) {
-    std::fprintf(stderr, "upload_mesh: %s\n", gpu_r.status().message().c_str());
-    return 1;
-  }
-  vgp::GpuMesh gpu_mesh = std::move(gpu_r).value();
-
-  // 4. Atlas: the keyframe's colour image where texturing ran (uv0 index into
-  // it), uploaded in the frame that draws it; else none, and the mesh draws in
-  // its vertex colour. The one frame is number 1 on a timeline of its own, so
-  // one frame is in flight: a ring of two, gfx's least, as it keeps a second
-  // image for the picture a discard restores.
-  auto frames_r = vkc::TimelineSemaphore::create(app.device());
-  if (!frames_r.ok()) {
-    std::fprintf(stderr, "timeline: %s\n", frames_r.status().message().c_str());
-    return 1;
-  }
-  const vkc::TimelineSemaphore frames = std::move(frames_r).value();
-  std::optional<vgp::StreamedAtlas> atlas;
-  if (!recon.atlas.empty()) {
-    auto atlas_r = vgp::StreamedAtlas::create(
-        pipeline, app.allocator(), frames,
-        fuse_viewer::atlas_desc({recon.atlas_w, recon.atlas_h}, 1));
-    if (!atlas_r.ok()) {
-      std::fprintf(stderr, "atlas: %s\n", atlas_r.status().message().c_str());
-      return 1;
-    }
-    atlas = std::move(atlas_r).value();
-  }
-
-  // 5. Render one frame to the offscreen target, then read it back.
-  const vgp::HybridMeshDraw draw{&gpu_mesh};
-  vgp::HybridMeshFrame frame;
-  frame.extent = td.extent;
-  frame.view_proj = view_proj;
-  frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
-  frame.flags = (opt.render.shading == vgrid_example::config::Shading::Lit)
-                    ? vgp::kHybridMeshLit
-                    : 0u;
-  frame.draws = &draw;
-  frame.draw_count = 1;
-
-  vkc::Status uploaded;
-  auto rendered = app.device().submit_pending(
-      [&](VkCommandBuffer cmd) {
-        if (atlas) {
-          uploaded =
-              atlas->record_upload(cmd, 1, recon.atlas.data(),
-                                   recon.atlas.size() * sizeof(std::uint32_t));
-          frame.atlas = atlas->use(1);
-        }
-        target.prepare(cmd);
-        const vg::RenderTarget rt = target.target();
-        vg::RenderTargetBeginInfo begin_info;
-        // A float colour, so under the one colour rule it is LINEAR, and the
-        // _SRGB target encodes it on clear -- these land at codes ~63/63/75 in
-        // the PNG rather than the ~13/13/18 the same literals gave against the
-        // old _UNORM target. Kept as written rather than re-darkened: it is the
-        // background fuse_viewer has always drawn (its swapchain was already
-        // _SRGB with these very values), so the two examples now agree instead
-        // of differing by an encode.
-        begin_info.clear_color.float32[0] = 0.05f;
-        begin_info.clear_color.float32[1] = 0.05f;
-        begin_info.clear_color.float32[2] = 0.07f;
-        begin_info.clear_color.float32[3] = 1.0f;
-        rt.begin(cmd, begin_info);
-        pipeline.submit(cmd, frame);
-        rt.end(cmd);
-        target.record_readback(cmd);
-      },
-      {}, {{&frames, 1}});
-  const vkc::Status done =
-      rendered.ok() ? rendered.value().wait() : rendered.status();
-  if (!done.ok() || !uploaded.ok()) {
-    std::fprintf(stderr, "render: %s\n",
-                 (done.ok() ? uploaded : done).message().c_str());
-    return 1;
-  }
-
-  const auto* pixels = static_cast<const std::uint8_t*>(target.pixels());
-  if (pixels == nullptr) {
-    std::fprintf(stderr, "no readback pixels\n");
-    return 1;
-  }
-  // gfx sizes the readback buffer to the target's extent at the RGBA8 texel
-  // size chosen above; it exposes no byte count of its own.
-  const VkExtent2D extent = target.extent();
-  const vkc::Status written = sensor::io::write_png_rgba8(
-      opt.output.path, pixels,
-      static_cast<std::size_t>(extent.width) * extent.height * 4, extent.width,
-      extent.height);
-  if (!written) {
-    std::fprintf(stderr, "write PNG: %s\n", written.message().c_str());
+  // 2.-5. Render it on gfx's own device and write the PNG.
+  const vkc::Result<std::size_t> drawn = render(opt, recon, view_proj);
+  if (!drawn) {
+    std::fprintf(stderr, "%s\n", drawn.status().message().c_str());
     return 1;
   }
   // Vertices as well as triangles, and the ratio between them: that ratio is
@@ -444,6 +458,10 @@ int run_main(const Options& opt) {
                                 : 0.0,
       opt.output.path.c_str(), opt.window.width, opt.window.height, center.x,
       center.y, center.z);
+  // How a blank frame shows: recon_fuse_render_run reads this line.
+  std::printf("drew %zu of %zu pixels\n", drawn.value(),
+              static_cast<std::size_t>(opt.window.width) *
+                  static_cast<std::size_t>(opt.window.height));
   return 0;
 }
 

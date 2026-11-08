@@ -39,8 +39,9 @@ FetchContent_Declare(
   # negative uv0 decodes as the carried coordinate -uv - 1; against #92 a
   # triangle mixing textured and carried vertices smears the atlas origin across
   # its face, along every occlusion silhouette, on default flags. That floor
-  # fails silently and no test renders it (DECISIONS 2026-08-11). gfx refuses a
-  # core older than 0.20.0 (VG_VKC_MIN_VERSION).
+  # fails silently: recon_fuse_render_run counts the pixels drawn, not their
+  # colours (DECISIONS 2026-08-11). gfx refuses a core older than 0.20.0
+  # (VG_VKC_MIN_VERSION).
   GIT_TAG ffc1a17a3d14aeb546e5484067dbf0160e76c60c # gfx main, #173's merge
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
@@ -76,6 +77,22 @@ target_link_libraries(fuse_render PRIVATE ${_viewer_recon_libs}
                                           ${_viewer_gfx_libs} Vulkan::Vulkan)
 target_include_directories(fuse_render PRIVATE ${_viewer_common_inc})
 vr_target_warnings(fuse_render)
+# fuse_render on a device: two frames of recon_fuse_replica_run's wall, the
+# sensor package's JPEG fixture for colour, rendered to a PNG. A hang fails in
+# 300 s, as tests/'s do.
+if(VR_BUILD_TESTS)
+  add_test(
+    NAME recon_fuse_render_run
+    COMMAND
+      ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:fuse_render>
+      -DCOLOR=${VS_TEST_DATA_DIR}/jpeg/patches_256x144.jpg
+      -DDEPTH=${PROJECT_SOURCE_DIR}/tests/data/replica/depth_1m_256x144.png
+      -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fuse-render-run -P
+      ${PROJECT_SOURCE_DIR}/tests/example_fuse_render_run.cmake)
+  set_tests_properties(
+    recon_fuse_render_run PROPERTIES SKIP_REGULAR_EXPRESSION
+                                     "skipping: no Vulkan device" TIMEOUT 300)
+endif()
 
 # The atlas both live viewers draw with (viewer_atlas.hpp), on a headless gfx
 # device. Defined here, where gfx is fetched. Skips with no device under the
@@ -177,8 +194,9 @@ target_include_directories(fuse_viewer PRIVATE ${_viewer_common_inc})
 # These targets are the one place recon's code meets gfx's API, so they have
 # their own CI leg (.github/workflows/viewer.yml), added after a real recon/gfx
 # API mismatch reached `main` unbuilt: it builds them on macOS and runs the
-# headless tests above and their config entries; the programs themselves need a
-# dataset or a rig CI does not carry, and the live ones a window.
+# headless tests above, fuse_render on a two-frame wall among them, and their
+# config entries; the live viewers need a window and a dataset or a rig CI does
+# not carry.
 vr_target_warnings(fuse_viewer)
 
 # rig_viewer: fuse_viewer's sibling for a live, synced rig of Orbbec cameras,

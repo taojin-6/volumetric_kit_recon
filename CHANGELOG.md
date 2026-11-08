@@ -8,6 +8,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **`fuse_render` runs in CI** (`recon_fuse_render_run`, the
+  viewer leg): two frames of the wall `recon_fuse_replica_run` fuses, textured
+  with the second, rendered to a 320x200 PNG. The test reads the size from the
+  PNG's header, and the pixels drawn from `fuse_render`, which now prints them
+  (`drew N of M pixels`, those more than a code from the clear colour): at
+  least a twentieth of the frame, and not all of it. Under
+  `VKC_TEST_VALIDATION` (or `VKC_TEST_SYNC_VALIDATION`) the loader forces the
+  validation layer on, and the test fails if the loader's log does not show it
+  in both instances or it reports an error. A hang fails in 300 s.
+  `fuse_render`'s gfx half is one `render()`; its errors print as before.
 - `examples`: **many phones' sessions on one address**
   (`RgbdStreamSensor::Door`, `examples/common/link/rgbd_stream_sensor.hpp`):
   `Door::open` binds the address and returns, a bind it cannot make an
