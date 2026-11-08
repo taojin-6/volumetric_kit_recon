@@ -53,18 +53,4 @@ send_set(volumetric_kit::recon::sender::SetSender& out,
                   pts_ns, rows, sent);
 }
 
-/// @brief @ref send_set with no fillers.
-inline volumetric_kit::core::Result<
-    volumetric_kit::recon::sender::SetSender::Sent>
-send_set(volumetric_kit::recon::sender::SetSender& out,
-         volumetric_kit::core::CommandBatch& front,
-         const volumetric_kit::sensor::DeviceFrameSet& prepared,
-         volumetric_kit::sensor::FrameSet&& set, std::size_t index,
-         std::uint64_t pts_ns,
-         volumetric_kit::core::StageMetrics* rows = nullptr,
-         const std::function<void()>& sent = {}) {
-  return send_set(out, front, prepared, {}, std::move(set), index, pts_ns, rows,
-                  sent);
-}
-
 }  // namespace vr_example
