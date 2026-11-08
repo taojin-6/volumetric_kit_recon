@@ -369,10 +369,12 @@ jobs:
 
       # The Orbbec SDK, on the legs that build VS_WITH_ORBBEC: the pinned
       # release, installed as a developer does, by sensor's action at the
-      # sensor pin in third_party/CMakeLists.txt, which holds the SDK pin.
+      # sensor pin in third_party/CMakeLists.txt, which holds the SDK pin. It
+      # takes the archive from the runner's tool cache, seeded on each
+      # self-hosted runner, before any download.
       - name: Install the Orbbec SDK
         if: steps.detect.outputs.present == 'true' && inputs.orbbec_sdk
-        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@1c5dd4855995c5168477ffc7322f0ad6dad81e2d
+        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-orbbec-sdk@174c845bc0541a41309b1888682acdbec9f5ef21
 
       # OpenCV 5 for VR_WITH_CALIB on Linux, whose packages are OpenCV 4:
       # built from source by calib's action at the calib pin in
@@ -388,7 +390,7 @@ jobs:
       # formula is checked with the others above.
       - name: Install librealsense
         if: steps.detect.outputs.present == 'true' && inputs.realsense_sdk && runner.os == 'Linux'
-        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-librealsense@1c5dd4855995c5168477ffc7322f0ad6dad81e2d
+        uses: taojin-6/volumetric_kit_sensor/.github/actions/install-librealsense@174c845bc0541a41309b1888682acdbec9f5ef21
 
       # Report the Vulkan device the runner sees (the real GPU in a self-hosted
       # container, lavapipe on a hosted Linux runner, MoltenVK on macOS). On a

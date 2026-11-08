@@ -80,16 +80,18 @@ endif()
 # sensor, so its tests and -Werror stay off in this build; recon's examples take
 # its test fixtures (VS_TEST_DATA_DIR, which it sets).
 #
-# The pin is sensor 0.43.0 (1c5dd48, sensor #51's merge: on 0.40.0's
-# DepthNoise::known taking ARKit's stated noise, which the phone lane's tracker
-# needs known; 0.37.0's PatternReader, 0.36.0's HEVC encoder on NVENC and
-# 0.28.0's GPU hand-over of NVIDIA's decoded pictures), as are its Orbbec SDK
-# and librealsense actions in .github/workflows (the sibling-actions-at-pins
-# hook).
+# The pin is sensor 0.48.0 at 174c845, the head of sensor's
+# ci/orbbec-tool-cache, to move to that PR's merge: its Orbbec SDK action takes
+# the pinned archive from the runner's tool cache before any download. recon
+# relies on 0.40.0's DepthNoise::known (ARKit's stated noise, which the phone
+# lane's tracker needs known), 0.37.0's PatternReader, 0.36.0's HEVC encoder on
+# NVENC and 0.28.0's GPU hand-over of NVIDIA's decoded pictures. Its Orbbec SDK
+# and librealsense actions in .github/workflows are at the same commit (the
+# sibling-actions-at-pins hook).
 FetchContent_Declare(
   volumetric_kit_sensor
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_sensor.git
-  GIT_TAG 1c5dd4855995c5168477ffc7322f0ad6dad81e2d)
+  GIT_TAG 174c845bc0541a41309b1888682acdbec9f5ef21)
 FetchContent_MakeAvailable(volumetric_kit_sensor)
 vkc_require_sibling(volumetric_kit::sensor ${VR_SENSOR_MIN_VERSION} TARGETS
                     volumetric_kit::sensor_frame)
@@ -149,7 +151,7 @@ endif()
 #
 # The pin is calib 0.12.0 (58a6dd6, calib #75's merge: its OpenCV action runs
 # the script beside it, so recon's CI can call it; register_tracked since 0.9.0,
-# on sensor 0.43.0, recon's pin).
+# on sensor 0.43.0, which recon's newer pin above replaces in this build).
 if(VR_WITH_CALIB AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
   FetchContent_Declare(
     volumetric_kit_calib
