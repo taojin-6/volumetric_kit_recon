@@ -252,6 +252,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **the phone lane holds sessions**
+  (`examples/common/live_mobile.hpp`): `MobileLane::add` joins one phone's
+  session (`SessionParts`: its sensor, tracker, log and watch, a presence and
+  a say closure, a name and a placement) at the next gap, each with its own
+  pairing, clock, splits, registration and notes, and `sessions()` shows each.
+  `counts()` is their total, by value. A send takes at most 3 placed frames in
+  all, one a session in turn in join order; a session keeps at most 40 waiting
+  (`kPlacedCap`), its oldest let go (`Counts::shed`); a filler the send would
+  refuse (`check_filler`: an index of 63 or more, a camera not finite) is let
+  go (`Counts::unfit`) rather than refusing the set. Each session fills under
+  its own index, which `to_filler` now takes: (its join's ordinal - 1) mod 63,
+  past those held; a session holds its index until it is done, when its frame
+  prep and timer go too. The tints are the lane's, one pair a depth size. A
+  run still holds one session, which `create` adds, joined at the first gap as
+  before, so a run changes only where more than 40 would wait, or where a
+  filler the send would refuse is let go instead of ending the run.
+  `tests/fake_phone.hpp` holds the lane tests' phones, and
+  `recon_example_live_sessions` tests the sessions.
 - build: **recon pins grid 0.15.0** (grid #24's merge, `af45973`; was 0.14.0,
   `368e111`), and the floor rises to it for `StreamClient::send_note`. The core
   and sensor stay, so no workflow pin moves.

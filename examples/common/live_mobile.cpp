@@ -3,17 +3,23 @@
 
 #include "live_mobile.hpp"
 
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdio>
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "interrupt.hpp"
 #include "link/rgbd_stream_sensor.hpp"
@@ -46,13 +52,13 @@ track::TrackerConfig lane_tracking() {
   return c;
 }
 
-sender::Filler to_filler(track::Released&& released) {
+sender::Filler to_filler(track::Released&& released, std::uint32_t index) {
   const bool rig_anchored =
       released.placement == track::Placement::Anchored && released.driver == 0;
   sender::Filler f;
   f.frame = track::corrected(std::move(released.frame), released.correction);
   f.tier = rig_anchored ? tsdf::FillTier::Anchored : tsdf::FillTier::Unanchored;
-  f.index = 0;
+  f.index = index;
   return f;
 }
 
@@ -254,7 +260,31 @@ std::unique_ptr<sensor::IRgbdSensor> polled_in_background(
 
 // --- The lane ---------------------------------------------------------------
 
-struct MobileLane::State {
+namespace {
+
+// `c` counted into `to`, field by field: a field added to Counts is added
+// here too, or this fails.
+static_assert(sizeof(MobileLane::Counts) == 13 * sizeof(std::uint64_t),
+              "add_to sums every field of MobileLane::Counts");
+void add_to(MobileLane::Counts& to, const MobileLane::Counts& c) {
+  to.polled += c.polled;
+  to.paired += c.paired;
+  to.skipped += c.skipped;
+  to.passed_over += c.passed_over;
+  to.splits += c.splits;
+  to.errors += c.errors;
+  to.anchored += c.anchored;
+  to.unanchored += c.unanchored;
+  to.dropped += c.dropped;
+  to.fused += c.fused;
+  to.unregistered += c.unregistered;
+  to.shed += c.shed;
+  to.unfit += c.unfit;
+}
+
+// One phone's session: what the lane was before it held sessions, but the
+// tints, which the lane keeps for them all.
+struct PhoneSession {
   vkc::Device* device = nullptr;
   vkc::Allocator* allocator = nullptr;
   std::unique_ptr<sensor::IRgbdSensor> phone;
@@ -265,6 +295,13 @@ struct MobileLane::State {
   std::unique_ptr<TrackLog> log;
   // The origin tag's watch: let go before the phone stops.
   std::unique_ptr<TagWatch> tags;
+  // TODO: read at each gap once a session leaves (away while it reads
+  // false, retired after a grace), which phones that come and go need.
+  std::function<bool()> presence;
+  std::string name;
+  MobileLane::Placement placement = MobileLane::Placement::Registration;
+  std::uint32_t ordinal = 0;  // its join's place, from 1; 0 until it joins
+  std::uint32_t index = 0;    // its mobile index, from its join
   bool by_tag = false;
   bool placed = true;  // false until the tag registers the phone
   sensor::camera::Mat4d tracking_to_world{1.0};  // the tag's registration
@@ -283,7 +320,7 @@ struct MobileLane::State {
   std::function<void(gnet::ViewerNote)> say;
   std::optional<gnet::ViewerNote> said;
   std::uint64_t said_ns = 0;
-  // The frames placed, not yet handed to a send.
+  // The frames placed, not yet handed to a send: kPlacedCap at most.
   std::deque<sender::Filler> queue;
   // The records taken from the phone, oldest first, not yet due.
   std::deque<sensor::RgbdFrame> held;
@@ -296,19 +333,47 @@ struct MobileLane::State {
   // The losses, oldest first: the tracker is flushed before the first frame
   // at or after each.
   std::deque<std::uint64_t> splits;
-  bool started = false;  // the phone, at the first gap
-  // The tint pictures, by tier, at the phone's depth size.
-  std::shared_ptr<const vkc::Buffer> tint[2];
-  std::uint32_t tint_width = 0;
-  std::uint32_t tint_height = 0;
-  bool ended = false;  // the phone is exhausted and the tracker flushed
+  bool started = false;  // the phone, at its join
+  bool ended = false;    // the phone is exhausted and the tracker flushed
   bool closed = false;
-  Counts counts;
+  MobileLane::Counts counts;
   std::string first_refusal;  // why the first frame passed over was
   std::string first_error;    // the first error the phone returned
+  std::string first_unfit;    // why the first filler let go was
+
+  PhoneSession() = default;
+  ~PhoneSession() {
+    tags.reset();  // its thread may hold a picture of the phone's
+    if (phone) phone->stop();
+  }
+  PhoneSession(const PhoneSession&) = delete;
+  PhoneSession& operator=(const PhoneSession&) = delete;
+
+  // Done: its phone exhausted, its tracker flushed and what it placed handed
+  // over, for good.
+  bool done() const { return ended && queue.empty(); }
+
+  // Whether it holds its index: joined, and not done.
+  bool holding() const { return started && !done(); }
+
+  // At its join: its place and index, and the phone started.
+  vkc::Status join(std::uint32_t at, std::uint32_t mobile_index) {
+    // What the link held while the cameras opened comes in the first takes,
+    // passed by but for each take's newest.
+    VKC_TRY(phone->set_queue_depth(kPhoneQueue));
+    VKC_TRY(phone->start());
+    started = true;
+    ordinal = at;
+    index = mobile_index;
+    return {};
+  }
 
   void passed_over(const vkc::Status& why) {
     if (counts.passed_over++ == 0) first_refusal = why.message();
+  }
+
+  void unfit(const vkc::Status& why) {
+    if (counts.unfit++ == 0) first_unfit = why.message();
   }
 
   // The newest paired frame's camera as the tag registered it.
@@ -413,16 +478,21 @@ struct MobileLane::State {
     said_ns = set_ns;
   }
 
-  // A step's placements into the queue, its counts, and the log.
+  // A step's placements into the queue, its oldest let go past the cap; its
+  // counts, and the log.
   vkc::Status take(const track::TrackStep& step) {
     watch_rig(step);
     VKC_TRY(log->write(step));
     for (const track::Released& r : step.released) {
       track::Released copy = r;
-      sender::Filler f = to_filler(std::move(copy));
+      sender::Filler f = to_filler(std::move(copy), index);
       ++(f.tier == tsdf::FillTier::Anchored ? counts.anchored
                                             : counts.unanchored);
       queue.push_back(std::move(f));
+      if (queue.size() > kPlacedCap) {
+        queue.pop_front();
+        ++counts.shed;
+      }
     }
     counts.dropped += step.dropped_ns.size();
     return {};
@@ -475,36 +545,6 @@ struct MobileLane::State {
       held.pop_front();
     }
     return due;
-  }
-
-  // The tint pictures at the frame's depth size, made on the device once.
-  vkc::Status ensure_tints(std::uint32_t width, std::uint32_t height) {
-    if (tint[0] && tint_width == width && tint_height == height) return {};
-    const VkDeviceSize bytes = VkDeviceSize(width) * height * 4;
-    vkc::CommandBatch batch(*device, *allocator);
-    const std::uint32_t words[2] = {kAnchoredFillTint, kUnanchoredFillTint};
-    std::shared_ptr<const vkc::Buffer> made[2];
-    for (int t = 0; t < 2; ++t) {
-      VKC_ASSIGN(vkc::Buffer b, vkc::device_storage_buffer(*allocator, bytes));
-      VKC_TRY(batch.fill(b, 0, bytes, words[t]));
-      made[t] = std::make_shared<const vkc::Buffer>(std::move(b));
-    }
-    VKC_TRY(batch.submit());
-    tint[0] = std::move(made[0]);
-    tint[1] = std::move(made[1]);
-    tint_width = width;
-    tint_height = height;
-    return {};
-  }
-
-  // A filler coloured by its tier's tint, through a colour camera of its
-  // depth camera's geometry.
-  void tinted(sender::Filler& f) const {
-    const sensor::DepthCameraParams& d = f.frame.depth_camera;
-    f.frame.color = tint[f.tier == tsdf::FillTier::Anchored ? 0 : 1];
-    f.frame.color_camera = {d.fx,    d.fy,     d.cx,          d.cy,
-                            d.width, d.height, d.cam_to_world};
-    f.frame.color_encoding = {};
   }
 
   // A frame paired: shown to the tag's watch, then tracked once placed. Every
@@ -591,15 +631,244 @@ struct MobileLane::State {
     ended = true;
     return take(tracker->flush());
   }
+
+  // A gap, once joined: the watch's news, then the record due by the set at
+  // `next_set_ns` paired; once the phone is exhausted, the tracker flushed.
+  vkc::Status gap(const vol::VoxelBlockGrid& grid, std::uint64_t next_set_ns) {
+    set_ns = next_set_ns;
+    if (tags) {
+      VKC_ASSIGN(TagNews news, tags->take());
+      VKC_TRY(apply(std::move(news)));
+    }
+    if (!ended) {
+      std::optional<sensor::RgbdFrame> due = pair(next_set_ns);
+      if (due) VKC_TRY(paired(grid, std::move(*due)));
+      if (held.empty() && phone->exhausted()) VKC_TRY(end());
+    }
+    return {};
+  }
+
+  // The run's end: the watch's last news, then the watch let go before the
+  // phone stops; its error comes back after the rest of the close, which
+  // still runs.
+  vkc::Status close() {
+    if (closed) return {};
+    closed = true;
+    vkc::Status tagged;
+    if (tags) {
+      vkc::Result<TagNews> news = tags->take();
+      tagged = news.ok() ? apply(std::move(news).value()) : news.status();
+      tags.reset();
+    }
+    VKC_TRY(end());  // placed, not fused: the run is over
+    phone->stop();
+    VKC_TRY(log->close());
+    VKC_ASSIGN(const std::string table,
+               summarize(log->run(), log->directory()));
+    std::fputs(table.c_str(), stdout);
+    return tagged;
+  }
+
+  // Its lines of the run's report, the first beginning with `label`.
+  std::string report(const std::string& label) const {
+    const MobileLane::Counts& c = counts;
+    const sensor::SensorStats st = phone->stats();
+    char buf[512];
+    std::snprintf(
+        buf, sizeof(buf),
+        "%s: %llu records (%llu received, %llu failed), %llu tracked, %llu "
+        "skipped, %llu passed over, %llu splits; fill %llu anchored, %llu "
+        "unanchored, %llu dropped, %llu fused, %zu waiting\n",
+        label.c_str(), static_cast<unsigned long long>(c.polled),
+        static_cast<unsigned long long>(st.received),
+        static_cast<unsigned long long>(st.failed),
+        static_cast<unsigned long long>(c.paired),
+        static_cast<unsigned long long>(c.skipped),
+        static_cast<unsigned long long>(c.passed_over),
+        static_cast<unsigned long long>(c.splits),
+        static_cast<unsigned long long>(c.anchored),
+        static_cast<unsigned long long>(c.unanchored),
+        static_cast<unsigned long long>(c.dropped),
+        static_cast<unsigned long long>(c.fused), queue.size());
+    std::string out = buf;
+    if (by_tag) {
+      const TagWatch::Counts& t = tag_counts;
+      char when[96];
+      if (registered_after) {
+        std::snprintf(when, sizeof(when),
+                      "registered at %.1f s, %llu frames before it",
+                      double(*registered_after) * 1e-9,
+                      static_cast<unsigned long long>(c.unregistered));
+      } else {
+        std::snprintf(when, sizeof(when), "not registered, %llu frames",
+                      static_cast<unsigned long long>(c.unregistered));
+      }
+      std::snprintf(buf, sizeof(buf),
+                    "  tag: %llu searched, %llu stills, %llu holds (%llu "
+                    "refused), %llu replaced, %llu failed; %s\n",
+                    static_cast<unsigned long long>(t.candidates),
+                    static_cast<unsigned long long>(t.stills),
+                    static_cast<unsigned long long>(t.holds),
+                    static_cast<unsigned long long>(t.refused),
+                    static_cast<unsigned long long>(t.replaced),
+                    static_cast<unsigned long long>(t.failed), when);
+      out += buf;
+    }
+    if (!first_refusal.empty()) {
+      out += "  first passed over: " + first_refusal + "\n";
+    }
+    if (c.errors != 0) {
+      out += "  " + std::to_string(c.errors) +
+             " phone error(s), the first: " + first_error + "\n";
+    }
+    if (c.shed != 0) {
+      out += "  " + std::to_string(c.shed) + " placed let go past " +
+             std::to_string(kPlacedCap) + " waiting\n";
+    }
+    if (c.unfit != 0) {
+      out += "  " + std::to_string(c.unfit) +
+             " placed the send would refuse, the first: " + first_unfit + "\n";
+    }
+    return out;
+  }
+};
+
+bool finite(const Mat4f& m) {
+  for (int c = 0; c < 4; ++c) {
+    for (int r = 0; r < 4; ++r) {
+      if (!std::isfinite(m[c][r])) return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+vkc::Status check_filler(const sender::Filler& filler) {
+  if (filler.index >= tsdf::kMaxSourcesPerClass) {
+    return vkc::Status::invalid_argument(
+        "filler: mobile index " + std::to_string(filler.index) +
+        " is past the source byte's " +
+        std::to_string(tsdf::kMaxSourcesPerClass) + " sensors a class");
+  }
+  const sensor::DepthCameraParams& d = filler.frame.depth_camera;
+  if (!std::isfinite(d.fx) || !std::isfinite(d.fy) || !std::isfinite(d.cx) ||
+      !std::isfinite(d.cy) || !std::isfinite(d.min_depth) ||
+      !std::isfinite(d.max_depth) || !finite(d.cam_to_world)) {
+    return vkc::Status::invalid_argument(
+        "filler: its depth camera has a non-finite intrinsic, depth bound or "
+        "pose entry");
+  }
+  const sensor::ColorCameraParams& c = filler.frame.color_camera;
+  if (filler.frame.has_color() &&
+      (!std::isfinite(c.fx) || !std::isfinite(c.fy) || !std::isfinite(c.cx) ||
+       !std::isfinite(c.cy) || !finite(c.cam_to_world))) {
+    return vkc::Status::invalid_argument(
+        "filler: its colour camera has a non-finite intrinsic or pose entry");
+  }
+  return {};
+}
+
+struct MobileLane::State {
+  vkc::Device* device = nullptr;
+  vkc::Allocator* allocator = nullptr;
+  // The sessions in join order, those added since the last gap last.
+  std::vector<std::unique_ptr<PhoneSession>> sessions;
+  std::uint32_t joins = 0;     // sessions joined so far
+  std::size_t drain_next = 0;  // the session the next turn of the drain is
+  // The tint pictures, by tier, at each depth size a filler has had.
+  std::map<std::pair<std::uint32_t, std::uint32_t>,
+           std::array<std::shared_ptr<const vkc::Buffer>, 2>>
+      tints;
+  bool closed = false;
+
+  // The index of the session joining as `ordinal`: (ordinal - 1) mod 63,
+  // past any a session holds; none while all are held.
+  std::optional<std::uint32_t> free_index(std::uint32_t ordinal) const {
+    std::array<bool, tsdf::kMaxSourcesPerClass> held{};
+    for (const std::unique_ptr<PhoneSession>& s : sessions) {
+      if (s->holding()) held[s->index] = true;
+    }
+    for (std::uint32_t k = 0; k < tsdf::kMaxSourcesPerClass; ++k) {
+      const std::uint32_t i = static_cast<std::uint32_t>(
+          (std::uint64_t{ordinal} - 1 + k) % tsdf::kMaxSourcesPerClass);
+      if (!held[i]) return i;
+    }
+    return std::nullopt;
+  }
+
+  // The sessions added since the last gap, in turn, each with an index free.
+  vkc::Status adopt() {
+    for (const std::unique_ptr<PhoneSession>& s : sessions) {
+      if (s->started) continue;
+      const std::optional<std::uint32_t> index = free_index(joins + 1);
+      if (!index) break;  // waits for a session to be done
+      VKC_TRY(s->join(joins + 1, *index));
+      ++joins;
+    }
+    return {};
+  }
+
+  // A filler coloured by its tier's tint, through a colour camera of its
+  // depth camera's geometry; the tints at its depth size made on the device
+  // once.
+  vkc::Status tint(sender::Filler& f) {
+    const sensor::DepthCameraParams& d = f.frame.depth_camera;
+    std::array<std::shared_ptr<const vkc::Buffer>, 2>& made =
+        tints[{d.width, d.height}];
+    if (!made[0]) {
+      const VkDeviceSize bytes = VkDeviceSize(d.width) * d.height * 4;
+      vkc::CommandBatch batch(*device, *allocator);
+      const std::uint32_t words[2] = {kAnchoredFillTint, kUnanchoredFillTint};
+      std::array<std::shared_ptr<const vkc::Buffer>, 2> fresh;
+      for (int t = 0; t < 2; ++t) {
+        VKC_ASSIGN(vkc::Buffer b,
+                   vkc::device_storage_buffer(*allocator, bytes));
+        VKC_TRY(batch.fill(b, 0, bytes, words[t]));
+        fresh[t] = std::make_shared<const vkc::Buffer>(std::move(b));
+      }
+      VKC_TRY(batch.submit());
+      made = std::move(fresh);
+    }
+    f.frame.color = made[f.tier == tsdf::FillTier::Anchored ? 0 : 1];
+    f.frame.color_camera = {d.fx,    d.fy,     d.cx,          d.cy,
+                            d.width, d.height, d.cam_to_world};
+    f.frame.color_encoding = {};
+    return {};
+  }
+
+  // The next send's fillers: one a session in turn, in join order from
+  // where the last send's turns stopped, kDrainCap in all; a session with
+  // none waiting gives its turn away, and a filler the send would refuse is
+  // let go.
+  vkc::Status drain(std::vector<sender::Filler>* out) {
+    const std::size_t n = sessions.size();
+    for (std::size_t idle = 0; out->size() < kDrainCap && idle < n;) {
+      PhoneSession& s = *sessions[drain_next];
+      drain_next = (drain_next + 1) % n;
+      if (s.queue.empty()) {
+        ++idle;
+        continue;
+      }
+      idle = 0;
+      sender::Filler f = std::move(s.queue.front());
+      s.queue.pop_front();
+      const vkc::Status fit = check_filler(f);
+      if (!fit.ok()) {
+        s.unfit(fit);
+        continue;
+      }
+      VKC_TRY(tint(f));
+      ++s.counts.fused;
+      out->push_back(std::move(f));
+    }
+    return {};
+  }
 };
 
 MobileLane::MobileLane(std::unique_ptr<State> state) noexcept
     : state_(std::move(state)) {}
-MobileLane::~MobileLane() {
-  if (!state_) return;
-  state_->tags.reset();  // its thread may hold a picture of the phone's
-  if (state_->phone) state_->phone->stop();
-}
+MobileLane::~MobileLane() = default;
 
 vkc::Result<std::unique_ptr<MobileLane>> MobileLane::create(
     vkc::Device& device, vkc::Allocator& allocator,
@@ -609,141 +878,142 @@ vkc::Result<std::unique_ptr<MobileLane>> MobileLane::create(
   auto s = std::make_unique<State>();
   s->device = &device;
   s->allocator = &allocator;
+  std::unique_ptr<MobileLane> lane(new MobileLane(std::move(s)));
   if (phone) {
     if (!tracker || !log) {
       return vkc::Status::invalid_argument(
           "MobileLane::create: a phone needs its tracker and its log");
     }
-    VKC_ASSIGN(sensor::GpuFramePrep prep,
-               sensor::GpuFramePrep::create(device, allocator));
-    s->prep.emplace(std::move(prep));
-    VKC_ASSIGN(vkc::GpuTimer timer, vkc::GpuTimer::create(device));
-    s->timer.emplace(std::move(timer));
-    s->phone = std::move(phone);
-    s->tracker = std::move(tracker);
-    s->log = std::move(log);
-    s->by_tag = tags != nullptr;
-    s->placed = !s->by_tag;
-    s->tags = std::move(tags);
-    if (s->by_tag) s->say = std::move(say);
+    SessionParts parts;
+    parts.name = phone->info().id;
+    parts.placement = tags ? Placement::Tag : Placement::Registration;
+    parts.phone = std::move(phone);
+    parts.tracker = std::move(tracker);
+    parts.log = std::move(log);
+    parts.tags = std::move(tags);
+    parts.say = std::move(say);
+    VKC_TRY(lane->add(std::move(parts)));
   }
-  return std::unique_ptr<MobileLane>(new MobileLane(std::move(s)));
+  return lane;
+}
+
+vkc::Status MobileLane::add(SessionParts parts) {
+  State& st = *state_;
+  if (st.closed) {
+    return vkc::Status::invalid_argument("MobileLane::add: the lane is closed");
+  }
+  if (!parts.phone || !parts.tracker || !parts.log) {
+    return vkc::Status::invalid_argument(
+        "MobileLane::add: a session needs its phone, its tracker and its log");
+  }
+  const bool by_tag = parts.placement == Placement::Tag;
+  if (by_tag != (parts.tags != nullptr)) {
+    return vkc::Status::invalid_argument(
+        "MobileLane::add: a session placed by the tag needs its watch, and "
+        "only one placed so takes one");
+  }
+  auto s = std::make_unique<PhoneSession>();
+  s->device = st.device;
+  s->allocator = st.allocator;
+  VKC_ASSIGN(sensor::GpuFramePrep prep,
+             sensor::GpuFramePrep::create(*st.device, *st.allocator));
+  s->prep.emplace(std::move(prep));
+  VKC_ASSIGN(vkc::GpuTimer timer, vkc::GpuTimer::create(*st.device));
+  s->timer.emplace(std::move(timer));
+  s->phone = std::move(parts.phone);
+  s->tracker = std::move(parts.tracker);
+  s->log = std::move(parts.log);
+  s->by_tag = by_tag;
+  s->placed = !by_tag;
+  s->tags = std::move(parts.tags);
+  if (by_tag) s->say = std::move(parts.say);
+  s->presence = std::move(parts.presence);
+  s->name = std::move(parts.name);
+  s->placement = parts.placement;
+  st.sessions.push_back(std::move(s));
+  return {};
 }
 
 vkc::Result<std::vector<sender::Filler>> MobileLane::next(
     const vol::VoxelBlockGrid& grid, std::uint64_t next_set_ns) {
-  State& s = *state_;
+  State& st = *state_;
   std::vector<sender::Filler> out;
-  if (!s.phone || s.closed) return out;
-  if (!s.started) {
-    // At the first gap: what the link held while the cameras opened comes
-    // in the first takes, passed by but for each take's newest.
-    VKC_TRY(s.phone->set_queue_depth(kPhoneQueue));
-    VKC_TRY(s.phone->start());
-    s.started = true;
+  if (st.closed) return out;
+  VKC_TRY(st.adopt());
+  for (const std::unique_ptr<PhoneSession>& s : st.sessions) {
+    if (s->started) VKC_TRY(s->gap(grid, next_set_ns));
   }
-  s.set_ns = next_set_ns;
-  if (s.tags) {
-    VKC_ASSIGN(TagNews news, s.tags->take());
-    VKC_TRY(s.apply(std::move(news)));
+  VKC_TRY(st.drain(&out));
+  for (const std::unique_ptr<PhoneSession>& s : st.sessions) {
+    if (!s->started) continue;
+    s->tell();
+    // Done, it prepares nothing more: its prep and timer go (a frame handed
+    // out holds its own buffers), and their query pools with them, before
+    // its watch and phone, which stay until the close: what lets those go
+    // finds the prep and timer gone.
+    if (s->done()) {
+      s->prep.reset();
+      s->timer.reset();
+    }
   }
-  if (!s.ended) {
-    std::optional<sensor::RgbdFrame> due = s.pair(next_set_ns);
-    if (due) VKC_TRY(s.paired(grid, std::move(*due)));
-    if (s.held.empty() && s.phone->exhausted()) VKC_TRY(s.end());
-  }
-  while (!s.queue.empty() && out.size() < kDrainCap) {
-    sender::Filler f = std::move(s.queue.front());
-    s.queue.pop_front();
-    VKC_TRY(s.ensure_tints(f.frame.depth_camera.width,
-                           f.frame.depth_camera.height));
-    s.tinted(f);
-    out.push_back(std::move(f));
-  }
-  s.counts.fused += out.size();
-  s.tell();
   return out;
 }
 
 vkc::Status MobileLane::close() {
-  State& s = *state_;
-  if (!s.phone || s.closed) return {};
-  s.closed = true;
-  // The watch's last news, then the watch let go before the phone stops; its
-  // error comes back after the rest of the close, which still runs.
-  vkc::Status tagged;
-  if (s.tags) {
-    vkc::Result<TagNews> news = s.tags->take();
-    tagged = news.ok() ? s.apply(std::move(news).value()) : news.status();
-    s.tags.reset();
+  State& st = *state_;
+  if (st.closed) return {};
+  st.closed = true;
+  vkc::Status first;
+  for (const std::unique_ptr<PhoneSession>& s : st.sessions) {
+    const vkc::Status closed = s->close();
+    if (first.ok()) first = closed;
   }
-  VKC_TRY(s.end());  // placed, not fused: the run is over
-  s.phone->stop();
-  VKC_TRY(s.log->close());
-  VKC_ASSIGN(const std::string table,
-             summarize(s.log->run(), s.log->directory()));
-  std::fputs(table.c_str(), stdout);
-  return tagged;
+  return first;
 }
 
-const MobileLane::Counts& MobileLane::counts() const noexcept {
-  return state_->counts;
+MobileLane::Counts MobileLane::counts() const noexcept {
+  Counts total;
+  for (const std::unique_ptr<PhoneSession>& s : state_->sessions) {
+    add_to(total, s->counts);
+  }
+  return total;
 }
 
-const TrackLog* MobileLane::log() const noexcept { return state_->log.get(); }
+std::vector<MobileLane::SessionView> MobileLane::sessions() const {
+  std::vector<SessionView> out;
+  for (const std::unique_ptr<PhoneSession>& s : state_->sessions) {
+    SessionView v;
+    v.name = s->name;
+    v.placement = s->placement;
+    v.ordinal = s->ordinal;
+    v.index = s->index;
+    v.holding = s->holding();
+    v.waiting = s->queue.size();
+    v.counts = s->counts;
+    v.log = s->log.get();
+    out.push_back(std::move(v));
+  }
+  return out;
+}
+
+const TrackLog* MobileLane::log() const noexcept {
+  return state_->sessions.empty() ? nullptr
+                                  : state_->sessions.front()->log.get();
+}
 
 std::string MobileLane::report() const {
-  const State& s = *state_;
-  if (!s.phone) return {};
-  const Counts& c = s.counts;
-  const sensor::SensorStats st = s.phone->stats();
-  char buf[512];
-  std::snprintf(
-      buf, sizeof(buf),
-      "mobile: %llu records (%llu received, %llu failed), %llu tracked, %llu "
-      "skipped, %llu passed over, %llu splits; fill %llu anchored, %llu "
-      "unanchored, %llu dropped, %llu fused, %zu waiting\n",
-      static_cast<unsigned long long>(c.polled),
-      static_cast<unsigned long long>(st.received),
-      static_cast<unsigned long long>(st.failed),
-      static_cast<unsigned long long>(c.paired),
-      static_cast<unsigned long long>(c.skipped),
-      static_cast<unsigned long long>(c.passed_over),
-      static_cast<unsigned long long>(c.splits),
-      static_cast<unsigned long long>(c.anchored),
-      static_cast<unsigned long long>(c.unanchored),
-      static_cast<unsigned long long>(c.dropped),
-      static_cast<unsigned long long>(c.fused), s.queue.size());
-  std::string out = buf;
-  if (s.by_tag) {
-    const TagWatch::Counts& t = s.tag_counts;
-    char when[96];
-    if (s.registered_after) {
-      std::snprintf(when, sizeof(when),
-                    "registered at %.1f s, %llu frames before it",
-                    double(*s.registered_after) * 1e-9,
-                    static_cast<unsigned long long>(c.unregistered));
+  const std::vector<std::unique_ptr<PhoneSession>>& sessions = state_->sessions;
+  if (sessions.size() == 1) return sessions.front()->report("mobile");
+  std::string out;
+  for (const std::unique_ptr<PhoneSession>& s : sessions) {
+    char label[64];
+    if (s->ordinal != 0) {
+      std::snprintf(label, sizeof(label), "mobile %02u",
+                    static_cast<unsigned>(s->ordinal));
     } else {
-      std::snprintf(when, sizeof(when), "not registered, %llu frames",
-                    static_cast<unsigned long long>(c.unregistered));
+      std::snprintf(label, sizeof(label), "mobile --");
     }
-    std::snprintf(buf, sizeof(buf),
-                  "  tag: %llu searched, %llu stills, %llu holds (%llu "
-                  "refused), %llu replaced, %llu failed; %s\n",
-                  static_cast<unsigned long long>(t.candidates),
-                  static_cast<unsigned long long>(t.stills),
-                  static_cast<unsigned long long>(t.holds),
-                  static_cast<unsigned long long>(t.refused),
-                  static_cast<unsigned long long>(t.replaced),
-                  static_cast<unsigned long long>(t.failed), when);
-    out += buf;
-  }
-  if (!s.first_refusal.empty()) {
-    out += "  first passed over: " + s.first_refusal + "\n";
-  }
-  if (c.errors != 0) {
-    out += "  " + std::to_string(c.errors) +
-           " phone error(s), the first: " + s.first_error + "\n";
+    out += s->report(std::string(label) + " (" + s->name + ")");
   }
   return out;
 }
