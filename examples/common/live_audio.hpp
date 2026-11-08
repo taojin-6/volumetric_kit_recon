@@ -143,9 +143,6 @@ class AudioFeed {
     return last;
   }
 
-  /// @return Whether a drain failed, ending the audio before @ref finish.
-  bool lost() const noexcept { return lost_; }
-
   /// @return The mic's line beside the cameras' (@ref array_report):
   ///         "  audio <id>: " and its counters (@ref counters_text),
   ///         "; ended early" once a drain failed, and "; the stream: <n>

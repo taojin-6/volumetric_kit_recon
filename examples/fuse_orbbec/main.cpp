@@ -37,7 +37,6 @@
 #include "fuse_orbbec_sets.hpp"
 #include "info_log.hpp"
 #include "live_fusion.hpp"
-#include "orbbec_config.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 
 namespace vkc = volumetric_kit::core;

@@ -5,9 +5,10 @@
 
 /// @file examples/common/live_sets.hpp
 /// @brief The live examples' sensor array, whichever cameras it holds: a
-///        camera model's part of a camera's line, the report of the array's
-///        counters and a rig's skew over its sets (`sensor::RigSets`), its
-///        clock and its first set's age. Header-only, on the array alone.
+///        camera model's and its colour exposure's parts of a camera's line,
+///        the report of the array's counters and a rig's skew over its sets
+///        (`sensor::RigSets`), its clock and its first set's age. Header-only,
+///        on the array alone.
 
 #include <chrono>
 #include <cstddef>
@@ -48,6 +49,16 @@ inline const char* lens_name(const sensor::camera::RationalDistortion& d) {
     return "brown-conrady";
   }
   return "pinhole";
+}
+
+/// @return A colour exposure's part of a camera's line: ", exposure <e> gain
+///         <g>" from @p sensor's `SensorInfo::color_controls` as read back,
+///         or ", auto exposure" without them.
+inline std::string exposure_text(const sensor::SensorInfo& sensor) {
+  return sensor.color_controls
+             ? ", exposure " + std::to_string(sensor.color_controls->exposure) +
+                   " gain " + std::to_string(sensor.color_controls->gain)
+             : std::string(", auto exposure");
 }
 
 /// @return Counters as a camera's line shows them: "<received> received,
@@ -104,7 +115,7 @@ inline std::string array_report(sensor::SensorArray& array,
 /// @return Whether every sensor of @p array stamps its frames on the host's
 ///         clock, so a set's time is on the system clock: a rig's always
 ///         are, a single Orbbec camera's only with `source.host_clock`, a
-///         RealSense camera's always.
+///         RealSense or DeckLink camera's always.
 inline bool on_host_clock(sensor::SensorArray& array) {
   for (std::size_t i = 0; i < array.size(); ++i) {
     if (array.sensor(i).info().clock != sensor::ClockDomain::Host) {

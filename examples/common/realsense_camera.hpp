@@ -144,11 +144,6 @@ inline std::string realsense_depth_line(const config::Config& opt) {
 /// @param sensor  Its `IRgbdSensor::info()`, with both camera models.
 inline std::string realsense_camera_report(
     const sensor::RealSenseDeviceInfo& info, const sensor::SensorInfo& sensor) {
-  const std::string exposure =
-      sensor.color_controls
-          ? ", exposure " + std::to_string(sensor.color_controls->exposure) +
-                " gain " + std::to_string(sensor.color_controls->gain)
-          : std::string(", auto exposure");
   const sensor::camera::Mat4d& to_color = sensor.depth_to_color;
   char at[96];
   std::snprintf(at, sizeof at,
@@ -158,7 +153,7 @@ inline std::string realsense_camera_report(
          info.firmware_version + ", USB " + info.usb_type + ", " +
          sensor::to_string(sensor.clock) + " clock\n" + "  colour" +
          camera_summary(*sensor.color, lens_name(sensor.color->distortion)) +
-         exposure + "\n" + "  depth" +
+         exposure_text(sensor) + "\n" + "  depth" +
          camera_summary(*sensor.depth, lens_name(sensor.depth->distortion)) +
          at;
 }
