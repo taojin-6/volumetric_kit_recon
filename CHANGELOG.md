@@ -189,7 +189,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its overlay, have "wireframe" (gfx's `kHybridMeshWireframe`: the triangles'
   edges alone, hidden ones removed, no fill) and "cull back faces"
   (`kHybridMeshCullBackFaces`), both off at first. The viewers' device
-  requires `fillModeNonSolid`; gfx is pinned at its #173.
+  requires `fillModeNonSolid`; gfx is pinned at or past its #173.
 - **`fuse_decklink`**, live fusion of two SDI cameras on a Blackmagic
   DeckLink card as one stereo camera, its depth from FFS on R'G'B' views,
   its colour the left camera's 10-bit picture (core's `FuseDecklink`; README,
@@ -265,6 +265,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **the viewers pin gfx main at #176's merge** (`51a82ad`), whose
+  OrbitCamera takes a settable world up and has no stop at the poles; #175
+  changes only gfx's tests.
 - `examples`: **the rig never waits; phones join, leave and switch**
   (`examples/common/live_mobile.hpp`; DECISIONS.md, 2026-11-08). A live
   `source.mobile` no longer waits up to 5 minutes for one phone before the
