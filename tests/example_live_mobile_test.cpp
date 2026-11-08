@@ -26,11 +26,13 @@
 //   5 Hz sets. A live link's backlog from the cameras' setup, taken at once
 //   or over several gaps, is passed by but for each take's newest, and the
 //   records after it are tracked in the first gap after they came.
-// - check_mobile: no phone, or a phone under Dynamic, runs; Classic and FFS
-//   depth are refused. A phone with no registration needs the origin tag: a
-//   build without VR_WITH_CALIB refuses it, naming the option, before the
-//   wait too; one with it takes a tag world and refuses another. The empty
-//   lane does nothing.
+// - check_mobile: no phone, or a phone under Dynamic, runs; a file under
+//   Classic or beside FFS depth is refused, and a file with no registration
+//   needs the origin tag: a build without VR_WITH_CALIB refuses it, naming
+//   the option; one with it takes a tag world and refuses another. A live
+//   source is never refused, whatever it would refuse of a file: its phones
+//   are turned away instead (example_live_phones_test). The empty lane does
+//   nothing, and is not enabled.
 // - polled_in_background: a poll never waits on the inner sensor's; it keeps
 //   the interface's queue (a poll the newest, a drain every frame oldest
 //   first, a full queue letting its oldest go); an inner error and the end
@@ -525,42 +527,57 @@ int test_check_and_empty(const Env& env, const std::filesystem::path& dir) {
   auto classic = parse(R"(, "mobile": "phone.vrst",
       "mobile_registration": "phone.registration.json"},
       "fusion": {"dynamic": false})");
-  CHECK(rig.ok() && phone.ok() && live.ok() && classic.ok());
+  auto live_classic = parse(R"(, "mobile": "tcp://10.8.0.1:7101",
+      "mobile_registration": "phone.registration.json"},
+      "fusion": {"dynamic": false})");
+  CHECK(rig.ok() && phone.ok() && live.ok() && classic.ok() &&
+        live_classic.ok());
   CHECK(vr_example::check_mobile(*rig).ok());
   CHECK(vr_example::check_mobile(*phone).ok());
   CHECK(vr_example::check_mobile(*live).ok());
   CHECK(vr_example::check_mobile(*classic).domain() ==
         vkc::Status::Code::InvalidArgument);
+  CHECK(vr_example::check_mobile(*live_classic).ok());  // its phones go
   // Without a registration (the core defaults none since 0.49.0) the origin
   // tag registers the phone, which the build and the calibration's world
-  // must allow: checked before any device opens, and again before any wait.
+  // must allow: a file's checked before any device opens; a live one's
+  // phones turned away when they do not.
   auto by_tag = parse(R"(, "mobile": "tcp://10.8.0.1:7101"})", tag_world);
   auto by_sensor = parse(R"(, "mobile": "phone.vrst"})", sensor_world);
+  auto live_by_sensor =
+      parse(R"(, "mobile": "tcp://10.8.0.1:7101"})", sensor_world);
   auto no_file = parse(R"(, "mobile": "phone.vrst"})");
-  CHECK(by_tag.ok() && by_sensor.ok() && no_file.ok());
+  CHECK(by_tag.ok() && by_sensor.ok() && live_by_sensor.ok() && no_file.ok());
   CHECK(vr_example::check_mobile(*no_file).domain() ==
         vkc::Status::Code::NotFound);
-  const vkc::Status tagged = vr_example::check_mobile(*by_tag);
+  CHECK(vr_example::check_mobile(*by_tag).ok());
+  CHECK(vr_example::check_mobile(*live_by_sensor).ok());
   const vkc::Status sensored = vr_example::check_mobile(*by_sensor);
 #ifdef VR_TEST_WITH_CALIB
-  CHECK(tagged.ok());
   CHECK(sensored.domain() == vkc::Status::Code::InvalidArgument);
   CHECK(sensored.message().find("source.mobile_registration") !=
         std::string::npos);
 #else
   // live_tag_off.cpp: refused, naming the option and the key.
-  for (const vkc::Status& s : {tagged, sensored}) {
-    CHECK(s.domain() == vkc::Status::Code::Unsupported);
-    CHECK(s.message().find("-DVR_WITH_CALIB=ON") != std::string::npos);
-    CHECK(s.message().find("source.mobile_registration") != std::string::npos);
-  }
-  CHECK(vr_example::open_mobile_lane(*by_tag, env.gpu.device, env.gpu.allocator)
-            .status()
-            .domain() == vkc::Status::Code::Unsupported);
+  CHECK(sensored.domain() == vkc::Status::Code::Unsupported);
+  CHECK(sensored.message().find("-DVR_WITH_CALIB=ON") != std::string::npos);
+  CHECK(sensored.message().find("source.mobile_registration") !=
+        std::string::npos);
   CHECK(vr_example::TagWatch::create(env.gpu.device, env.gpu.allocator, {})
             .status()
             .domain() == vkc::Status::Code::Unsupported);
 #endif
+  // A live lane opens on an address it cannot bind, which it keeps trying:
+  // TEST-NET-1's, which no host holds.
+  auto unbound = parse(R"(, "mobile": "tcp://192.0.2.1:7101"})", tag_world);
+  CHECK(unbound.ok());
+  auto live_lane =
+      vr_example::open_mobile_lane(*unbound, env.gpu.device, env.gpu.allocator);
+  CHECK(live_lane.ok() && (*live_lane)->enabled());
+  CHECK((*live_lane)->next(env.grid, 2 * kS).ok());
+  CHECK((*live_lane)->report().find("phones: not listening: ") !=
+        std::string::npos);
+  CHECK((*live_lane)->close().ok());
   cfg::Config ffs = *phone;
   ffs.source.depth = cfg::DepthSource::Ffs;
   const vkc::Status refused = vr_example::check_mobile(ffs);
@@ -569,7 +586,7 @@ int test_check_and_empty(const Env& env, const std::filesystem::path& dir) {
   // The empty lane: no phone, nothing done.
   auto empty =
       vr_example::open_mobile_lane(*rig, env.gpu.device, env.gpu.allocator);
-  CHECK(empty.ok());
+  CHECK(empty.ok() && !(*empty)->enabled());
   auto none = (*empty)->next(env.grid, 2 * kS);
   CHECK(none.ok() && none->empty());
   CHECK((*empty)->report().empty() && (*empty)->log() == nullptr);

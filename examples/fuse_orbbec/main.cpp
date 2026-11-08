@@ -24,12 +24,14 @@
 // exposure. source.host_clock puts one camera on the
 // host's clock (OrbbecSensor::Options::sync_clock_to_host), which its first
 // frame's age checks; a rig is always on it. Each camera's counters at the
-// end count its `lost` frames too (vr_example::orbbec_counters). A phone
-// (source.mobile, a recorded session or tcp://ADDRESS:PORT it dials, placed by
-// source.mobile_registration, or without one by the origin tag in its
-// pictures, in a build with VR_WITH_CALIB) is tracked against the rig's model
-// and fused as fill where the rig does not see (vr_example::MobileLane);
-// diagnostics.track_log writes its tracking log, and records a live phone.
+// end count its `lost` frames too (vr_example::orbbec_counters). Phones
+// (source.mobile: a recorded session, or tcp://ADDRESS:PORT they dial, joining
+// and leaving while the rig runs, which never waits for one; each placed by
+// source.mobile_registration, or by the origin tag in its pictures, in a build
+// with VR_WITH_CALIB) are tracked against the rig's model and fused as fill
+// where the rig does not see (vr_example::MobileLane); a setting no phone can
+// run under turns them away, not the run. diagnostics.track_log writes their
+// tracking logs, a directory a live session with its recording.
 
 #include <cstdio>
 

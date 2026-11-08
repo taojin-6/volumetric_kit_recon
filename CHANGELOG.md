@@ -42,8 +42,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not as a failure, and the failure cap ends that session alone. The handle
   (`RgbdStreamSensor::handle`, also `listen`'s) carries the session's presence
   (`connected`, `ended` and why) and its note box (`say`) for any thread, and
-  may outlive the sensor. Nothing in the live runs opens a door yet;
-  `listen` is unchanged.
+  may outlive the sensor. `listen` is unchanged. `DoorOptions::screen` refuses
+  a new session the caller cannot take, before the cap (`Stats::screened`),
+  and `DoorOptions::csv` names `door.csv`, written by the door's thread alone
+  and made at its first row: a row for each connection refused, by the door
+  or `admit`, or superseded, with its session and peer.
 - `track`: **`Tracker::fit_due` says whether a record would fit the driver**,
   before it records: the hop rule on the frames' clock, by the steps finished
   so far, so a hop whose step was abandoned, or dropped by a refused finish,
@@ -262,6 +265,56 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **the rig never waits; phones join, leave and switch**
+  (`examples/common/live_mobile.hpp`; DECISIONS.md, 2026-11-08). A live
+  `source.mobile` no longer waits up to 5 minutes for one phone before the
+  cameras open, nor fails when none comes: `open_mobile_lane` returns at
+  once, a door listens for the whole run (an address it cannot bind yet
+  warned of and retried every 2 s, the report saying `phones: not listening`
+  if it never takes), and phones join and leave while the rig runs. Past
+  `kMaxPhones` (1 for now) a new session is refused right after its session's
+  chunk, as the iPad reads a failed dial; a held one's reconnect always gets
+  through. A session is Away from the first gap without a connection, its
+  tracker flushed once at 7 s and the session retired at 30 s of set time
+  (`LaneOptions`), at its stream's end, at an error of its own or at the
+  run's end; a return within the grace is the same session. An opener thread
+  admits and builds each session (decoder, watch, prep, timer, fitters,
+  tracker, log), the lane joins one a gap (`MobileLane::create` with a
+  `SessionSource`), and a reaper thread lets each go (watch, phone, GPU
+  objects, then its log and summary). Presence and notes go through the
+  session's handle. `source.mobile_registration` places only the session it
+  names (one that cannot be read names none); any other is placed by the
+  origin tag, or turned away. **What used to refuse a live run turns its
+  phones away instead**: Classic fusion, FFS depth, `operation: "stream"`,
+  no tag registration and no registration, a device that cannot track;
+  `check_mobile` refuses only a file. A track log an earlier run logged into,
+  or one that cannot be made, leaves the phones unlogged, never turned away.
+  **Errors in a live session end the run only for the device's loss**; any
+  other retires that session, printed once its id, and keeps its id from the
+  door for a back-off (`LaneOptions::error_back_off`, 10 s doubling to
+  320 s), as does a session the opener could not open; a log's write error
+  is printed once. A file's session's error ends the run, as before. A live
+  `diagnostics.track_log` holds `sessions.csv` and `door.csv`, each made at
+  its first row, and a directory a session (`NN-<sensor>-<hex8>/`: its log,
+  `phone.vrst`, `registration.json`); `run.csv` gains `session_id`,
+  `sensor`, `peer`, `ordinal`, `mobile_index` and `joined_set_ns`
+  (`TrackLog::joined`), still version 1; a file's run keeps its flat log,
+  and an empty directory writes nothing. `TrackLog::close` writes every file
+  whatever another's write did. The end of the run reports each session
+  (its join and leave from the lane's first gap), the totals and the door.
+  `next` takes a `GapBudget`, which the live run fills and nothing reads yet,
+  and the run's gap is gated by `MobileLane::enabled()`. Reverses "the rig
+  never fuses alone in a run that asked for it" (the 0.43.0 pin's entry
+  below). `config/examples/fuse_orbbec_phone.json` is a live phone template.
+  The tests that pinned the old contract changed: `recon_example_live_tag`'s
+  live case (no blocking open; a second session at the cap, then joining),
+  `recon_example_live_mobile`'s `check_mobile` case (a live source never
+  refused); `recon_example_live_phones` is new.
+- build: **recon pins core 0.49.0 at core #101's merge** (`65af19c`; was
+  core #99's merge, `947fe19`), whose docs describe phones that dial in to
+  `source.mobile`'s address and a rig that never waits for one, and CI takes
+  the core's actions there. No key, type or check changes, so the floor
+  stays 0.49.0.
 - build: **the live examples link one bundle** (`vr_example_live`,
   `examples/common/CMakeLists.txt`, which says why each library is on it):
   `fuse_orbbec`, `fuse_realsense` and `fuse_decklink` link it and their camera,

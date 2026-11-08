@@ -295,8 +295,9 @@ calib's `tools/install-opencv.sh` installs it, and `-DOpenCV_DIR` names it. The
 pictures decode on sensor's decoders (VideoToolbox, or NVDEC with
 `VS_WITH_FFMPEG` and `VS_WITH_CUDA`), and configure refuses the option in a
 build without them. The calibration's world must be calib's origin tag
-(`kOriginTag`, AprilTag 36h11 id 0) alone. Off, the default, a phone without
-a registration is refused before anything opens.
+(`kOriginTag`, AprilTag 36h11 id 0) alone. Off, the default, a recorded
+session without a registration is refused before anything opens, and a live
+run turns away every phone no registration names.
 
 ```sh
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
@@ -326,6 +327,42 @@ next set as a key for a viewer that joins or falls behind, through
 batches ([the sender contract](DESIGN.md#sender)), then written and served
 by grid's codec stream. The server, the client, `serve_stream` and what they
 print are grid's ([its live streaming](https://github.com/taojin-6/volumetric_kit_grid/blob/main/README.md#live-streaming)).
+
+### A phone in a live run
+
+With `source.mobile` `tcp://ADDRESS:PORT`
+([fuse_orbbec_phone.json](config/examples/fuse_orbbec_phone.json)), the rig
+never waits for a phone. The run prints `phones: listening on tcp://A:P for
+one phone at a time, placed by the tag; the rig fuses alone until one joins`
+and opens the cameras; an address it cannot bind yet (not this host's, in
+use) is warned of, again each minute, and tried every 2 s. A setting under
+which no phone can be taken says so on that line, and every phone is turned
+away, not the run.
+
+- **Joining.** Connect on the iPad at any time: the session joins at the next
+  set, hears "Looking for the tag", shows the origin tag, hears "Tag found,
+  registered", and its fill appears seconds later. The console prints
+  `phones: 01 77b0e412 (arkit) from 10.8.0.23:50211 joined by the tag; 1 of
+  1`.
+- **Leaving.** Disconnect, a lock, a force-quit or lost Wi-Fi never touch the
+  rig. After 30 s without a connection (about 40 s after a lock or a lost
+  Wi-Fi, since the rig's link notices a silent phone only after its 10 s idle
+  limit), the session retires: what it held decided, its fill fused, its log
+  closed, its slot free. The console says when it goes away and when it
+  retires. Back within that time, it is the same session, still registered.
+- **Switching.** A relaunch or another device is a new session, registered by
+  the tag again. One phone at a time for now, and the old session holds the
+  slot for its grace: Disconnect the old device first. The new one shows
+  Retrying, redials each second and joins about 30 s after the old one
+  disconnected (about 40 s after a lock or a lost Wi-Fi). While the old one
+  stays connected, the new one waits.
+
+`diagnostics.track_log` keeps a directory a session (`NN-<sensor>-<hex8>`, its
+log and recording, which replays as a file), `sessions.csv` and `door.csv`,
+each made only once there is something to write; the end of the run reports
+each session, the totals and the door. Give each run its own `track_log`: a
+run into one an earlier run logged into still takes its phones but logs and
+records none of them, warning at the start and in the report.
 
 ### Checking a phone's stream: `session_check`
 

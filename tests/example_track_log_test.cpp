@@ -4,8 +4,10 @@
 // A tracking run's log and its one summary (examples/common/track_log.hpp):
 // - A write -> read round trip: a run of scripted fitters (two driver chains,
 //   arkit, a shadow that refuses at times) through a log to a directory, read
-//   back field for field; each chain's TUM has a line `t tx ty tz qx qy qz qw`
-//   for each decided frame, in time order; an empty directory writes nothing.
+//   back field for field, the lane's session keys and its join (in run.csv
+//   at the close) included; each chain's TUM has a line `t tx ty tz qx qy qz
+//   qw` for each decided frame, in time order; an empty directory writes
+//   nothing.
 // - The summary against values worked by hand on a run built in place:
 //   decisions by kind, the lock share, latency, the distance from arkit, the
 //   jitter between consecutive Anchored frames, fits by verdict, the fill by
@@ -68,6 +70,13 @@ Mat4f translate(float x, float y, float z) {
   Mat4f m(1.0f);
   m[3] = Vec4f(x, y, z, 1.0f);
   return m;
+}
+
+std::vector<std::string> lines_of(const std::filesystem::path& path) {
+  std::ifstream in(path);
+  std::vector<std::string> out;
+  for (std::string line; std::getline(in, line);) out.push_back(line);
+  return out;
 }
 
 bool same(const Mat4f& a, const Mat4f& b) {
@@ -140,8 +149,15 @@ int round_trip(vkc::test::GpuContext& gpu, const std::filesystem::path& dir) {
   source.device = "test GPU";
   source.tracking_to_world = translate(0.5f, 0.25f, 1.0f);
   source.device_steps = {{1200 * kMs, translate(0.0f, 0.05f, 0.0f)}};
+  source.session_id = "8f3c0a7e5b2d4e6f9a1b0c2d3e4f5a6b";
+  source.sensor = "arkit";
+  source.peer = "10.8.0.23:50211";
   auto log = vr_example::TrackLog::open(dir.string(), **tracker, source);
   CHECK(log.ok());
+  // The lane's join: in the run at once, in run.csv at the close.
+  CHECK((*log)->joined(3, 2, 4500 * kMs).ok());
+  CHECK((*log)->run().source.ordinal == 3);
+  CHECK(lines_of(dir / "run.csv").back() == "joined_set_ns,0");
   for (std::uint64_t i = 0; i < 40; ++i) {
     sensor::DeviceFrame f;
     f.depth = buffer;
@@ -171,6 +187,12 @@ int round_trip(vkc::test::GpuContext& gpu, const std::filesystem::path& dir) {
         b.source.registration == a.source.registration &&
         b.source.device == a.source.device &&
         same(b.source.tracking_to_world, a.source.tracking_to_world));
+  CHECK(b.source.session_id == a.source.session_id &&
+        b.source.sensor == "arkit" && b.source.peer == "10.8.0.23:50211" &&
+        b.source.ordinal == 3 && b.source.mobile_index == 2 &&
+        b.source.joined_set_ns == 4500 * kMs);
+  CHECK((*log)->joined(4, 0, 0).domain() ==
+        vkc::Status::Code::InvalidArgument);  // closed
   CHECK(b.source.device_steps.size() == 1 &&
         b.source.device_steps[0].pts_ns == 1200 * kMs &&
         same(b.source.device_steps[0].raw_from_sent,
@@ -483,13 +505,6 @@ int window_recovers(vkc::test::GpuContext& gpu) {
 }
 
 // --- 4. The origin tag's holds and its late registration --------------------
-
-std::vector<std::string> lines_of(const std::filesystem::path& path) {
-  std::ifstream in(path);
-  std::vector<std::string> out;
-  for (std::string line; std::getline(in, line);) out.push_back(line);
-  return out;
-}
 
 int tags_and_registration(const std::filesystem::path& dir) {
   track::TrackerConfig config;

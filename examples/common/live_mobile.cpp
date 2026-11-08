@@ -3,7 +3,9 @@
 
 #include "live_mobile.hpp"
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -11,17 +13,18 @@
 #include <cstdio>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
 
-#include "interrupt.hpp"
 #include "link/rgbd_stream_sensor.hpp"
 #include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
@@ -29,6 +32,8 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
+#include "volumetric_kit/grid/stream/session.hpp"
 #include "volumetric_kit/recon/tsdf/source.hpp"
 #include "volumetric_kit/sensor/camera/array_calibration.hpp"
 #include "volumetric_kit/sensor/camera/tracked_registration.hpp"
@@ -41,8 +46,19 @@ namespace tsdf = volumetric_kit::recon::tsdf;
 namespace vol = volumetric_kit::grid::volume;
 using volumetric_kit::recon::Mat4f;
 
-// How long a run waits for its live phone to dial.
-constexpr std::chrono::minutes kPhoneWait{5};
+namespace stream = volumetric_kit::grid::stream;
+
+// How often a live lane tries its address again while it cannot bind it,
+// and how often it says again that it is not listening.
+constexpr std::chrono::seconds kBindRetry{2};
+constexpr std::chrono::seconds kBindReminder{60};
+// How long a live lane admits no session after the device ran out of memory
+// in one.
+constexpr std::chrono::seconds kOutOfMemoryPause{60};
+// The longest the opener waits for an arrival a pass, so a close is seen.
+constexpr std::chrono::milliseconds kOpenerWait{100};
+// A phone's back-off grows to this many times LaneOptions::error_back_off.
+constexpr int kBackOffMaxDoublings = 5;
 
 track::TrackerConfig lane_tracking() {
   track::TrackerConfig c;
@@ -91,8 +107,10 @@ bool note_due(const gnet::ViewerNote& now,
          since_ns >= kNoteAtLeastNs;
 }
 
-vkc::Status check_mobile(const config::Config& opt) {
-  if (!opt.source.mobile) return {};
+namespace {
+
+// What the run's settings refuse of any phone, a file's or a live one's.
+vkc::Status settings_refusal(const config::Config& opt) {
   if (opt.source.depth == config::DepthSource::Ffs) {
     return vkc::Status::unsupported(
         "source.mobile: the phone's lane does not run beside FFS depth "
@@ -107,6 +125,24 @@ vkc::Status check_mobile(const config::Config& opt) {
     return vkc::Status::invalid_argument(
         "source.mobile is not run by operation stream, which fuses nothing");
   }
+  return {};
+}
+
+// Whether the origin tag can place a phone: this build finds it, and the
+// calibration's world is it; then that world.
+vkc::Result<sensor::camera::WorldFrame> tag_world(const config::Config& opt) {
+  VKC_ASSIGN(const sensor::camera::ArrayCalibration rig,
+             sensor::camera::read_array_calibration(opt.source.calibration));
+  VKC_TRY(TagWatch::check(rig.world));
+  return rig.world;
+}
+
+}  // namespace
+
+vkc::Status check_mobile(const config::Config& opt) {
+  // A live one's refusals turn its phones away (open_mobile_lane).
+  if (!opt.source.mobile || !opt.source.mobile->host.empty()) return {};
+  VKC_TRY(settings_refusal(opt));
   if (opt.source.mobile->registration.empty()) {
     // Registered by the origin tag: this build must find it, and the
     // calibration's world must be a tag.
@@ -262,6 +298,8 @@ std::unique_ptr<sensor::IRgbdSensor> polled_in_background(
 
 namespace {
 
+using Stage = MobileLane::Stage;
+
 // `c` counted into `to`, field by field: a field added to Counts is added
 // here too, or this fails.
 static_assert(sizeof(MobileLane::Counts) == 13 * sizeof(std::uint64_t),
@@ -282,8 +320,67 @@ void add_to(MobileLane::Counts& to, const MobileLane::Counts& c) {
   to.unfit += c.unfit;
 }
 
+// Whether `s` is the device's loss, the one error a lane returns.
+bool device_lost(const vkc::Status& s) {
+  const std::optional<VkResult> r = vkc::vk_result(s);
+  return r && *r == VK_ERROR_DEVICE_LOST;
+}
+
+// Whether `s` is memory running out, the device's or the host's.
+bool ran_out_of_memory(const vkc::Status& s) {
+  if (s.domain() == vkc::Status::Code::OutOfMemory) return true;
+  const std::optional<VkResult> r = vkc::vk_result(s);
+  return r && (*r == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
+               *r == VK_ERROR_OUT_OF_HOST_MEMORY);
+}
+
+// A session id's 32 hex digits.
+std::string hex32(const std::array<std::uint8_t, 16>& id) {
+  constexpr char kDigits[] = "0123456789abcdef";
+  std::string out;
+  for (const std::uint8_t byte : id) {
+    out += kDigits[byte >> 4];
+    out += kDigits[byte & 0xf];
+  }
+  return out;
+}
+
+// A CSV field: a comma or a line break made harmless.
+std::string field(std::string s) {
+  std::replace(s.begin(), s.end(), ',', '_');
+  std::replace(s.begin(), s.end(), '\n', ' ');
+  std::replace(s.begin(), s.end(), '\r', ' ');
+  return s;
+}
+
+// The counts' line of a report, beginning with `label`.
+std::string counts_line(const std::string& label, const MobileLane::Counts& c,
+                        const sensor::SensorStats& st, std::size_t waiting) {
+  char buf[512];
+  std::snprintf(
+      buf, sizeof(buf),
+      "%s: %llu records (%llu received, %llu failed), %llu tracked, %llu "
+      "skipped, %llu passed over, %llu splits; fill %llu anchored, %llu "
+      "unanchored, %llu dropped, %llu fused, %zu waiting\n",
+      label.c_str(), static_cast<unsigned long long>(c.polled),
+      static_cast<unsigned long long>(st.received),
+      static_cast<unsigned long long>(st.failed),
+      static_cast<unsigned long long>(c.paired),
+      static_cast<unsigned long long>(c.skipped),
+      static_cast<unsigned long long>(c.passed_over),
+      static_cast<unsigned long long>(c.splits),
+      static_cast<unsigned long long>(c.anchored),
+      static_cast<unsigned long long>(c.unanchored),
+      static_cast<unsigned long long>(c.dropped),
+      static_cast<unsigned long long>(c.fused), waiting);
+  return buf;
+}
+
 // One phone's session: what the lane was before it held sessions, but the
-// tints, which the lane keeps for them all.
+// tints, which the lane keeps for them all. The lane's thread alone uses it
+// until it is handed to the reaper (Stage::Reaping), whose it is then, but
+// for what the lane reads of a session gone: its stage, counts and lines,
+// which the reaper never writes.
 struct PhoneSession {
   vkc::Device* device = nullptr;
   vkc::Allocator* allocator = nullptr;
@@ -295,15 +392,22 @@ struct PhoneSession {
   std::unique_ptr<TrackLog> log;
   // The origin tag's watch: let go before the phone stops.
   std::unique_ptr<TagWatch> tags;
-  // TODO: read at each gap once a session leaves (away while it reads
-  // false, retired after a grace), which phones that come and go need.
+  // Whether the phone is connected: a live phone's, which comes and goes;
+  // let go, with the say and the error's hearer, as the session goes to the
+  // reaper.
   std::function<bool()> presence;
+  std::function<void(const vkc::Status&)> on_error;
+  bool lives = false;  // given a presence: it comes and goes
+  bool seen = false;   // its presence read connected since its join
   std::string name;
   MobileLane::Placement placement = MobileLane::Placement::Registration;
+  std::atomic<Stage> stage{Stage::Added};
   std::uint32_t ordinal = 0;  // its join's place, from 1; 0 until it joins
   std::uint32_t index = 0;    // its mobile index, from its join
   bool by_tag = false;
-  bool placed = true;  // false until the tag registers the phone
+  bool placed = true;         // false until the tag registers the phone
+  bool watch_failed = false;  // its watch died after the registration
+  bool log_failed = false;    // a write of its log failed, printed once
   sensor::camera::Mat4d tracking_to_world{1.0};  // the tag's registration
   // The newest paired frame: its time, and its colour camera in the phone's
   // own world, where the gaps are measured.
@@ -334,8 +438,19 @@ struct PhoneSession {
   // at or after each.
   std::deque<std::uint64_t> splits;
   bool started = false;  // the phone, at its join
-  bool ended = false;    // the phone is exhausted and the tracker flushed
-  bool closed = false;
+  bool ended = false;    // the phone is done or it retired; the tracker flushed
+  // The device's loss the phone returned, for the gap to return.
+  vkc::Status lost;
+  // Set by the reaper once its phone is gone, and with it the door's slot.
+  std::atomic<bool> released{false};
+  // Coming and going, in set time: Away since; flushed once in this spell.
+  std::uint64_t away_since = 0;
+  bool settled = false;
+  std::uint64_t joined_ns = 0;  // the set its join came before
+  std::uint64_t left_ns = 0;    // the set it was handed to the reaper at
+  std::string leave_reason;     // why it retired
+  // The phone's counters as it was handed to the reaper, which lets it go.
+  sensor::SensorStats last_stats{};
   MobileLane::Counts counts;
   std::string first_refusal;  // why the first frame passed over was
   std::string first_error;    // the first error the phone returned
@@ -349,23 +464,58 @@ struct PhoneSession {
   PhoneSession(const PhoneSession&) = delete;
   PhoneSession& operator=(const PhoneSession&) = delete;
 
-  // Done: its phone exhausted, its tracker flushed and what it placed handed
-  // over, for good.
+  // Whether it comes and goes: a live phone's, given a presence.
+  bool comes_and_goes() const { return lives; }
+
+  // In the run and pairing: joined, not retired.
+  bool active() const {
+    const Stage s = stage.load(std::memory_order_acquire);
+    return s == Stage::Live || s == Stage::Away;
+  }
+
+  // Done: its phone done or the session retired, its tracker flushed and
+  // what it placed handed over, for good.
   bool done() const { return ended && queue.empty(); }
 
   // Whether it holds its index: joined, and not done.
   bool holding() const { return started && !done(); }
 
-  // At its join: its place and index, and the phone started.
-  vkc::Status join(std::uint32_t at, std::uint32_t mobile_index) {
-    // What the link held while the cameras opened comes in the first takes,
-    // passed by but for each take's newest.
+  // Its name in the run's lines: its ordinal, its session's first 8 hex
+  // digits where known, and its sensor.
+  std::string label() const {
+    char nn[16];
+    std::snprintf(nn, sizeof(nn), "%02u", static_cast<unsigned>(ordinal));
+    const std::string& id = log->run().source.session_id;
+    return std::string(nn) + " " + (id.empty() ? name : id.substr(0, 8)) +
+           " (" + name + ")";
+  }
+
+  // At its join: its place and index, then the phone started.
+  vkc::Status join(std::uint32_t at, std::uint32_t mobile_index,
+                   std::uint64_t now_ns) {
+    ordinal = at;
+    index = mobile_index;
+    joined_ns = now_ns;
+    set_ns = now_ns;
+    stage.store(Stage::Live, std::memory_order_release);
+    log_written(log->joined(at, mobile_index, now_ns));
+    // What the link held while the cameras opened, or before a late join,
+    // comes in the first takes, passed by but for each take's newest.
     VKC_TRY(phone->set_queue_depth(kPhoneQueue));
     VKC_TRY(phone->start());
     started = true;
-    ordinal = at;
-    index = mobile_index;
     return {};
+  }
+
+  // A write of its log or its registration: one that fails is printed once,
+  // and the session goes on, since the log never changes what fuses.
+  void log_written(const vkc::Status& written) {
+    if (written.ok() || log_failed) return;
+    log_failed = true;
+    std::fprintf(stderr,
+                 "warning: phone %s: a write of its log failed (%s); the "
+                 "session goes on\n",
+                 name.c_str(), written.message().c_str());
   }
 
   void passed_over(const vkc::Status& why) {
@@ -403,8 +553,8 @@ struct PhoneSession {
 
   // The session registered by the tag's first hold that passed: frames are
   // placed from now on, and the run's log and registration file say so.
-  vkc::Status register_by(const sensor::camera::TrackedRegistration& reg,
-                          const TagHold& hold) {
+  void register_by(const sensor::camera::TrackedRegistration& reg,
+                   const TagHold& hold) {
     placed = true;
     tracking_to_world = reg.tracking_to_world;
     registered_after = hold.last_pts_ns - first_paired.value_or(0);
@@ -412,16 +562,19 @@ struct PhoneSession {
     if (!log->directory().empty()) {
       where = (std::filesystem::path(log->directory()) / "registration.json")
                   .string();
-      VKC_TRY(sensor::camera::write_tracked_registration(
-          where, reg, vkc::WriteMode::CreateNew));
+      const vkc::Status written = sensor::camera::write_tracked_registration(
+          where, reg, vkc::WriteMode::CreateNew);
+      log_written(written);
+      if (!written.ok()) where = "tag";
     }
-    return log->registered(std::move(where), Mat4f(reg.tracking_to_world));
+    log_written(
+        log->registered(std::move(where), Mat4f(reg.tracking_to_world)));
   }
 
   // What the watch found: each hold logged and printed, the first that
   // passed registering the session, a passed one after it measured against
   // the rig chain; the first failure printed, every one counted.
-  vkc::Status apply(TagNews news) {
+  void apply(TagNews news) {
     for (const std::string& f : news.failures) {
       if (!first_tag_failure.empty()) break;
       first_tag_failure = f;
@@ -429,7 +582,7 @@ struct PhoneSession {
                   f.c_str());
     }
     for (const TagHold& h : news.holds) {
-      VKC_TRY(log->write(h));
+      log_written(log->write(h));
       if (h.use == TagHold::Use::Refused) {
         refused_ns = set_ns;
         std::printf("phone: tag hold refused: %s: %s\n", h.miss.c_str(),
@@ -440,7 +593,7 @@ struct PhoneSession {
       if (h.use == TagHold::Use::Registered) {
         VKC_CHECK(news.registered.has_value(),
                   "MobileLane: a registering hold without its registration");
-        VKC_TRY(register_by(*news.registered, h));
+        register_by(*news.registered, h);
       } else if (!rig_correction) {
         outcome = "passed, no rig fit yet (logged)";
       } else {
@@ -460,6 +613,24 @@ struct PhoneSession {
           h.worst_px, h.range_m, h.off_normal_deg, outcome.c_str());
     }
     tag_counts = tags->counts();
+  }
+
+  // The watch's news since the last gap. A watch that fails before the
+  // session registers is the session's error; after it, it is let be, and
+  // the session goes on placed. The device's loss returns either way.
+  vkc::Status take_news() {
+    if (!tags || watch_failed) return {};
+    vkc::Result<TagNews> news = tags->take();
+    if (news.ok()) {
+      apply(std::move(news).value());
+      return {};
+    }
+    if (device_lost(news.status()) || !placed) return news.status();
+    watch_failed = true;
+    std::fprintf(stderr,
+                 "warning: phone %s: its tag watch failed after the "
+                 "registration (%s); the session goes on placed\n",
+                 name.c_str(), news.status().message().c_str());
     return {};
   }
 
@@ -480,9 +651,9 @@ struct PhoneSession {
 
   // A step's placements into the queue, its oldest let go past the cap; its
   // counts, and the log.
-  vkc::Status take(const track::TrackStep& step) {
+  void take(const track::TrackStep& step) {
     watch_rig(step);
-    VKC_TRY(log->write(step));
+    log_written(log->write(step));
     for (const track::Released& r : step.released) {
       track::Released copy = r;
       sender::Filler f = to_filler(std::move(copy), index);
@@ -495,7 +666,6 @@ struct PhoneSession {
       }
     }
     counts.dropped += step.dropped_ns.size();
-    return {};
   }
 
   // The records the phone holds, taken in order for the set at `next_set`; a
@@ -511,6 +681,7 @@ struct PhoneSession {
     std::vector<sensor::RgbdFrame> got;
     const vkc::Status st = phone->drain(&got);
     if (!st.ok() && counts.errors++ == 0) first_error = st.message();
+    if (device_lost(st) && lost.ok()) lost = st;
     if (!got.empty()) {
       const sensor::RgbdFrame& newest = got.back();
       const std::int64_t pin =
@@ -557,7 +728,7 @@ struct PhoneSession {
     }
     if (!first_paired) first_paired = frame.timestamp_ns;
     newest_tracking = frame.color_to_world;
-    if (tags) {
+    if (tags && !watch_failed) {
       if (split) tags->split();
       VKC_TRY(tags->see(frame));  // before track_one lets its picture go
     }
@@ -576,7 +747,7 @@ struct PhoneSession {
                         sensor::RgbdFrame frame, bool split) {
     if (split) {
       ++counts.splits;
-      VKC_TRY(take(tracker->flush()));
+      take(tracker->flush());
     }
     // The phone's picture is never fused: fill fuses its tier's tint.
     frame.color = {};
@@ -622,75 +793,109 @@ struct PhoneSession {
     }
     VKC_ASSIGN(const track::TrackStep done, tracker->finish(*step));
     ++counts.paired;
-    return take(done);
+    take(done);
+    return {};
   }
 
-  // The phone is done: what the tracker holds is decided now.
-  vkc::Status end() {
-    if (ended) return {};
+  // What the tracker holds decided now: the phone is done, or the session
+  // retired.
+  void end() {
+    if (ended) return;
     ended = true;
-    return take(tracker->flush());
+    take(tracker->flush());
   }
 
-  // A gap, once joined: the watch's news, then the record due by the set at
-  // `next_set_ns` paired; once the phone is exhausted, the tracker flushed.
-  vkc::Status gap(const vol::VoxelBlockGrid& grid, std::uint64_t next_set_ns) {
-    set_ns = next_set_ns;
-    if (tags) {
-      VKC_ASSIGN(TagNews news, tags->take());
-      VKC_TRY(apply(std::move(news)));
+  // Retired, for `why`: its watch's last news taken and its tracker
+  // flushed; from now on it pairs and says nothing. A session that comes
+  // and goes says so. Only the device's loss returns.
+  vkc::Status retire(std::string why) {
+    const Stage now = stage.load(std::memory_order_acquire);
+    if (now == Stage::Retiring || now == Stage::Reaping || now == Stage::Left) {
+      return {};
     }
-    if (!ended) {
-      std::optional<sensor::RgbdFrame> due = pair(next_set_ns);
-      if (due) VKC_TRY(paired(grid, std::move(*due)));
-      if (held.empty() && phone->exhausted()) VKC_TRY(end());
+    leave_reason = std::move(why);
+    stage.store(Stage::Retiring, std::memory_order_release);
+    if (comes_and_goes()) {
+      std::printf("phones: %s retires: %s\n", label().c_str(),
+                  leave_reason.c_str());
+    }
+    const vkc::Status news = take_news();
+    end();
+    return device_lost(news) ? news : vkc::Status{};
+  }
+
+  // A gap, joined and not retired: its presence (one that comes and goes),
+  // the watch's news, then the record due by the set at `next_set_ns`
+  // paired; the phone's end ends it, and retires one that comes and goes, as
+  // the grace does. An error returned is the session's own, for the lane to
+  // retire it by, or the device's loss.
+  vkc::Status gap(const vol::VoxelBlockGrid& grid, std::uint64_t next_set_ns,
+                  const LaneOptions& options) {
+    set_ns = next_set_ns;
+    if (comes_and_goes()) {
+      const bool here = presence();
+      const Stage now = stage.load(std::memory_order_acquire);
+      if (here && now == Stage::Away) {
+        stage.store(Stage::Live, std::memory_order_release);
+        std::printf("phones: %s is back after %.1f s away\n", label().c_str(),
+                    double(set_ns - away_since) * 1e-9);
+      } else if (!here && now == Stage::Live &&
+                 (seen || set_ns >= joined_ns + kFirstSeenNs)) {
+        // One never seen connected is away from its join.
+        stage.store(Stage::Away, std::memory_order_release);
+        away_since = seen ? set_ns : joined_ns;
+        settled = false;
+        std::printf(
+            "phones: %s away; it retires at %.0f s away unless it comes "
+            "back\n",
+            label().c_str(), double(options.grace_ns) * 1e-9);
+      }
+      seen = seen || here;
+      if (stage.load(std::memory_order_acquire) == Stage::Away) {
+        const std::uint64_t away =
+            set_ns > away_since ? set_ns - away_since : 0;
+        if (away >= options.grace_ns) {
+          char why[64];
+          std::snprintf(why, sizeof(why), "away %.0f s", double(away) * 1e-9);
+          return retire(why);
+        }
+        if (away >= options.settle_ns && !settled) {
+          settled = true;  // what it holds decided, as no later frame shares
+          take(tracker->flush());
+        }
+      }
+    }
+    VKC_TRY(take_news());
+    std::optional<sensor::RgbdFrame> due = pair(next_set_ns);
+    if (!lost.ok()) return lost;
+    if (due) VKC_TRY(paired(grid, std::move(*due)));
+    if (held.empty() && phone->exhausted()) {
+      // A file's end: what it placed still drains, and it leaves at the
+      // close.
+      return retire(comes_and_goes() ? "its stream ended" : "its file ended");
     }
     return {};
   }
 
-  // The run's end: the watch's last news, then the watch let go before the
-  // phone stops; its error comes back after the rest of the close, which
-  // still runs.
-  vkc::Status close() {
-    if (closed) return {};
-    closed = true;
-    vkc::Status tagged;
-    if (tags) {
-      vkc::Result<TagNews> news = tags->take();
-      tagged = news.ok() ? apply(std::move(news).value()) : news.status();
-      tags.reset();
-    }
-    VKC_TRY(end());  // placed, not fused: the run is over
-    phone->stop();
-    VKC_TRY(log->close());
-    VKC_ASSIGN(const std::string table,
-               summarize(log->run(), log->directory()));
-    std::fputs(table.c_str(), stdout);
-    return tagged;
+  // Retired: the phone's queue taken and let go, its decoded pictures with
+  // it, and nothing paired. Only the device's loss returns.
+  vkc::Status discard() {
+    held.clear();
+    std::vector<sensor::RgbdFrame> got;
+    if (!phone || !started) return {};
+    const vkc::Status st = phone->drain(&got);
+    return device_lost(st) ? st : vkc::Status{};
   }
 
-  // Its lines of the run's report, the first beginning with `label`.
-  std::string report(const std::string& label) const {
+  // Its lines of the run's report, the first beginning with `label`; its
+  // join and leave in seconds from `origin_ns`, the lane's first gap.
+  std::string report(const std::string& label, std::uint64_t origin_ns) const {
     const MobileLane::Counts& c = counts;
-    const sensor::SensorStats st = phone->stats();
+    const Stage now = stage.load(std::memory_order_acquire);
+    const bool gone = now == Stage::Reaping || now == Stage::Left;
+    const sensor::SensorStats st = gone ? last_stats : phone->stats();
+    std::string out = counts_line(label, c, st, queue.size());
     char buf[512];
-    std::snprintf(
-        buf, sizeof(buf),
-        "%s: %llu records (%llu received, %llu failed), %llu tracked, %llu "
-        "skipped, %llu passed over, %llu splits; fill %llu anchored, %llu "
-        "unanchored, %llu dropped, %llu fused, %zu waiting\n",
-        label.c_str(), static_cast<unsigned long long>(c.polled),
-        static_cast<unsigned long long>(st.received),
-        static_cast<unsigned long long>(st.failed),
-        static_cast<unsigned long long>(c.paired),
-        static_cast<unsigned long long>(c.skipped),
-        static_cast<unsigned long long>(c.passed_over),
-        static_cast<unsigned long long>(c.splits),
-        static_cast<unsigned long long>(c.anchored),
-        static_cast<unsigned long long>(c.unanchored),
-        static_cast<unsigned long long>(c.dropped),
-        static_cast<unsigned long long>(c.fused), queue.size());
-    std::string out = buf;
     if (by_tag) {
       const TagWatch::Counts& t = tag_counts;
       char when[96];
@@ -729,7 +934,39 @@ struct PhoneSession {
       out += "  " + std::to_string(c.unfit) +
              " placed the send would refuse, the first: " + first_unfit + "\n";
     }
+    if (comes_and_goes() && !leave_reason.empty()) {
+      const auto in = [origin_ns](std::uint64_t ns) {
+        return double(ns > origin_ns ? ns - origin_ns : 0) * 1e-9;
+      };
+      std::snprintf(buf, sizeof(buf),
+                    "  joined %.1f s in, %s %.1f s in: ", in(joined_ns),
+                    now == Stage::Left ? "left" : "retired",
+                    in(now == Stage::Left ? left_ns : set_ns));
+      out += buf + leave_reason + "\n";
+    }
     return out;
+  }
+
+  // Its row of sessions.csv: a join's, or a leave's with its counts and
+  // reason.
+  std::string row(bool join) const {
+    const RunSource& src = log->run().source;
+    const std::string directory =
+        log->directory().empty()
+            ? std::string()
+            : std::filesystem::path(log->directory()).filename().string();
+    std::string s = join ? "join," : "leave,";
+    s += std::to_string(join ? joined_ns : left_ns) + "," +
+         std::to_string(ordinal) + "," + field(src.session_id) + "," +
+         field(name) + "," + field(src.peer) + "," + std::to_string(index) +
+         "," + (by_tag ? "tag" : "registration") + "," + field(directory) + ",";
+    if (join) return s + "0,0,0,\n";
+    std::string why = leave_reason;
+    std::replace(why.begin(), why.end(), '\n', ' ');
+    std::replace(why.begin(), why.end(), '\r', ' ');
+    return s + std::to_string(counts.polled) + "," +
+           std::to_string(counts.paired) + "," + std::to_string(counts.fused) +
+           "," + why + "\n";
   }
 };
 
@@ -741,6 +978,161 @@ bool finite(const Mat4f& m) {
   }
   return true;
 }
+
+// What a session holds let go, in the plan's order: its watch, then its
+// phone (the link's slot frees as the sensor goes), then its tracker, prep
+// and timer.
+void release(PhoneSession& s) noexcept {
+  s.tags.reset();  // its thread may hold a picture of the phone's
+  if (s.phone) {
+    s.phone->stop();
+    s.phone.reset();
+  }
+  s.released.store(true, std::memory_order_release);
+  s.tracker.reset();
+  s.prep.reset();
+  s.timer.reset();
+}
+
+// What lets a session go: release, then its log closed and its summary
+// printed, either's error printed and passed by. Its log goes too unless
+// `keep_log`. The reaper's thread runs it, or the lane's at a file's close.
+void let_go(PhoneSession& s, bool keep_log) {
+  release(s);
+  if (!s.log) return;
+  const vkc::Status closed = s.log->close();
+  s.log_written(closed);
+  vkc::Result<std::string> table = summarize(s.log->run(), s.log->directory());
+  if (table.ok()) {
+    std::fputs(table->c_str(), stdout);
+  } else {
+    s.log_written(table.status());
+  }
+  if (!keep_log) s.log.reset();
+}
+
+// The lane's reaper: a thread that lets the sessions handed to it go
+// (let_go), in turn, and the one writer of sessions.csv, whose join rows
+// the lane's thread queues to it.
+class Reaper {
+ public:
+  // `csv_path`: sessions.csv, made at its first row; empty, none. Its thread
+  // started here: std::system_error if it cannot be.
+  explicit Reaper(std::string csv_path) : csv_path_(std::move(csv_path)) {
+    thread_ = std::thread([this] { run(); });
+  }
+  ~Reaper() { finish(); }
+  Reaper(const Reaper&) = delete;
+  Reaper& operator=(const Reaper&) = delete;
+
+  // A join's row, written in turn.
+  void join_row(std::string row) { push({nullptr, false, std::move(row)}); }
+
+  // `s` let go, then its leave's row written and its stage Left. The lane
+  // no longer touches what the reaper does.
+  void reap(PhoneSession* s, bool keep_log) { push({s, keep_log, {}}); }
+
+  // Every job done, the thread joined. Idempotent.
+  void finish() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stopping_ = true;
+    }
+    wake_.notify_all();
+    if (thread_.joinable()) thread_.join();
+  }
+
+ private:
+  struct Job {
+    PhoneSession* session = nullptr;  // null: a join's row alone
+    bool keep_log = false;
+    std::string row;
+  };
+
+  void push(Job job) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      jobs_.push_back(std::move(job));
+    }
+    wake_.notify_one();
+  }
+
+  void run() {
+    for (;;) {
+      Job job;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        wake_.wait(lock, [this] { return stopping_ || !jobs_.empty(); });
+        if (jobs_.empty()) return;  // stopping, every job done
+        job = std::move(jobs_.front());
+        jobs_.pop_front();
+      }
+      // Host memory running out on the way is printed, and the next job
+      // goes on: no phone's trouble ends the run.
+      if (job.session != nullptr) {
+        PhoneSession& s = *job.session;
+        try {
+          // Its row before let_go may let its log go: the row reads it.
+          job.row = s.row(/*join=*/false);
+          let_go(s, job.keep_log);
+        } catch (const std::exception& e) {
+          release(s);
+          std::fprintf(stderr, "warning: phones: letting %s go: %s\n",
+                       s.name.c_str(), e.what());
+        }
+        s.stage.store(Stage::Left, std::memory_order_release);
+      }
+      try {
+        write(job.row);
+      } catch (const std::exception& e) {
+        std::fprintf(stderr, "warning: phones: %s: %s\n", csv_path_.c_str(),
+                     e.what());
+      }
+    }
+  }
+
+  // `row` written, sessions.csv made with its header (and its directory) at
+  // the first, never over anything already there; a file that cannot be
+  // made or written is printed, and written no more.
+  void write(const std::string& row) {
+    if (csv_path_.empty() || csv_failed_ || row.empty()) return;
+    if (!csv_.is_open()) {
+      const std::filesystem::path path(csv_path_);
+      std::error_code ec;
+      if (std::filesystem::exists(std::filesystem::symlink_status(path, ec))) {
+        std::fprintf(stderr,
+                     "warning: phones: %s is there already; this run writes "
+                     "none\n",
+                     csv_path_.c_str());
+        csv_failed_ = true;
+        return;
+      }
+      std::filesystem::create_directories(path.parent_path(), ec);
+      csv_.open(path, std::ios::binary | std::ios::trunc);
+      csv_ << "event,set_ns,ordinal,session_id,sensor,peer,mobile_index,"
+              "placement,directory,polled,paired,fused,reason\n";
+    }
+    csv_ << row;
+    csv_.flush();
+    if (!csv_) {
+      std::fprintf(stderr,
+                   "warning: phones: a write of %s failed; it is written no "
+                   "more\n",
+                   csv_path_.c_str());
+      csv_.close();
+      csv_failed_ = true;
+    }
+  }
+
+  std::ofstream csv_;        // the thread's
+  bool csv_failed_ = false;  // the thread's
+  std::string csv_path_;
+  std::mutex mutex_;
+  std::condition_variable wake_;
+  std::deque<Job> jobs_;   // under mutex_
+  bool stopping_ = false;  // under mutex_
+  std::thread thread_;     // last: started once the rest is
+};
 
 }  // namespace
 
@@ -772,7 +1164,8 @@ vkc::Status check_filler(const sender::Filler& filler) {
 struct MobileLane::State {
   vkc::Device* device = nullptr;
   vkc::Allocator* allocator = nullptr;
-  // The sessions in join order, those added since the last gap last.
+  // The sessions in join order, those added since the last gap last; a
+  // session stays here once it left, for its counts and lines.
   std::vector<std::unique_ptr<PhoneSession>> sessions;
   std::uint32_t joins = 0;     // sessions joined so far
   std::size_t drain_next = 0;  // the session the next turn of the drain is
@@ -781,6 +1174,26 @@ struct MobileLane::State {
            std::array<std::shared_ptr<const vkc::Buffer>, 2>>
       tints;
   bool closed = false;
+  // A live lane's: its options, its sessions' source and its reaper, which
+  // goes before the sessions it reaps.
+  bool live = false;
+  LaneOptions options;
+  std::unique_ptr<SessionSource> source;
+  std::unique_ptr<Reaper> reaper;
+  // The first gap's set, which a report's times count from.
+  std::optional<std::uint64_t> origin_ns;
+  // The sessions whose own error was printed, by id (or name), the oldest
+  // forgotten past 64.
+  std::deque<std::string> warned;
+
+  State() = default;
+  // The source closed and the reaper's jobs done before the sessions go.
+  ~State() {
+    if (source) source->close();
+    reaper.reset();
+  }
+  State(const State&) = delete;
+  State& operator=(const State&) = delete;
 
   // The index of the session joining as `ordinal`: (ordinal - 1) mod 63,
   // past any a session holds; none while all are held.
@@ -797,16 +1210,70 @@ struct MobileLane::State {
     return std::nullopt;
   }
 
-  // The sessions added since the last gap, in turn, each with an index free.
-  vkc::Status adopt() {
+  // The sessions in the run now, from their join until the reaper let their
+  // phone go, which frees the door's slot: what a live join's line counts
+  // against kMaxPhones.
+  std::size_t in_run() const {
+    std::size_t n = 0;
     for (const std::unique_ptr<PhoneSession>& s : sessions) {
-      if (s->started) continue;
+      const Stage st = s->stage.load(std::memory_order_acquire);
+      if (st == Stage::Live || st == Stage::Away || st == Stage::Retiring ||
+          (st == Stage::Reaping &&
+           !s->released.load(std::memory_order_acquire))) {
+        ++n;
+      }
+    }
+    return n;
+  }
+
+  // The sessions added since the last gap, in turn, each with an index free,
+  // at the set `set_ns`: its phone started, a live lane's line printed and
+  // its join's row queued. A phone that does not start retires its session.
+  vkc::Status adopt(std::uint64_t set_ns) {
+    for (const std::unique_ptr<PhoneSession>& s : sessions) {
+      if (s->stage.load(std::memory_order_acquire) != Stage::Added) continue;
       const std::optional<std::uint32_t> index = free_index(joins + 1);
       if (!index) break;  // waits for a session to be done
-      VKC_TRY(s->join(joins + 1, *index));
+      const vkc::Status started = s->join(joins + 1, *index, set_ns);
       ++joins;
+      if (live) {
+        const RunSource& src = s->log->run().source;
+        const std::string by = s->by_tag                  ? "the tag"
+                               : src.registration.empty() ? "its registration"
+                                                          : src.registration;
+        std::printf("phones: %s%s%s joined by %s; %zu of %zu\n",
+                    s->label().c_str(), src.peer.empty() ? "" : " from ",
+                    src.peer.c_str(), by.c_str(), in_run(), kMaxPhones);
+        if (reaper) reaper->join_row(s->row(/*join=*/true));
+      }
+      if (!started.ok()) {
+        VKC_TRY(contain(*s, started.with_context("its phone's start")));
+      }
     }
     return {};
+  }
+
+  // A session's own error retires one that comes and goes alone, printed
+  // once its id, and its hearer told; out of memory, the source admits
+  // nothing for a while. The device's loss returns, as does a file's
+  // session's error: a replay asked for that file.
+  vkc::Status contain(PhoneSession& s, const vkc::Status& error) {
+    if (error.ok()) return {};
+    if (device_lost(error) || !s.comes_and_goes()) return error;
+    if (ran_out_of_memory(error) && source) source->out_of_memory();
+    const std::string& id = s.log->run().source.session_id;
+    const std::string key = id.empty() ? s.name : id;
+    if (std::find(warned.begin(), warned.end(), key) == warned.end()) {
+      if (warned.size() >= 64) warned.pop_front();
+      warned.push_back(key);
+      std::fprintf(stderr, "warning: phone %s: %s; the session retires\n",
+                   s.name.c_str(), error.message().c_str());
+    }
+    if (std::function<void(const vkc::Status&)> told =
+            std::exchange(s.on_error, {})) {
+      told(error);
+    }
+    return s.retire("its error: " + error.message());
   }
 
   // A filler coloured by its tier's tint, through a colour camera of its
@@ -839,14 +1306,18 @@ struct MobileLane::State {
 
   // The next send's fillers: one a session in turn, in join order from
   // where the last send's turns stopped, kDrainCap in all; a session with
-  // none waiting gives its turn away, and a filler the send would refuse is
-  // let go.
+  // none waiting, or gone to the reaper, gives its turn away, and a filler
+  // the send would refuse is let go. A tint that cannot be made is the
+  // device's: out of memory, the filler is let go; its loss returns.
   vkc::Status drain(std::vector<sender::Filler>* out) {
     const std::size_t n = sessions.size();
+    if (n == 0) return {};
+    drain_next %= n;
     for (std::size_t idle = 0; out->size() < kDrainCap && idle < n;) {
       PhoneSession& s = *sessions[drain_next];
       drain_next = (drain_next + 1) % n;
-      if (s.queue.empty()) {
+      const Stage st = s.stage.load(std::memory_order_acquire);
+      if (st == Stage::Reaping || st == Stage::Left || s.queue.empty()) {
         ++idle;
         continue;
       }
@@ -858,11 +1329,28 @@ struct MobileLane::State {
         s.unfit(fit);
         continue;
       }
-      VKC_TRY(tint(f));
+      const vkc::Status tinted = tint(f);
+      if (!tinted.ok()) {
+        if (device_lost(tinted)) return tinted;
+        s.unfit(tinted);
+        continue;
+      }
       ++s.counts.fused;
       out->push_back(std::move(f));
     }
     return {};
+  }
+
+  // A session done, handed to the reaper: its counters kept, its presence,
+  // say and error's hearer let go here; from now on the reaper's.
+  void hand_over(PhoneSession& s, bool keep_log) {
+    s.last_stats = s.phone ? s.phone->stats() : sensor::SensorStats{};
+    s.left_ns = s.set_ns;
+    s.presence = {};
+    s.say = {};
+    s.on_error = {};
+    s.stage.store(Stage::Reaping, std::memory_order_release);
+    reaper->reap(&s, keep_log);
   }
 };
 
@@ -897,6 +1385,44 @@ vkc::Result<std::unique_ptr<MobileLane>> MobileLane::create(
   return lane;
 }
 
+vkc::Result<std::unique_ptr<MobileLane>> MobileLane::create(
+    vkc::Device& device, vkc::Allocator& allocator,
+    std::unique_ptr<SessionSource> source, LaneOptions options) {
+  if (options.settle_ns == 0 || options.settle_ns >= options.grace_ns) {
+    return vkc::Status::invalid_argument("MobileLane::create: a settle of " +
+                                         std::to_string(options.settle_ns) +
+                                         " ns, which must be positive and "
+                                         "below the grace's " +
+                                         std::to_string(options.grace_ns));
+  }
+  if (options.error_back_off.count() <= 0) {
+    return vkc::Status::invalid_argument(
+        "MobileLane::create: a back-off of " +
+        std::to_string(options.error_back_off.count()) +
+        " ms, which must be positive");
+  }
+  auto s = std::make_unique<State>();
+  s->device = &device;
+  s->allocator = &allocator;
+  s->live = true;
+  s->source = std::move(source);
+  // sessions.csv, made at its first row, never over one there.
+  std::string csv_path;
+  if (!options.log_directory.empty()) {
+    csv_path = (std::filesystem::path(options.log_directory) / "sessions.csv")
+                   .string();
+  }
+  s->options = std::move(options);
+  try {
+    s->reaper = std::make_unique<Reaper>(std::move(csv_path));
+  } catch (const std::system_error& e) {
+    return vkc::Status::io_error(
+        std::string("MobileLane::create: cannot start the reaper's thread: ") +
+        e.what());
+  }
+  return std::unique_ptr<MobileLane>(new MobileLane(std::move(s)));
+}
+
 vkc::Status MobileLane::add(SessionParts parts) {
   State& st = *state_;
   if (st.closed) {
@@ -915,11 +1441,19 @@ vkc::Status MobileLane::add(SessionParts parts) {
   auto s = std::make_unique<PhoneSession>();
   s->device = st.device;
   s->allocator = st.allocator;
-  VKC_ASSIGN(sensor::GpuFramePrep prep,
-             sensor::GpuFramePrep::create(*st.device, *st.allocator));
-  s->prep.emplace(std::move(prep));
-  VKC_ASSIGN(vkc::GpuTimer timer, vkc::GpuTimer::create(*st.device));
-  s->timer.emplace(std::move(timer));
+  if (parts.prep) {
+    s->prep = std::move(parts.prep);
+  } else {
+    VKC_ASSIGN(sensor::GpuFramePrep prep,
+               sensor::GpuFramePrep::create(*st.device, *st.allocator));
+    s->prep.emplace(std::move(prep));
+  }
+  if (parts.timer) {
+    s->timer = std::move(parts.timer);
+  } else {
+    VKC_ASSIGN(vkc::GpuTimer timer, vkc::GpuTimer::create(*st.device));
+    s->timer.emplace(std::move(timer));
+  }
   s->phone = std::move(parts.phone);
   s->tracker = std::move(parts.tracker);
   s->log = std::move(parts.log);
@@ -927,7 +1461,9 @@ vkc::Status MobileLane::add(SessionParts parts) {
   s->placed = !by_tag;
   s->tags = std::move(parts.tags);
   if (by_tag) s->say = std::move(parts.say);
+  s->lives = static_cast<bool>(parts.presence);
   s->presence = std::move(parts.presence);
+  if (s->lives) s->on_error = std::move(parts.on_error);
   s->name = std::move(parts.name);
   s->placement = parts.placement;
   st.sessions.push_back(std::move(s));
@@ -935,23 +1471,47 @@ vkc::Status MobileLane::add(SessionParts parts) {
 }
 
 vkc::Result<std::vector<sender::Filler>> MobileLane::next(
-    const vol::VoxelBlockGrid& grid, std::uint64_t next_set_ns) {
+    const vol::VoxelBlockGrid& grid, std::uint64_t next_set_ns,
+    GapBudget budget) {
+  (void)budget;  // TODO: the gap's scheduler reads it (live_mobile.hpp)
   State& st = *state_;
   std::vector<sender::Filler> out;
   if (st.closed) return out;
-  VKC_TRY(st.adopt());
+  if (!st.origin_ns) st.origin_ns = next_set_ns;
+  // One session the source made, a gap at most.
+  if (st.source) {
+    VKC_ASSIGN(std::optional<SessionParts> ready, st.source->take());
+    if (ready) {
+      const vkc::Status added = add(std::move(*ready));
+      if (!added.ok()) {
+        if (device_lost(added)) return added;
+        std::fprintf(stderr, "warning: phones: a session not joined: %s\n",
+                     added.message().c_str());
+      }
+    }
+  }
+  VKC_TRY(st.adopt(next_set_ns));
   for (const std::unique_ptr<PhoneSession>& s : st.sessions) {
-    if (s->started) VKC_TRY(s->gap(grid, next_set_ns));
+    if (s->active()) {
+      VKC_TRY(st.contain(*s, s->gap(grid, next_set_ns, st.options)));
+    } else if (s->stage.load(std::memory_order_acquire) == Stage::Retiring) {
+      s->set_ns = next_set_ns;
+      if (s->comes_and_goes()) VKC_TRY(s->discard());
+    }
   }
   VKC_TRY(st.drain(&out));
   for (const std::unique_ptr<PhoneSession>& s : st.sessions) {
-    if (!s->started) continue;
-    s->tell();
-    // Done, it prepares nothing more: its prep and timer go (a frame handed
-    // out holds its own buffers), and their query pools with them, before
-    // its watch and phone, which stay until the close: what lets those go
-    // finds the prep and timer gone.
-    if (s->done()) {
+    if (s->active()) s->tell();
+    if (s->stage.load(std::memory_order_acquire) != Stage::Retiring ||
+        !s->done()) {
+      continue;
+    }
+    if (s->comes_and_goes() && st.reaper) {
+      st.hand_over(*s, /*keep_log=*/false);  // it leaves
+    } else {
+      // A file's, done, prepares nothing more: its prep and timer go (a
+      // frame handed out holds its own buffers), and their query pools with
+      // them, before its watch and phone, which stay until the close.
       s->prep.reset();
       s->timer.reset();
     }
@@ -963,12 +1523,33 @@ vkc::Status MobileLane::close() {
   State& st = *state_;
   if (st.closed) return {};
   st.closed = true;
-  vkc::Status first;
+  if (st.source) st.source->close();
+  vkc::Status lost;
   for (const std::unique_ptr<PhoneSession>& s : st.sessions) {
-    const vkc::Status closed = s->close();
-    if (first.ok()) first = closed;
+    const Stage now = s->stage.load(std::memory_order_acquire);
+    if (now == Stage::Added || now == Stage::Reaping || now == Stage::Left) {
+      continue;
+    }
+    // Placed, not fused: the run is over. One retired before takes its
+    // watch's news once more, as a search may have ended since.
+    const vkc::Status retired =
+        now == Stage::Retiring ? s->take_news() : s->retire("the run's end");
+    if (lost.ok() && device_lost(retired)) lost = retired;
+    if (st.reaper) {
+      st.hand_over(*s, /*keep_log=*/true);
+    } else {
+      s->last_stats = s->phone->stats();
+      s->left_ns = s->set_ns;
+      let_go(*s, /*keep_log=*/true);
+      s->stage.store(Stage::Left, std::memory_order_release);
+    }
   }
-  return first;
+  if (st.reaper) st.reaper->finish();
+  return lost;
+}
+
+bool MobileLane::enabled() const noexcept {
+  return state_->live || !state_->sessions.empty();
 }
 
 MobileLane::Counts MobileLane::counts() const noexcept {
@@ -988,22 +1569,30 @@ std::vector<MobileLane::SessionView> MobileLane::sessions() const {
     v.ordinal = s->ordinal;
     v.index = s->index;
     v.holding = s->holding();
+    v.stage = s->stage.load(std::memory_order_acquire);
     v.waiting = s->queue.size();
     v.counts = s->counts;
-    v.log = s->log.get();
+    // The reaper's while it lets the session go.
+    v.log = v.stage == Stage::Reaping ? nullptr : s->log.get();
     out.push_back(std::move(v));
   }
   return out;
 }
 
 const TrackLog* MobileLane::log() const noexcept {
-  return state_->sessions.empty() ? nullptr
-                                  : state_->sessions.front()->log.get();
+  if (state_->sessions.empty()) return nullptr;
+  const PhoneSession& s = *state_->sessions.front();
+  if (s.stage.load(std::memory_order_acquire) == Stage::Reaping) return nullptr;
+  return s.log.get();
 }
 
 std::string MobileLane::report() const {
-  const std::vector<std::unique_ptr<PhoneSession>>& sessions = state_->sessions;
-  if (sessions.size() == 1) return sessions.front()->report("mobile");
+  const State& st = *state_;
+  const std::vector<std::unique_ptr<PhoneSession>>& sessions = st.sessions;
+  const std::uint64_t origin = st.origin_ns.value_or(0);
+  if (!st.live && sessions.size() == 1) {
+    return sessions.front()->report("mobile", origin);
+  }
   std::string out;
   for (const std::unique_ptr<PhoneSession>& s : sessions) {
     char label[64];
@@ -1013,30 +1602,743 @@ std::string MobileLane::report() const {
     } else {
       std::snprintf(label, sizeof(label), "mobile --");
     }
-    out += s->report(std::string(label) + " (" + s->name + ")");
+    out += s->report(std::string(label) + " (" + s->name + ")", origin);
+  }
+  if (!st.live) return out;
+  // The lane's totals, then its source's lines.
+  sensor::SensorStats phones{};
+  std::size_t waiting = 0;
+  std::size_t left = 0;
+  for (const std::unique_ptr<PhoneSession>& s : sessions) {
+    const Stage now = s->stage.load(std::memory_order_acquire);
+    const bool gone = now == Stage::Reaping || now == Stage::Left;
+    if (now == Stage::Added) continue;
+    const sensor::SensorStats ps = gone ? s->last_stats : s->phone->stats();
+    phones.received += ps.received;
+    phones.failed += ps.failed;
+    waiting += s->queue.size();
+    if (now == Stage::Left) ++left;
+  }
+  char label[96];
+  std::snprintf(label, sizeof(label), "mobile, %u session(s), %zu left",
+                static_cast<unsigned>(st.joins), left);
+  out += counts_line(label, counts(), phones, waiting);
+  if (st.source) out += st.source->report();
+  return out;
+}
+
+// --- A live run's sessions -------------------------------------------------
+
+namespace {
+
+using Door = link::RgbdStreamSensor::Door;
+
+// A sensor id as a directory's name takes it: any byte but a letter, a
+// digit, '.', '_' or '-' made '_'; "phone" for none.
+std::string sanitized(const std::string& id) {
+  std::string out = id.empty() ? std::string("phone") : id;
+  for (char& c : out) {
+    const bool kept = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                      (c >= '0' && c <= '9') || c == '.' || c == '_' ||
+                      c == '-';
+    if (!kept) c = '_';
   }
   return out;
 }
 
+// The sensor id a session's depth track names; empty for none.
+std::string depth_sensor(const stream::Session& session) {
+  for (const stream::Track& t : session.tracks) {
+    if (t.kind == stream::TrackKind::RgbdDepth) return t.sensor;
+  }
+  return {};
+}
+
+// Whether a session carries pictures: a colour track, which the tag is found
+// in.
+bool has_pictures(const stream::Session& session) {
+  return std::any_of(session.tracks.begin(), session.tracks.end(),
+                     [](const stream::Track& t) {
+                       return t.kind == stream::TrackKind::RgbdColor;
+                     });
+}
+
+// What a live run takes of a phone, settled as it opens.
+struct LivePlan {
+  std::string host;
+  std::uint16_t port = 0;
+  std::string address;        // "tcp://host:port"
+  std::filesystem::path dir;  // D; empty for none
+  std::string device_name;    // the GPU, for each log
+  // Why every phone is turned away; empty: none is.
+  std::string turned_away;
+  // Why nothing is written in D (an earlier run's logs, or none can be made);
+  // empty: D is written, or none was given.
+  std::string unlogged;
+  // The registration file and the one session it places, depth alone; or
+  // why it cannot be read, which places none.
+  std::string registration_path;
+  std::optional<sensor::camera::TrackedRegistration> registration;
+  std::string unread;
+  // The origin tag's world, when the tag can place a session; else why not.
+  std::optional<sensor::camera::WorldFrame> tag;
+  std::string no_tag;
+};
+
+// Why a session is refused at the door, if it is: the plan's turning away,
+// or one no registration names that the tag cannot place.
+std::string screen_of(const LivePlan& plan, const stream::Session& session) {
+  if (!plan.turned_away.empty()) return plan.turned_away;
+  if (plan.registration && session.id == plan.registration->session) return {};
+  if (!plan.tag) {
+    return "no registration names it and the origin tag places none: " +
+           plan.no_tag;
+  }
+  if (!has_pictures(session)) {
+    return "it sends no pictures, which the origin tag is found in: give "
+           "source.mobile_registration";
+  }
+  return {};
+}
+
+// The phones' ids a live lane keeps from its door for a while: each whose
+// session retired for an error of its own or was not opened, for the
+// back-off, doubled with each repeat of that id up to 32 times. Its own
+// lock, never held while calling the door, which asks it under its own (the
+// screen): every call from any thread.
+class BackOff {
+ public:
+  using Id = std::array<std::uint8_t, 16>;
+  using Clock = std::chrono::steady_clock;
+
+  explicit BackOff(std::chrono::milliseconds base) : base_(base) {}
+
+  // `id`'s session failed for `why`: it is kept away for the next back-off.
+  void failed(const Id& id, const std::string& why) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = std::find_if(ids_.begin(), ids_.end(),
+                           [&](const Kept& k) { return k.id == id; });
+    if (it == ids_.end()) {
+      if (ids_.size() >= kMaxIds) ids_.pop_front();
+      ids_.push_back({id, 0, {}, {}});
+      it = ids_.end() - 1;
+    }
+    const std::chrono::milliseconds kept =
+        base_ * (1 << std::min(it->failures, kBackOffMaxDoublings));
+    it->until = Clock::now() + kept;
+    ++it->failures;
+    // The door logs a refusal once a spell, while its reason stays the same:
+    // the reason names this back-off, never what is left of it.
+    char buf[96];
+    std::snprintf(buf, sizeof(buf),
+                  "kept away %.1f s after %d failure(s) of its session, the "
+                  "last: ",
+                  double(kept.count()) * 1e-3, it->failures);
+    it->why = buf + why.substr(0, 160);
+  }
+
+  // Why `id` is kept away now; empty: it is not.
+  std::string refusal(const Id& id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const Clock::time_point now = Clock::now();
+    for (const Kept& k : ids_) {
+      if (k.id == id && now < k.until) return k.why;
+    }
+    return {};
+  }
+
+ private:
+  static constexpr std::size_t kMaxIds = 256;
+  struct Kept {
+    Id id{};
+    int failures = 0;  // its sessions' so far
+    Clock::time_point until;
+    std::string why;  // the refusal while kept away
+  };
+  const std::chrono::milliseconds base_;
+  mutable std::mutex mutex_;
+  std::deque<Kept> ids_;  // under mutex_
+};
+
+// A live run's sessions: the door, bound at once or every 2 s until it is,
+// and the opener's thread, which admits each arrival and makes its session
+// whole (its watch, prep, timer, fitters, tracker and log) off the set loop.
+class DoorSource final : public MobileLane::SessionSource {
+ public:
+  DoorSource(vkc::Device& device, vkc::Allocator& allocator, LivePlan plan,
+             std::chrono::milliseconds back_off)
+      : device_(device),
+        allocator_(allocator),
+        plan_(std::move(plan)),
+        back_off_(std::make_shared<BackOff>(back_off)) {}
+  ~DoorSource() override { close(); }
+  DoorSource(const DoorSource&) = delete;
+  DoorSource& operator=(const DoorSource&) = delete;
+
+  // Bound now if the address takes it, the start line printed either way;
+  // then the opener's thread: std::system_error if it cannot start.
+  void start() {
+    bind(/*first=*/true);
+    opener_ = std::thread([this] { run(); });
+  }
+
+  vkc::Result<std::optional<MobileLane::SessionParts>> take() override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!lost_.ok()) return std::exchange(lost_, {});
+    if (ready_.empty()) return std::optional<MobileLane::SessionParts>{};
+    std::optional<MobileLane::SessionParts> out(std::move(ready_.front()));
+    ready_.pop_front();
+    return out;
+  }
+
+  void out_of_memory() noexcept override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    paused_until_ = std::chrono::steady_clock::now() + kOutOfMemoryPause;
+  }
+
+  void close() noexcept override {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (closed_) return;
+      closed_ = true;
+    }
+    wake_.notify_all();
+    if (opener_.joinable()) opener_.join();
+    std::unique_ptr<Door> door;
+    std::deque<MobileLane::SessionParts> ready;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (door_) {
+        last_stats_ = door_->stats();  // for the report, the door gone
+        closed_door_ = true;
+      }
+      door = std::move(door_);
+      ready.swap(ready_);
+    }
+    // A session made and not taken goes, its watch before its phone (the
+    // parts' members go in that order), then the door, which ends an arrival
+    // not admitted.
+    ready.clear();
+    door.reset();
+  }
+
+  std::string report() const override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string out;
+    // What turned every phone away, or kept them unlogged, after the door's
+    // line, or after its not listening.
+    std::string after;
+    if (!plan_.turned_away.empty()) {
+      after += "  every phone turned away: " + plan_.turned_away + "\n";
+    }
+    if (!plan_.unlogged.empty()) {
+      after += "  phones not logged: " + plan_.unlogged + "\n";
+    }
+    if (!door_ && !closed_door_) {
+      return "phones: not listening: " + bind_error_ + "\n" + after;
+    }
+    const Door::Stats d = door_ ? door_->stats() : last_stats_;
+    char buf[320];
+    std::snprintf(
+        buf, sizeof(buf),
+        "phones: door on %s: %llu accepted, %llu arrived, %llu admitted, "
+        "%llu refused (%llu turned away), %llu reconnects, %llu strays, "
+        "%llu crowded\n",
+        plan_.address.c_str(), static_cast<unsigned long long>(d.accepted),
+        static_cast<unsigned long long>(d.arrivals),
+        static_cast<unsigned long long>(d.admitted),
+        static_cast<unsigned long long>(d.refused),
+        static_cast<unsigned long long>(d.screened),
+        static_cast<unsigned long long>(d.reconnects),
+        static_cast<unsigned long long>(d.strays),
+        static_cast<unsigned long long>(d.crowded));
+    out = buf + after;
+    if (failed_ != 0) {
+      out += "  " + std::to_string(failed_) +
+             " session(s) not opened, the first: " + first_failure_ + "\n";
+    }
+    return out;
+  }
+
+ private:
+  // The door, bound if the address takes it: the start line, or a warning
+  // the first time and once a reason changes, and a reminder each minute;
+  // the line again once bound after.
+  void bind(bool first) {
+    link::DoorOptions options;
+    options.max_sessions = kMaxPhones;
+    // The plan is the source's for its life, which the door's ends inside;
+    // the back-off is shared.
+    options.screen = [plan = &plan_,
+                      back_off = back_off_](const stream::Session& session) {
+      std::string why = screen_of(*plan, session);
+      if (why.empty()) why = back_off->refusal(session.id);
+      return why;
+    };
+    if (!plan_.dir.empty()) options.csv = (plan_.dir / "door.csv").string();
+    vkc::Result<std::unique_ptr<Door>> opened =
+        Door::open(plan_.host, plan_.port, options);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!opened.ok()) {
+      const std::string why = opened.status().message();
+      const auto now = std::chrono::steady_clock::now();
+      if (first || why != bind_error_) {
+        std::fprintf(stderr,
+                     "warning: phones: cannot listen on %s (%s); the rig runs "
+                     "without phones, trying again every %lld s\n",
+                     plan_.address.c_str(), why.c_str(),
+                     static_cast<long long>(kBindRetry.count()));
+        warned_at_ = now;
+      } else if (now - warned_at_ >= kBindReminder) {
+        std::fprintf(stderr,
+                     "warning: phones: still not listening on %s (%s)\n",
+                     plan_.address.c_str(), why.c_str());
+        warned_at_ = now;
+      }
+      bind_error_ = why;
+      return;
+    }
+    door_ = std::move(opened).value();
+    std::printf("phones: listening on %s%s\n", plan_.address.c_str(),
+                welcome().c_str());
+  }
+
+  // The start line's rest: who is taken, and how.
+  std::string welcome() const {
+    if (!plan_.turned_away.empty()) {
+      return ", every phone turned away: " + plan_.turned_away;
+    }
+    std::string out =
+        kMaxPhones == 1
+            ? std::string(" for one phone at a time")
+            : " for up to " + std::to_string(kMaxPhones) + " phones at once";
+    if (plan_.registration) {
+      char hex[9];
+      const std::array<std::uint8_t, 16>& id = plan_.registration->session;
+      std::snprintf(hex, sizeof(hex), "%02x%02x%02x%02x", id[0], id[1], id[2],
+                    id[3]);
+      out += std::string(", session ") + hex + " placed by " +
+             plan_.registration_path;
+      out += plan_.tag ? std::string(", any other by the tag")
+                       : ", any other turned away: " + plan_.no_tag;
+    } else {
+      out += ", placed by the tag";
+      if (!plan_.unread.empty()) {
+        out += " (" + plan_.unread + ", which places none)";
+      }
+    }
+    return out + "; the rig fuses alone until one joins";
+  }
+
+  bool stopping() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return closed_;
+  }
+
+  // The opener's thread: the door bound again every 2 s until it is; then
+  // each arrival admitted and made whole, in turn, or let go (its slot
+  // free), and none for a while after the device ran out of memory. Host
+  // memory running out in a pass is printed, the arrival let go, and the
+  // next pass goes on: no phone's trouble ends the run.
+  void run() noexcept {
+    auto next_bind = std::chrono::steady_clock::now() + kBindRetry;
+    while (!stopping()) {
+      try {
+        pass(next_bind);
+      } catch (const std::exception& e) {
+        try {
+          std::fprintf(stderr, "warning: phones: the opener: %s\n", e.what());
+        } catch (...) {
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+  }
+
+  // One pass of the opener's thread: the door bound, or one arrival taken.
+  void pass(std::chrono::steady_clock::time_point& next_bind) {
+    Door* door = nullptr;
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      door = door_.get();
+      if (door == nullptr) {
+        wake_.wait_until(lock, next_bind, [this] { return closed_; });
+        if (closed_) return;
+      }
+    }
+    if (door == nullptr) {
+      if (std::chrono::steady_clock::now() >= next_bind) {
+        bind(/*first=*/false);
+        next_bind = std::chrono::steady_clock::now() + kBindRetry;
+      }
+      return;
+    }
+    std::optional<Door::Arrival> arrival = door->take_arrival(kOpenerWait);
+    if (!arrival) return;
+    const std::array<std::uint8_t, 16> id = arrival->session.id;
+    const std::string peer = arrival->peer;  // admit consumes the arrival
+    bool paused = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      paused = std::chrono::steady_clock::now() < paused_until_;
+    }
+    if (paused) {
+      // The arrival goes, its slot with it; the pause keeps the rest away.
+      fail(id, peer, "the device ran out of memory within the last minute",
+           /*back_off=*/false);
+      return;
+    }
+    vkc::Result<MobileLane::SessionParts> made = open(*door, *arrival);
+    if (!made.ok()) {
+      if (device_lost(made.status())) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!lost_seen_) lost_ = made.status();  // for the lane, once
+        lost_seen_ = true;
+      }
+      if (ran_out_of_memory(made.status())) out_of_memory();
+      fail(id, peer, made.status().message(), /*back_off=*/true);
+      return;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    ready_.push_back(std::move(made).value());
+  }
+
+  // A session not opened: counted, printed once an id, and its id kept away
+  // from the door for a while (`back_off`).
+  void fail(const std::array<std::uint8_t, 16>& id, const std::string& peer,
+            const std::string& why, bool back_off) {
+    if (back_off) back_off_->failed(id, why);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (failed_++ == 0) first_failure_ = why;
+    if (std::find(failed_ids_.begin(), failed_ids_.end(), id) !=
+        failed_ids_.end()) {
+      return;
+    }
+    if (failed_ids_.size() >= 64) failed_ids_.pop_front();
+    failed_ids_.push_back(id);
+    std::fprintf(stderr,
+                 "warning: phones: session %s from %s not opened (%s); the run "
+                 "goes on\n",
+                 hex32(id).substr(0, 8).c_str(), peer.c_str(), why.c_str());
+  }
+
+  // `arrival`'s session made whole: its directory, admitted (its decoder
+  // made), its watch, its phone polled in the background, its prep, timer,
+  // fitters, tracker and log. A failure lets it go, its directory with it.
+  vkc::Result<MobileLane::SessionParts> open(Door& door,
+                                             Door::Arrival& arrival) {
+    const std::string id = hex32(arrival.session.id);
+    const std::string sensor_id = depth_sensor(arrival.session);
+    const bool named =
+        plan_.registration && arrival.session.id == plan_.registration->session;
+    // Its directory, NN its join's: the lane joins the sessions made in the
+    // order they are made, and a failure gives its number back.
+    std::filesystem::path dir;
+    if (!plan_.dir.empty()) {
+      char name[64];
+      std::snprintf(name, sizeof(name), "%02u-",
+                    static_cast<unsigned>(opened_ + 1));
+      dir = plan_.dir / (name + sanitized(sensor_id) + "-" + id.substr(0, 8));
+      std::error_code made;
+      std::filesystem::create_directories(dir, made);
+      if (made) {
+        std::fprintf(stderr,
+                     "warning: phones: cannot make %s (%s); session %s goes "
+                     "on unlogged and unrecorded\n",
+                     dir.string().c_str(), made.message().c_str(),
+                     id.substr(0, 8).c_str());
+        dir.clear();
+      }
+    }
+    const auto unmade = [&](vkc::Status why) {
+      if (!dir.empty()) {
+        std::error_code ignored;
+        std::filesystem::remove_all(dir, ignored);
+      }
+      return why;
+    };
+    link::RgbdStreamSensor::Options options;
+    options.min_confidence = 2;  // the phone's high, whatever it fused at
+    RunSource source;
+    source.session = plan_.address;
+    source.device = plan_.device_name;
+    source.session_id = id;
+    source.peer = arrival.peer;
+    if (named) {
+      options.registration = plan_.registration;
+      source.registration = plan_.registration_path;
+      source.tracking_to_world = Mat4f(plan_.registration->tracking_to_world);
+    } else {
+      options.device = &device_;  // the pictures, for the tag
+      options.allocator = &allocator_;
+      source.registration = "tag";  // until the watch registers it
+    }
+    const std::array<std::uint8_t, 16> session_id = arrival.session.id;
+    vkc::Result<std::unique_ptr<link::RgbdStreamSensor>> admitted =
+        door.admit(std::move(arrival), std::move(options),
+                   dir.empty() ? std::string() : (dir / "phone.vrst").string());
+    if (!admitted.ok()) return unmade(admitted.status());
+    std::unique_ptr<link::RgbdStreamSensor> stream =
+        std::move(admitted).value();
+    source.sensor = stream->info().id;
+    MobileLane::SessionParts parts;
+    parts.name = stream->info().id;
+    if (!named) {
+      if (!plan_.tag) {  // the screen refuses these; never placed blind
+        return unmade(vkc::Status::invalid_argument(
+            "no registration names it and the origin tag places none: " +
+            plan_.no_tag));
+      }
+      if (!stream->info().color) {
+        return unmade(vkc::Status::invalid_argument(
+            "sensor " + parts.name +
+            " sends no pictures, which the origin tag is found in: give "
+            "source.mobile_registration"));
+      }
+      const sensor::camera::WorldFrame& world = *plan_.tag;
+      std::printf(
+          "phones: session %s (%s): registering by the origin tag, %s id "
+          "%d, at its printed edge %.4g mm\n",
+          id.substr(0, 8).c_str(), parts.name.c_str(),
+          world.apriltag->family.c_str(), world.apriltag->id,
+          world.apriltag->size_m * 1e3);
+      vkc::Result<std::unique_ptr<TagWatch>> tags = TagWatch::create(
+          device_, allocator_, {parts.name, session_id, world, true});
+      if (!tags.ok()) return unmade(tags.status());
+      parts.tags = std::move(tags).value();
+      parts.placement = MobileLane::Placement::Tag;
+    }
+    // Its presence and its notes through its handle, never the sensor, which
+    // the reaper lets go on a thread of its own.
+    const std::shared_ptr<link::SessionHandle> handle = stream->handle();
+    parts.presence = [handle] { return handle->connected(); };
+    parts.on_error = [back_off = back_off_,
+                      session_id](const vkc::Status& error) {
+      back_off->failed(session_id, error.message());
+    };
+    if (!named) {
+      parts.say = [handle](gnet::ViewerNote note) {
+        handle->say(std::move(note));
+      };
+    }
+    parts.phone = polled_in_background(std::move(stream));
+    vkc::Result<sensor::GpuFramePrep> prep =
+        sensor::GpuFramePrep::create(device_, allocator_);
+    if (!prep.ok()) return unmade(prep.status());
+    parts.prep.emplace(std::move(prep).value());
+    vkc::Result<vkc::GpuTimer> timer = vkc::GpuTimer::create(device_);
+    if (!timer.ok()) return unmade(timer.status());
+    parts.timer.emplace(std::move(timer).value());
+    const track::TrackerConfig tracking = lane_tracking();
+    vkc::Result<std::vector<std::unique_ptr<track::IFitter>>> fitters =
+        track::create_fitters(device_, allocator_, tracking);
+    if (!fitters.ok()) return unmade(fitters.status());
+    vkc::Result<std::unique_ptr<track::Tracker>> tracker =
+        track::Tracker::create(tracking, std::move(fitters).value());
+    if (!tracker.ok()) return unmade(tracker.status());
+    parts.tracker = std::move(tracker).value();
+    // A log that cannot be made is printed, and the session is logged in
+    // memory alone.
+    vkc::Result<std::unique_ptr<TrackLog>> log =
+        TrackLog::open(dir.string(), *parts.tracker, source);
+    if (!log.ok()) {
+      std::fprintf(stderr,
+                   "warning: phones: session %s's log (%s); it is kept in "
+                   "memory alone\n",
+                   id.substr(0, 8).c_str(), log.status().message().c_str());
+      log = TrackLog::open({}, *parts.tracker, std::move(source));
+      if (!log.ok()) return unmade(log.status());
+    }
+    parts.log = std::move(log).value();
+    ++opened_;
+    return parts;
+  }
+
+  vkc::Device& device_;
+  vkc::Allocator& allocator_;
+  const LivePlan plan_;
+  const std::shared_ptr<BackOff> back_off_;  // the door's screen's too
+  mutable std::mutex mutex_;
+  std::condition_variable wake_;
+  std::unique_ptr<Door> door_;  // set by start or the opener; under mutex_
+  std::deque<MobileLane::SessionParts> ready_;         // under mutex_
+  bool closed_ = false;                                // under mutex_
+  bool closed_door_ = false;                           // under mutex_
+  Door::Stats last_stats_{};                           // under mutex_
+  std::string bind_error_;                             // under mutex_
+  std::chrono::steady_clock::time_point warned_at_{};  // under mutex_
+  vkc::Status lost_;        // the device's loss, for take; under mutex_
+  bool lost_seen_ = false;  // under mutex_
+  std::chrono::steady_clock::time_point paused_until_{};  // under mutex_
+  std::uint64_t failed_ = 0;                              // under mutex_
+  std::string first_failure_;                             // under mutex_
+  std::deque<std::array<std::uint8_t, 16>> failed_ids_;   // under mutex_
+  std::uint32_t opened_ = 0;  // the sessions made; the opener's
+  std::thread opener_;        // last: started once the rest is
+};
+
+// Whether `name` is a session's directory's, as the opener names one:
+// NN-<sensor>-<hex8>, NN two digits or more, the sensor not empty.
+bool session_directory_name(const std::string& name) {
+  std::size_t digits = 0;
+  while (digits < name.size() && name[digits] >= '0' && name[digits] <= '9') {
+    ++digits;
+  }
+  // The digits, '-', a sensor of one byte or more, '-' and 8 hex digits.
+  if (digits < 2 || name.size() < digits + 1 + 1 + 1 + 8) return false;
+  if (name[digits] != '-' || name[name.size() - 9] != '-') return false;
+  return std::all_of(name.end() - 8, name.end(), [](char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+  });
+}
+
+// What an earlier run's logs left in D, which this one would write beside:
+// its sessions.csv or door.csv (each made only with a row), a session's
+// directory with its log, recording or registration in it, or a file run's
+// flat registration.json or a recording; its name, or empty.
+std::string earlier_run(const std::filesystem::path& dir) {
+  std::error_code ec;
+  const auto there = [&](const std::filesystem::path& p) {
+    return std::filesystem::exists(std::filesystem::symlink_status(p, ec));
+  };
+  for (const char* file :
+       {"sessions.csv", "door.csv", "registration.json", "phone.vrst"}) {
+    if (there(dir / file)) return file;
+  }
+  for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end;
+       it.increment(ec)) {
+    const std::string name = it->path().filename().string();
+    std::error_code is_dir;
+    if (!session_directory_name(name) || !it->is_directory(is_dir)) continue;
+    for (const char* file : {"run.csv", "phone.vrst", "registration.json"}) {
+      if (there(it->path() / file)) return name;
+    }
+  }
+  return {};
+}
+
+// A live source.mobile's lane (above): what it takes of a phone settled
+// here, never refusing the run; the door bound or binding; the lane.
+vkc::Result<std::unique_ptr<MobileLane>> open_live_lane(
+    const config::Config& opt, vkc::Device& device, vkc::Allocator& allocator,
+    LaneOptions options) {
+  const config::MobileSession& m = *opt.source.mobile;
+  LivePlan plan;
+  plan.host = m.host;
+  plan.port = m.port;
+  plan.address = "tcp://" + m.host + ":" + std::to_string(m.port);
+  plan.device_name = device.caps().properties().deviceName;
+  plan.dir = opt.diagnostics.track_log;
+  const vkc::Status settings = settings_refusal(opt);
+  if (!settings.ok()) plan.turned_away = settings.message();
+  if (plan.turned_away.empty() && !m.registration.empty()) {
+    vkc::Result<sensor::camera::TrackedRegistration> reg =
+        sensor::camera::read_tracked_registration(m.registration);
+    if (reg.ok()) {
+      plan.registration = std::move(reg).value();
+      plan.registration_path = m.registration;
+    } else {
+      // It names no session, so each is placed as one it does not name.
+      plan.unread = "source.mobile_registration: " + reg.status().message();
+      std::fprintf(stderr,
+                   "warning: phones: %s; it places no session, and the origin "
+                   "tag any it can\n",
+                   plan.unread.c_str());
+    }
+  }
+  vkc::Result<sensor::camera::WorldFrame> world = tag_world(opt);
+  if (world.ok()) {
+    plan.tag = std::move(world).value();
+  } else {
+    plan.no_tag = world.status().message();
+  }
+  if (plan.turned_away.empty() && !plan.registration && !plan.tag) {
+    // Nothing places any phone: the registration that would have, or why
+    // the tag cannot.
+    plan.turned_away = plan.unread.empty() ? plan.no_tag : plan.unread;
+  }
+  if (!plan.dir.empty()) {
+    // The log never changes what is taken: a D this run cannot write takes
+    // the phones all the same, unlogged.
+    const std::string earlier = earlier_run(plan.dir);
+    std::error_code made;
+    if (earlier.empty()) std::filesystem::create_directories(plan.dir, made);
+    if (!earlier.empty()) {
+      plan.unlogged = "diagnostics.track_log: " + plan.dir.string() +
+                      " holds an earlier run's " + earlier +
+                      ": give each run its own directory";
+    } else if (made) {
+      plan.unlogged = "diagnostics.track_log: cannot make " +
+                      plan.dir.string() + " (" + made.message() + ")";
+    }
+    if (!plan.unlogged.empty()) {
+      std::fprintf(stderr,
+                   "warning: phones: %s; no phone is logged or recorded\n",
+                   plan.unlogged.c_str());
+      plan.dir.clear();
+    }
+  }
+  if (plan.turned_away.empty()) {
+    // A device that cannot track takes no phone: what each session makes,
+    // made once here, which also fills the pipeline cache for them.
+    vkc::Status can = [&]() -> vkc::Status {
+      VKC_ASSIGN(const sensor::GpuFramePrep prep,
+                 sensor::GpuFramePrep::create(device, allocator));
+      (void)prep;
+      VKC_ASSIGN(const std::vector<std::unique_ptr<track::IFitter>> fitters,
+                 track::create_fitters(device, allocator, lane_tracking()));
+      (void)fitters;
+      return {};
+    }();
+    if (device_lost(can)) return can;
+    if (!can.ok())
+      plan.turned_away = "this device cannot track: " + can.message();
+  }
+  options.log_directory = plan.dir.string();
+  if (options.error_back_off.count() <= 0) {
+    return vkc::Status::invalid_argument(
+        "open_mobile_lane: a back-off of " +
+        std::to_string(options.error_back_off.count()) +
+        " ms, which must be positive");
+  }
+  auto source = std::make_unique<DoorSource>(device, allocator, std::move(plan),
+                                             options.error_back_off);
+  try {
+    source->start();
+  } catch (const std::system_error& e) {
+    return vkc::Status::io_error(
+        std::string("open_mobile_lane: cannot start the opener's thread: ") +
+        e.what());
+  }
+  return MobileLane::create(device, allocator, std::move(source),
+                            std::move(options));
+}
+
+}  // namespace
+
 vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
-    const config::Config& opt, vkc::Device& device, vkc::Allocator& allocator) {
+    const config::Config& opt, vkc::Device& device, vkc::Allocator& allocator,
+    LaneOptions options) {
   if (!opt.source.mobile)
     return MobileLane::create(device, allocator, {}, {}, {});
-  VKC_TRY(check_mobile(opt));  // every refusal before any wait
   const config::MobileSession& m = *opt.source.mobile;
+  if (!m.host.empty()) {
+    return open_live_lane(opt, device, allocator, std::move(options));
+  }
+  // A file: its one session, as before.
+  VKC_TRY(check_mobile(opt));
   const std::filesystem::path dir = opt.diagnostics.track_log;
   const bool by_tag = m.registration.empty();
-  link::RgbdStreamSensor::Options options;
-  options.min_confidence = 2;  // the phone's high, whatever it fused at
+  link::RgbdStreamSensor::Options reading;
+  reading.min_confidence = 2;  // the phone's high, whatever it fused at
   RunSource source;
   source.device = device.caps().properties().deviceName;
+  source.session = m.path;
   sensor::camera::WorldFrame world;
   if (by_tag) {
-    VKC_ASSIGN(const sensor::camera::ArrayCalibration rig,
-               sensor::camera::read_array_calibration(opt.source.calibration));
-    world = rig.world;
-    options.device = &device;  // the pictures, for the tag
-    options.allocator = &allocator;
+    VKC_ASSIGN(world, tag_world(opt));
+    reading.device = &device;  // the pictures, for the tag
+    reading.allocator = &allocator;
     source.registration = "tag";  // until the watch registers it
     std::error_code ignored;
     if (!dir.empty() &&
@@ -1047,56 +2349,16 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
           "directory");
     }
   } else {
-    VKC_ASSIGN(options.registration,
+    VKC_ASSIGN(reading.registration,
                sensor::camera::read_tracked_registration(m.registration));
     source.registration = m.registration;
-    source.tracking_to_world = Mat4f(options.registration->tracking_to_world);
+    source.tracking_to_world = Mat4f(reading.registration->tracking_to_world);
   }
-  std::unique_ptr<link::RgbdStreamSensor> stream;
-  if (m.host.empty()) {
-    source.session = m.path;
-    VKC_ASSIGN(stream, link::RgbdStreamSensor::open_file(m.path, options));
-  } else {
-    source.session = "tcp://" + m.host + ":" + std::to_string(m.port);
-    // With a log, the phone is recorded beside it from its first session,
-    // so the run replays; listen refuses a recording already there.
-    std::string record;
-    if (!dir.empty()) {
-      std::error_code made;
-      std::filesystem::create_directories(dir, made);
-      if (made) {
-        return vkc::Status::io_error("diagnostics.track_log: cannot make " +
-                                     dir.string() + ": " + made.message());
-      }
-      record = (dir / "phone.vrst").string();
-    }
-    std::printf("waiting for the phone to dial %s (Ctrl+C ends the wait)\n",
-                source.session.c_str());
-    // A second at a time, so a Ctrl+C ends the wait; the empty lane then
-    // lets the run return before its cameras open.
-    const auto until = std::chrono::steady_clock::now() + kPhoneWait;
-    for (;;) {
-      if (vgrid_example::interrupted()) {
-        return MobileLane::create(device, allocator, {}, {}, {});
-      }
-      vkc::Result<std::unique_ptr<link::RgbdStreamSensor>> heard =
-          link::RgbdStreamSensor::listen(m.host, m.port, options, record,
-                                         std::chrono::seconds(1));
-      if (heard.ok()) {
-        stream = std::move(*heard);
-        break;
-      }
-      // Only the wait running out is waited through again.
-      const bool waited =
-          heard.status().domain() == vkc::Status::Code::IoError &&
-          heard.status().message().find("no session within the wait") !=
-              std::string::npos;
-      if (!waited || std::chrono::steady_clock::now() >= until) {
-        return heard.status();
-      }
-    }
-  }
-  // The tag's watch, for the session that came: it needs its pictures.
+  VKC_ASSIGN(std::unique_ptr<link::RgbdStreamSensor> stream,
+             link::RgbdStreamSensor::open_file(m.path, reading));
+  source.session_id = hex32(stream->session_id());
+  source.sensor = stream->info().id;
+  // The tag's watch, for the session: it needs its pictures.
   std::unique_ptr<TagWatch> tags;
   if (by_tag) {
     const std::string id = stream->info().id;
@@ -1106,33 +2368,15 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
           " sends no pictures, which the origin tag is found in: give "
           "source.mobile_registration");
     }
-    const std::array<std::uint8_t, 16>& session = stream->session_id();
-    char hex[9];
-    std::snprintf(hex, sizeof(hex), "%02x%02x%02x%02x", session[0], session[1],
-                  session[2], session[3]);
     std::printf(
         "phone: session %s… (%s): registering by the origin tag, %s id "
         "%d, at its printed edge %.4g mm\n",
-        hex, id.c_str(), world.apriltag->family.c_str(), world.apriltag->id,
+        source.session_id.substr(0, 8).c_str(), id.c_str(),
+        world.apriltag->family.c_str(), world.apriltag->id,
         world.apriltag->size_m * 1e3);
-    VKC_ASSIGN(tags,
-               TagWatch::create(device, allocator,
-                                {id, session, world, /*background=*/true}));
-  }
-  // A live phone on the tag is told how the search goes. The sensor stays where
-  // it is inside the background poll, and the lane says nothing after its
-  // close, before the phone stops.
-  std::function<void(gnet::ViewerNote)> say;
-  if (by_tag && !m.host.empty()) {
-    say = [reader = stream.get()](gnet::ViewerNote note) {
-      reader->say(std::move(note));
-    };
-  }
-  std::unique_ptr<sensor::IRgbdSensor> phone;
-  if (m.host.empty()) {
-    phone = std::move(stream);
-  } else {
-    phone = polled_in_background(std::move(stream));
+    VKC_ASSIGN(tags, TagWatch::create(device, allocator,
+                                      {id, stream->session_id(), world,
+                                       /*background=*/true}));
   }
   const track::TrackerConfig tracking = lane_tracking();
   VKC_ASSIGN(std::vector<std::unique_ptr<track::IFitter>> fitters,
@@ -1142,9 +2386,9 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
   VKC_ASSIGN(
       std::unique_ptr<TrackLog> log,
       TrackLog::open(opt.diagnostics.track_log, *tracker, std::move(source)));
-  return MobileLane::create(device, allocator, std::move(phone),
-                            std::move(tracker), std::move(log), std::move(tags),
-                            std::move(say));
+  return MobileLane::create(device, allocator, std::move(stream),
+                            std::move(tracker), std::move(log),
+                            std::move(tags));
 }
 
 }  // namespace vr_example

@@ -1177,35 +1177,51 @@ rules (refusals, reconnects, repeats, the failure cap and the recording), and
 `RgbdStreamSensor::Door` holds such an address for a whole run, on a thread of
 its own, and routes each connection by its session's id and every byte of its
 `VRST` chunk: a held session's reconnect to that session's `SessionHandle`, at
-the cap too; a new session, with a slot free, to an `Arrival` that `admit`
-makes a sensor of its own, the decoder opened off the door's thread, and
-unrecorded rather than refused where its recording cannot be made; anything
-else (the cap reached, an id cooling down after its failure cap or its decoder,
-one remembered as refused for what its session is) is closed right after its
-session's chunk, never an error. The handle carries the newest connection, the
-session's presence and the note for its writer, so another thread watches and
-tells the session without touching the sensor. A newer connection takes the
-place of the one read, from the same peer at once and from another after a
-second of silence, neither a failure; the failure cap ends that session alone,
-and its slot frees when its sensor goes. Nothing in the live runs opens a door
-yet.
+the cap too; a new session, with a slot free and passed by the caller's screen
+(`DoorOptions::screen`), to an `Arrival` that `admit` makes a sensor of its
+own, the decoder opened off the door's thread, and unrecorded rather than
+refused where its recording cannot be made; anything else (the screen's
+reason, the cap reached, an id cooling down after its failure cap or its
+decoder, one remembered as refused for what its session is) is closed right
+after its session's chunk, never an error. The handle carries the newest
+connection, the session's presence and the note for its writer, so another
+thread watches and tells the session without touching the sensor. A newer
+connection takes the place of the one read, from the same peer at once and
+from another after a second of silence, neither a failure; the failure cap
+ends that session alone, and its slot frees when its sensor goes. Its thread
+alone writes `door.csv`, made at its first row, a row for each connection
+refused or superseded, with its session and peer; the live runs' phone lane
+keeps one door a run.
 `tools/session_check`, built with the tests, prints what
 its `session_check.hpp` finds of a file or a link (README, "Checking a
 phone's stream"); the link tests run the same checks (`vr_session_check`).
 
 **The phone lane** (`examples/common/live_mobile.hpp`, `vr_example_mobile`)
 puts such sensors beside a live run's cameras (`source.mobile`). It holds
-sessions, one a phone's, in join order (`MobileLane::add`; a run's lane holds
+sessions, one a phone's, in join order (`MobileLane::add`; a file's lane holds
 one): after each set's send, `MobileLane::next` tracks each session's record
 due by the next set on `lane_tracking()` in one batch a session, each waited
 on in the gap in join order, and hands the next send up to 3 of the frames
 the sessions' `Tracker`s placed, one a session in turn, as fillers of their
-tier under the session's own mobile index. Its rules (pairing, the drain and
+tier under the session's own mobile index. A live lane never holds the rig
+up: `open_mobile_lane` returns at once, a door listens for the whole run (an
+address it cannot bind retried every 2 s), and its sessions come and go
+(`kMaxPhones`, 1 until the gap's scheduler; Away, settled at 7 s and retired
+at 30 s of set time; a return within it the same session). An opener thread
+admits and builds each session off the set loop, the lane joins one a gap,
+and a reaper thread lets each go, releasing before it reports. A setting
+that rules phones out turns them away at the door, never the run; a track
+log it cannot write (an earlier run's) leaves them unlogged; a phone whose
+session fails of its own is kept from the door for a back-off; and of a
+live session only the device's loss comes out of the lane, while a file's
+session's error ends its run as before. Its rules (pairing, the drain and
 its turns, the queue's cap, the index, splits, the tint, what a phone is
-told) are the header's; why, the 2026-11-04 and 2026-11-05 entries. A
-session's log (`track_log.hpp`) is its `Tracker`'s steps as CSVs and a TUM
-pose file a chain, which `read_track_log` reads back and `summarize` turns
-into every metric of a run, once.
+told, coming and going, the errors, the live layout) are the header's; why,
+the 2026-11-04, 2026-11-05 and 2026-11-08 entries. A session's log
+(`track_log.hpp`) is its `Tracker`'s steps as CSVs and a TUM pose file a
+chain, which `read_track_log` reads back and `summarize` turns into every
+metric of a run, once; a live run keeps one a session in a directory of its
+own (`NN-<sensor>-<hex8>`), beside `sessions.csv` and `door.csv`.
 
 Every example reads a scenario with `--config path.json`; `--help` prints
 that entry point. The optional core `config` tier owns the JSON format, typed
@@ -1469,7 +1485,13 @@ summary: the shipped `lane_tracking()` with its keys, a rig model read
 from a file, the tag-hold and twin judges, per-chain meshes), whose
 reference check against 0b ran once from a harness (the 2026-11-04
 entry); the live phone lane's minute on the rig (its gap, its fill
-surviving people); the Partial step restricted in each iteration, as 0b's
+surviving people), and, with the door listening and no phone, the rig's 300
+sets' digests and send unchanged; on an iPad, a join after minutes, locks
+of 20 and 60 s, a relaunch, Disconnect then Connect and another device (the
+2026-11-08 entry); then up to four phones: the gap's scheduler (one hop a
+gap across phones, a steady-clock guard on `GapBudget`), measured at one,
+two and four phones under load before `kMaxPhones` rises from 1; the
+Partial step restricted in each iteration, as 0b's
 reference does (the solve's `TODO:`). The hop's batch (two window fits)
 must fit the gap after a set's send: on a nearly idle 5090 it does, beside
 other jobs' load not always (the 2026-11-04 entry). Should the live rig

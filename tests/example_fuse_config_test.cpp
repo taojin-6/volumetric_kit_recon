@@ -46,6 +46,7 @@ int main() {
       {"fuse_orbbec", cfg::Application::FuseOrbbec},
       {"codec_orbbec", cfg::Application::FuseOrbbec},
       {"serve_orbbec", cfg::Application::FuseOrbbec},
+      {"fuse_orbbec_phone", cfg::Application::FuseOrbbec},
       {"stream_orbbec", cfg::Application::FuseOrbbec},
       {"readback_orbbec", cfg::Application::FuseOrbbec},
       {"dump_orbbec", cfg::Application::FuseOrbbec},
@@ -64,13 +65,14 @@ int main() {
       std::fprintf(stderr, "%s: %s\n", example.file,
                    loaded.status().message().c_str());
     CHECK(loaded);
-    // codec_orbbec alone writes codec rows, and it and serve_orbbec frames;
-    // serve_orbbec alone serves them, on the default port to every interface,
-    // to the server's default count of viewers, a joiner waiting for the key
-    // the stream makes for it.
+    // codec_orbbec alone writes codec rows, and it, serve_orbbec and
+    // fuse_orbbec_phone frames; those two serve them, on the default port to
+    // every interface, to the server's default count of viewers, a joiner
+    // waiting for the key the stream makes for it.
     // Every live example fuses Dynamic, by core's default, the rest Classic.
     const bool coded = std::string(example.file) == "codec_orbbec";
-    const bool served = std::string(example.file) == "serve_orbbec";
+    const bool served = std::string(example.file) == "serve_orbbec" ||
+                        std::string(example.file) == "fuse_orbbec_phone";
     const bool live = example.application == cfg::Application::FuseOrbbec ||
                       example.application == cfg::Application::FuseRealsense ||
                       example.application == cfg::Application::FuseDecklink ||
@@ -115,6 +117,22 @@ int main() {
   CHECK(replica_encoder->segment_size == 64 &&
         replica_encoder->resolved_update_size() ==
             replica_encoder->segment_size);
+
+  // The rig served live with phones joining it: listening on one of this
+  // host's addresses at the lab's phone port, apart from the viewers', each
+  // placed by the origin tag, a directory a session in the track log.
+  const auto phones =
+      cfg::load(std::string(VR_CONFIG_FIXTURES) + "/fuse_orbbec_phone.json",
+                cfg::Application::FuseOrbbec);
+  CHECK(phones && phones->source.mobile && phones->fusion.dynamic);
+  CHECK(phones->source.mobile->host == "10.8.0.1" &&
+        phones->source.mobile->port == 7120 &&
+        phones->source.mobile->port != phones->output.serve &&
+        phones->source.mobile->registration.empty());
+  CHECK(phones->diagnostics.track_log ==
+        (std::filesystem::path(VR_CONFIG_FIXTURES) / "results" / "phones")
+            .lexically_normal()
+            .string());
 
   const auto readback =
       cfg::load(std::string(VR_CONFIG_FIXTURES) + "/readback_orbbec.json",
