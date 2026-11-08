@@ -70,7 +70,6 @@
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/streamed_atlas.hpp"
 
-namespace vr = volumetric_kit::recon;
 namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::grid::volume;

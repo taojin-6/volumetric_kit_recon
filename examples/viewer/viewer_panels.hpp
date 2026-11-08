@@ -7,8 +7,9 @@
 /// @brief The Dear ImGui rows both viewers report recon's side in -- the
 ///        map's occupancy and recon's device memory -- `fuse_viewer`'s
 ///        Reconstruction panel, and the View options both add to the mesh's
-///        shading (draw_mesh_view). Each builds into the ImGui frame the caller
-///        is driving (it calls neither NewFrame nor Render), as gfx's
+///        shading (draw_mesh_view), with the flags of each and of the shading
+///        itself. Each panel builds into the ImGui frame the caller is driving
+///        (it calls neither NewFrame nor Render), as gfx's
 ///        `draw_metrics_panel` does.
 
 #include <algorithm>
@@ -18,6 +19,7 @@
 
 #include <imgui.h>
 
+#include "volumetric_kit/core/config/config.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/grid/mesh/marching_cubes.hpp"
@@ -181,6 +183,23 @@ inline std::uint32_t mesh_view_flags(const MeshView& view) {
   namespace vgp = volumetric_kit::gfx::pipelines;
   return (view.wireframe ? vgp::kHybridMeshWireframe : 0u) |
          (view.cull_back_faces ? vgp::kHybridMeshCullBackFaces : 0u);
+}
+
+/// @return The gfx `HybridMeshFlags` the live viewers shade with for
+///         @p shading: `kHybridMeshLit`, none for unlit, or
+///         `kHybridMeshNormals`.
+inline std::uint32_t shading_flags(vkc::config::Shading shading) {
+  namespace vgp = volumetric_kit::gfx::pipelines;
+  using Shading = vkc::config::Shading;
+  switch (shading) {
+    case Shading::Lit:
+      return vgp::kHybridMeshLit;
+    case Shading::Unlit:
+      return 0u;
+    case Shading::Normals:
+      return vgp::kHybridMeshNormals;
+  }
+  return vgp::kHybridMeshLit;
 }
 
 /// @brief Checkboxes for @p view in the current ImGui window: "wireframe",

@@ -6,15 +6,18 @@
 /// @file examples/viewer/viewer_atlas.hpp
 /// @brief The atlas `fuse_viewer` and `rig_viewer` draw a live mesh with:
 ///        what a mesh's atlas is copied from, and gfx's `StreamedAtlas`
-///        filled from it in the frame that first draws the mesh; and the
+///        filled from it in the frame that first draws the mesh; the solid
+///        tiles `rig_viewer`'s colour-by-camera view copies instead; and the
 ///        atlas description they and `fuse_render` share.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -88,6 +91,114 @@ inline std::vector<vg::ImageCopy> atlas_copies(
   }
   return copies;
 }
+
+/// Each camera's colour in the colour-by-camera view, as sRGB bytes (R, G,
+/// B), the encoding the atlas holds; past the eighth, the colours repeat.
+inline constexpr std::array<std::array<std::uint8_t, 3>, 8> kCameraColours = {{
+    {230, 60, 60},
+    {60, 200, 80},
+    {60, 110, 240},
+    {240, 210, 50},
+    {210, 70, 210},
+    {60, 210, 220},
+    {245, 140, 40},
+    {200, 200, 200},
+}};
+
+/// @return Camera @p camera 's @ref kCameraColours entry as an atlas word:
+///         R, G and B in the low three bytes and full coverage in the high
+///         one, the bytes of R8G8B8A8.
+inline std::uint32_t camera_colour_word(std::size_t camera) {
+  const std::array<std::uint8_t, 3>& rgb =
+      kCameraColours[camera % kCameraColours.size()];
+  return std::uint32_t{rgb[0]} | (std::uint32_t{rgb[1]} << 8) |
+         (std::uint32_t{rgb[2]} << 16) | 0xFF000000u;
+}
+
+/// @brief The colour-by-camera view's sources: one device-local buffer a
+///        tile, the tile's size, every word its camera's
+///        @ref camera_colour_word, for @ref LiveAtlas::commit to copy instead
+///        of the cameras' images.
+///
+/// Made the first time the view is switched on, since at 4K they are 33 MB a
+/// camera, and filled on the device in that frame's command buffer:
+/// host-visible, a discrete GPU would copy them across the bus on every
+/// remesh.
+///
+/// @code
+/// fuse_viewer::SolidTiles solid(allocator);
+/// // in the frame that commits a textured job, before the commit:
+/// VKC_TRY(solid.ensure(cmd, layout.tiles));
+/// VKC_TRY(atlas.commit(cmd, frame, job, &solid.buffers()));
+/// @endcode
+class SolidTiles {
+ public:
+  /// @param allocator  Allocates the buffers; it must outlive this.
+  explicit SolidTiles(vkc::Allocator& allocator) : allocator_(&allocator) {}
+
+  SolidTiles(const SolidTiles&) = delete;
+  SolidTiles& operator=(const SolidTiles&) = delete;
+  SolidTiles(SolidTiles&&) = delete;
+  SolidTiles& operator=(SolidTiles&&) = delete;
+
+  /// @brief Make a buffer for each of @p tiles, in their order, unless they
+  ///        are made, and record into @p cmd their fills and the barrier that
+  ///        lands them before a later transfer in @p cmd reads them. With the
+  ///        buffers already made, it records nothing.
+  /// @param cmd    A command buffer in the recording state, which the atlas
+  ///               copy is recorded into after this.
+  /// @param tiles  One per camera, in camera order; the same on every call.
+  ///               Made buffers are never made again, since a submitted
+  ///               frame's copy may still read them and nothing retires them
+  ///               by frame, so another count while they are held is a
+  ///               programmer error (`VKC_CHECK`).
+  /// @return OK; or the allocator's refusal, which leaves no buffer held and
+  ///         records nothing, for a later call to try again.
+  vkc::Status ensure(VkCommandBuffer cmd,
+                     const std::vector<rtex::AtlasTile>& tiles) {
+    if (buffers_.size() == tiles.size()) return vkc::Status{};
+    VKC_CHECK(buffers_.empty(),
+              "SolidTiles::ensure: the tile count changed after the buffers "
+              "were made");
+    for (const rtex::AtlasTile& tile : tiles) {
+      vkc::BufferDesc desc;
+      desc.size = VkDeviceSize(tile.width) * tile.height * 4u;
+      desc.usage =
+          VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+      desc.memory = vkc::MemoryUsage::DeviceOnly;
+      vkc::Result<vkc::Buffer> buffer = allocator_->create_buffer(desc);
+      if (!buffer.ok()) {
+        buffers_.clear();
+        return buffer.status();
+      }
+      buffers_.push_back(std::move(buffer).value());
+    }
+    // Filled only once every buffer exists, so a failed allocation above
+    // frees none that a recorded fill names.
+    for (std::size_t c = 0; c < buffers_.size(); ++c) {
+      vkCmdFillBuffer(cmd, buffers_[c].handle(), 0, VK_WHOLE_SIZE,
+                      camera_colour_word(c));
+    }
+    // The fills land before the atlas copy reads them, later in this buffer.
+    VkMemoryBarrier filled{};
+    filled.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    filled.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    filled.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &filled, 0,
+                         nullptr, 0, nullptr);
+    return vkc::Status{};
+  }
+
+  /// @return One buffer a tile, in the tiles' order; empty until
+  ///         @ref ensure first succeeds. The `solid` @ref LiveAtlas::commit
+  ///         takes.
+  const std::vector<vkc::Buffer>& buffers() const noexcept { return buffers_; }
+
+ private:
+  vkc::Allocator* allocator_;
+  std::vector<vkc::Buffer> buffers_;
+};
 
 /// @brief The atlas the viewers draw with: @p extent, in the frame prep's
 ///        canonical-encoded 8-bit colour, so the sampler decodes and filters

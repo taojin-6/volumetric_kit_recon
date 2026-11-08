@@ -102,7 +102,9 @@ jobs:
 
       # Name the viewer targets explicitly rather than building everything, so
       # this leg fails for the reason it exists rather than on some unrelated
-      # target, and so it does not re-do what the build legs already cover.
+      # target, and so it does not re-do what the build legs already cover;
+      # recon_example_viewer_metrics_test, which they run too, is named only
+      # because the Test step's regex matches it.
       # The level is explicit, as in _build.yml's Build step.
       - name: Build viewer examples
         run: |
@@ -110,7 +112,7 @@ jobs:
             --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
             --target fuse_viewer fuse_render rig_viewer \
             recon_example_viewer_atlas_test recon_example_viewer_device_test \
-            recon_example_viewer_pass_test recon_example_viewer_rig_report_test \
+            recon_example_viewer_pass_test recon_example_viewer_metrics_test \
             recon_example_viewer_orbit_test
 
       # The viewers' headless tests and fuse_render's run, on the core's test

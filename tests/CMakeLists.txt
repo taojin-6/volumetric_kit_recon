@@ -526,6 +526,23 @@ target_link_libraries(recon_example_set_log_test
 vr_target_warnings(recon_example_set_log_test)
 add_test(NAME recon_example_set_log COMMAND recon_example_set_log_test)
 
+# The live viewers' host-side figures (examples/viewer/viewer_metrics.hpp): the
+# atlas copies' device time from the profiler's late snapshots, a count's rate
+# over the run and over the last second, each camera's share of a mesh, the
+# frame each camera textures a remesh from, and the end table's title. The
+# header includes no gfx, so every leg builds it, the viewer or not. Host only.
+add_executable(recon_example_viewer_metrics_test
+               example_viewer_metrics_test.cpp)
+target_include_directories(recon_example_viewer_metrics_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/viewer)
+target_link_libraries(
+  recon_example_viewer_metrics_test
+  PRIVATE volumetric_kit::recon_texture volumetric_kit::sensor_frame
+          grid_example_common)
+vr_target_warnings(recon_example_viewer_metrics_test)
+add_test(NAME recon_example_viewer_metrics
+         COMMAND recon_example_viewer_metrics_test)
+
 # A sender's set into the run's figures (examples/common/fuse_sender.hpp): a set
 # stamped from what the set step returned, its frame's row kept; the world's up
 # a calibration file names; and a live run's session, which builds on

@@ -97,6 +97,7 @@
 #include "set_log.hpp"
 #include "viewer_atlas.hpp"
 #include "viewer_common.hpp"
+#include "viewer_metrics.hpp"  // texture_sources, WindowRate, per_set_title
 #include "viewer_orbit.hpp"
 #include "viewer_panels.hpp"  // draw_mesh_view
 #include "world_up.hpp"
@@ -106,7 +107,6 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
-#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/shared_device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/grid/mesh/device_mesh.hpp"
@@ -139,7 +139,6 @@
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
-namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::grid::volume;
 namespace rtsdf = volumetric_kit::recon::tsdf;
@@ -167,18 +166,6 @@ constexpr std::size_t kLoggedSets = 15000;
 // The three ways the hybrid pipeline shades, as the View panel offers them.
 using Shading = vgrid_example::config::Shading;
 
-std::uint32_t shading_flags(Shading shading) {
-  switch (shading) {
-    case Shading::Lit:
-      return vgp::kHybridMeshLit;
-    case Shading::Unlit:
-      return 0u;
-    case Shading::Normals:
-      return vgp::kHybridMeshNormals;
-  }
-  return vgp::kHybridMeshLit;
-}
-
 using Options = vgrid_example::config::Config;
 
 // Scroll arrives through a callback; the render loop reads what built up.
@@ -186,36 +173,9 @@ struct ScrollInput {
   double pending = 0.0;
 };
 
-// A camera's newest frame with colour, and the set it came in (sets count
-// from 1).
-struct NewestFrame {
-  rsensor::DeviceFrame frame;
-  std::uint64_t set = 0;
-};
-
-// The frame a remesh textures one camera from, and whether it is held: from
-// an earlier set.
-struct TextureSource {
-  const rsensor::DeviceFrame* frame = nullptr;
-  bool held = false;
-};
-
-// Per camera, its newest frame: this set's, or an earlier one taken at most
-// `hold_ns` before `set_ns` on the host's clock (Options::hold_ms).
-std::vector<TextureSource> texture_sources(
-    const std::vector<std::optional<NewestFrame>>& newest, std::uint64_t set,
-    std::uint64_t set_ns, std::uint64_t hold_ns) {
-  std::vector<TextureSource> out(newest.size());
-  for (std::size_t c = 0; c < newest.size(); ++c) {
-    if (!newest[c]) continue;
-    const bool held = newest[c]->set != set;
-    const std::uint64_t taken = newest[c]->frame.timestamp_ns;
-    if (!held || (set_ns >= taken && set_ns - taken <= hold_ns)) {
-      out[c] = {&newest[c]->frame, held};
-    }
-  }
-  return out;
-}
+using fuse_viewer::NewestFrame;
+using fuse_viewer::texture_sources;
+using fuse_viewer::TextureSource;
 
 // Owns the WindowedApp and every device resource, so they are gone before
 // main destroys the window (see fuse_viewer's run()).
@@ -468,60 +428,16 @@ int run(GLFWwindow* window, const Options& opt) {
     imgui_glfw = std::move(imgui_glfw_result).value();
   }
 
-  // The colour-by-camera view's sources: one device-local buffer a camera,
-  // its tile's size, filled with that camera's colour (sRGB bytes, as the
-  // atlas holds). Made the first time the view is switched on, since at 4K
-  // they are 33 MB a camera, and filled on the device in that frame's command
-  // buffer: host-visible, a discrete GPU would copy them across the bus on
-  // every remesh.
-  const std::array<std::array<std::uint8_t, 3>, 8> kCameraColours = {{
-      {230, 60, 60},
-      {60, 200, 80},
-      {60, 110, 240},
-      {240, 210, 50},
-      {210, 70, 210},
-      {60, 210, 220},
-      {245, 140, 40},
-      {200, 200, 200},
-  }};
-  std::vector<vkc::Buffer> solid_buffers;
+  // The colour-by-camera view's sources, a solid tile a camera, made the
+  // first time the view is switched on. A failure is said on every attempt.
+  fuse_viewer::SolidTiles solid_tiles(app.allocator());
   auto ensure_solid = [&](VkCommandBuffer cmd) -> bool {
-    if (solid_buffers.size() == cameras) return true;
-    solid_buffers.clear();
-    for (std::size_t c = 0; c < cameras; ++c) {
-      const rtex::AtlasTile& tile = layout.tiles[c];
-      vkc::BufferDesc desc;
-      desc.size = VkDeviceSize(tile.width) * tile.height * 4u;
-      desc.usage =
-          VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-      desc.memory = vkc::MemoryUsage::DeviceOnly;
-      auto buffer = app.allocator().create_buffer(desc);
-      if (!buffer.ok()) {
-        std::fprintf(stderr, "rig_viewer: colour-by-camera buffer: %s\n",
-                     buffer.status().message().c_str());
-        solid_buffers.clear();
-        return false;
-      }
-      solid_buffers.push_back(std::move(buffer).value());
+    const vkc::Status made = solid_tiles.ensure(cmd, layout.tiles);
+    if (!made.ok()) {
+      std::fprintf(stderr, "rig_viewer: colour-by-camera buffer: %s\n",
+                   made.message().c_str());
     }
-    // Filled only once every buffer exists, so a failed allocation above
-    // frees none that a recorded fill names.
-    for (std::size_t c = 0; c < cameras; ++c) {
-      const auto& rgb = kCameraColours[c % kCameraColours.size()];
-      const std::uint32_t word = std::uint32_t{rgb[0]} |
-                                 (std::uint32_t{rgb[1]} << 8) |
-                                 (std::uint32_t{rgb[2]} << 16) | 0xFF000000u;
-      vkCmdFillBuffer(cmd, solid_buffers[c].handle(), 0, VK_WHOLE_SIZE, word);
-    }
-    // The fills land before the atlas copy reads them, later in this buffer.
-    VkMemoryBarrier filled{};
-    filled.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    filled.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    filled.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &filled, 0,
-                         nullptr, 0, nullptr);
-    return true;
+    return made.ok();
   };
 
   // --- The view -------------------------------------------------------------
@@ -935,10 +851,8 @@ int run(GLFWwindow* window, const Options& opt) {
   int exit_code = 0;
   int drawn = 0;
   std::uint64_t atlas_copies = 0;
-  // The mesh rate's window: when it began, and the generation drawn then.
-  auto rate_start = std::chrono::steady_clock::now();
-  std::uint64_t rate_generation = 0;
-  double mesh_rate = 0.0;
+  // The mesh rate, over the newest second's window.
+  fuse_viewer::WindowRate mesh_rate(std::chrono::steady_clock::now());
   // For the end: the meshes drawn a second while the rig fuses, and the
   // atlas copies' device time.
   fuse_viewer::CountRate mesh_updates;
@@ -989,7 +903,7 @@ int run(GLFWwindow* window, const Options& opt) {
                 !job.empty() && show_sources && ensure_solid(render_frame.cmd);
             const vkc::Status committed =
                 atlas.commit(render_frame.cmd, render_frame.number, job,
-                             solid ? &solid_buffers : nullptr);
+                             solid ? &solid_tiles.buffers() : nullptr);
             if (!committed.ok()) {
               // Retried every frame, so said once until it succeeds.
               if (!atlas_error_said) {
@@ -1025,16 +939,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // A generation is one extract, and every extract is committed, so their
       // rise over a second is the meshes drawn in it.
       const auto now = std::chrono::steady_clock::now();
-      const double seconds =
-          std::chrono::duration<double>(now - rate_start).count();
-      if (seconds >= 1.0) {
-        mesh_rate =
-            static_cast<double>(live_view.generation - rate_generation) /
-            seconds;
-        rate_generation = live_view.generation;
-        rate_start = now;
-      }
-      panel.mesh_rate = mesh_rate;
+      panel.mesh_rate = mesh_rate.at(live_view.generation, now);
       // Once a set has fused and until fusion stops, so neither a mesh of
       // the empty map before the first set nor a remesh for a view change
       // after the last stretches the span.
@@ -1138,8 +1043,9 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         ImGui::Checkbox("colour by camera", &show_sources);
         if (show_sources) {
+          const auto& colours = fuse_viewer::kCameraColours;
           for (std::size_t c = 0; c < cameras; ++c) {
-            const auto& rgb = kCameraColours[c % kCameraColours.size()];
+            const auto& rgb = colours[c % colours.size()];
             ImGui::ColorButton(
                 serials[c].c_str(),
                 ImVec4(rgb[0] / 255.0f, rgb[1] / 255.0f, rgb[2] / 255.0f, 1.0f),
@@ -1188,8 +1094,8 @@ int run(GLFWwindow* window, const Options& opt) {
           hybrid_frame.extent = extent;
           hybrid_frame.view_proj = view_proj;
           hybrid_frame.light_dir = light_dir;
-          hybrid_frame.flags =
-              shading_flags(shading) | fuse_viewer::mesh_view_flags(mesh_view);
+          hybrid_frame.flags = fuse_viewer::shading_flags(shading) |
+                               fuse_viewer::mesh_view_flags(mesh_view);
           hybrid_frame.atlas = atlas.use(render_frame.number);
           hybrid_frame.draws = &draw;
           hybrid_frame.draw_count = 1;
@@ -1227,13 +1133,10 @@ int run(GLFWwindow* window, const Options& opt) {
                                  mesh_updates.per_second());
   vr_example::print_rig_stats(array, nullptr);
   std::fputs(copy_times.report().c_str(), stdout);
-  const std::string title =
-      log.dropped() == 0
-          ? std::string("per set")
-          : "per set (the newest " + std::to_string(log.sets().size()) +
-                " of " + std::to_string(log.sets().size() + log.dropped()) +
-                ")";
-  std::fputs(log.table(title).c_str(), stdout);
+  std::fputs(
+      log.table(fuse_viewer::per_set_title(log.sets().size(), log.dropped()))
+          .c_str(),
+      stdout);
   return exit_code;
 }
 
