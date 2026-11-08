@@ -12,8 +12,11 @@
 // Teardown keeps submitted copies' sources alive and releases the sources of
 // a later frame that never reached the queue without waiting for its number.
 // The atlas description the viewers and fuse_render share makes, for a single
-// frame, an atlas gfx accepts and draws a host upload from. The copies run on
-// a headless device, which the test skips without.
+// frame, an atlas gfx accepts and draws a host upload from. The
+// colour-by-camera view's solid tiles are made and filled, each with its
+// camera's colour, in the frame that first copies them, and kept, unfilled,
+// for later frames. The copies run on a headless device, which the test skips
+// without.
 
 #include <chrono>
 #include <cstdint>
@@ -31,6 +34,7 @@
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
@@ -47,6 +51,7 @@ namespace vgp = volumetric_kit::gfx::pipelines;
 namespace rtex = volumetric_kit::recon::texture;
 using fuse_viewer::AtlasJob;
 using fuse_viewer::LiveAtlas;
+using fuse_viewer::SolidTiles;
 
 // A rig of two cameras: 3 x 2 tiles side by side, then a third tile below
 // the first, which the job leaves out.
@@ -395,6 +400,106 @@ int one_frame_atlas_draws_its_upload(vg::app::HeadlessApp& app) {
   return 0;
 }
 
+// The colour-by-camera view, as rig_viewer runs it: two cameras' solid tiles
+// made and filled in the frame that copies them into the atlas, each word its
+// camera's colour; the next frame keeps them, records no fill, and copies
+// from them again. Only synchronization validation
+// (`VKC_TEST_SYNC_VALIDATION=1`) sees the fills' barrier go missing.
+int solid_tiles_fill_each_camera_tile(vg::app::HeadlessApp& app) {
+  // sRGB bytes with full coverage, repeating past the eighth camera.
+  CHECK(fuse_viewer::camera_colour_word(0) == 0xFF3C3CE6u);
+  CHECK(fuse_viewer::camera_colour_word(7) == 0xFFC8C8C8u);
+  CHECK(fuse_viewer::camera_colour_word(8) ==
+        fuse_viewer::camera_colour_word(0));
+
+  vg::RenderTargetLayout target;
+  target.color_formats[0] = VK_FORMAT_R8G8B8A8_SRGB;
+  target.color_count = 1;
+  target.depth_format = VK_FORMAT_D32_SFLOAT;
+  auto pipeline =
+      vgp::HybridMeshPipeline::create(app.device(), app.allocator(), target);
+  CHECK(pipeline.ok());
+  auto frames = vkc::TimelineSemaphore::create(app.device());
+  CHECK(frames.ok());
+  LiveAtlas atlas(pipeline.value(), app.allocator(), frames.value(), {5, 3}, 2);
+
+  // A 3 x 3 tile and a 2 x 2 one beside it. The job names no colour buffer:
+  // the copies read the solid tiles alone.
+  const std::vector<rtex::AtlasTile> tiles = {rtex::AtlasTile{0, 0, 3, 3},
+                                              rtex::AtlasTile{3, 0, 2, 2}};
+  AtlasJob job;
+  job.tiles.push_back({nullptr, tiles[0], 0});
+  job.tiles.push_back({nullptr, tiles[1], 1});
+  SolidTiles solid(app.allocator());
+  CHECK(solid.buffers().empty());
+
+  // Frame 1 makes and fills them, then copies them: one command buffer.
+  vkc::Status ensured;
+  vkc::Status committed;
+  VkDescriptorSet bound = VK_NULL_HANDLE;
+  const auto frame = [&](std::uint64_t number) {
+    return app.device().submit_pending(
+        [&](VkCommandBuffer cmd) {
+          ensured = solid.ensure(cmd, tiles);
+          if (ensured.ok()) {
+            committed = atlas.commit(cmd, number, job, &solid.buffers());
+          }
+          bound = atlas.use(number);
+        },
+        {}, {{&frames.value(), number}});
+  };
+  auto frame1 = frame(1);
+  CHECK(frame1.ok());
+  CHECK(ensured.ok() && committed.ok());
+  CHECK(bound != VK_NULL_HANDLE);
+  CHECK(frame1.value().wait().ok());
+  CHECK(solid.buffers().size() == 2);
+
+  // Each tile's first and last words.
+  std::uint32_t words[2][2] = {};
+  {
+    vkc::CommandBatch batch(app.device(), app.allocator());
+    for (std::size_t c = 0; c < 2; ++c) {
+      const vkc::Buffer& buffer = solid.buffers()[c];
+      CHECK(buffer.size() ==
+            VkDeviceSize{tiles[c].width} * tiles[c].height * 4u);
+      CHECK(batch.readback(buffer, 0, 4, &words[c][0]).ok());
+      CHECK(batch.readback(buffer, buffer.size() - 4, 4, &words[c][1]).ok());
+    }
+    CHECK(batch.submit().ok());
+  }
+  for (std::size_t c = 0; c < 2; ++c) {
+    CHECK(words[c][0] == fuse_viewer::camera_colour_word(c));
+    CHECK(words[c][1] == fuse_viewer::camera_colour_word(c));
+  }
+
+  // Frame 2, after the first tile is overwritten: the same buffers, not
+  // filled again, copied from as they stand.
+  const VkBuffer first = solid.buffers()[0].handle();
+  const VkBuffer second = solid.buffers()[1].handle();
+  {
+    vkc::CommandBatch batch(app.device(), app.allocator());
+    CHECK(batch.fill(solid.buffers()[0], 0, 4, 0x01020304u).ok());
+    CHECK(batch.submit().ok());
+  }
+  auto frame2 = frame(2);
+  CHECK(frame2.ok());
+  CHECK(ensured.ok() && committed.ok());
+  CHECK(bound != VK_NULL_HANDLE);
+  CHECK(frame2.value().wait().ok());
+  CHECK(solid.buffers().size() == 2);
+  CHECK(solid.buffers()[0].handle() == first);
+  CHECK(solid.buffers()[1].handle() == second);
+  std::uint32_t kept = 0;
+  {
+    vkc::CommandBatch batch(app.device(), app.allocator());
+    CHECK(batch.readback(solid.buffers()[0], 0, 4, &kept).ok());
+    CHECK(batch.submit().ok());
+  }
+  CHECK(kept == 0x01020304u);
+  return 0;
+}
+
 int run_atlas_tests() {
   if (const int rc = copies_place_each_tile()) return rc;
 
@@ -425,6 +530,7 @@ int run_atlas_tests() {
           live_atlas_teardown_after_an_unsubmitted_frame(app.value())) {
     return rc;
   }
+  if (const int rc = solid_tiles_fill_each_camera_tile(app.value())) return rc;
   std::puts("viewer_atlas: OK");
   return 0;
 }

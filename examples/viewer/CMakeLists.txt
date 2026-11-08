@@ -129,12 +129,15 @@ if(VR_BUILD_TESTS)
            COMMAND recon_example_viewer_orbit_test)
 
   # The device both live viewers adopt (viewer_common.hpp), for recon's and the
-  # sensor package's requirements (examples/common/fuse_device.hpp). Host only.
+  # sensor package's requirements (examples/common/fuse_device.hpp), and the
+  # View options' and shading's flags (viewer_panels.hpp), which takes the core
+  # config tier's Shading. Host only.
   add_executable(recon_example_viewer_device_test
                  "${PROJECT_SOURCE_DIR}/tests/example_viewer_device_test.cpp")
   target_link_libraries(
     recon_example_viewer_device_test
     PRIVATE volumetric_kit::core_test_base
+            volumetric_kit::core_config
             volumetric_kit::recon_core
             volumetric_kit::grid_mesh
             volumetric_kit::sensor_frame
@@ -146,29 +149,6 @@ if(VR_BUILD_TESTS)
   vr_target_warnings(recon_example_viewer_device_test)
   add_test(NAME recon_example_viewer_device
            COMMAND recon_example_viewer_device_test)
-
-  # What rig_viewer prints at the end (rig_report.hpp): the atlas copies' device
-  # time from the profiler's late snapshots, and a count's rate. Host only;
-  # gfx_glfw for ImGui's headers, which the report's panel includes,
-  # gfx_pipelines for the View options' flags (viewer_panels.hpp), and
-  # grid_example_common for its stage table.
-  add_executable(
-    recon_example_viewer_rig_report_test
-    "${PROJECT_SOURCE_DIR}/tests/example_viewer_rig_report_test.cpp")
-  target_link_libraries(
-    recon_example_viewer_rig_report_test
-    PRIVATE volumetric_kit::core_test_base
-            volumetric_kit::sensor_array
-            volumetric_kit::recon_texture
-            volumetric_kit::gfx_glfw
-            volumetric_kit::gfx_pipelines
-            grid_example_common
-            Vulkan::Vulkan)
-  target_include_directories(recon_example_viewer_rig_report_test
-                             PRIVATE ${_viewer_common_inc})
-  vr_target_warnings(recon_example_viewer_rig_report_test)
-  add_test(NAME recon_example_viewer_rig_report
-           COMMAND recon_example_viewer_rig_report_test)
 
   # The render pass both live viewers record (viewer_common.hpp), on a headless
   # gfx device. Skips with no device under the core policy.

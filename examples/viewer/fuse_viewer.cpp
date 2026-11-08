@@ -87,6 +87,7 @@
 #include "replica_sensor.hpp"  // vr_example::ReplicaSensor
 #include "viewer_atlas.hpp"
 #include "viewer_common.hpp"
+#include "viewer_metrics.hpp"  // kAtlasCopyRow
 #include "viewer_panels.hpp"
 
 #include "volumetric_kit/core/base/result.hpp"
@@ -122,8 +123,6 @@
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
-namespace vr = volumetric_kit::recon;
-namespace sensor = volumetric_kit::sensor;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::grid::volume;
 namespace rtsdf = volumetric_kit::recon::tsdf;
@@ -211,7 +210,7 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   vr_example::ReplicaSensor replica = std::move(capture_result).value();
-  const sensor::camera::CameraModel& cam = *replica.info().color;
+  const rsensor::camera::CameraModel& cam = *replica.info().color;
   // The far plane follows the depth gate the frames carry.
   const float max_depth = opt.fusion.max_depth_m;
 
@@ -793,7 +792,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // Scoped over the whole step, so the row reports ~0 on a frame with no
       // new mesh instead of vanishing from the table.
       vg::Profiler::Scope copy_scope =
-          profiler.gpu_scope(render_frame.cmd, "atlas copy");
+          profiler.gpu_scope(render_frame.cmd, fuse_viewer::kAtlasCopyRow);
       const rmesh::ExchangeOutcome outcome = exchange.begin_frame(
           render_frame.slot,
           [&](const rmesh::DeviceMesh&, const MeshPayload& payload) {
@@ -945,11 +944,8 @@ int run(GLFWwindow* window, const Options& opt) {
           hybrid_frame.extent = extent;
           hybrid_frame.view_proj = view_proj;
           hybrid_frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
-          hybrid_frame.flags =
-              ((opt.render.shading == vgrid_example::config::Shading::Lit)
-                   ? vgp::kHybridMeshLit
-                   : 0u) |
-              fuse_viewer::mesh_view_flags(mesh_view);
+          hybrid_frame.flags = fuse_viewer::shading_flags(opt.render.shading) |
+                               fuse_viewer::mesh_view_flags(mesh_view);
           hybrid_frame.atlas = atlas.use(render_frame.number);
           hybrid_frame.draws = &draw;
           hybrid_frame.draw_count = 1;

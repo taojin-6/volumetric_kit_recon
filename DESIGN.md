@@ -1248,8 +1248,9 @@ APIs. Stage rows print through one table, grid's
 `stage_table.hpp`. Reports live beside the helpers rather than in a `main`:
 `fuse_replica`'s extract reports and `fusion.dirty_every` survey in
 `remesh_report.hpp`, the viewers' panels in `viewer_panels.hpp`,
-`rig_viewer`'s panel, progress line, `render.texture_stats` and end-of-run
-rates and atlas-copy times in `rig_report.hpp`,
+`rig_viewer`'s panel and progress line in `rig_report.hpp`, its rates,
+atlas-copy times, `render.texture_stats` shares, texture sources and per-set
+title in the gfx-free `viewer_metrics.hpp`, which every CI leg tests,
 the live array's report (its counters, each camera's line through a
 counters function, a rig's skew) and clock in `live_sets.hpp`, the Orbbec
 camera lines and counters (`lost` among them) in `fuse_orbbec_sets.hpp`, and
@@ -1415,7 +1416,9 @@ a mesh's payload names the colour buffers of the cameras that textured it and
 their tiles, the frame that commits the mesh copies them into the atlas, and
 gfx's `RetireQueue` holds them until the frame loop's timeline reaches that
 frame; an untextured mesh draws in vertex colour against the pipeline's own
-fallback (2026-10-08).
+fallback (2026-10-08). `rig_viewer`'s colour-by-camera view copies from
+`SolidTiles` instead: a buffer a camera, filled with its `kCameraColours`
+entry in the frame that first copies it.
 At teardown, `LiveAtlas` destroys the gfx atlas first, waiting for submitted
 work or draining the queues when the newest frame was never submitted, then
 reclaims the retained colour buffers without waiting for that frame's number.

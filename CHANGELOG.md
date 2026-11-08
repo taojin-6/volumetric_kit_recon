@@ -265,6 +265,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **the viewers' host-side figures in one gfx-free header**
+  (`examples/viewer/viewer_metrics.hpp`): `CountRate`, `AtlasCopyTimes`,
+  `kAtlasCopyRow` and the texture shares leave `rig_report.hpp`, which
+  includes it, and `rig_viewer`'s texture sources, mesh-rate window
+  (`WindowRate`) and per-set table title (`per_set_title`) leave
+  `rig_viewer.cpp`. `tests/` builds it on every leg, the viewer or not:
+  `recon_example_viewer_metrics` (was `recon_example_viewer_rig_report`,
+  viewer builds only) adds the shares, the sources, `WindowRate` and the
+  title. The colour-by-camera tiles are `viewer_atlas.hpp`'s `SolidTiles`
+  and `kCameraColours`, which `recon_example_viewer_atlas` fills, reads back
+  and copies on a device; `shading_flags` is `viewer_panels.hpp`'s, which
+  `fuse_viewer` now draws with too (the core refuses `normals` there),
+  checked by `recon_example_viewer_device`; `fuse_viewer`'s copy scope is
+  `kAtlasCopyRow`. Output and rendering are unchanged.
 - `examples`: **`rig_viewer` turns about the world's up with gfx's
   `OrbitCamera`** (`examples/viewer/viewer_orbit.hpp`). The up is the one the
   stream states, now by one rule (`calibration_up`,
