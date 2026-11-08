@@ -8,6 +8,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `track`: **`Tracker::fit_due` says whether a record would fit the driver**,
+  before it records: the hop rule on the frames' clock, by the steps finished
+  so far, so a hop whose step was abandoned, or dropped by a refused finish,
+  stays due, and the hops go on across a flush.
 - `examples`: **a live phone is told how the tag search goes**, in one line of
   words up the socket it dialled: `lane_note` holds every word
   (`MobileLane::Status` its one input), `note_due` the rate (on a change and at

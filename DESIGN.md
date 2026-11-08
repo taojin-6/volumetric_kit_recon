@@ -1079,8 +1079,12 @@ own chain's, so they change nothing the driver does
 (`recon_track_tracker`). A refused finish drops its step from that fit on,
 so no fitter is left holding a record. A flush may be followed by more
 frames (a split): the judges go on, and frames after it are fitted and
-placed by fits after it alone. The phone lane runs it (Examples); the bench
-(`track_eval`) is next work.
+placed by fits after it alone. The phone lane runs the Tracker (Examples);
+the bench (`track_eval`) is next work. `fit_due` says, before a record,
+whether it would fit the driver: the hop rule by the steps finished so far
+(one abandoned, or dropped by a refused finish, counts for nothing), so a
+dropped step's hop stays due and the hops go on across a flush. Nothing
+calls it yet.
 
 **Memory** (computed, 256x192): an entry is 2.2 MiB (the three levels'
 depth, vertex and normal maps), so a 20-frame window fitter holds 44 MiB of
