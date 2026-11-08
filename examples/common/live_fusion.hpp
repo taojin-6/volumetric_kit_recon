@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -66,10 +67,10 @@ namespace vkc = volumetric_kit::core;
 
 /// @brief Opens a run's cameras as an array, preparing each set on the device
 ///        it is given unless the scenario only streams: fuse_orbbec's
-///        `open_orbbec_array`, fuse_realsense's `open_realsense_array`.
-using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
-                                                       vkc::Device&,
-                                                       vkc::Allocator&);
+///        `open_orbbec_array`, fuse_realsense's `open_realsense_array`, or a
+///        test's fake cameras.
+using OpenArray = std::function<vkc::Result<sensor::SensorArray>(
+    const config::Config&, vkc::Device&, vkc::Allocator&)>;
 
 /// @brief A live example's run: the device, any codec stream, the cameras
 ///        @p open opens, then sets until `run.frames` frames or a Ctrl+C,
@@ -114,12 +115,22 @@ using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
 ///                  clock, as the session then names; the opened cameras
 ///                  must agree (`VKC_CHECK`).
 /// @param counters  Each camera's counters at the end.
+/// @param caller_device  The device to run on, meeting
+///                  @ref fuse_device_requirements, and @p caller_allocator
+///                  its allocator, both outliving the call: a test's, so its
+///                  validation policy sees every command the run records.
+///                  Null, the default, with @p caller_allocator null too: the
+///                  run makes an instance and a device of its own, after the
+///                  mic.
+/// @param caller_allocator  As @p caller_device.
 /// @return OK, or the first failure, a camera silent past
 ///         `RigSets::kSilenceLimit` among them; the counters, any stream and
 ///         the dump's report are still reported when the run fails part-way.
 inline vkc::Status run_live_fusion(const config::Config& opt,
                                    const char* program, OpenArray open,
-                                   bool host_clock, CameraCounters counters) {
+                                   bool host_clock, CameraCounters counters,
+                                   vkc::Device* caller_device = nullptr,
+                                   vkc::Allocator* caller_allocator = nullptr) {
   namespace vgrid = volumetric_kit::grid;
   namespace vol = volumetric_kit::grid::volume;
   namespace mesh = volumetric_kit::grid::mesh;
@@ -154,13 +165,24 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
   }
 
   // --- GPU, first: the cameras' pictures are prepared, or decoded, on it ---
-  VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
-  VKC_ASSIGN(const vkc::DeviceRequirements reqs, fuse_device_requirements());
-  VKC_ASSIGN(vkc::PhysicalDeviceInfo gpu,
-             instance.select_physical_device(reqs));
-  VKC_ASSIGN(vkc::Device device, vkc::Device::create(instance, gpu, reqs));
-  VKC_ASSIGN(vkc::Allocator allocator,
-             vkc::Allocator::create(instance.handle(), device));
+  // The caller's, or the run's own.
+  VKC_CHECK((caller_device == nullptr) == (caller_allocator == nullptr),
+            "run_live_fusion: a device and an allocator, or neither");
+  std::optional<vkc::Instance> instance;
+  std::optional<vkc::Device> own_device;
+  std::optional<vkc::Allocator> own_allocator;
+  if (caller_device == nullptr) {
+    VKC_ASSIGN(instance, vkc::Instance::create({}));
+    VKC_ASSIGN(const vkc::DeviceRequirements reqs, fuse_device_requirements());
+    VKC_ASSIGN(vkc::PhysicalDeviceInfo gpu,
+               instance->select_physical_device(reqs));
+    VKC_ASSIGN(own_device, vkc::Device::create(*instance, gpu, reqs));
+    VKC_ASSIGN(own_allocator,
+               vkc::Allocator::create(instance->handle(), *own_device));
+  }
+  vkc::Device& device = caller_device ? *caller_device : *own_device;
+  vkc::Allocator& allocator =
+      caller_allocator ? *caller_allocator : *own_allocator;
 
   // --- Codec, with output.stream, output.csv or output.serve ---
   std::optional<codec_stream::CodecStream> stream;

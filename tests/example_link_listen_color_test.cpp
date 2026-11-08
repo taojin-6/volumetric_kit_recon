@@ -8,7 +8,8 @@
 // sensor's HevcEncoder on this machine's hardware (VideoToolbox, NVENC) from
 // targets written on the device, each depth the same index's pattern depth.
 // session_check's checks (tools/session_check/session_check.hpp) read both
-// indices on the device.
+// indices on the device (tests/link_pictures.hpp, which the door's colour
+// test shares).
 // - Every frame carries its own picture over the link. A colour record the
 //   decode refuses makes the reader let the connection go (one failure), and
 //   the writer's next connection, starting at a key, brings the rest with
@@ -37,7 +38,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -47,6 +47,7 @@
 
 #include "link/rgbd_stream_sensor.hpp"
 #include "link_dialler.hpp"
+#include "link_pictures.hpp"
 #include "session_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/net/address.hpp"
@@ -54,16 +55,9 @@
 #include "volumetric_kit/core/testing/net_loopback.hpp"
 #include "volumetric_kit/core/testing/scratch_dir.hpp"
 #include "volumetric_kit/core/testing/test_check.hpp"
-#include "volumetric_kit/core/vulkan/command_batch.hpp"
-#include "volumetric_kit/core/vulkan/sync.hpp"
-#include "volumetric_kit/grid/stream/stream_reader.hpp"
 #include "volumetric_kit/sensor/testing/hevc_clip.hpp"
-#include "volumetric_kit/sensor/testing/nv12_pattern.hpp"
-#include "volumetric_kit/sensor/testing/nv12_writer.hpp"
-#include "volumetric_kit/sensor/video/color_codes.hpp"
 #include "volumetric_kit/sensor/video/hevc_decoder.hpp"
 #include "volumetric_kit/sensor/video/hevc_encoder.hpp"
-#include "volumetric_kit/sensor/wire/rgbd_wire.hpp"
 
 #endif
 
@@ -77,169 +71,21 @@ using Gpu = vkc::test::GpuContext;
 
 namespace stream = volumetric_kit::grid::stream;
 namespace testing = volumetric_kit::sensor::testing;
-namespace wire = volumetric_kit::sensor::wire;
 namespace gnet = volumetric_kit::grid::networking;
 using Code = vkc::Status::Code;
 using vr_example::link::RgbdStreamSensor;
-using vr_example::link::SessionCheck;
 using vr_example::link::SessionReport;
+using vr_test::check_frames;
+using vr_test::color_frames;
+using vr_test::color_record;
+using vr_test::ColorRecord;
 using vr_test::Dialler;
+using vr_test::kSomeColor;
+using vr_test::on_device;
+using vr_test::PatternCoder;
 using vr_test::PatternFrames;
+using vr_test::publish_frame;
 using vr_test::Record;
-
-// What a frame's colour is to wire::encode_color, which asks only that it
-// has one: the pictures are coded apart.
-constexpr std::uint8_t kSomeColor = 0;
-
-// As an iPad's pictures are tagged: BT.601's matrix, BT.709's transfer and
-// primaries, full range, sited left.
-constexpr sensor::ColorCodes kCodes{6, 1, 1, true, 0};
-
-// The test pattern's pictures coded by sensor's HevcEncoder, each written
-// into its target on the device (testing::Nv12Writer), as a producer's own
-// kernel writes one, and coded before the next is sent.
-class PatternCoder {
- public:
-  static vkc::Result<std::unique_ptr<PatternCoder>> create(
-      const Gpu& gpu, std::uint32_t width, std::uint32_t height) {
-    sensor::HevcEncoder::Options options;
-    options.width = width;
-    options.height = height;
-    options.qp = 26;
-    options.color = kCodes;
-    options.device = &gpu.device;
-    options.allocator = &gpu.allocator;
-    VKC_ASSIGN(sensor::HevcEncoder encoder,
-               sensor::HevcEncoder::create(options));
-    VKC_ASSIGN(testing::Nv12Writer writer,
-               testing::Nv12Writer::create(gpu.device));
-    VKC_ASSIGN(vkc::TimelineSemaphore written,
-               vkc::TimelineSemaphore::create(gpu.device));
-    return std::unique_ptr<PatternCoder>(
-        new PatternCoder(gpu, std::move(encoder), std::move(writer),
-                         std::move(written), width, height));
-  }
-
-  // Picture `index` of the pattern coded at `pts`: a key when asked or
-  // owed.
-  vkc::Result<sensor::HevcEncoder::CodedPicture> code(std::uint32_t index,
-                                                      bool key,
-                                                      std::int64_t pts) {
-    vkc::CommandBatch batch(gpu_.device, gpu_.allocator);
-    VKC_ASSIGN(const sensor::YuvImage target, encoder_.target(batch));
-    VKC_TRY(writer_.record_upload(batch, gpu_.allocator,
-                                  testing::test_pattern(width_, height_, index),
-                                  target));
-    const std::uint64_t value = ++value_;
-    VKC_ASSIGN(vkc::PendingBatch pending,
-               batch.submit_async({}, {{&written_, value}}));
-    VKC_TRY(encoder_.send(key || encoder_.key_owed(), pts, {&written_, value}));
-    sensor::HevcEncoder::CodedPicture coded;
-    VKC_ASSIGN(const bool got, encoder_.receive(coded));
-    VKC_TRY(pending.wait());
-    if (!got) return vkc::Status::io_error("the encoder dropped a picture");
-    return coded;
-  }
-
-  const sensor::ColorCodes& codes() const { return encoder_.facts().color; }
-
- private:
-  PatternCoder(const Gpu& gpu, sensor::HevcEncoder encoder,
-               testing::Nv12Writer writer, vkc::TimelineSemaphore written,
-               std::uint32_t width, std::uint32_t height)
-      : gpu_(gpu),
-        encoder_(std::move(encoder)),
-        writer_(std::move(writer)),
-        written_(std::move(written)),
-        width_(width),
-        height_(height) {}
-
-  const Gpu& gpu_;
-  sensor::HevcEncoder encoder_;
-  testing::Nv12Writer writer_;
-  vkc::TimelineSemaphore written_;
-  std::uint64_t value_ = 0;
-  std::uint32_t width_;
-  std::uint32_t height_;
-};
-
-// Frame `f`'s colour record on track 0: its picture `unit`, or its prefix
-// alone, which the decode refuses, for an empty one.
-struct ColorRecord {
-  stream::RecordInfo info;
-  std::array<std::uint8_t, wire::kColorPrefixBytes> prefix{};
-  stream::RecordPayload payload = stream::RecordPayload::of(nullptr, 0);
-};
-
-vkc::Status color_record(const sensor::SensorInfo& info,
-                         const sensor::RgbdFrame& f,
-                         const sensor::ColorCodes& codes,
-                         const std::vector<std::uint8_t>& unit, bool key,
-                         ColorRecord* out) {
-  VKC_ASSIGN(out->prefix, wire::encode_color(info, f, codes));
-  out->info.track = 0;
-  out->info.key = key;
-  out->info.pts_ns = f.timestamp_ns;
-  out->info.seq = f.sequence;
-  out->info.set = f.sequence;
-  out->payload = stream::RecordPayload::of(
-      out->prefix.data(), out->prefix.size(),
-      unit.empty() ? nullptr : unit.data(), unit.size());
-  return {};
-}
-
-// Frame `i` of `p` whole: its colour record, then its depth record.
-vkc::Status publish(Dialler& d, const PatternFrames& p,
-                    const sensor::ColorCodes& codes,
-                    const sensor::HevcEncoder::CodedPicture& picture,
-                    std::size_t i) {
-  ColorRecord c;
-  VKC_TRY(color_record(p.info, p.frames[i], codes, picture.access_unit,
-                       picture.key, &c));
-  VKC_TRY(d.publish(c.info, c.payload));
-  Record r;
-  VKC_TRY(vr_test::depth_record(p.info, p.frames[i], 1, i, &r));
-  return d.publish(r);
-}
-
-// The pattern frames of `info`, each with colour of its colour camera.
-PatternFrames color_frames(const sensor::SensorInfo& info, std::size_t count) {
-  PatternFrames p = vr_test::pattern_frames(info, count);
-  for (sensor::RgbdFrame& f : p.frames) {
-    f.color.host = &kSomeColor;
-    f.color.width = info.color->size.width;
-    f.color.height = info.color->size.height;
-    f.color_camera = *info.color;
-  }
-  return p;
-}
-
-RgbdStreamSensor::Options on_device(const Gpu& gpu) {
-  RgbdStreamSensor::Options options;
-  options.device = &gpu.device;
-  options.allocator = &gpu.allocator;
-  return options;
-}
-
-// Every frame `s` hands out until `count` or its end, each checked.
-vkc::Result<SessionReport> check_frames(const Gpu& gpu, RgbdStreamSensor& s,
-                                        std::size_t count,
-                                        std::atomic<std::size_t>* taken,
-                                        std::vector<std::uint64_t>* seqs) {
-  VKC_ASSIGN(std::unique_ptr<SessionCheck> check,
-             SessionCheck::create(gpu.device, gpu.allocator, s.info()));
-  VKC_TRY(s.start());
-  const auto end = vr_test::Clock::now() + std::chrono::seconds(10);
-  while (seqs->size() < count && !s.exhausted() &&
-         vr_test::Clock::now() < end) {
-    VKC_ASSIGN(std::optional<sensor::RgbdFrame> frame, s.poll());
-    if (!frame) continue;
-    VKC_TRY(check->take(*frame));
-    seqs->push_back(frame->sequence);
-    if (taken != nullptr) taken->store(seqs->size());
-  }
-  return check->report(s);
-}
 
 // 12 frames, keys at 0 and 6. Frames 0-3 whole, then frame 4's colour record
 // refused by the decode: the reader lets the connection go. The writer's
@@ -275,17 +121,17 @@ int test_pictures(const Gpu& gpu, const vkc::test::Scratch& scratch) {
       auto d = Dialler::dial(vr_test::session_of(p.info), port);
       if (!d.ok()) return;
       for (std::size_t i = 0; i < 4; ++i) {
-        if (!publish(**d, p, codes, pictures[i], i).ok()) return;
+        if (!publish_frame(**d, p, codes, pictures[i], i).ok()) return;
       }
       sensor::HevcEncoder::CodedPicture broken = pictures[4];
       broken.access_unit.clear();
-      if (!publish(**d, p, codes, broken, 4).ok()) return;
+      if (!publish_frame(**d, p, codes, broken, 4).ok()) return;
       if (!(*d)->let_go()) return;  // the reader's
     }
     auto d = Dialler::dial(vr_test::session_of(p.info), port);
     if (!d.ok()) return;
     for (std::size_t i = 6; i < 12; ++i) {
-      if (!publish(**d, p, codes, pictures[i], i).ok()) return;
+      if (!publish_frame(**d, p, codes, pictures[i], i).ok()) return;
     }
     sent = vr_test::wait_for([&] { return done.load(); });
   });
@@ -335,6 +181,8 @@ int test_pictures(const Gpu& gpu, const vkc::test::Scratch& scratch) {
 }
 
 // The hand check's sender (above): `frames` frames to `host`:`port`.
+// TODO: before this file goes with listen(), move this sender, which uses no
+// listen(), and point the README's hand check at where it lands.
 int send_to(const Gpu& gpu, const std::string& host, std::uint16_t port,
             std::uint64_t frames) {
   constexpr std::uint32_t kW = 1920;
