@@ -956,6 +956,7 @@ int test_presence() {
   std::unique_ptr<RgbdStreamSensor> s = std::move(admitted).value();
 
   std::atomic<bool> watching{false};
+  std::atomic<bool> saw_connected{false};
   std::atomic<bool> stop{false};
   std::atomic<int> ended{static_cast<int>(End::None)};
   std::vector<bool> flips;
@@ -968,14 +969,19 @@ int test_presence() {
       if (now != last) {
         flips.push_back(now);
         last = now;
+        if (now) saw_connected = true;
       }
       ended = static_cast<int>(handle->ended());
       std::this_thread::yield();
     }
   });
   bool gone = false;
+  // The writer goes only once the watcher has seen the connection: the frames
+  // were sent before the sensor started, so the connected spell can be shorter
+  // than a busy host takes to schedule the watcher once.
   if (vr_test::wait_for([&] { return watching.load(); }) && s->start().ok() &&
-      poll_frames(*s, 2).size() == 2) {
+      poll_frames(*s, 2).size() == 2 &&
+      vr_test::wait_for([&] { return saw_connected.load(); })) {
     d.value().reset();  // the writer goes
     const auto end = Clock::now() + kWait;
     while (s->link_stats().connected && Clock::now() < end) (void)s->poll();
