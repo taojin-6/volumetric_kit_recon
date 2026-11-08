@@ -1187,15 +1187,18 @@ yet.
 phone's stream").
 
 **The phone lane** (`examples/common/live_mobile.hpp`, `vr_example_mobile`)
-puts such a sensor beside a live run's cameras (`source.mobile`): after each
-set's send, `MobileLane::next` tracks the phone's record due by the next set
-on `lane_tracking()` in one batch, waited on in the gap, and hands the next
-send the frames the `Tracker` placed as fillers of their tier. Its rules
-(pairing, the drain cap, splits, the tint, what a phone is told) are the
-header's; why, the 2026-11-04 and 2026-11-05 entries. Its log
-(`track_log.hpp`) is a `Tracker`'s steps as CSVs and a TUM pose file a chain,
-which `read_track_log` reads back and `summarize` turns into every metric of a
-run, once.
+puts such sensors beside a live run's cameras (`source.mobile`). It holds
+sessions, one a phone's, in join order (`MobileLane::add`; a run's lane holds
+one): after each set's send, `MobileLane::next` tracks each session's record
+due by the next set on `lane_tracking()` in one batch a session, each waited
+on in the gap in join order, and hands the next send up to 3 of the frames
+the sessions' `Tracker`s placed, one a session in turn, as fillers of their
+tier under the session's own mobile index. Its rules (pairing, the drain and
+its turns, the queue's cap, the index, splits, the tint, what a phone is
+told) are the header's; why, the 2026-11-04 and 2026-11-05 entries. A
+session's log (`track_log.hpp`) is its `Tracker`'s steps as CSVs and a TUM
+pose file a chain, which `read_track_log` reads back and `summarize` turns
+into every metric of a run, once.
 
 Every example reads a scenario with `--config path.json`; `--help` prints
 that entry point. The optional core `config` tier owns the JSON format, typed

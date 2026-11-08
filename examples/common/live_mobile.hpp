@@ -4,21 +4,38 @@
 #pragma once
 
 /// @file examples/common/live_mobile.hpp
-/// @brief The phone lane of a live run (`source.mobile`): the phone's frames,
+/// @brief The phone lane of a live run (`source.mobile`): phones' frames,
 ///        tracked against the rig's model and fused as fill where the rig's
 ///        cameras do not see.
 ///
-/// After each set's send, in the gap before the next set, the lane takes the
-/// phone record due by the predicted next set's time, prepares it and runs
-/// every fit due at it (`track::Tracker` on @ref lane_tracking) in one batch,
-/// waited on there; then it hands the next send up to @ref kDrainCap of the
-/// frames the tracker has placed, as fillers (`sender::Filler`,
-/// @ref to_filler). The tracker holds a frame on the device until a fit has
-/// placed it, Anchored or between two Anchored fits within its hold (5 s
-/// either side), and drops it otherwise, so fill lands 2 to 7 s after
-/// capture. What the lane does each step goes into its log (`track_log.hpp`).
+/// After each set's send, in the gap before the next set, each of the lane's
+/// sessions takes its phone's record due by the predicted next set's time,
+/// prepares it and runs every fit due at it (`track::Tracker` on
+/// @ref lane_tracking) in one batch, waited on there; then the lane hands the
+/// next send up to @ref kDrainCap of the frames the trackers have placed, as
+/// fillers (`sender::Filler`, @ref to_filler). A tracker holds a frame on the
+/// device until a fit has placed it, Anchored or between two Anchored fits
+/// within its hold (5 s either side), and drops it otherwise, so fill lands 2
+/// to 7 s after capture. What a session does each step goes into its log
+/// (`track_log.hpp`).
 ///
-/// **Pairing.** The phone starts with the first gap. Its frames are taken in
+/// **Sessions.** A session is one phone's: its sensor, its tracker, its log
+/// and, placed by the tag, its watch (@ref MobileLane::SessionParts). One
+/// added (@ref MobileLane::add) joins at the next gap, after those joined; a
+/// run's lane holds one (@ref open_mobile_lane). At its join it takes its
+/// mobile index, (its join's ordinal - 1) mod 63 past any a session still
+/// holds, so each phone fills under its own (`tsdf::mobile_source`); it holds
+/// it until it is done: its phone exhausted, its tracker flushed and what it
+/// placed handed over. Done, it lets its frame prep and timer go, and keeps
+/// its counts, log and phone for the close. The drain takes one placed frame
+/// a session in turn, in join order from the session after the last send's
+/// last, up to @ref kDrainCap in all, each session's oldest first: a fixed
+/// order, since fused averages depend on it. A session keeps at most
+/// @ref kPlacedCap placed frames waiting, its oldest let go past it. A filler
+/// the send would refuse (@ref check_filler), which would refuse the whole set,
+/// is let go. The rules below are each session's own.
+///
+/// **Pairing.** A session's phone starts at its join. Its frames are taken in
 /// order (`IRgbdSensor::drain`, a queue of 64) whenever none taken waits.
 /// The first take pins the phone's clock to the rig's at its newest record:
 /// that record's time pairs with the predicted time of the set it is taken
@@ -55,7 +72,8 @@
 /// the search goes, in one line of words for a person to read (@ref lane_note),
 /// up the socket it dialled (`link::RgbdStreamSensor::say`), on a change and at
 /// least every @ref kNoteAtLeastNs, so it can tell a stalled run from a steady
-/// one. A lane placed by a registration file, or reading a file, says nothing.
+/// one. A session placed by a registration file, or reading a file, says
+/// nothing.
 ///
 /// **The log** has no `arkit_raw` row live: the wire carries no log of the
 /// device's removed map steps. A replay that has one gives it to its log
@@ -63,8 +81,8 @@
 ///
 /// **Fill's colour** (pending owner decision): until the phone's picture is
 /// fused, fill is drawn in a fixed tint of its tier (@ref kAnchoredFillTint,
-/// @ref kUnanchoredFillTint), the colour every filler fuses with; the
-/// phone's own picture is never read.
+/// @ref kUnanchoredFillTint), the colour every filler fuses with, made once
+/// a depth size for the whole lane; the phone's own picture is never read.
 
 #include <cstddef>
 #include <cstdint>
@@ -94,9 +112,13 @@ namespace sensor = volumetric_kit::sensor;
 namespace track = volumetric_kit::recon::track;
 namespace vkc = volumetric_kit::core;
 
-/// Fillers fused a set, at most: the frames a gap placed beyond it wait for
-/// the sets after.
+/// Fillers fused a set, at most, from every session together: the frames a
+/// gap placed beyond it wait for the sets after.
 inline constexpr std::size_t kDrainCap = 3;
+
+/// A session's placed frames waiting for a send, at most: past it, its oldest
+/// are let go (@ref MobileLane::Counts::shed).
+inline constexpr std::size_t kPlacedCap = 40;
 
 /// At least one note a second, in set time, changed or not.
 inline constexpr std::uint64_t kNoteAtLeastNs = 1'000'000'000;
@@ -129,8 +151,19 @@ track::TrackerConfig lane_tracking();
 /// @return @p released as a filler: its frame moved by its correction, both
 ///         cameras (`track::corrected`); Anchored fill only when the rig-only
 ///         chain (driver 0) anchored it, else Unanchored, so fill placed with
-///         fill's help is never tracked against; mobile sensor 0.
-volumetric_kit::recon::sender::Filler to_filler(track::Released&& released);
+///         fill's help is never tracked against; mobile sensor @p index (its
+///         session's, @ref MobileLane::SessionView::index).
+volumetric_kit::recon::sender::Filler to_filler(track::Released&& released,
+                                                std::uint32_t index);
+
+/// @brief What the send would refuse of @p filler, and the whole set with it
+///        (`tsdf::TsdfIntegrator::integrate`): checked before the lane hands
+///        a filler over.
+/// @return OK; `Status::Code::InvalidArgument` for an index of
+///         `tsdf::kMaxSourcesPerClass` (63) or more, or a depth camera, or a
+///         colour camera with a colour, with a non-finite intrinsic, depth
+///         bound or pose entry.
+vkc::Status check_filler(const volumetric_kit::recon::sender::Filler& filler);
 
 /// @brief What a scenario with `source.mobile` needs that the run cannot do,
 ///        checked before any device opens.
@@ -160,7 +193,7 @@ std::unique_ptr<sensor::IRgbdSensor> polled_in_background(
 /// @brief The phone lane (above). An aggregate: neither copied nor moved.
 class MobileLane {
  public:
-  /// @brief What the lane did.
+  /// @brief What a session did, or every session together.
   struct Counts {
     std::uint64_t polled = 0;  ///< Records taken from the phone.
     std::uint64_t paired = 0;  ///< Frames prepared and tracked.
@@ -176,6 +209,10 @@ class MobileLane {
     std::uint64_t fused = 0;       ///< Handed to a send.
     /// Paired before the tag registered the session: not tracked.
     std::uint64_t unregistered = 0;
+    /// Placed, then let go past the session's @ref kPlacedCap, oldest first.
+    std::uint64_t shed = 0;
+    /// Placed, then let go as the send would refuse it (@ref check_filler).
+    std::uint64_t unfit = 0;
   };
 
   /// @brief Where the tag search stands, for a person (@ref lane_note).
@@ -186,23 +223,76 @@ class MobileLane {
     std::uint64_t refused_ns = 0;
   };
 
+  /// @brief How a session's frames are placed in the rig's world.
+  enum class Placement {
+    /// As its phone was opened: by `source.mobile_registration`, or a world
+    /// it shares already.
+    Registration,
+    /// By the origin tag (@ref SessionParts::tags): nothing is tracked until
+    /// the watch registers the session.
+    Tag,
+  };
+
+  /// @brief One phone's session, as @ref add takes it.
+  struct SessionParts {
+    /// The phone, not started: its queue is set and it is started at the
+    /// session's join. Required.
+    std::unique_ptr<sensor::IRgbdSensor> phone;
+    /// Its tracker. Required.
+    std::unique_ptr<track::Tracker> tracker;
+    /// Its log. Required (an empty directory writes no files).
+    std::unique_ptr<TrackLog> log;
+    /// The origin tag's watch, which registers the session, its frames in
+    /// the phone's own world; with a log directory, the registration is
+    /// written there (`registration.json`, never over one). Required by
+    /// @ref Placement::Tag, refused otherwise. Destroyed before the phone
+    /// stops (its thread may hold a picture of the phone's decoder).
+    std::unique_ptr<TagWatch> tags;
+    /// Whether the phone is connected now, for the session's leave, which
+    /// does not read it yet; called on the lane's thread, it must not wait.
+    /// Empty: always.
+    std::function<bool()> presence;
+    /// With @ref tags, told @ref lane_note after a gap when @ref note_due
+    /// says so, on the lane's thread; it must not wait. Empty, or without
+    /// them: told nothing.
+    std::function<void(gnet::ViewerNote)> say;
+    /// What the lane's report calls the session (a sensor's id).
+    std::string name;
+    /// How its frames are placed.
+    Placement placement = Placement::Registration;
+  };
+
+  /// @brief A session as the lane holds it (@ref sessions).
+  struct SessionView {
+    std::string name;  ///< @ref SessionParts::name.
+    /// @ref SessionParts::placement.
+    Placement placement = Placement::Registration;
+    /// Its place in the join order, from 1; 0 until it joins.
+    std::uint32_t ordinal = 0;
+    /// Its mobile index (@ref to_filler), taken at its join; 0 before.
+    std::uint32_t index = 0;
+    /// Whether it holds @ref index: joined, and not done (its phone
+    /// exhausted, its tracker flushed and what it placed handed over).
+    bool holding = false;
+    /// Its placed frames not yet handed to a send.
+    std::size_t waiting = 0;
+    Counts counts;                  ///< What it did.
+    const TrackLog* log = nullptr;  ///< Its log.
+  };
+
+  /// @brief The lane, with one session (@ref add) named by @p phone's sensor
+  ///        id, placed by @p tags or as @p phone was opened, joined at the
+  ///        first @ref next.
   /// @param device     The run's device; it and @p allocator outlive the lane.
-  /// @param phone      The phone, not started: its queue is set and it is
-  ///                   started at the first @ref next. Null makes the empty
-  ///                   lane, whose every call does nothing.
+  /// @param phone      As @ref SessionParts::phone. Null makes the empty
+  ///                   lane, whose every call does nothing until a session
+  ///                   is added.
   /// @param tracker    Its tracker; required with a phone.
   /// @param log        Its log; required with a phone (an empty directory
   ///                   writes no files).
-  /// @param tags       The origin tag's watch, which registers the phone,
-  ///                   its frames in the phone's own world; with a log
-  ///                   directory, the registration is written there
-  ///                   (`registration.json`, never over one). Null: placed
-  ///                   as the phone was opened. Destroyed before the phone
-  ///                   stops (its thread may hold a picture of the phone's
-  ///                   decoder).
-  /// @param say        With @p tags, told @ref lane_note after a gap when
-  ///                   @ref note_due says so, on the lane's thread; it must
-  ///                   not wait. Empty, or without them: told nothing.
+  /// @param tags       As @ref SessionParts::tags. Null: placed as the phone
+  ///                   was opened.
+  /// @param say        As @ref SessionParts::say.
   /// @return The lane; `Status::Code::InvalidArgument` for a phone without a
   ///         tracker or a log; or the prep's error.
   static vkc::Result<std::unique_ptr<MobileLane>> create(
@@ -217,39 +307,58 @@ class MobileLane {
   MobileLane(MobileLane&&) = delete;
   MobileLane& operator=(MobileLane&&) = delete;
 
-  /// @brief After a set's send: take the record due by @p next_set_ns,
-  ///        prepare it and record its due fits against @p grid as the set
-  ///        left it, in one batch, waited on here; then judge, place and log.
-  ///        Once the phone is exhausted, the tracker is flushed and what it
-  ///        placed still drains.
+  /// @brief A session to join at the next @ref next, after those joined, or
+  ///        at the first after it with an index free while a session holds
+  ///        each of the 63. Its frame prep and timer are made here.
+  /// @param parts  The session.
+  /// @return OK; `Status::Code::InvalidArgument` for a missing phone,
+  ///         tracker or log, a watch its placement does not match, or a
+  ///         closed lane; or the prep's error.
+  vkc::Status add(SessionParts parts);
+
+  /// @brief After a set's send: the sessions added since the last gap join
+  ///        (@ref add); then each joined session, in join order, takes its
+  ///        record due by @p next_set_ns, prepares it and records its due
+  ///        fits against @p grid as the set left it, in one batch of its own,
+  ///        waited on here, then judges, places and logs. Once a session's
+  ///        phone is exhausted, its tracker is flushed and what it placed
+  ///        still drains.
   /// @param grid         The run's model, not written until this returns.
   /// @param next_set_ns  The next set's predicted time, on the rig's clock.
-  /// @return The next send's fillers, at most @ref kDrainCap, oldest first;
-  ///         a frame the prep or the tracker refuses is passed over and
-  ///         counted. Only the device's, a poll's, the log's, the tag
-  ///         watch's device or copy errors and the registration file's write
-  ///         error return.
+  /// @return The next send's fillers, at most @ref kDrainCap, one a session
+  ///         in turn (above), each session's oldest first; a frame the prep
+  ///         or the tracker refuses is passed over and counted, as is a
+  ///         filler @ref check_filler refuses. Only the device's, a poll's,
+  ///         a log's, a tag watch's device or copy errors, a phone's start
+  ///         error and a registration file's write error return.
   vkc::Result<std::vector<volumetric_kit::recon::sender::Filler>> next(
       const volumetric_kit::grid::volume::VoxelBlockGrid& grid,
       std::uint64_t next_set_ns);
 
-  /// @brief The run's end: the tag watch's last news taken and the watch
-  ///        let go (a hold its thread is solving then, one search of 10 to
-  ///        55 ms, is not logged), the tracker flushed (held frames decided,
-  ///        placed or dropped, and logged, not fused), the log closed and its
-  ///        summary printed. Idempotent.
-  /// @return OK; the tracker's or the log's error; or the watch's device or
-  ///         copy error, once the rest of the close has run.
+  /// @brief The run's end, for each session in join order: its tag watch's
+  ///        last news taken and the watch let go (a hold its thread is
+  ///        solving then, one search of 10 to 55 ms, is not logged), its
+  ///        tracker flushed (held frames decided, placed or dropped, and
+  ///        logged, not fused), its log closed and its summary printed.
+  ///        Idempotent.
+  /// @return OK; or the first session's error to return one: its tracker's
+  ///         or its log's, or its watch's device or copy error once the rest
+  ///         of its close has run. Every session's close runs.
   vkc::Status close();
 
-  /// @return What the lane did so far.
-  const Counts& counts() const noexcept;
+  /// @return What the lane's sessions did so far, together.
+  Counts counts() const noexcept;
 
-  /// @return Its line for the run's report: the counts and the phone's
-  ///         counters; empty for the empty lane.
+  /// @return Each session, in join order, those added since the last gap
+  ///         last.
+  std::vector<SessionView> sessions() const;
+
+  /// @return Its lines for the run's report: each session's counts and its
+  ///         phone's counters, in join order, each named by its ordinal and
+  ///         name when there are more than one; empty for the empty lane.
   std::string report() const;
 
-  /// @return The lane's log; null for the empty lane.
+  /// @return The first session's log; null for the empty lane.
   const TrackLog* log() const noexcept;
 
  private:

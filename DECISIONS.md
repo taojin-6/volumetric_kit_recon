@@ -1070,6 +1070,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   the next set's predicted time, at most 3 fillers a send, a split at a loss
   of 100 ms or more, fill in a fixed tint of its tier. Its log and one
   summary in `examples/common`; the bench waits for a rig model it can read.
+  *Amended 2026-11-08:* the lane holds sessions; the 3 a send are in all, one
+  a session in turn in join order; a session keeps at most 40 waiting, its
+  oldest let go; a filler the send would refuse is let go.
 - [**2026-11-05**](#2026-11-05--a-live-stream-states-the-worlds-up-from-its-calibration-file-a-sensors-world-is-that-cameras-own-image-up-amends-the-2026-10-20-entry) —
   A live stream states the world's up from `source.calibration`'s file
   (`live_up`): a tag's +z; a sensor's world, or no file, that colour camera's
@@ -6353,6 +6356,24 @@ windows the reference anchored or left Partial (median 0.005 and
 for coverage: 15 and 50 mm from the reference).
 
 ### 2026-11-04 — The phone lane: a phone's frames tracked in the gap after each set, and fused as fill in the next.
+
+*Amended 2026-11-08:* the lane holds sessions, one a phone's (a run still
+holds one). The 3 placed frames a send take are the lane's in all, one a
+session in turn in join order from where the last send's turns stopped: a
+fixed order, since fused averages depend on it, and a session with nothing
+placed gives its turn away. A session keeps at most 40 placed frames waiting
+and lets its oldest go past that, so a phone the sends cannot keep up with
+fills a bounded time late and its device memory stays bounded; its newest
+frames are the ones worth fusing. One phone alone sheds only on a large
+release: by the `Tracker`'s rules a step releases at most the frames waiting
+to be interpolated, past the 2 s window and within the 5 s hold, so about
+3 s of paired frames beside the few already waiting; about 30 for a phone
+paired at 10 Hz. One paired faster (a file of denser records, one read a
+set) can shed frames that before this fused over the sets after. How often
+one phone sheds in a real session is not measured: the multi-phone lab run
+is to measure it. A filler the send would refuse (an index of 63 or more, a
+camera not finite) is let go before it, since it would refuse the whole
+set. What else changes per session is the multi-phone work's to record.
 
 **Context.** The track tier places a phone's frames against the rig's model
 and the source byte lets them fill only where the rig does not see (both

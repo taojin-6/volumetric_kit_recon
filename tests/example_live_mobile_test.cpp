@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// The phone lane (examples/common/live_mobile.hpp) on a fake phone, its
-// frames prepared on the device and tracked by scripted fitters
-// (scripted_fitter.hpp) on lane_tracking()'s chains, sets every 40 ms:
+// The phone lane (examples/common/live_mobile.hpp) on a fake phone
+// (fake_phone.hpp), one session, its frames prepared on the device and
+// tracked by scripted fitters (scripted_fitter.hpp) on lane_tracking()'s
+// chains, sets every 40 ms:
 // - Tiers and one generation: frames the rig chain anchored fuse as Anchored
 //   fill at its correction, frames only the track chain placed as Unanchored
 //   fill at its own, each in its tier's tint through its depth camera; the
@@ -56,6 +57,7 @@
 #include <utility>
 #include <vector>
 
+#include "fake_phone.hpp"
 #include "live_mobile.hpp"
 #include "scripted_fitter.hpp"
 #include "volumetric_kit/core/base/result.hpp"
@@ -79,14 +81,20 @@ namespace gnet = volumetric_kit::grid::networking;
 using volumetric_kit::recon::Mat4f;
 using volumetric_kit::recon::Vec4f;
 using vr_example::MobileLane;
+using vr_test::device_pose;
+using vr_test::FakePhone;
+using vr_test::kLatency;
+using vr_test::LivePhone;
+using vr_test::PhoneFrame;
 using vr_test::ScriptedFitter;
+using vr_test::ten_hz;
 
 namespace {
 
 constexpr std::uint64_t kMs = 1'000'000;
 constexpr std::uint64_t kS = 1'000'000'000;
-constexpr std::uint32_t kW = 32;
-constexpr std::uint32_t kH = 24;
+constexpr std::uint32_t kW = vr_test::kPhoneW;
+constexpr std::uint32_t kH = vr_test::kPhoneH;
 
 Mat4f translate(float x, float y, float z) {
   Mat4f m(1.0f);
@@ -97,140 +105,6 @@ Mat4f translate(float x, float y, float z) {
 bool same(const Mat4f& a, const Mat4f& b) {
   return std::memcmp(&a, &b, sizeof(Mat4f)) == 0;
 }
-
-// --- The fake phone ---------------------------------------------------------
-
-struct PhoneFrame {
-  std::uint64_t pts = 0;
-  std::uint64_t seq = 0;
-  bool noise = true;  // false: states none, which the tracker refuses
-};
-
-// Frames at 10 Hz from 1 s: `count` of them, seq 0 up.
-std::vector<PhoneFrame> ten_hz(std::size_t count) {
-  std::vector<PhoneFrame> out;
-  for (std::size_t i = 0; i < count; ++i)
-    out.push_back({kS + i * 100 * kMs, i});
-  return out;
-}
-
-// The device's pose of the frame at `pts`: 1 cm along x a frame.
-Mat4f device_pose(std::uint64_t pts) {
-  return translate(0.01f * float((pts - kS) / (100 * kMs)), 0.0f, 0.0f);
-}
-
-// A phone whose records the script lists, each a 32 x 24 depth at 1.5 m with
-// a confidence plane, as a recorded session hands them out: at once, in
-// order, exhausted after the last.
-class FakePhone final : public sensor::IRgbdSensor {
- public:
-  explicit FakePhone(std::vector<PhoneFrame> script)
-      : script_(std::move(script)) {
-    info_.id = "phone";
-    info_.clock = sensor::ClockDomain::Host;
-    info_.fps = 10;
-  }
-  const sensor::SensorInfo& info() const noexcept override { return info_; }
-  vkc::Status set_queue_depth(std::size_t) override { return {}; }
-  vkc::Status start() override {
-    started_ = true;
-    return {};
-  }
-  void stop() noexcept override { started_ = false; }
-  vkc::Result<std::optional<sensor::RgbdFrame>> poll() override {
-    if (!started_ || next_ >= script_.size()) {
-      return std::optional<sensor::RgbdFrame>{};
-    }
-    const PhoneFrame& p = script_[next_++];
-    struct Pixels {
-      std::vector<std::uint16_t> depth;
-      std::vector<std::uint8_t> confidence;
-    };
-    auto pixels = std::make_shared<Pixels>();
-    pixels->depth.assign(std::size_t{kW} * kH, 1500);
-    pixels->confidence.assign(std::size_t{kW} * kH, 2);
-    sensor::RgbdFrame f;
-    f.depth = pixels->depth.data();
-    f.depth_confidence = pixels->confidence.data();
-    f.min_confidence = 2;  // as the lane's reader raises it
-    f.depth_camera = {{kW, kH}, {40.0, 40.0, 15.5, 11.5}, {}};
-    f.min_depth = 0.1f;
-    f.max_depth = 5.0f;
-    if (p.noise) f.depth_noise = {0.002f, 0.0f, 0.002f};
-    f.color_to_world = sensor::camera::Mat4d(device_pose(p.pts));
-    f.timestamp_ns = p.pts;
-    f.sequence = p.seq;
-    f.pixels = std::move(pixels);
-    return std::optional<sensor::RgbdFrame>(std::move(f));
-  }
-  vkc::Status drain(std::vector<sensor::RgbdFrame>* out) override {
-    if (fail_at_ && next_ == *fail_at_) {
-      fail_at_.reset();
-      return vkc::Status::io_error("fake phone: a damaged record");
-    }
-    VKC_ASSIGN(std::optional<sensor::RgbdFrame> f, poll());
-    if (f) out->push_back(std::move(*f));
-    return {};
-  }
-  // The drain before record `n` returns an error, once.
-  void fail_before(std::size_t n) { fail_at_ = n; }
-  bool exhausted() const noexcept override { return next_ >= script_.size(); }
-  sensor::SensorStats stats() const noexcept override {
-    sensor::SensorStats s{};
-    s.received = next_;
-    s.delivered = next_;
-    return s;
-  }
-
- private:
-  std::vector<PhoneFrame> script_;
-  std::size_t next_ = 0;
-  std::optional<std::size_t> fail_at_;
-  bool started_ = false;
-  sensor::SensorInfo info_;
-};
-
-// How long after its capture a live phone's record comes.
-constexpr std::uint64_t kLatency = 50 * kMs;
-
-// The script's records as a live link hands them out: each comes kLatency
-// after its capture, and a drain takes those come by `*now`, oldest first,
-// at most `per_drain` (the rest wait in the link), each stamped with its
-// arrival.
-class LivePhone final : public sensor::IRgbdSensor {
- public:
-  LivePhone(const std::vector<PhoneFrame>& script, const std::uint64_t* now,
-            std::size_t per_drain)
-      : inner_(script), script_(script), now_(now), per_drain_(per_drain) {}
-  const sensor::SensorInfo& info() const noexcept override {
-    return inner_.info();
-  }
-  vkc::Status set_queue_depth(std::size_t) override { return {}; }
-  vkc::Status start() override { return inner_.start(); }
-  void stop() noexcept override { inner_.stop(); }
-  vkc::Result<std::optional<sensor::RgbdFrame>> poll() override {
-    return std::optional<sensor::RgbdFrame>{};
-  }
-  vkc::Status drain(std::vector<sensor::RgbdFrame>* out) override {
-    for (std::size_t n = 0; n < per_drain_ && next_ < script_.size() &&
-                            script_[next_].pts + kLatency <= *now_;
-         ++n, ++next_) {
-      VKC_ASSIGN(std::optional<sensor::RgbdFrame> f, inner_.poll());
-      f->arrival_ns = *now_;
-      out->push_back(std::move(*f));
-    }
-    return {};
-  }
-  bool exhausted() const noexcept override { return inner_.exhausted(); }
-  sensor::SensorStats stats() const noexcept override { return inner_.stats(); }
-
- private:
-  FakePhone inner_;
-  std::vector<PhoneFrame> script_;
-  const std::uint64_t* now_;
-  std::size_t per_drain_;
-  std::size_t next_ = 0;
-};
 
 // --- Scripts ----------------------------------------------------------------
 

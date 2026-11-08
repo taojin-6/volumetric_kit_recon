@@ -422,6 +422,17 @@ if(VR_BUILD_EXAMPLES)
   vr_target_warnings(recon_example_live_mobile_test)
   add_test(NAME recon_example_live_mobile
            COMMAND recon_example_live_mobile_test)
+  # The lane's sessions, fake phones added on scripted fitters: indices, the
+  # drain's turns and cap, a late join's own clock, the queue's cap, indices
+  # wrapping, add's refusals and check_filler.
+  add_executable(recon_example_live_sessions_test
+                 example_live_sessions_test.cpp)
+  target_link_libraries(
+    recon_example_live_sessions_test PRIVATE vr_example_mobile
+                                             volumetric_kit::core_test_policy)
+  vr_target_warnings(recon_example_live_sessions_test)
+  add_test(NAME recon_example_live_sessions
+           COMMAND recon_example_live_sessions_test)
   # The origin tag's watch (live_tag.hpp), with VR_WITH_CALIB: OpenCV's markers
   # pasted face-on into NV12 pictures on the device (sensor's nv12_picture.hpp),
   # moved and turned by OpenCV's warp for a moving camera, searched, gated and
