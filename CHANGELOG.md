@@ -286,6 +286,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **recon pins core 0.50.0 at core #102's merge** (`b1f555b`; was
+  core #101's merge, `65af19c`), which refuses `diagnostics.dump_sets` and
+  `diagnostics.dump_directory` as unknown fields (the dump's removal below),
+  and CI takes the core's actions there. The core floor rises to 0.50.0 with
+  it: on an older core whose pin won, `fuse_orbbec` would load a scenario
+  that sets either key and silently write nothing.
 - `examples`: **the phone lane in files of its own** (`examples/common/`,
   moved as is): `live_mobile.cpp` (was 2,673 lines, now 785) keeps the lane
   and the gap's scheduler; a session's work and its leave (`PhoneSession`,
@@ -775,6 +781,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pin above (grid 0.2.1, grid #5).
 
 ### Removed
+
+- `examples`: **`fuse_orbbec`'s dump of its first sets**
+  (`diagnostics.dump_sets` and `diagnostics.dump_directory`;
+  `examples/common/set_dump.hpp`, `config/examples/dump_orbbec.json`,
+  `recon_example_set_dump`). It was a one-off check of the MJPEG decode, and
+  colour is H.265 by default. Core 0.50.0 refuses both keys, so a scenario
+  that still sets either fails to load (`diagnostics.dump_sets: unknown
+  field`): delete them. `readback_orbbec.json` keeps the MJPEG stream with
+  its readback stage. A camera's JPEGs, byte for byte, come from calib's
+  CalibRig capture. Tests: `recon_example_fuse_config`.
 
 - `examples`: **dead and duplicated code.** `send_set`'s overload without
   fillers (callers pass `{}`), `AudioFeed::lost`, which nothing read, and
