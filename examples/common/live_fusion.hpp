@@ -36,7 +36,6 @@
 #include "live_mobile.hpp"
 #include "live_sets.hpp"
 #include "send_set.hpp"
-#include "set_dump.hpp"
 #include "set_log.hpp"
 #include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
@@ -103,11 +102,10 @@ using OpenArray = std::function<vkc::Result<sensor::SensorArray>(
 /// operation=stream polls, counts and releases each set, with no GPU
 /// preparation, fusion or mesh, so the run measures the cameras' stream and
 /// decode alone.
-/// diagnostics.readback and diagnostics.dump_sets read and write each set's
-/// pictures as stages of their own. Before the cameras stream, a Ctrl+C
-/// returns with nothing recorded; after, the run ends after the set in hand,
-/// as `run.frames` would: the stream is finished and its viewers closed, the
-/// cameras released and the PLY written.
+/// diagnostics.readback reads each set's luma as a stage of its own. Before
+/// the cameras stream, a Ctrl+C returns with nothing recorded; after, the run
+/// ends after the set in hand, as `run.frames` would: the stream is finished
+/// and its viewers closed, the cameras released and the PLY written.
 /// @param opt       The scenario, validated by the core for the program.
 /// @param program   The program's name, for its stream and its messages.
 /// @param open      Opens its cameras, each printed, as an array.
@@ -124,8 +122,8 @@ using OpenArray = std::function<vkc::Result<sensor::SensorArray>(
 ///                  mic.
 /// @param caller_allocator  As @p caller_device.
 /// @return OK, or the first failure, a camera silent past
-///         `RigSets::kSilenceLimit` among them; the counters, any stream and
-///         the dump's report are still reported when the run fails part-way.
+///         `RigSets::kSilenceLimit` among them; the counters and any stream
+///         are still reported when the run fails part-way.
 inline vkc::Status run_live_fusion(const config::Config& opt,
                                    const char* program, OpenArray open,
                                    bool host_clock, CameraCounters counters,
@@ -146,11 +144,7 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
 
   // First, so a Ctrl+C while the run sets up still unwinds what it opened.
   vgrid_example::catch_interrupts();
-  // Checked before anything opens: the dump's directory, which the run makes
-  // with the first set it writes, and any codec step the codec refuses.
-  SetDump dump(opt.diagnostics.dump_directory,
-               static_cast<std::size_t>(opt.diagnostics.dump_sets));
-  VKC_TRY(dump.check());
+  // Checked before anything opens: any codec step the codec refuses.
   VKC_TRY(check_mobile(opt));
   VKC_ASSIGN(const vgrid::codec::EncoderConfig encoder,
              vgrid_example::encoder_config(opt.codec));
@@ -259,11 +253,6 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
     VKC_ASSIGN(readback, sensor::PictureReadback::create(device, allocator));
   }
 
-  std::vector<std::string> ids;  // each camera's, naming its dump files
-  for (std::size_t c = 0; c < array->size(); ++c) {
-    ids.push_back(array->sensor(c).info().id);
-  }
-
   // --- Stream, until run.frames or Ctrl+C ---
   // A Ctrl+C since the check above ends the run here, before any set.
   if (vgrid_example::interrupted()) {
@@ -301,15 +290,14 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
       print_first_frame_age(*array, sets, set);
       s.arrived(set.arrival_ns, host_clock ? set.timestamp_ns : 0);
       // A set's stages run here, in turn, on its frames; operation=stream runs
-      // none past the poll, any readback and any dump, and the set is
-      // released as it came.
-      std::vector<std::optional<sensor::PictureView>> luma;
+      // none past the poll and any readback, and the set is released as it
+      // came.
       if (readback) {
-        VKC_ASSIGN(luma, readback->read(set.frames,
-                                        sensor::PictureReadback::Planes::Luma,
-                                        &s.rows));
+        VKC_TRY(readback
+                    ->read(set.frames, sensor::PictureReadback::Planes::Luma,
+                           &s.rows)
+                    .status());
       }
-      VKC_TRY(dump.write(set, ids, readback ? &luma : nullptr));
       if (out) {
         // One row for the prep: the cameras prepare together, into the
         // set's front batch, whose commands read the set's pictures once
@@ -379,7 +367,6 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
   std::fputs(array_report(*array, &sets, counters).c_str(), stdout);
   std::fputs(audio.report().c_str(), stdout);
   std::fputs(mobile->report().c_str(), stdout);
-  std::fputs(dump.report().c_str(), stdout);
   // A coded frame per source set; one frame alone has no bitrate.
   if (coded && !report->rows().empty()) {
     report->print(opt.source.fps, report->rows().size() > 1 ? 1 : 0);

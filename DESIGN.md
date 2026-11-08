@@ -1304,17 +1304,12 @@ half is a second batch), and writes a PLY after `run.frames` frames.
 `operation: "stream"` only streams: each set is polled, counted and released, with no
 GPU preparation, fusion or mesh, so a run measures the cameras' stream and
 decode alone. `diagnostics.readback: true` reads each set's luma back through
-`PictureReadback`, a stage of its own, as the calibration app does.
-`diagnostics.dump_sets` writes the first sets' camera JPEGs, and with the
-readback their luma as PNGs (R = G = B), into `diagnostics.dump_directory`
-(`SetDump`), so the device's luma can be compared with the JPEGs' off line.
-The directory must not exist: it is checked before the cameras open and made
-with the first set. The run reports the cameras' open time and, at the end
-or when it fails, the array's counters, each camera's `lost` frames and, for
-a rig, each secondary's mean and worst skew to the primary. Colour is H.265
-at 3840x2160 and 25 fps unless the scenario names another mode, and every
-camera opens at `source.calibration`'s colour controls, or at auto
-exposure.
+`PictureReadback`, a stage of its own, as the calibration app does. The run
+reports the cameras' open time and, at the end or when it fails, the array's
+counters, each camera's `lost` frames and, for a rig, each secondary's mean
+and worst skew to the primary. Colour is H.265 at 3840x2160 and 25 fps
+unless the scenario names another mode, and every camera opens at
+`source.calibration`'s colour controls, or at auto exposure.
 With `output.stream`, `output.csv` or `output.serve` it also codes each
 fused set as one frame of a `codec_stream::CodecStream` (the 2026-10-20
 decision), decoding it too only with `output.csv` or `codec.sweep`

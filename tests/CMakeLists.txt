@@ -537,17 +537,6 @@ if(VR_BUILD_EXAMPLES)
                "session_check: RgbdStreamSensor::open_file: .*none.vrst")
 endif()
 
-# fuse_orbbec's dump of its first sets (examples/common/set_dump.hpp): the JPEGs
-# byte for byte, the luma as R = G = B PNGs, and the refusals. Host only.
-add_executable(recon_example_set_dump_test example_set_dump_test.cpp)
-target_include_directories(recon_example_set_dump_test
-                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
-target_link_libraries(
-  recon_example_set_dump_test PRIVATE volumetric_kit::sensor_array
-                                      volumetric_kit::sensor_image_io)
-vr_target_warnings(recon_example_set_dump_test)
-add_test(NAME recon_example_set_dump COMMAND recon_example_set_dump_test)
-
 # A sender's per-set log (examples/common/set_log.hpp): counters across each
 # set, P-frame, I-frame and uncoded sets apart, nearest-rank percentiles over
 # the sets that ran a row, n/t, n/a and dash cells, latencies and redo and tail

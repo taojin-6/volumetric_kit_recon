@@ -24,7 +24,6 @@ mesh-source notes are grid's ([its config/README.md](https://github.com/taojin-6
 | `fuse_orbbec` | [fuse_orbbec_phone.json](examples/fuse_orbbec_phone.json) | The same, phones joining and leaving it as fill |
 | `fuse_orbbec` | [stream_orbbec.json](examples/stream_orbbec.json) | Live stream/decode only |
 | `fuse_orbbec` | [readback_orbbec.json](examples/readback_orbbec.json) | Live stream with luma readback |
-| `fuse_orbbec` | [dump_orbbec.json](examples/dump_orbbec.json) | Live stream with readback, first sets' JPEGs and luma written |
 | `fuse_realsense` | [fuse_realsense.json](examples/fuse_realsense.json) | Live RealSense camera, its own depth, to PLY |
 | `fuse_realsense` | [fuse_realsense_ffs.json](examples/fuse_realsense_ffs.json) | Live RealSense camera, FFS depth on its infrared cameras (NVIDIA), to PLY |
 | `fuse_decklink` | [fuse_decklink.json](examples/fuse_decklink.json) | Live DeckLink stereo camera, FFS depth (NVIDIA), to PLY |
@@ -94,15 +93,6 @@ move or delete its `.vrst` before a rerun.
 scenario. It copies every set's luma to host memory and reports a separate
 `readback` stage. It defaults to false, so a stream without it measures only
 streaming and decoding.
-
-`diagnostics.dump_sets: N` with `diagnostics.dump_directory` writes the first
-N sets' files into that directory, which must not exist yet (its parent must):
-`set_NNN_<serial>.jpg`, each camera's JPEG as it came, and with `readback`
-`set_NNN_<serial>_luma.png`, the luma the device decoded, as R = G = B. It
-needs `source.color_codec: "mjpeg"`. Writing slows the sets it writes.
-`run.frames` counts frames, so four cameras' 40 frames are 10 sets: a run
-that ends before N sets says so with a warning, and a set the run's end cuts
-writes only the frames it keeps.
 
 `source.audio` records a mic beside the cameras into the coded stream, as an
 Audio track on the host's clock: `default`, the system's default input, or an

@@ -102,8 +102,10 @@ find_package(Vulkan REQUIRED)
 # and tests need). A floor is the oldest release with everything recon, its
 # examples and its tests use; the phone lane set all three: core 0.49.0's
 # optional source.mobile_registration, sensor 0.40.0's DepthNoise::known and
-# grid 0.15.0's StreamClient::send_note. CHANGELOG records each rise and why.
-set(VR_CORE_MIN_VERSION 0.49.0)
+# grid 0.15.0's StreamClient::send_note. The core's then rose to 0.50.0, which
+# refuses diagnostics.dump_sets and dump_directory, which fuse_orbbec no longer
+# writes. CHANGELOG records each rise and why.
+set(VR_CORE_MIN_VERSION 0.50.0)
 set(VR_SENSOR_MIN_VERSION 0.40.0)
 set(VR_GRID_MIN_VERSION 0.15.0)
 add_subdirectory(third_party)
