@@ -20,6 +20,24 @@ endif()
 # depth refuses the scenario before anything opens.
 add_subdirectory(fuse_decklink)
 
+# The rule tests/CMakeLists.txt sets on its tests (and says why there), for the
+# tests this directory and viewer/ add: a skip exits 77, and a hang fails after
+# 300 s unless the test sets a timeout of its own. Each calls it at its end,
+# after every test it can add.
+function(vr_example_test_limits)
+  get_property(
+    _tests
+    DIRECTORY
+    PROPERTY TESTS)
+  foreach(_test IN LISTS _tests)
+    set_tests_properties(${_test} PROPERTIES SKIP_RETURN_CODE 77)
+    get_test_property(${_test} TIMEOUT _timeout)
+    if(NOT _timeout)
+      set_tests_properties(${_test} PROPERTIES TIMEOUT 300)
+    endif()
+  endforeach()
+endfunction()
+
 # The gfx-linked reconstruction viewer examples (fuse_render headless PNG +
 # fuse_viewer live window). OFF by default: opting in is the ONLY place the
 # recon examples pull in the renderer sibling (volumetric_kit_gfx via
@@ -57,24 +75,8 @@ if(VR_BUILD_TESTS)
           ${volumetric_kit_grid_SOURCE_DIR}/tests/example_config_entry.cmake)
     endif()
   endforeach()
-  # fuse_realsense's depth against its build: FFS refused before the GPU where
-  # sensor_ffs is not built, and let through where it is.
-  if(TARGET fuse_realsense)
-    if(TARGET volumetric_kit::sensor_ffs)
-      set(_vr_ffs ON)
-    else()
-      set(_vr_ffs OFF)
-    endif()
-    add_test(
-      NAME recon_fuse_realsense_depth
-      COMMAND
-        ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:fuse_realsense>
-        -DFFS=${_vr_ffs}
-        -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fuse-realsense-depth -P
-        ${PROJECT_SOURCE_DIR}/tests/example_fuse_realsense_depth.cmake)
-  endif()
-  # fuse_decklink against its build: refused before the GPU, naming what is
-  # missing, without the DeckLink driver or FFS; let through with both.
+  # Which of sensor's optional tiers the live examples are built with
+  # (vr_example_ffs, vr_example_decklink), for the two tests below.
   foreach(_vr_tier decklink ffs)
     if(TARGET volumetric_kit::sensor_${_vr_tier})
       set(_vr_has_${_vr_tier} ON)
@@ -82,6 +84,19 @@ if(VR_BUILD_TESTS)
       set(_vr_has_${_vr_tier} OFF)
     endif()
   endforeach()
+  # fuse_realsense's depth against its build: FFS refused before the GPU where
+  # sensor_ffs is not built, and let through where it is.
+  if(TARGET fuse_realsense)
+    add_test(
+      NAME recon_fuse_realsense_depth
+      COMMAND
+        ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:fuse_realsense>
+        -DFFS=${_vr_has_ffs}
+        -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fuse-realsense-depth -P
+        ${PROJECT_SOURCE_DIR}/tests/example_fuse_realsense_depth.cmake)
+  endif()
+  # fuse_decklink against its build: refused before the GPU, naming what is
+  # missing, without the DeckLink driver or FFS; let through with both.
   add_test(
     NAME recon_fuse_decklink_build
     COMMAND
@@ -118,4 +133,5 @@ if(VR_BUILD_TESTS)
   set_tests_properties(
     recon_codec_replica_run PROPERTIES SKIP_REGULAR_EXPRESSION
                                        "skipping: no Vulkan device")
+  vr_example_test_limits()
 endif()
