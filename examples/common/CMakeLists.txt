@@ -28,6 +28,29 @@ if(TARGET volumetric_kit::sensor_microphone)
                              INTERFACE VR_EXAMPLE_MICROPHONE=1)
 endif()
 
+# FFS stereo depth (ffs_depth.hpp) for the cameras that offer it: sensor_ffs
+# where sensor builds it (VS_WITH_FFS), which VR_EXAMPLE_FFS turns on; elsewhere
+# a scenario that needs it is refused before anything opens.
+add_library(vr_example_ffs INTERFACE)
+if(TARGET volumetric_kit::sensor_ffs)
+  target_link_libraries(vr_example_ffs INTERFACE volumetric_kit::sensor_ffs)
+  target_compile_definitions(vr_example_ffs INTERFACE VR_EXAMPLE_FFS=1)
+endif()
+# The DeckLink camera (decklink_camera.hpp): sensor's stereo tier, for the
+# calibration file's stereo camera, and its DeckLink driver where sensor builds
+# it (VS_WITH_DECKLINK), which VR_EXAMPLE_DECKLINK turns on. The stereo tier
+# rides here, as the driver and sensor_ffs link it (vr_example_live's rule,
+# below).
+add_library(vr_example_decklink INTERFACE)
+target_link_libraries(vr_example_decklink
+                      INTERFACE volumetric_kit::sensor_stereo)
+if(TARGET volumetric_kit::sensor_decklink)
+  target_link_libraries(vr_example_decklink
+                        INTERFACE volumetric_kit::sensor_decklink)
+  target_compile_definitions(vr_example_decklink
+                             INTERFACE VR_EXAMPLE_DECKLINK=1)
+endif()
+
 # One sensor of a .vrst session, from a file or a live link its writer dials,
 # read back as a sensor::IRgbdSensor (link/rgbd_stream_sensor.hpp): its depth
 # track's records, in sensor's wire form (sensor_wire), through grid's
@@ -68,3 +91,24 @@ else()
   target_sources(vr_example_mobile PRIVATE live_tag_off.cpp)
 endif()
 vr_target_warnings(vr_example_mobile)
+
+# The live runs' loop (live_fusion.hpp), which fuse_orbbec, fuse_realsense and
+# fuse_decklink each link with their camera's driver. vr_example_live_audio
+# brings vr_example_common, with the sensor package's GPU pass (sensor_prep),
+# and any microphone driver source.audio records with; vr_example_mobile the
+# phone lane source.mobile runs (its tracker and log) and recon_sender, the set
+# step, with its codec stream, the fuser and the codec; eval is the codec
+# sweep's, mesh_io the PLY's, voxelize the mesh settings codec_config.hpp maps,
+# and sensor_array the cameras' array. A program names these bundles and its
+# driver alone: a library they bring, named beside them, goes on the link line
+# ahead of what links it and repeats there, which Apple's linker warns about.
+add_library(vr_example_live INTERFACE)
+target_link_libraries(
+  vr_example_live
+  INTERFACE vr_example_live_audio
+            vr_example_mobile
+            volumetric_kit::grid_eval
+            volumetric_kit::grid_mesh_io
+            volumetric_kit::grid_voxelize
+            volumetric_kit::sensor_array
+            Vulkan::Vulkan)

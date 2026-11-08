@@ -158,7 +158,6 @@ if(VR_BUILD_TESTS)
   vr_target_warnings(recon_example_viewer_pass_test)
   add_test(NAME recon_example_viewer_pass
            COMMAND recon_example_viewer_pass_test)
-  set_tests_properties(recon_example_viewer_pass PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # fuse_viewer: the live window -- fuses on a background thread, draws the
@@ -197,4 +196,9 @@ if(TARGET volumetric_kit::sensor_orbbec)
             volumetric_kit::gfx_pipelines Vulkan::Vulkan)
   target_include_directories(rig_viewer PRIVATE ${_viewer_common_inc})
   vr_target_warnings(rig_viewer)
+endif()
+
+# Last, so every test above takes examples/'s skip code and timeout.
+if(VR_BUILD_TESTS)
+  vr_example_test_limits()
 endif()

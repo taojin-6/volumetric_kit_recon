@@ -252,6 +252,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **the live examples link one bundle** (`vr_example_live`,
+  `examples/common/CMakeLists.txt`, which says why each library is on it):
+  `fuse_orbbec`, `fuse_realsense` and `fuse_decklink` link it and their camera,
+  FFS depth and the DeckLink camera through `vr_example_ffs` and
+  `vr_example_decklink`. The set of libraries each links is unchanged; a build
+  with DeckLink and FFS no longer names `sensor_stereo` twice on the link line.
+  The tests `examples/` and the viewer add skip on 77 and fail after 300 s, as
+  `tests/`'s do (`recon_example_viewer_atlas` keeps its 30 s), and the Replica
+  run scripts end a program that hangs after 240 s and fail with what it
+  printed, never taking it for the no-device skip.
 - `examples`: **the phone lane holds sessions**
   (`examples/common/live_mobile.hpp`): `MobileLane::add` joins one phone's
   session (`SessionParts`: its sensor, tracker, log and watch, a presence and

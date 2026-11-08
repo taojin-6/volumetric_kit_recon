@@ -5,7 +5,8 @@
 # patches over a constant depth, meshed after each. The periodic remesh is the
 # device extract, with nothing read back in the timed loop, and the final mesh
 # is extracted to the PLY. Skips with no Vulkan device unless
-# VKC_REQUIRE_VULKAN_DEVICE is set.
+# VKC_REQUIRE_VULKAN_DEVICE is set. A run that hangs is ended after 240 s,
+# inside the test's 300, and fails with what it printed.
 #
 # DEPTH is 256x144 16-bit samples of 1000, 1 m at a scale of 1000:
 # ~~~
@@ -34,9 +35,14 @@ file(
 
 execute_process(
   COMMAND "${PROGRAM}" --config "${WORK_DIR}/run.json"
+  TIMEOUT 240
   RESULT_VARIABLE result
   OUTPUT_VARIABLE output
   ERROR_VARIABLE error)
+# A hang fails whatever it printed, so it is never taken for the skip below.
+if(result MATCHES "timeout")
+  message(FATAL_ERROR "The run hung: ${result}: ${output}${error}")
+endif()
 if(NOT result EQUAL 0)
   if(error MATCHES "Vulkan|vkCreate|physical device|VK_ERROR"
      AND "$ENV{VKC_REQUIRE_VULKAN_DEVICE}" STREQUAL "")
