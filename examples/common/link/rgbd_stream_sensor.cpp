@@ -73,6 +73,11 @@ using FrameResult = vkc::Result<std::optional<sensor::RgbdFrame>>;
 // the nearest one -- so frame prep, which holds the row to 1e-12 and the
 // rotation to 1e-6, takes the frame. A pose further off is handed on as
 // written, for the prep to refuse.
+//
+// TODO: sensor 0.46.0's RgbdFrame rule has a driver, and a reader of
+// recordings made before it, hand out no frame whose pose its
+// camera::exact_rigid refuses (these tolerances, and a reflection or a value
+// not finite): use that call here and return no_frame() where it refuses.
 constexpr double kFloatRowRounding = 1e-6;
 constexpr double kFloatRotationDrift = 1e-4;
 

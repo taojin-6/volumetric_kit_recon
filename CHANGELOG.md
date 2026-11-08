@@ -265,6 +265,32 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **recon pins sensor 0.48.0 at the head of sensor's
+  `ci/orbbec-tool-cache`** (`174c845`, to move to that PR's merge; was 0.43.0,
+  sensor #51's merge, `1c5dd48`), and CI takes its actions there: **the
+  Orbbec SDK comes from the runner's tool cache**
+  (`$RUNNER_TOOL_CACHE/orbbec-sdk/<asset>`, seeded on each self-hosted runner)
+  when it matches the pin's SHA-256, and a download, where one is needed,
+  retries every error, 5xx included. GitHub's release downloads returned 504
+  for hours on 2026-11-08, failing every leg that installs the SDK before it
+  compiled. 0.44.0-0.48.0 change ARKit's driver (an open with no frame is
+  `NotFound`, the session runs whenever wanted, poses exactly rigid,
+  `poll_withheld_picture`), which recon does not call, and give `RigSets` a
+  settable silence limit, where recon's two-argument `RigSets(array, frames)`
+  keeps 10 s. The pixel-buffer importer now knows a surface by its id and
+  counts what it makes (`stats`): recon calls it nowhere itself, but its
+  VideoToolbox decoding of link colour (`RgbdStreamSensor`, by sensor's
+  `HevcDecoder`) imports each picture through it, which
+  `recon_example_link_rgbd_stream_color`, `recon_example_link_listen_color`
+  and `recon_example_live_tag` exercise under
+  `VS_TEST_HEVC_BACKEND=videotoolbox`.
+  The frame contract (`testing::RgbdContract`) now names a pose `check_rigid`
+  refuses, so `session_check` reports such a frame as its breach:
+  `RgbdStreamSensor` still hands on a pose `camera::exact_rigid` refuses, for
+  frame prep to refuse, where 0.46.0's `RgbdFrame` rule has a reader drop it
+  (a `TODO:` at its own `exact_rigid` marks the change). recon builds and
+  tests unchanged, so the floor stays 0.40.0, and the core 0.49.0 (sensor
+  needs 0.41.0).
 - `examples`: **up to four phones at once** (`kMaxPhones` 4, was 1;
   `examples/common/live_mobile.hpp`; DECISIONS.md, the 2026-11-04 entry's
   third amendment), as the gap's scheduler keeps their hops from stacking.
