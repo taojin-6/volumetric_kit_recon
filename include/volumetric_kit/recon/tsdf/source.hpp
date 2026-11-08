@@ -4,9 +4,9 @@
 #pragma once
 
 /// @file tsdf/source.hpp
-/// @brief Which sensor wrote a voxel: one byte a voxel, the `"source"`
-///        attribute every fusion grid carries (@ref create_fusion_grid), and
-///        the cast filters that read it.
+/// @brief Which sensor started a voxel's history: one byte a voxel, the
+///        `"source"` attribute every fusion grid carries
+///        (@ref create_fusion_grid), and the cast filters that read it.
 ///
 /// Four voxels share a `uint32` word of the attribute. A kernel writes a
 /// voxel's byte from the voxel's one thread: `atomicAnd` to clear it, then
@@ -18,8 +18,8 @@
 /// - 0: no sensor; the voxel holds no weight.
 /// - 1 to 63: fixed camera `byte - 1` started the voxel's history
 ///   (@ref fixed_source).
-/// - 128 + (1 to 63): mobile sensor `(byte & 63) - 1` wrote it, posed by a
-///   rig-only fit: anchored fill (@ref mobile_source).
+/// - 128 + (1 to 63): mobile sensor `(byte & 63) - 1` started it, posed by
+///   a rig-only fit: anchored fill (@ref mobile_source).
 /// - 192 + (1 to 63): the same from a frame no rig-only fit anchored:
 ///   unanchored fill.
 ///
@@ -88,8 +88,9 @@ constexpr std::uint8_t mobile_source(std::uint32_t index,
 VR_TSDF_API volumetric_kit::grid::volume::CastFilter rig_cast(
     float min_weight = 2.0f);
 
-/// @brief The rig plus anchored fill, at weight @p min_weight or more: what a
-///        filler's frames may be tracked against.
+/// @brief The rig plus anchored fill, every mobile sensor's, at weight
+///        @p min_weight or more: what a filler's frames may be tracked
+///        against.
 /// @param min_weight  As @ref rig_cast.
 /// @return The filter, on @ref kSourceAttribute: bytes 1 to 63 and 129 to
 ///         191 answer.

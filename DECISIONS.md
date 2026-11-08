@@ -1057,7 +1057,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   cameras remove fill only on their own change, where the new reading
   contradicts it, and never write a rim distance into it; a
   `FrameRole::Filler` fills only where no fixed camera holds weight and none
-  of its set vetoes, capped at half `max_weight`, to 3 m.
+  of its set vetoes, capped at half `max_weight`, to 3 m. *Amended
+  2026-11-08:* the rules hold across phones, reading the tier, never the
+  index; `tracking_cast()`'s anchored fill is every phone's; a phone's index
+  is (its join ordinal - 1) mod 63, skipping one a live session holds.
 - [**2026-11-04**](#2026-11-04--the-reduces-coarser-levels-pick-a-quarter-pixel-past-the-point-so-a-fit-repeats-on-nvidia-amends-the-2026-11-03-track-tier-entry) —
   The reduce's coarser levels pick the model pixel a quarter pixel past the
   point, off the rounding tie a pass's first iteration puts every point on,
@@ -6182,6 +6185,27 @@ orthonormal step, a correction's |R^T R - I| grew about 1.4e-7 a fit on a
 are taken (the review's probes).
 
 ### 2026-11-03 — Every fusion grid carries a source byte; fixed cameras remove fill only on a change that contradicts it, and a filler fills only where no fixed camera sees or holds weight (amends the 2026-10-29 Dynamic and outline entries).
+
+*Amended 2026-11-08:* fill from several phones in one grid meets these rules
+across them: they read the byte's tier, never its index. Same-tier samples
+average and keep the byte of the sample that started the voxel, whichever
+phone's; an Anchored band sample restarts any phone's unanchored fill as its
+own where its weight is at most the cap; a filler's free space wears down
+fill of its tier or below from any phone, and only fixed frames veto; an
+Unanchored frame writes no phone's anchored fill; the cap is the voxel's,
+whichever phones built its weight. A set's fillers fuse in the list's order,
+so with no fixed frame two phones in one set fill as their frames a set
+each, bit for bit. The byte names only the phone that started the voxel, so
+nothing may remove fill by index. `tracking_cast()`'s anchored fill is every
+phone's: a phone's track chain casts the others' too, its rig chain the rig
+alone. A phone's index is (its session's join ordinal - 1) mod 63, the
+run's first session taking 0, skipping an index a live session still holds;
+the lane assigns it at the join (later work; its one session takes 0
+today); the 63-a-class table stays. Two phones that disagree by more than
+the band wear down each other's fill; an index-aware rule comes only if a
+two-phone run shows it. Tests: `recon_tsdf_filler`'s two-phone cases
+(mobile indices 0 and 1, each way, in one set and a set each); ten planted
+bugs, each killed.
 
 **Context.** A moving camera (a phone, tracked against the rig) is to fill
 what the fixed cameras cannot see: under furniture, behind people, the empty
