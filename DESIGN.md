@@ -1228,7 +1228,13 @@ live session only the device's loss comes out of the lane, while a file's
 session's error ends its run as before. Its rules (pairing, the drain and
 its turns, the queue's cap, the index, splits, the tint, what a phone is
 told, coming and going, the errors, the live layout) are the header's; why,
-the 2026-11-04, 2026-11-05 and 2026-11-08 entries. A session's log
+the 2026-11-04, 2026-11-05 and 2026-11-08 entries. Its code:
+`live_mobile.cpp` the lane and the gap's scheduler, `live_mobile_session.cpp`
+a session's work and its leave (`PhoneSession`, the reaper),
+`live_mobile_open.cpp` the open path (`check_mobile`, `open_mobile_lane`, a
+live run's door, opener and back-off), over `live_mobile_internal.hpp`, which
+nothing installs; `polled_sensor.hpp` the background poll a live phone is
+read through. A session's log
 (`track_log.hpp`) is its `Tracker`'s steps as CSVs and a TUM pose file a
 chain, which `read_track_log` reads back and `summarize` turns into every
 metric of a run, once; a live run keeps one a session in a directory of its

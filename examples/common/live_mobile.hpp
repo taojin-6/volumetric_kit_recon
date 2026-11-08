@@ -216,6 +216,7 @@
 
 #include "config.hpp"
 #include "live_tag.hpp"
+#include "polled_sensor.hpp"  // polled_in_background, declared here before
 #include "track_log.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -407,18 +408,6 @@ vkc::Status check_filler(const volumetric_kit::recon::sender::Filler& filler);
 ///         (`Status::Code::Unsupported` in a build without
 ///         `VR_WITH_CALIB`).
 vkc::Status check_mobile(const config::Config& opt);
-
-/// @return @p sensor polled on a thread of its own from its start, so a
-///         @ref sensor::IRgbdSensor::poll or `drain` never waits on it: what
-///         a live link needs, whose own poll waits for records. It keeps the
-///         interface's queue: `set_queue_depth` frames (1 by default), the
-///         oldest let go (counted dropped) when a newer one arrives on a
-///         full one; `poll` takes the newest, `drain` every frame, oldest
-///         first. Its other counters and `exhausted` are the inner sensor's
-///         as of its last poll; an error the inner poll returns comes out of
-///         the next poll or drain once, and the polling goes on.
-std::unique_ptr<sensor::IRgbdSensor> polled_in_background(
-    std::unique_ptr<sensor::IRgbdSensor> sensor);
 
 /// @brief The phone lane (above). An aggregate: neither copied nor moved.
 class MobileLane {
