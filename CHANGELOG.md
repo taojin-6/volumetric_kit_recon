@@ -8,6 +8,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **`fuse_render` runs in CI** (`recon_fuse_render_run`, the
+  viewer leg): two frames of the wall `recon_fuse_replica_run` fuses, textured
+  with the second, rendered to a 320x200 PNG. The test reads the size from the
+  PNG's header, and the pixels drawn from `fuse_render`, which now prints them
+  (`drew N of M pixels`, those more than a code from the clear colour): at
+  least a twentieth of the frame, and not all of it. Under
+  `VKC_TEST_VALIDATION` (or `VKC_TEST_SYNC_VALIDATION`) the loader forces the
+  validation layer on, and the test fails if the loader's log does not show it
+  in both instances or it reports an error. A hang fails in 300 s.
+  `fuse_render`'s gfx half is one `render()`; its errors print as before.
 - `examples`: **many phones' sessions on one address**
   (`RgbdStreamSensor::Door`, `examples/common/link/rgbd_stream_sensor.hpp`):
   `Door::open` binds the address and returns, a bind it cannot make an
@@ -333,6 +343,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   filler the send would refuse is let go instead of ending the run.
   `tests/fake_phone.hpp` holds the lane tests' phones, and
   `recon_example_live_sessions` tests the sessions.
+- `examples`: **session_check's checks live with the tool**
+  (`tools/session_check/session_check.hpp`; was `examples/common/link/`),
+  behind `vr_session_check`, an INTERFACE target on `vr_example_link` and
+  `core_net` that the tool and the link tests link. `Address` and
+  `parse_address` are gone: `--listen` and the colour test's
+  `VR_TEST_SESSION_CHECK` read their address with core's
+  `net::parse_host_port`, so **both are slightly stricter**: a port with a
+  leading zero (`10.8.0.1:09123`) or a second ':' is refused rather than
+  read, with core's reason: `session_check` prints it before its usage (exit
+  2), the colour test in its FAIL line (exit 1).
+  `recon_session_check_listen_zero` and `recon_session_check_listen_colon`
+  test the refusal.
 - build: **recon pins grid 0.15.0** (grid #24's merge, `af45973`; was 0.14.0,
   `368e111`), and the floor rises to it for `StreamClient::send_note`. The core
   and sensor stay, so no workflow pin moves.

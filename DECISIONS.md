@@ -1321,6 +1321,11 @@ headless tests, which need no window or dataset: `recon_example_viewer_atlas`
 and `recon_example_viewer_pass` on a headless device,
 `recon_example_viewer_device`, and each viewer's config entry, on the core's
 test policy with validation.
+*Amended 2026-11-08:* it runs `fuse_render` too (`recon_fuse_render_run`), on
+the two-frame wall `recon_fuse_replica_run` fuses: the PNG's size and the
+pixels drawn are checked, and the loader forces the validation layer on, since
+the program turns none on; its log must show the layer in both instances.
+gfx #93's uv smear is still not seen.
 
 ### 2026-07-07 — Projective texturing is a new `texture` tier; live single-camera first.
 

@@ -3,7 +3,7 @@
 
 #pragma once
 
-/// @file examples/common/link/session_check.hpp
+/// @file tools/session_check/session_check.hpp
 /// @brief What `tools/session_check` checks of a session's frames as it
 ///        reads them: the frame contract (`testing::RgbdContract`); each
 ///        frame's pattern index read on the device
@@ -54,7 +54,9 @@ namespace vr_example::link {
 
 /// @brief A span of lost frames this long or more starts a new window in the
 ///        tracking lane (owner, 2026-11-03): a step of the map hidden in the
-///        gap then never joins two windows.
+///        gap then never joins two windows. The lane's own is `kSplitGapNs`
+///        (examples/common/live_mobile.hpp), in vr_example_mobile, which the
+///        check does not link: the two change together.
 inline constexpr std::uint64_t kLossWindowSplitNs = 100'000'000;
 
 /// @brief What a @ref SessionCheck found.
@@ -208,12 +210,6 @@ class SessionCheck {
   std::chrono::steady_clock::time_point last_wall_;
 };
 
-/// @brief A host and port as typed for a check: `host:port`.
-struct Address {
-  std::string host;        ///< As typed; the listener or dial checks it.
-  std::uint16_t port = 0;  ///< 1 to 65535.
-};
-
 /// @return @p text as a count: decimal digits alone, at most 9; empty
 ///         otherwise.
 inline std::optional<long> count_of(const char* text) {
@@ -223,17 +219,6 @@ inline std::optional<long> count_of(const char* text) {
     if (text[i] < '0' || text[i] > '9') return std::nullopt;
   }
   return std::strtol(text, nullptr, 10);
-}
-
-/// @return @p text, `host:port` with a port of 1 to 65535 in decimal
-///         digits, split at its last colon; empty otherwise. TODO: core
-///         0.44.0's `net::parse_host_port`, at recon's next core re-pin.
-inline std::optional<Address> parse_address(const std::string& text) {
-  const std::size_t colon = text.rfind(':');
-  if (colon == std::string::npos || colon == 0) return std::nullopt;
-  const std::optional<long> port = count_of(text.c_str() + colon + 1);
-  if (!port || *port < 1 || *port > 65535) return std::nullopt;
-  return Address{text.substr(0, colon), static_cast<std::uint16_t>(*port)};
 }
 
 /// @return @p r as session_check prints it, a line a topic: the frames, the

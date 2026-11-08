@@ -1193,8 +1193,8 @@ alone writes `door.csv`, made at its first row, a row for each connection
 refused or superseded, with its session and peer; the live runs' phone lane
 keeps one door a run.
 `tools/session_check`, built with the tests, prints what
-`link/session_check.hpp` finds of a file or a link (README, "Checking a
-phone's stream").
+its `session_check.hpp` finds of a file or a link (README, "Checking a
+phone's stream"); the link tests run the same checks (`vr_session_check`).
 
 **The phone lane** (`examples/common/live_mobile.hpp`, `vr_example_mobile`)
 puts such sensors beside a live run's cameras (`source.mobile`). It holds
