@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// Complete fusion is the default; live callers explicitly accept partial
-// bands. Growth, grow-ahead, and a bounded failure preserve the expected
-// voxel data and integration tick. A live grid holding a block fuses a set in
-// one submit to the same voxels, stamps and tick, its new blocks included,
-// and grows a set late. The record form (record_fuse, finish) gives what the
-// tier calls give from a grid's first set on, a refused set fused again at
-// its own tick; a token is the fuser's last record only, and a set the fuse
-// refuses records nothing and keeps the last one; and a warm strict
-// set is one submit with no staging buffer. Skips when no device is
-// available.
+// Complete fusion is the default; live callers explicitly accept partial bands,
+// fusing what fits, which may hold no weight. Growth, grow-ahead, and a bounded
+// failure preserve the expected voxel data and integration tick. A live grid
+// holding a block fuses a set in one submit to the same voxels, stamps and
+// tick, its new blocks included, and grows a set late. The record form
+// (record_fuse, finish) gives what the tier calls give from a grid's first set
+// on, a refused set fused again at its own tick; a token is the fuser's last
+// record only, and a set the fuse refuses records nothing and keeps the last
+// one; and a warm strict set is one submit with no staging buffer. Skips when
+// no device is available.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -101,16 +103,19 @@ bool same_stamps(vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
   return true;
 }
 
-// Whether each block `grid` holds carries the bits `expected` holds there.
+// Whether each block `grid` holds that `pick` takes carries the bits
+// `expected` holds there.
+template <typename Pick>
 bool held_blocks_match(const vkc::test::Gpu& gpu, vol::VoxelBlockGrid& expected,
-                       vol::VoxelBlockGrid& grid) {
+                       vol::VoxelBlockGrid& grid, Pick&& pick) {
   auto all = vgrid_test::blocks_of(expected);
   auto held = grid.map().compact_active_blocks();
   if (!all.ok() || !held.ok()) return false;
   vgrid_test::detail::MatchedBlocks blocks;
   for (const vol::BlockIndex& b : *held) {
-    const auto there =
-        all->find(vgrid_test::BlockCoord{b.coord.x, b.coord.y, b.coord.z});
+    const vgrid_test::BlockCoord coord{b.coord.x, b.coord.y, b.coord.z};
+    if (!pick(coord)) continue;
+    const auto there = all->find(coord);
     if (there == all->end()) return false;
     blocks.a.push_back({b.coord, there->second});
     blocks.b.push_back(b);
@@ -130,7 +135,15 @@ bool held_blocks_match(const vkc::test::Gpu& gpu, vol::VoxelBlockGrid& expected,
   return true;
 }
 
-// Whether any voxel of `grid` holds weight: the set was integrated.
+// Whether each block `grid` holds carries the bits `expected` holds there.
+bool held_blocks_match(const vkc::test::Gpu& gpu, vol::VoxelBlockGrid& expected,
+                       vol::VoxelBlockGrid& grid) {
+  return held_blocks_match(gpu, expected, grid,
+                           [](const vgrid_test::BlockCoord&) { return true; });
+}
+
+// Whether any voxel of `grid` holds weight. A partial set that fused need not
+// have given any: the blocks it holds may be ones the set gives none.
 vkc::Result<bool> fused_any(const vkc::test::Gpu& gpu,
                             const vol::VoxelBlockGrid& grid) {
   VKC_ASSIGN(const std::vector<float> weight,
@@ -140,6 +153,28 @@ vkc::Result<bool> fused_any(const vkc::test::Gpu& gpu,
     if (w > 0.0f) return true;
   }
   return false;
+}
+
+// Up to `n` of the blocks `grid` holds that hold no weight, in coordinate
+// order.
+vkc::Result<std::vector<vol::BlockIndex>> weightless_blocks(
+    const vkc::test::Gpu& gpu, vol::VoxelBlockGrid& grid, std::size_t n) {
+  VKC_ASSIGN(const auto blocks, vgrid_test::blocks_of(grid));
+  VKC_ASSIGN(const std::vector<float> weight,
+             vgrid_test::read_attribute<float>(gpu.device, gpu.allocator, grid,
+                                               vol::kWeightAttribute));
+  const auto vpb = std::size_t(grid.grid().voxels_per_block);
+  std::vector<vol::BlockIndex> out;
+  for (const auto& [coord, ptr] : blocks) {
+    if (out.size() == n) break;
+    const auto first = weight.begin() + std::ptrdiff_t(ptr);
+    if (std::all_of(first, first + std::ptrdiff_t(vpb),
+                    [](float w) { return w == 0.0f; })) {
+      const auto [x, y, z] = coord;
+      out.push_back({{x, y, z}, 0});
+    }
+  }
+  return out;
 }
 
 }  // namespace
@@ -462,26 +497,102 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   }
 
   // Live callers opt in: each bound includes the next set's grow-ahead,
-  // still integrates what fits, and reports the allocation failures.
-  for (const int bound : {0, 1, 2}) {
+  // still integrates what fits, and reports the allocation failures. What
+  // fits is the blocks the lock races placed, and a band's dilation reaches
+  // blocks the set gives no weight (the case below), so no voxel need gain
+  // any: each held block is checked instead. The first set finds no block
+  // held, so it is gated and fused again, as the tier calls fuse it: each
+  // block it holds is a set fused once's, and its tick, which a grid holding
+  // no block does not take, says it held one. The second is the live path's,
+  // which takes the tick as it records the integrate: a block the first set
+  // held is fused twice, as the reference's are, and one this set placed,
+  // once.
+  {
+    auto once = make_grid(dev, alloc, params(256));
+    CHECK(once.ok());
+    auto failed = once->map().allocate_from_depth(depths);
+    CHECK(failed.ok() && failed.value() == 0);
+    CHECK(integrator->integrate(*once, set).ok());
+    for (const int bound : {0, 1, 2}) {
+      tsdf::FuserConfig config;
+      config.max_grows_per_set = bound;
+      config.allow_partial = true;
+      auto fuser = make_fuser(dev, alloc, config);
+      auto grid = make_grid(dev, alloc, params(1));
+      CHECK(fuser.ok() && grid.ok());
+      std::map<vgrid_test::BlockCoord, std::int32_t> first;
+      for (int pass = 1; pass <= 2; ++pass) {
+        const std::uint32_t tick = grid->map().tick();
+        auto report = fuser->fuse(*grid, set);
+        CHECK(report.ok() && report->grows == bound);
+        CHECK(report->dropped > 0 && report->failures.capacity_limited());
+        CHECK(report->redone == (pass == 1));
+        CHECK(grid->grid().num_buckets == 1 << (bound * pass));
+        CHECK(grid->map().tick() == tick + 1);
+        if (pass == 1) {
+          CHECK(grid->map().allocated_blocks() > 0);
+          CHECK(held_blocks_match(ctx, *once, *grid));
+          auto held = vgrid_test::blocks_of(*grid);
+          CHECK(held.ok());
+          first = std::move(held).value();
+          continue;
+        }
+        const auto held_first = [&](const vgrid_test::BlockCoord& c) {
+          return first.count(c) != 0;
+        };
+        CHECK(held_blocks_match(ctx, *reference, *grid, held_first));
+        CHECK(held_blocks_match(
+            ctx, *once, *grid,
+            [&](const vgrid_test::BlockCoord& c) { return !held_first(c); }));
+      }
+      auto invalid = set;
+      invalid[0].depth = vkc::StorageInput(static_cast<const float*>(nullptr));
+      CHECK(fuser->fuse(*grid, invalid).status().domain() ==
+            vkc::Status::Code::InvalidArgument);
+    }
+  }
+
+  // A full table may hold only blocks the set gives no weight. CI's did on
+  // lavapipe: eight of camera 0's band, whose dispatch fills an empty table
+  // before the next camera's runs. Here that table is placed beforehand and
+  // fused on the live path; CI's gated first set, fused again over what its
+  // round placed, cannot be handed chosen blocks. The set still fuses what
+  // fits: it reports the capacity limit, takes the tick, each block ends as
+  // the tier calls leave it, and no voxel gains weight. The case pins the
+  // report and the absence of weight; the case above checks the voxels this
+  // path fuses. It assumes camera 0's band reaches eight blocks the set gives
+  // no weight (131 of its 319 do).
+  {
+    auto band = make_grid(dev, alloc, params(256));
+    CHECK(band.ok());
+    auto placed = band->map().allocate_from_depth(
+        std::vector<vol::DepthInput>{depths[0]});
+    CHECK(placed.ok() && placed.value() == 0);
+    CHECK(integrator->integrate(*band, set).ok());
+    auto weightless = weightless_blocks(ctx, *band, 8);
+    CHECK(weightless.ok() && weightless->size() == 8);
+    auto coords = vkc::test::upload_device_buffer(
+        dev, alloc, weightless->data(),
+        weightless->size() * sizeof(vol::BlockIndex));
     tsdf::FuserConfig config;
-    config.max_grows_per_set = bound;
+    config.max_grows_per_set = 0;
     config.allow_partial = true;
     auto fuser = make_fuser(dev, alloc, config);
     auto grid = make_grid(dev, alloc, params(1));
-    CHECK(fuser.ok() && grid.ok());
+    CHECK(coords.ok() && fuser.ok() && grid.ok());
+    auto failed = grid->map().allocate(*coords, 8);
+    CHECK(failed.ok() && failed.value() == 0);
     for (int pass = 1; pass <= 2; ++pass) {
+      const std::uint32_t tick = grid->map().tick();
       auto report = fuser->fuse(*grid, set);
-      CHECK(report.ok() && report->grows == bound);
+      CHECK(report.ok() && report->grows == 0 && !report->redone);
       CHECK(report->dropped > 0 && report->failures.capacity_limited());
-      CHECK(grid->grid().num_buckets == 1 << (bound * pass));
+      CHECK(grid->map().allocated_blocks() == 8);
+      CHECK(grid->map().tick() == tick + 1);
+      CHECK(held_blocks_match(ctx, *reference, *grid));
       auto any = fused_any(ctx, *grid);
-      CHECK(any.ok() && any.value());
+      CHECK(any.ok() && !any.value());
     }
-    auto invalid = set;
-    invalid[0].depth = vkc::StorageInput(static_cast<const float*>(nullptr));
-    CHECK(fuser->fuse(*grid, invalid).status().domain() ==
-          vkc::Status::Code::InvalidArgument);
   }
 
   // Reject invalid configuration and moved-from objects.

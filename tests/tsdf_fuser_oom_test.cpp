@@ -171,12 +171,12 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   failure.armed = false;
   CHECK(failure.injected && report.ok() && report->grows == 0);
   CHECK(report->growth_error.domain() == vkc::Status::Code::OutOfMemory);
+  // It fused what fits: it took the tick, which a grid holding no block does
+  // not. Its lock races pick which blocks a full table holds, and those may
+  // all be blocks the frames give no weight (tsdf_fuser_test), so no voxel
+  // need gain any.
   CHECK(report->dropped > 0 && small->map().tick() == refused_tick + 1);
-  auto weights = vgrid_test::read_attribute<float>(
-      gpu.device, gpu.allocator, *small, vol::kWeightAttribute);
-  CHECK(weights.ok() &&
-        std::any_of(weights->begin(), weights->end(),
-                    [](float weight) { return weight > 0.0f; }));
+  CHECK(small->map().allocated_blocks() > 0);
 
   fail_allocation(3 * sizeof(vkc::Buffer), resize_site);
   report = partial->fuse(*small, pair);
