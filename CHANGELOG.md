@@ -265,6 +265,47 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **up to four phones at once** (`kMaxPhones` 4, was 1;
+  `examples/common/live_mobile.hpp`; DECISIONS.md, the 2026-11-04 entry's
+  third amendment), as the gap's scheduler keeps their hops from stacking.
+  `MobileLane::next` classes each session's record due before anything of
+  it is shown to a watch or tracked (by the tag and not yet registered, a
+  prep, or a hop by `Tracker::fit_due`), runs one hop a gap across sessions
+  (the one that has waited the most gaps; ties in turn, the turn moved only
+  by a gap two or more hops contest), and puts the rest back at the front of
+  their sessions' records, counted (`MobileLane::Counts::deferred`, the
+  budget's in `over_budget`), with their splits and their watch's sight of
+  them kept. The kept records' batches are submitted in join order and then
+  waited in join order. `run_live_fusion` gives a live lane alone its gap's
+  `GapBudget` (`MobileLane::live`): its hop runs only if now plus `HopEstimate`'s p90 (the last 32 hops' wall times,
+  seeded at 20 ms, `LaneOptions::hop_seed`) ends by the gap's end, and past
+  that end its preps go back too. Once the budget has held hops back for 1 s
+  of sets with none run, the next gap not past its end runs one anyway, a
+  probe (`kHopProbeNs`), and one that ends within its room brings the
+  estimate down (`HopEstimate::probed`), so a burst of load never stops a
+  phone's fits for good; a probe may make its set late. A file's lane reads
+  no budget, whatever it is given, and with none (a file's run, the tests)
+  replays repeat and one phone defers nothing. A 10 s window of sets with more than half the records put back
+  is warned of, with the budget's part, the estimate and the last room; the
+  report gives the deferrals, the probes, the estimate and the room. The
+  drain stays at 3 fillers a send in all. No track-tier `reserve()`, though
+  the plan's bar for one is crossed: a late joiner's first fit took 3.9 ms
+  and its fifth hop 2.3-2.6 ms over a steady one on the M5 Max (wall time,
+  a throwaway probe), for the owner to confirm. The lab run at one, two and
+  four phones is owed (PERF.md, PH1). Tests: `recon_example_live_phones`
+  (the estimator, its seed and its probe; one hop a gap for two phones on
+  one clock, the first place by turns, fits within one over 10 s; a live
+  past gap end defers and keeps the split, a file's lane ignores it; an
+  estimate above every room holds the hop back while the preps pair, until
+  a probe; an end an hour off defers nothing; three phones replay
+  identically, each put back alike), `recon_example_live_tag` (the tag
+  registers through a past budget on a live lane; its live case now dials
+  four phones and a fifth, refused until one leaves, where it pinned a cap
+  of one). Four cases that ran phones on one clock now stagger their clocks
+  a record apart, as each passed only while the first joiner always went
+  first: `recon_example_live_sessions`' two alike, turn given away and queue
+  cap (12.5 Hz sets) and `recon_example_live_phones`' drain once retired
+  (12.5 Hz sets).
 - `examples`: **the viewers' host-side figures in one gfx-free header**
   (`examples/viewer/viewer_metrics.hpp`): `CountRate`, `AtlasCopyTimes`,
   `kAtlasCopyRow` and the texture shares leave `rig_report.hpp`, which
@@ -304,7 +345,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   once, a door listens for the whole run (an address it cannot bind yet
   warned of and retried every 2 s, the report saying `phones: not listening`
   if it never takes), and phones join and leave while the rig runs. Past
-  `kMaxPhones` (1 for now) a new session is refused right after its session's
+  `kMaxPhones` (4, above) a new session is refused right after its session's
   chunk, as the iPad reads a failed dial; a held one's reconnect always gets
   through. A session is Away from the first gap without a connection, its
   tracker flushed once at 7 s and the session retired at 30 s of set time
@@ -334,7 +375,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and an empty directory writes nothing. `TrackLog::close` writes every file
   whatever another's write did. The end of the run reports each session
   (its join and leave from the lane's first gap), the totals and the door.
-  `next` takes a `GapBudget`, which the live run fills and nothing reads yet,
+  `next` takes a `GapBudget`, which the live run fills and the scheduler reads,
   and the run's gap is gated by `MobileLane::enabled()`. Reverses "the rig
   never fuses alone in a run that asked for it" (the 0.43.0 pin's entry
   below). `config/examples/fuse_orbbec_phone.json` is a live phone template.

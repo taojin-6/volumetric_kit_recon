@@ -13,13 +13,28 @@
 //   summary.csv), its join's and its leave's rows in sessions.csv, its log
 //   let go and its lines kept.
 // - Fill still drains once retired: of five phones placing more than the
-//   sends take, one that goes retires with frames waiting, hands them over
-//   and only then leaves, its index free again.
+//   sends take (12.5 Hz sets, their clocks a record apart, so their hops
+//   fall in different gaps), one that goes retires with frames waiting,
+//   hands them over and only then leaves, its index free again.
 // - A return within the grace is the same session: Live again, its ordinal
 //   and index kept, the loss in its records one split.
 // - Containment: a fitter's error retires its session alone while next()
 //   stays OK, its error's hearer told once; the device's loss comes out of
 //   next(), and so does a file's session's own error, as before.
+// - The gap's scheduler: the guard's estimate is 20 ms until hops replace
+//   its seeds, then the 29th of the last 32 hops' wall times; a probe that
+//   fits its room brings it back down, one that overran is a sample as any.
+//   Two phones on one clock, their hops due in the same gaps, get one hop a
+//   gap, one put back to the next, the first place by turns, and their fits
+//   stay within one of each other over 10 s of sets, every record paired. A
+//   live gap whose end has passed runs no hop and puts its prep back, and
+//   once gaps have room the loss in between is still one split; a file's
+//   lane given that end pairs as with none. With the estimate above every
+//   gap's room, the hops go back and the preps pair, every deferral the
+//   budget's, until the probe a second of sets later, whose fit brings the
+//   estimate down; an end an hour off defers nothing, and the hops that run
+//   feed the estimate. Three phones on one clock replay the same fillers in
+//   the same sends and the same counts, each put back alike.
 // - open_mobile_lane returns within a second with no phone (the pipeline
 //   cache warmed first, as a run's earlier lanes leave it); a run no phone
 //   dials writes nothing in D. A phone that dials while the sets run joins
@@ -49,6 +64,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -253,7 +269,9 @@ int test_leave(const Env& env, const std::filesystem::path& dir) {
 }
 
 // Five phones placing more than the sends take; one goes, and retires with
-// frames waiting, which drain before it leaves.
+// frames waiting, which drain before it leaves. At 12.5 Hz sets, each phone's
+// clock a record after the one before, as the sessions test's queue cap case
+// runs them: their hops fall in different gaps and each pairs every record.
 int test_drains_when_retired(const Env& env) {
   LaneOptions options;
   options.settle_ns = kS;
@@ -264,10 +282,12 @@ int test_drains_when_retired(const Env& env) {
   auto upto = std::make_shared<std::size_t>(150);
   for (std::size_t k = 0; k < 5; ++k) {
     std::unique_ptr<sensor::IRgbdSensor> phone;
+    std::vector<PhoneFrame> script = ten_hz(150);
+    for (PhoneFrame& p : script) p.pts += k * 100 * kMs;
     if (k == 0) {
-      phone = std::make_unique<GatedPhone>(ten_hz(150), upto);
+      phone = std::make_unique<GatedPhone>(std::move(script), upto);
     } else {
-      phone = std::make_unique<FakePhone>(ten_hz(150));
+      phone = std::make_unique<FakePhone>(std::move(script));
     }
     auto parts = session(std::move(phone), anchors_when(always, Mat4f(1.0f)),
                          anchors_when(never, Mat4f(1.0f)),
@@ -277,8 +297,8 @@ int test_drains_when_retired(const Env& env) {
   bool drained_retired = false;  // fused while Retiring
   std::uint64_t fused_at_retire = 0;
   std::size_t waiting_at_retire = 0;
-  for (std::size_t i = 0; i < 200; ++i) {
-    const std::uint64_t set = kS + (i + 1) * 100 * kMs;
+  for (std::size_t i = 0; i < 250; ++i) {
+    const std::uint64_t set = kS + (i + 1) * 80 * kMs;
     if (set >= 11 * kS && *here) {
       *here = false;
       *upto = 0;  // it sends no more
@@ -408,6 +428,379 @@ int test_containment(const Env& env) {
   const std::optional<VkResult> result = vkc::vk_result(lost);
   CHECK(result && *result == VK_ERROR_DEVICE_LOST);
   CHECK((*lost_lane)->close().ok());
+  return 0;
+}
+
+// --- The gap's scheduler ----------------------------------------------------
+
+// The guard's estimate: 20 ms until hops take the seeds' places, then the
+// 29th smallest of the last 32 hops' wall times.
+int test_hop_estimate() {
+  using std::chrono::milliseconds;
+  vr_example::HopEstimate e;
+  CHECK(e.p90() == milliseconds(20));
+  // 28 quick hops leave four seeds above them; a 29th, three.
+  for (int i = 0; i < 28; ++i) e.add(milliseconds(5));
+  CHECK(e.p90() == milliseconds(20));
+  e.add(milliseconds(5));
+  CHECK(e.p90() == milliseconds(5));
+  // Three slow hops in the last seeds' places are above the rank; a fourth,
+  // in the oldest quick one's, is at it.
+  for (int i = 0; i < 3; ++i) e.add(milliseconds(100));
+  CHECK(e.p90() == milliseconds(5));
+  e.add(milliseconds(100));
+  CHECK(e.p90() == milliseconds(100));
+  // 32 more push every older one out.
+  for (int i = 0; i < 32; ++i) e.add(milliseconds(8));
+  CHECK(e.p90() == milliseconds(8));
+  // Ranked, not averaged, whatever the order: 32 ms down to 1 ms is 29 ms.
+  vr_example::HopEstimate ranked;
+  for (int i = 32; i >= 1; --i) ranked.add(milliseconds(i));
+  CHECK(ranked.p90() == milliseconds(29));
+  // Four slow hops hold it above any gap's 30 ms of room, and no hop the
+  // guard holds back can bring it down. A probe that overran its room is a
+  // sample as any; one that ended within it replaces every sample longer
+  // than that room, and the estimate is the seed's again.
+  vr_example::HopEstimate slow;
+  for (int i = 0; i < 4; ++i) slow.add(milliseconds(100));
+  CHECK(slow.p90() == milliseconds(100));
+  slow.probed(milliseconds(40), milliseconds(30));
+  CHECK(slow.p90() == milliseconds(100));
+  slow.probed(milliseconds(15), milliseconds(30));
+  CHECK(slow.p90() == milliseconds(20));
+  // A seed of its own: above every room until a probe that fits.
+  vr_example::HopEstimate seeded(std::chrono::hours(1));
+  CHECK(seeded.p90() == std::chrono::hours(1));
+  seeded.probed(milliseconds(3), std::chrono::seconds(10));
+  CHECK(seeded.p90() == milliseconds(3));
+  return 0;
+}
+
+// A session of a fake phone of `script` whose rig chain anchors every fit
+// and logs it into `*rig_fits`; logged in memory, a file's (no presence).
+vkc::Result<MobileLane::SessionParts> logged_session(
+    std::vector<PhoneFrame> script, std::string name,
+    std::shared_ptr<const std::vector<vr_test::ScriptedRecord>>* rig_fits) {
+  auto rig =
+      std::make_unique<ScriptedFitter>(anchors_when(always, Mat4f(1.0f)));
+  *rig_fits = rig->log();
+  std::vector<std::unique_ptr<track::IFitter>> fitters;
+  fitters.push_back(std::move(rig));
+  fitters.push_back(
+      std::make_unique<ScriptedFitter>(anchors_when(never, Mat4f(1.0f))));
+  fitters.emplace_back();  // arkit
+  MobileLane::SessionParts parts;
+  VKC_ASSIGN(parts.tracker, track::Tracker::create(vr_example::lane_tracking(),
+                                                   std::move(fitters)));
+  VKC_ASSIGN(parts.log, vr_example::TrackLog::open({}, *parts.tracker, {}));
+  parts.phone = std::make_unique<FakePhone>(std::move(script));
+  parts.name = std::move(name);
+  return parts;
+}
+
+// The lane with no session, which sessions are added to: a file's, which
+// reads no budget.
+vkc::Result<std::unique_ptr<MobileLane>> empty_lane(const Env& env) {
+  return MobileLane::create(env.gpu.device, env.gpu.allocator, {}, {}, {});
+}
+
+bool same_counts(const MobileLane::Counts& a, const MobileLane::Counts& b) {
+  return std::memcmp(&a, &b, sizeof a) == 0;
+}
+
+// The gaps' sets at 25 Hz: gap i before the set at 1 s + (i + 1) * 40 ms.
+std::uint64_t gap_set(std::size_t i) { return kS + (i + 1) * 40 * kMs; }
+
+// A budget whose end is `ahead` from now.
+vr_example::GapBudget ending_in(std::chrono::steady_clock::duration ahead) {
+  vr_example::GapBudget b;
+  b.gap_end = std::chrono::steady_clock::now() + ahead;
+  return b;
+}
+
+// Two phones on one clock, their hops due in the same gaps: one hop a gap of
+// the two, one phone's at the gap and the other's at the next, the first
+// place taking turns period by period (the turn moves on only in a contested
+// gap), and over 10 s of sets their fits within one of each other, every
+// record paired.
+int test_one_hop_a_gap(const Env& env) {
+  auto lane = empty_lane(env);
+  CHECK(lane.ok());
+  std::shared_ptr<const std::vector<vr_test::ScriptedRecord>> fits[2];
+  for (int k = 0; k < 2; ++k) {
+    auto parts = logged_session(ten_hz(100), k == 0 ? "a" : "b", &fits[k]);
+    CHECK(parts.ok() && (*lane)->add(std::move(*parts)).ok());
+  }
+  std::size_t ran[2] = {0, 0};    // fits so far, each
+  std::size_t together = 0;       // gaps whose two hops were due at once
+  std::vector<std::size_t> back;  // whose hop went back, gap by gap
+  for (std::size_t i = 0; i < 250; ++i) {  // 10 s of sets at 25 Hz
+    std::uint64_t deferred[2];
+    for (std::size_t k = 0; k < 2; ++k) {
+      deferred[k] = (*lane)->sessions().at(k).counts.deferred;
+    }
+    CHECK((*lane)->next(env.grid, gap_set(i)).ok());
+    const std::size_t now[2] = {fits[0]->size(), fits[1]->size()};
+    CHECK(now[0] + now[1] <= ran[0] + ran[1] + 1);  // one hop a gap at most
+    for (std::size_t k = 0; k < 2; ++k) {
+      if ((*lane)->sessions().at(k).counts.deferred == deferred[k]) continue;
+      ++together;
+      back.push_back(k);
+      // Exactly one ran: the other's.
+      CHECK(now[k] == ran[k] && now[1 - k] == ran[1 - k] + 1);
+    }
+    CHECK(now[0] <= now[1] + 1 && now[1] <= now[0] + 1);
+    ran[0] = now[0];
+    ran[1] = now[1];
+  }
+  // A hop each 0.5 s from the first record: 20 each, every one due with the
+  // other's, one put back once each time, the second's first and then by
+  // turns: 10 each.
+  const std::vector<MobileLane::SessionView> views = (*lane)->sessions();
+  CHECK(fits[0]->size() == 20 && fits[1]->size() == 20 && together == 20);
+  for (std::size_t k = 0; k < back.size(); ++k) CHECK(back[k] == (k + 1) % 2);
+  CHECK(views[0].counts.deferred == 10 && views[1].counts.deferred == 10);
+  for (const MobileLane::SessionView& v : views) {
+    CHECK(v.counts.paired == 100 && v.counts.skipped == 0 &&
+          v.counts.over_budget == 0);
+  }
+  CHECK(has((*lane)->report(),
+            "10 deferred to a later gap (one hop a gap; 0 "
+            "by the gap's budget)"));
+  CHECK((*lane)->close().ok());
+  return 0;
+}
+
+// A live gap whose end has passed runs no hop and puts its preps back, and
+// nothing is lost: once gaps have room again, the loss in between is still
+// one split. A file's lane given the same end reads none: it pairs as with
+// no budget.
+int test_past_budget(const Env& env) {
+  auto lane = live_lane(env, {});
+  CHECK(lane.ok() && (*lane)->live());
+  std::vector<PhoneFrame> script = ten_hz(20);  // 1.0-2.9 s
+  for (std::uint64_t i = 30; i < 50; ++i) {
+    script.push_back({kS + i * 100 * kMs, i});  // 4.0-5.9 s, 20-29 lost
+  }
+  std::shared_ptr<const std::vector<vr_test::ScriptedRecord>> fits;
+  auto parts = logged_session(script, "phone", &fits);
+  CHECK(parts.ok() && (*lane)->add(std::move(*parts)).ok());
+  vr_example::GapBudget past;
+  past.gap_end = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+  // Record k is due at gap ceil(2.5 k): 0-5 paired by gap 14, the hops at
+  // 1.0 and 1.5 s run; record 6 (1.6 s, gap 15) is a prep.
+  for (std::size_t i = 0; i < 15; ++i) {
+    CHECK((*lane)->next(env.grid, gap_set(i)).ok());
+  }
+  MobileLane::Counts c = (*lane)->sessions().at(0).counts;
+  CHECK(fits->size() == 2 && c.paired == 6 && c.deferred == 0);
+  // Past the gap's end to 6.2 s of sets, past every record and the loss:
+  // the prep at gap 15 goes back, and so does each record due after it,
+  // each by the budget; a gap already past runs no probe.
+  for (std::size_t i = 15; i < 130; ++i) {
+    CHECK((*lane)->next(env.grid, gap_set(i), past).ok());
+    c = (*lane)->sessions().at(0).counts;
+    if (i == 15) CHECK(c.deferred == 1);
+    CHECK(fits->size() == 2 && c.paired == 6 && c.splits == 0 &&
+          c.over_budget == c.deferred);
+  }
+  CHECK(c.deferred > 100 && c.skipped > 0);
+  // Room again: the newest record, put back last, pairs, its hop runs, and
+  // the loss before it is one split.
+  for (std::size_t i = 130; i < 140; ++i) {
+    CHECK((*lane)->next(env.grid, gap_set(i)).ok());
+  }
+  c = (*lane)->sessions().at(0).counts;
+  CHECK(fits->size() == 3 && fits->back().pts.back() == kS + 49 * 100 * kMs);
+  CHECK(c.paired == 7 && c.splits == 1);
+  CHECK(has((*lane)->report(), "0 probe(s)"));
+  CHECK((*lane)->close().ok());
+  // A file's lane, given that end throughout and given none.
+  MobileLane::Counts file[2];
+  std::size_t file_fits[2] = {0, 0};
+  for (int given = 0; given < 2; ++given) {
+    auto f = empty_lane(env);
+    CHECK(f.ok() && !(*f)->live());
+    auto p = logged_session(script, "phone", &fits);
+    CHECK(p.ok() && (*f)->add(std::move(*p)).ok());
+    for (std::size_t i = 0; i < 140; ++i) {
+      CHECK((*f)->next(env.grid, gap_set(i),
+                       given == 1 ? past : vr_example::GapBudget{})
+                .ok());
+    }
+    file[given] = (*f)->sessions().at(0).counts;
+    file_fits[given] = fits->size();
+    CHECK((*f)->close().ok());
+  }
+  CHECK(same_counts(file[0], file[1]) && file_fits[0] == file_fits[1]);
+  CHECK(file[1].deferred == 0 && file[1].paired == 40 && file[1].skipped == 0 &&
+        file[1].splits == 1);
+  return 0;
+}
+
+// The guard's main branch and its probe, on a live lane whose estimate
+// starts at an hour, above every gap's minute of room (so no host work, how
+// slow soever, makes a gap late): the hops held back while the preps pair,
+// every deferral the budget's; once the budget has held hops back for a
+// second of sets with none run, the next gap runs one, a probe that ends
+// within its minute and so brings the estimate down; then the hops run as
+// due.
+int test_guard(const Env& env) {
+  LaneOptions options;
+  options.hop_seed = std::chrono::hours(1);
+  auto lane = live_lane(env, options);
+  CHECK(lane.ok());
+  std::shared_ptr<const std::vector<vr_test::ScriptedRecord>> fits;
+  auto parts = logged_session(ten_hz(60), "phone", &fits);  // 1.0-6.9 s
+  CHECK(parts.ok() && (*lane)->add(std::move(*parts)).ok());
+  // No budget: records 0-5 paired by gap 14, the hops at 1.0 and 1.5 s run.
+  for (std::size_t i = 0; i < 15; ++i) {
+    CHECK((*lane)->next(env.grid, gap_set(i)).ok());
+  }
+  MobileLane::Counts c = (*lane)->sessions().at(0).counts;
+  CHECK(fits->size() == 2 && c.paired == 6 && c.deferred == 0);
+  CHECK(has((*lane)->report(), "a hop estimated at 3600000.0 ms"));
+  const auto minute = [] { return ending_in(std::chrono::minutes(1)); };
+  // A minute of room each gap: records 6-9 (gaps 15-23) are preps and pair;
+  // record 10's hop (2.0 s, gap 25) goes back, and so does each newer
+  // record's that takes its place, until gap 50 (3.04 s of sets, a second
+  // after gap 25's 2.04 s), whose probe runs record 20's.
+  for (std::size_t i = 15; i < 50; ++i) {
+    CHECK((*lane)->next(env.grid, gap_set(i), minute()).ok());
+    c = (*lane)->sessions().at(0).counts;
+    CHECK(fits->size() == 2);
+    // Records 0 to 2i/5 are due by gap i.
+    CHECK(c.paired == std::min<std::size_t>(10, 2 * i / 5 + 1));
+    CHECK(c.over_budget == c.deferred && c.deferred == (i < 25 ? 0 : i - 24));
+  }
+  CHECK(c.paired == 10 && c.deferred == 25 && c.skipped == 9);
+  CHECK((*lane)->next(env.grid, gap_set(50), minute()).ok());
+  CHECK(fits->size() == 3 && fits->back().pts.back() == kS + 20 * 100 * kMs);
+  CHECK((*lane)->sessions().at(0).counts.skipped == 10);
+  std::string report = (*lane)->report();
+  CHECK(has(report, "1 probe(s)") &&
+        report.find("estimated at 3600000.0 ms") == std::string::npos);
+  // The estimate the probe's: each hop after it runs as due, at records 25,
+  // 30, ..., 55, with no deferral more.
+  for (std::size_t i = 51; i < 160; ++i) {
+    CHECK((*lane)->next(env.grid, gap_set(i), minute()).ok());
+  }
+  c = (*lane)->sessions().at(0).counts;
+  CHECK(fits->size() == 10 && c.deferred == 25 && c.paired == 50 &&
+        c.skipped == 10);
+  CHECK(has((*lane)->report(), "1 probe(s)"));
+  CHECK((*lane)->close().ok());
+  return 0;
+}
+
+// A live lane's budget that ends far ahead (an hour) defers nothing: the
+// same fillers and counts as no budget. And every hop that runs feeds the
+// estimate: from an hour, 30 hops with no budget bring it down.
+int test_far_budget(const Env& env) {
+  std::vector<std::pair<std::uint64_t, tsdf::FillTier>> got[2];
+  MobileLane::Counts counts[2];
+  for (int far = 0; far < 2; ++far) {
+    LaneOptions options;
+    options.hop_seed = std::chrono::hours(1);
+    auto lane = live_lane(env, far == 1 ? LaneOptions{} : options);
+    CHECK(lane.ok());
+    std::shared_ptr<const std::vector<vr_test::ScriptedRecord>> fits;
+    auto parts = logged_session(ten_hz(150), "phone", &fits);  // 30 hops
+    CHECK(parts.ok() && (*lane)->add(std::move(*parts)).ok());
+    for (std::size_t i = 0; i < 400; ++i) {
+      auto sent = (*lane)->next(env.grid, gap_set(i),
+                                far == 1 ? ending_in(std::chrono::hours(1))
+                                         : vr_example::GapBudget{});
+      CHECK(sent.ok());
+      for (const sender::Filler& f : *sent) {
+        got[far].emplace_back(f.frame.timestamp_ns, f.tier);
+      }
+    }
+    CHECK(fits->size() == 30);
+    counts[far] = (*lane)->sessions().at(0).counts;
+    if (far == 0) {
+      CHECK(has((*lane)->report(), "0 probe(s)") &&
+            (*lane)->report().find("estimated at 3600000.0 ms") ==
+                std::string::npos);
+    }
+    CHECK((*lane)->close().ok());
+  }
+  CHECK(same_counts(counts[0], counts[1]) && counts[1].deferred == 0);
+  CHECK(!got[0].empty() && got[0] == got[1]);
+  return 0;
+}
+
+// One filler as a send got it, to compare runs by.
+struct Got {
+  std::size_t send = 0;
+  std::uint64_t pts = 0;
+  std::uint32_t index = 0;
+  tsdf::FillTier tier = tsdf::FillTier::Anchored;
+  Mat4f pose{1.0f};
+
+  bool operator==(const Got& o) const {
+    return send == o.send && pts == o.pts && index == o.index &&
+           tier == o.tier && std::memcmp(&pose, &o.pose, sizeof pose) == 0;
+  }
+};
+
+// Three phones on one clock, every hop due in the same gaps: the fillers each
+// send got and the sessions' counts, one hop a gap throughout.
+vkc::Result<std::vector<Got>> three(const Env& env,
+                                    std::vector<MobileLane::Counts>* counts) {
+  VKC_ASSIGN(std::unique_ptr<MobileLane> lane, empty_lane(env));
+  std::shared_ptr<const std::vector<vr_test::ScriptedRecord>> fits[3];
+  for (int k = 0; k < 3; ++k) {
+    VKC_ASSIGN(MobileLane::SessionParts parts,
+               logged_session(ten_hz(60), "p" + std::to_string(k), &fits[k]));
+    VKC_TRY(lane->add(std::move(parts)));
+  }
+  std::vector<Got> out;
+  std::size_t ran = 0;
+  for (std::size_t i = 0; i < 260; ++i) {
+    VKC_ASSIGN(const std::vector<sender::Filler> sent,
+               lane->next(env.grid, kS + (i + 1) * 40 * kMs));
+    for (const sender::Filler& f : sent) {
+      out.push_back({i, f.frame.timestamp_ns, f.index, f.tier,
+                     f.frame.depth_camera.cam_to_world});
+    }
+    const std::size_t now = fits[0]->size() + fits[1]->size() + fits[2]->size();
+    if (now > ran + 1) {
+      return vkc::Status::invalid_argument("two hops in one gap");
+    }
+    ran = now;
+  }
+  counts->clear();
+  for (const MobileLane::SessionView& v : lane->sessions()) {
+    counts->push_back(v.counts);
+  }
+  VKC_TRY(lane->close());
+  return out;
+}
+
+// Three phones replay identically: the same fillers in the same sends, the
+// same counts. Their hops always due together, the first place goes round:
+// each phone is put back as often as the others, and passes as many records
+// by (a hop that waits two gaps where the next record is due two gaps on).
+int test_three_replay(const Env& env) {
+  std::vector<MobileLane::Counts> counts[2];
+  auto first = three(env, &counts[0]);
+  auto again = three(env, &counts[1]);
+  if (!first.ok())
+    std::fprintf(stderr, "%s\n", first.status().message().c_str());
+  CHECK(first.ok() && again.ok() && !first->empty() && *first == *again);
+  CHECK(counts[0].size() == 3 && counts[1].size() == 3);
+  const MobileLane::Counts& first_phone = counts[0][0];
+  CHECK(first_phone.deferred > 0 && first_phone.over_budget == 0);
+  for (std::size_t k = 0; k < 3; ++k) {
+    CHECK(same_counts(counts[0][k], counts[1][k]));
+    // Each record paired, or passed by for a newer one due before its hop
+    // ran.
+    const MobileLane::Counts& c = counts[0][k];
+    CHECK(c.paired + c.skipped == 60 && c.fused > 0);
+    CHECK(c.deferred == first_phone.deferred &&
+          c.skipped == first_phone.skipped);
+  }
   return 0;
 }
 
@@ -880,10 +1273,16 @@ int gpu_main(vkc::test::GpuContext& gpu) {
                                          vr_example::lane_tracking());
     CHECK(prep.ok() && fitters.ok());
   }
+  CHECK(test_hop_estimate() == 0);
   CHECK(test_leave(env, scratch.path / "leave") == 0);
   CHECK(test_drains_when_retired(env) == 0);
   CHECK(test_return(env) == 0);
   CHECK(test_containment(env) == 0);
+  CHECK(test_one_hop_a_gap(env) == 0);
+  CHECK(test_past_budget(env) == 0);
+  CHECK(test_guard(env) == 0);
+  CHECK(test_far_budget(env) == 0);
+  CHECK(test_three_replay(env) == 0);
   CHECK(test_open_live(env, scratch.path / "open") == 0);
   CHECK(test_bind_retry(env, scratch.path / "bind") == 0);
   CHECK(test_turned_away(env, scratch.path / "away") == 0);

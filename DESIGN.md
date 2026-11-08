@@ -1085,8 +1085,9 @@ placed by fits after it alone. The phone lane runs the Tracker (Examples);
 the bench (`track_eval`) is next work. `fit_due` says, before a record,
 whether it would fit the driver: the hop rule by the steps finished so far
 (one abandoned, or dropped by a refused finish, counts for nothing), so a
-dropped step's hop stays due and the hops go on across a flush. Nothing
-calls it yet.
+dropped step's hop stays due and the hops go on across a flush. The phone
+lane's scheduler classes each record by it before the record is shown or
+tracked.
 
 **Memory** (computed, 256x192): an entry is 2.2 MiB (the three levels'
 depth, vertex and normal maps), so a 20-frame window fitter holds 44 MiB of
@@ -1199,15 +1200,25 @@ phone's stream"); the link tests run the same checks (`vr_session_check`).
 **The phone lane** (`examples/common/live_mobile.hpp`, `vr_example_mobile`)
 puts such sensors beside a live run's cameras (`source.mobile`). It holds
 sessions, one a phone's, in join order (`MobileLane::add`; a file's lane holds
-one): after each set's send, `MobileLane::next` tracks each session's record
-due by the next set on `lane_tracking()` in one batch a session, each waited
-on in the gap in join order, and hands the next send up to 3 of the frames
-the sessions' `Tracker`s placed, one a session in turn, as fillers of their
-tier under the session's own mobile index. A live lane never holds the rig
-up: `open_mobile_lane` returns at once, a door listens for the whole run (an
-address it cannot bind retried every 2 s), and its sessions come and go
-(`kMaxPhones`, 1 until the gap's scheduler; Away, settled at 7 s and retired
-at 30 s of set time; a return within it the same session). An opener thread
+one): after each set's send, `MobileLane::next` takes each session's record
+due by the next set, and its scheduler classes each before it is shown or
+tracked (by the tag and unregistered, a prep, or a hop by `Tracker::fit_due`)
+and keeps one hop a gap across sessions, the longest waited first, ties in
+turn (the turn moved by a contest); in a live lane's gap only a hop whose
+p90 wall time ends by the gap's end (`GapBudget`), or a probe once the
+budget has held hops back 1 s of sets, so the estimate is never stuck, and
+preps only before that end; the rest go back for a later gap.
+`run_live_fusion` gives the gap's end to a live lane alone
+(`MobileLane::live`), and a file's lane reads none.
+The kept records are tracked on `lane_tracking()` in one batch a session,
+submitted in join order and then waited in join order, and the next send
+takes up to 3 of the frames the sessions' `Tracker`s placed, one a session
+in turn, as fillers of their tier under the session's own mobile index. A
+live lane never holds the rig up: `open_mobile_lane` returns at once, a door
+listens for the whole run (an address it cannot bind retried every 2 s), and
+its sessions come and go (`kMaxPhones`, 4, provisional until the lab run;
+Away, settled at 7 s and retired at 30 s of set time; a return within it the
+same session). An opener thread
 admits and builds each session off the set loop, the lane joins one a gap,
 and a reaper thread lets each go, releasing before it reports. A setting
 that rules phones out turns them away at the door, never the run; a track
@@ -1501,16 +1512,24 @@ entry); the live phone lane's minute on the rig (its gap, its fill
 surviving people), and, with the door listening and no phone, the rig's 300
 sets' digests and send unchanged; on an iPad, a join after minutes, locks
 of 20 and 60 s, a relaunch, Disconnect then Connect and another device (the
-2026-11-08 entry); then up to four phones: the gap's scheduler (one hop a
-gap across phones, a steady-clock guard on `GapBudget`), measured at one,
-two and four phones under load before `kMaxPhones` rises from 1; the
-Partial step restricted in each iteration, as 0b's
-reference does (the solve's `TODO:`). The hop's batch (two window fits)
-must fit the gap after a set's send: on a nearly idle 5090 it does, beside
-other jobs' load not always (the 2026-11-04 entry). Should the live rig
-share its GPU so, next are the fill chain one step behind the rig's and the
-casts no farther than fill reaches; 3 passes only once the bench shows they
-matter and the gap holds them.
+2026-11-08 entry); then up to four phones on the rig: the gap's scheduler
+(one hop a gap across phones, a steady-clock guard on `GapBudget` with a
+probe a second at most) has landed with `kMaxPhones` at 4, and its lab run
+at one, two and four phones under load at 25 fps is owed (PERF.md, PH1:
+send plus gap, sets past 40 ms, the deferral share and the budget's part,
+the probes and the sets they made late, allocator growth a phone, CPU,
+concurrent decoders), which keeps four or lowers it; with it, whether a
+late joiner's fifth hop (its fitter's stack grown to 20, 2.3-2.6 ms over a
+steady hop on the M5 Max, past the plan's 2 ms bar for a `reserve()`, which
+was not added: the owner's call) passes the 5090's gap, and if not a fitter
+sized to `kMaxFitFrames` on the opener or the fitter's own `TODO:` (keep
+the committed entries when the stack grows); the Partial step restricted in
+each iteration, as 0b's reference does (the solve's `TODO:`). The hop's
+batch (two window fits) must fit the gap after a set's send: on a nearly idle
+5090 it does, beside other jobs' load not always (the 2026-11-04 entry). Should
+the live rig share its GPU so, next are the fill chain one step behind the rig's
+and the casts no farther than fill reaches; 3 passes only once the bench shows
+they matter and the gap holds them.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

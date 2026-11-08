@@ -6,19 +6,21 @@
 // the device and tracked by scripted fitters (scripted_fitter.hpp):
 // - Two sessions added get ordinals 1 and 2 and indices 0 and 1, each filler
 //   under its session's index at its session's correction; a send takes at
-//   most 3 in all, one a session in turn, so two phones placing alike
-//   alternate filler by filler across the sends; every placed frame is
+//   most 3 in all, one a session in turn, so two phones placing alike (their
+//   clocks a record apart, so their hops fall in different gaps) alternate
+//   filler by filler across the sends; every placed frame is
 //   handed over in the end, and the lane's counts are the sessions' summed.
 //   The same two phones twice give the same fillers, bit for bit.
-// - A session with nothing placed gives its turns away: beside it, a phone's
-//   sends are those it gets alone.
+// - A session with nothing placed gives its turns away: beside it (its clock
+//   a record after, so their hops fall in different gaps), a phone's sends
+//   are those it gets alone.
 // - A session added at gap 50 pins its own clock at its first take: it pairs
 //   one record every 2.5 sets from its join, and the first session pairs as
 //   if it were alone.
-// - Five phones placing more than the sends take: a session never keeps more
-//   than 40 waiting, its oldest let go; what it hands over keeps its order,
-//   its newest placed among it, and every placed frame is fused, let go or
-//   dropped.
+// - Five phones placing more than the sends take, their hops in different
+//   gaps: a session never keeps more than 40 waiting, its oldest let go;
+//   what it hands over keeps its order, its newest placed among it, and
+//   every placed frame is fused, let go or dropped.
 // - Indices wrap: 71 sessions joined over 70 gaps, one holding its index
 //   throughout: each takes (ordinal - 1) mod 63 past those held, the 64th
 //   index 1, and no two sessions hold one at once.
@@ -160,13 +162,18 @@ vkc::Result<std::vector<Got>> run(const Env& env, MobileLane& lane,
 
 // --- The cases --------------------------------------------------------------
 
-// Two phones placing alike, each at its own correction.
+// Two phones placing alike, each at its own correction, the second's clock
+// a record after the first's: past their first fits (the second's a gap
+// later) their hops fall in different gaps, so one hop a gap never holds
+// either back and each pairs each record at its gap.
 vkc::Result<std::vector<Got>> two_alike(const Env& env, const Mat4f (&at)[2],
                                         std::string* report) {
   VKC_ASSIGN(std::unique_ptr<MobileLane> lane, empty_lane(env));
   for (int k = 0; k < 2; ++k) {
+    std::vector<vr_test::PhoneFrame> script = ten_hz(60);
+    for (vr_test::PhoneFrame& p : script) p.pts += k * 100 * kMs;
     VKC_ASSIGN(MobileLane::SessionParts parts,
-               session(ten_hz(60), anchors_when(always, at[k]),
+               session(std::move(script), anchors_when(always, at[k]),
                        anchors_when(never, Mat4f(1.0f)), k == 0 ? "a" : "b"));
     VKC_TRY(lane->add(std::move(parts)));
   }
@@ -211,11 +218,17 @@ int test_two_sessions(const Env& env) {
   std::fputs(report.c_str(), stdout);
   CHECK(report.find("mobile 01 (a): 60 records") != std::string::npos);
   CHECK(report.find("mobile 02 (b): 60 records") != std::string::npos);
-  // One a session in turn, across the sends: 0, 1, 0, 1, ...; each at its
-  // session's correction, anchored by the rig chain.
+  // One a session in turn, across the sends: 0, 1, 0, 1, ... while both have
+  // frames to hand, each at its session's correction, anchored by the rig
+  // chain. The second's last frames close the run: its last record is a hop,
+  // whose fit places them, while the first's come after its last fit and are
+  // dropped.
+  std::size_t firsts = 0;
+  for (const Got& g : *got) firsts += g.index == 0 ? 1 : 0;
+  CHECK(firsts > 0 && 2 * firsts < got->size());
   for (std::size_t k = 0; k < got->size(); ++k) {
     const Got& g = (*got)[k];
-    CHECK(g.index == k % 2);
+    CHECK(g.index == (k < 2 * firsts ? k % 2 : 1));
     CHECK(g.tier == tsdf::FillTier::Anchored);
     CHECK(same(g.pose, at[g.index] * device_pose(g.pts)));
   }
@@ -226,7 +239,10 @@ int test_two_sessions(const Env& env) {
   return 0;
 }
 
-// A session with nothing placed gives its turns away.
+// A session with nothing placed gives its turns away. The idle phone's clock
+// starts a record after the other's: past their first fits (the idle one's a
+// gap later) their hops fall in different gaps, so one hop a gap never holds
+// the other back.
 int test_turn_given_away(const Env& env) {
   const auto anchors = [](std::uint64_t t) { return t % (1500 * kMs) == 0; };
   std::vector<Got> runs[2];
@@ -237,7 +253,9 @@ int test_turn_given_away(const Env& env) {
                      anchors_when(always, translate(0.0f, 0.01f, 0.0f)), "a");
     CHECK(a.ok() && (*lane)->add(std::move(*a)).ok());
     if (beside == 1) {
-      auto idle = session(ten_hz(60), anchors_when(never, Mat4f(1.0f)),
+      std::vector<vr_test::PhoneFrame> script = ten_hz(60);
+      for (vr_test::PhoneFrame& p : script) p.pts += 100 * kMs;
+      auto idle = session(std::move(script), anchors_when(never, Mat4f(1.0f)),
                           anchors_when(never, Mat4f(1.0f)), "idle");
       CHECK(idle.ok() && (*lane)->add(std::move(*idle)).ok());
     }
@@ -285,15 +303,20 @@ int test_late_join(const Env& env) {
   return 0;
 }
 
-// Five phones at 10 Hz sets, each placing about a frame a set: more than
-// the sends' 3 take.
+// Five phones at 12.5 Hz sets, each placing 0.8 frames a set: more than the
+// sends' 3 take. One hop a gap leaves 6.25 gaps a 0.5 s hop for their five,
+// and each phone's clock starts a record after the one before, so once their
+// first fits are done their hops fall in different gaps and each pairs
+// every record.
 int test_queue_cap(const Env& env) {
   auto lane = empty_lane(env);
   CHECK(lane.ok());
   constexpr std::size_t kPhones = 5;
   for (std::size_t k = 0; k < kPhones; ++k) {
+    std::vector<vr_test::PhoneFrame> script = ten_hz(150);
+    for (vr_test::PhoneFrame& p : script) p.pts += k * 100 * kMs;
     auto parts =
-        session(ten_hz(150), anchors_when(always, Mat4f(1.0f)),
+        session(std::move(script), anchors_when(always, Mat4f(1.0f)),
                 anchors_when(never, Mat4f(1.0f)), "p" + std::to_string(k + 1));
     CHECK(parts.ok() && (*lane)->add(std::move(*parts)).ok());
   }
@@ -301,7 +324,7 @@ int test_queue_cap(const Env& env) {
   std::size_t most = 0;
   std::size_t longest = 0;
   for (std::size_t i = 0; i < 260; ++i) {
-    auto sent = (*lane)->next(env.grid, kS + (i + 1) * 100 * kMs);
+    auto sent = (*lane)->next(env.grid, kS + (i + 1) * 80 * kMs);
     CHECK(sent.ok());
     most = std::max(most, sent->size());
     for (const sender::Filler& f : *sent) {

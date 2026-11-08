@@ -43,6 +43,11 @@
 // - What the lane tells: looking, the count, a refusal, registered, in that
 //   order, on a change and at least once a second; given no one to tell, it
 //   runs the same.
+// - A live lane with every gap's end past until late: the tag registers the
+//   session as it does without a budget (a frame shown to the watch alone
+//   never waits),
+//   nothing after the registration is tracked until the gaps have room, and
+//   the loss among the frames put back is still one split.
 // - A session that comes and goes (a live lane's, given a presence), placed
 //   by the tag on its own thread: once it is gone past the grace, the reaper
 //   lets it go, its phone stopped (the watch-before-phone step run, under the
@@ -55,14 +60,16 @@
 //   refused, naming source.mobile_registration. Where no decoder path
 //   opens, that case skips, unless VS_TEST_HEVC_BACKEND promises one.
 // - open_mobile_lane on a live address, on the same world, returns within a
-//   second with no phone; a phone dialling over loopback joins while the
-//   sets run, and its server, reading notes, reads what the lane tells it. A
-//   second phone (another session) is refused while the first holds the one
-//   slot; once the first has left past its grace, the second joins as a new
-//   session (ordinal 2, a directory of its own, a watch of its own that
-//   tells it it looks for the tag). sessions.csv holds both joins and
-//   leaves, door.csv the refusal. That case skips where no decoder path
-//   opens, unless VS_TEST_HEVC_BACKEND promises one.
+//   second with no phone; four phones dialling over loopback, one after
+//   another, join while the sets run (indices 0-3), and each one's server,
+//   reading notes, reads what the lane tells it. A fifth (another session)
+//   is refused while the four hold kMaxPhones' slots, closed right after its
+//   session and told nothing; once the first has left past its grace, the
+//   fifth joins as a new session (ordinal 5, index 4, a directory of its
+//   own, a watch of its own that tells it it looks for the tag).
+//   sessions.csv holds five joins and five leaves, door.csv the refusal at
+//   four held. That case skips where no decoder path opens, unless
+//   VS_TEST_HEVC_BACKEND promises one.
 
 #include <atomic>
 #include <chrono>
@@ -764,7 +771,9 @@ struct Told {
 
 // The lane over `phone` registered by a watch in see() (so the run repeats),
 // or on its own thread with 2 ms between the sets; on scripted fitters, the
-// rig's anchoring every fit: 200 sets, then closed. `told` holds what it told
+// rig's anchoring every fit: 200 sets, then closed. With `past_until`, a live
+// lane (the one that reads a budget), its one session added, the first
+// `past_until` gaps given an end already past. `told` holds what it told
 // (nothing with `saying` false, which gives it no one to tell).
 struct LaneRun {
   std::unique_ptr<vr_example::MobileLane> lane;
@@ -777,7 +786,7 @@ struct LaneRun {
 vkc::Result<LaneRun> run_lane(vkc::test::GpuContext& gpu,
                               std::unique_ptr<TagPhone> phone,
                               const std::string& dir, bool background = false,
-                              bool saying = true) {
+                              bool saying = true, std::size_t past_until = 0) {
   VKC_ASSIGN(
       vol::VoxelBlockGrid grid,
       tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64));
@@ -806,14 +815,32 @@ vkc::Result<LaneRun> run_lane(vkc::test::GpuContext& gpu,
       told->push_back({*set_ns, std::move(note)});
     };
   }
-  VKC_ASSIGN(run.lane, vr_example::MobileLane::create(
-                           gpu.device, gpu.allocator, std::move(phone),
-                           std::move(tracker), std::move(log), std::move(tags),
-                           std::move(say)));
+  if (past_until == 0) {
+    VKC_ASSIGN(run.lane, vr_example::MobileLane::create(
+                             gpu.device, gpu.allocator, std::move(phone),
+                             std::move(tracker), std::move(log),
+                             std::move(tags), std::move(say)));
+  } else {
+    VKC_ASSIGN(run.lane, vr_example::MobileLane::create(
+                             gpu.device, gpu.allocator, nullptr,
+                             vr_example::LaneOptions{}));
+    vr_example::MobileLane::SessionParts parts;
+    parts.name = phone->info().id;
+    parts.placement = vr_example::MobileLane::Placement::Tag;
+    parts.phone = std::move(phone);
+    parts.tracker = std::move(tracker);
+    parts.log = std::move(log);
+    parts.tags = std::move(tags);
+    parts.say = std::move(say);
+    VKC_TRY(run.lane->add(std::move(parts)));
+  }
+  vr_example::GapBudget past;
+  past.gap_end = std::chrono::steady_clock::now() - std::chrono::seconds(1);
   for (std::size_t i = 0; i < 200; ++i) {
     *set_ns = kS + (i + 1) * 40 * kMs;
     VKC_ASSIGN(const std::vector<volumetric_kit::recon::sender::Filler> sent,
-               run.lane->next(grid, *set_ns));
+               run.lane->next(grid, *set_ns,
+                              i < past_until ? past : vr_example::GapBudget{}));
     run.fillers += sent.size();
     if (background) std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
@@ -943,6 +970,26 @@ int test_lane_loss(vkc::test::GpuContext& gpu, const Pictures& pics) {
         std::string::npos);
   CHECK(ran->report.find("registered at 3.2 s, 31 frames before it") !=
         std::string::npos);
+  return 0;
+}
+
+// A live lane, every gap's end past until gap 150: the tag still registers
+// the session as without a budget, at 2.5 s, 26 frames before it, since a
+// frame shown to the watch alone never waits; no frame after it is tracked,
+// each put back until the last, record 59 (gap 148), which pairs at gap 150
+// with the loss of records 40 and 41 before it one split, and its hop the one
+// fit.
+int test_lane_past_budget(vkc::test::GpuContext& gpu, const Pictures& pics) {
+  auto ran = run_lane(gpu, std::make_unique<TagPhone>(60, pics.tag, 40, 2), "",
+                      false, /*saying=*/false, /*past_until=*/150);
+  CHECK(ran.ok());
+  CHECK(ran->report.find("registered at 2.5 s, 26 frames before it") !=
+        std::string::npos);
+  const vr_example::MobileLane::Counts& c = ran->lane->counts();
+  CHECK(c.unregistered == 26 && c.paired == 1 && c.splits == 1);
+  CHECK(c.deferred > 26 && c.over_budget == c.deferred && c.skipped > 0);
+  CHECK(ran->rig_fits->size() == 1 &&
+        ran->rig_fits->front().pts.back() == pts(59));
   return 0;
 }
 
@@ -1157,7 +1204,8 @@ int test_open_file(vkc::test::GpuContext& gpu,
                 lane.status().message().c_str());
     return 0;
   }
-  CHECK(lane.ok());
+  // A file's lane: run_live_fusion gives it no gap's end, and it reads none.
+  CHECK(lane.ok() && !(*lane)->live());
   auto grid =
       tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64);
   CHECK(grid.ok());
@@ -1208,16 +1256,21 @@ bool told_to_look(vr_test::Dialler& d) {
 }
 
 // Phones that dial the lane, their servers reading notes, as a scanner's do:
-// what the lane tells one comes up the socket, with no frame needed. One
-// slot: a second session waits until the first has left.
+// what the lane tells one comes up the socket, with no frame needed. Four
+// slots (kMaxPhones): a fifth session is refused silently while four hold
+// them, and joins once one has left.
 int test_open_live(vkc::test::GpuContext& gpu,
                    const std::filesystem::path& dir) {
   using Stage = vr_example::MobileLane::Stage;
+  static_assert(vr_example::kMaxPhones == 4, "the case dials four, then one");
   std::filesystem::create_directories(dir);
   const auto first = clip_session(true);
   CHECK(first.ok());
-  stream::Session second = *first;  // a relaunch: another session's id
-  second.id[15] ^= 0xff;
+  // Five relaunches: five sessions' ids.
+  std::vector<stream::Session> ids(5, *first);
+  for (std::size_t k = 1; k < ids.size(); ++k) {
+    ids[k].id[15] ^= static_cast<std::uint8_t>(k);
+  }
   const std::uint16_t port = vkc::test::closed_port();
   auto opt = tag_scenario(dir, "tcp://127.0.0.1:" + std::to_string(port));
   CHECK(opt.ok());
@@ -1228,67 +1281,88 @@ int test_open_live(vkc::test::GpuContext& gpu,
   auto lane =
       vr_example::open_mobile_lane(*opt, gpu.device, gpu.allocator, options);
   CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(1));
-  CHECK(lane.ok() && (*lane)->enabled());
+  CHECK(lane.ok() && (*lane)->enabled() && (*lane)->live());
   auto grid =
       tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64);
   CHECK(grid.ok());
   std::uint64_t set = kS;
-  auto a = vr_test::Dialler::dial(*first, port, /*read_notes=*/true);
-  CHECK(a.ok());
-  const bool joined = run_until(**lane, *grid, &set, [&] {
-    return !(*lane)->sessions().empty() && told_to_look(**a);
-  });
-  if (!joined && (*lane)->sessions().empty() &&
-      !sensor::testing::hevc_decoder_promised()) {
-    std::printf("open_mobile_lane on a live phone: skipped, no decoder path\n");
-    std::fputs((*lane)->report().c_str(), stdout);
-    return 0;
+  // Four, one after another, each joining while the sets run and told to
+  // look for the tag by a watch of its own.
+  std::vector<std::unique_ptr<vr_test::Dialler>> phones;
+  for (std::size_t k = 0; k < 4; ++k) {
+    auto d = vr_test::Dialler::dial(ids[k], port, /*read_notes=*/true);
+    CHECK(d.ok());
+    phones.push_back(std::move(d).value());
+    const bool joined = run_until(**lane, *grid, &set, [&] {
+      return (*lane)->sessions().size() == k + 1 && told_to_look(*phones[k]);
+    });
+    if (!joined && k == 0 && (*lane)->sessions().empty() &&
+        !sensor::testing::hevc_decoder_promised()) {
+      std::printf(
+          "open_mobile_lane on a live phone: skipped, no decoder path\n");
+      std::fputs((*lane)->report().c_str(), stdout);
+      return 0;
+    }
+    CHECK(joined);
   }
-  CHECK(joined);
-  vr_example::MobileLane::SessionView v = (*lane)->sessions().at(0);
-  CHECK(v.ordinal == 1 &&
-        v.placement == vr_example::MobileLane::Placement::Tag);
-  // The second, while the first holds the slot: refused, closed right after
-  // its session.
+  for (std::size_t k = 0; k < 4; ++k) {
+    const vr_example::MobileLane::SessionView v = (*lane)->sessions().at(k);
+    CHECK(v.ordinal == k + 1 && v.index == k && v.stage == Stage::Live &&
+          v.placement == vr_example::MobileLane::Placement::Tag);
+  }
+  // The fifth, while four hold the slots: refused, closed right after its
+  // session, and told nothing.
   {
-    auto b = vr_test::Dialler::dial(second, port, true);
-    CHECK(b.ok() && (*b)->let_go());
+    auto e = vr_test::Dialler::dial(ids[4], port, true);
+    CHECK(e.ok() && (*e)->let_go() && !(*e)->server().newest_note());
   }
-  // The first goes; past its grace it leaves, and the second joins once it
+  CHECK((*lane)->sessions().size() == 4);
+  // The first goes; past its grace it leaves, and the fifth joins once it
   // dials after that, told to look for the tag by a watch of its own.
-  a->reset();  // hung up
+  phones[0].reset();  // hung up
   CHECK(run_until(**lane, *grid, &set, [&] {
     return (*lane)->sessions().at(0).stage == Stage::Left;
   }));
-  std::unique_ptr<vr_test::Dialler> b;
+  std::unique_ptr<vr_test::Dialler> e;
   CHECK(run_until(**lane, *grid, &set, [&] {
-    if (!b || b->server().viewers() == 0) {  // refused, or not yet dialled
-      auto dialled = vr_test::Dialler::dial(second, port, true);
-      if (dialled.ok()) b = std::move(dialled).value();
+    if (!e || e->server().viewers() == 0) {  // refused, or not yet dialled
+      auto dialled = vr_test::Dialler::dial(ids[4], port, true);
+      if (dialled.ok()) e = std::move(dialled).value();
       return false;
     }
-    return (*lane)->sessions().size() == 2 && told_to_look(*b);
+    return (*lane)->sessions().size() == 5 && told_to_look(*e);
   }));
-  v = (*lane)->sessions().at(1);
-  CHECK(v.ordinal == 2 && v.stage == Stage::Live);
+  // Its index the first's, free again: (5 - 1) mod 63 is 4, not held.
+  const vr_example::MobileLane::SessionView v = (*lane)->sessions().at(4);
+  CHECK(v.ordinal == 5 && v.index == 4 && v.stage == Stage::Live);
+  for (std::size_t k = 1; k < 4; ++k) {
+    CHECK((*lane)->sessions().at(k).stage == Stage::Live);
+  }
   CHECK((*lane)->close().ok());
   const std::string report = (*lane)->report();
   std::fputs(report.c_str(), stdout);
   CHECK(report.find("1 refused (0 turned away)") != std::string::npos);
   const std::filesystem::path log = dir / "log";
-  for (const stream::Session& s : {*first, second}) {
-    const std::string hex8 = vr_test::hex_of(s.id).substr(0, 8);
-    const char* nn = &s == &second ? "02-ipad-" : "01-ipad-";
+  for (std::size_t k = 0; k < ids.size(); ++k) {
+    const std::string hex8 = vr_test::hex_of(ids[k].id).substr(0, 8);
+    const std::string nn = "0" + std::to_string(k + 1) + "-ipad-";
     CHECK(std::filesystem::exists(log / (nn + hex8) / "phone.vrst"));
   }
   const std::vector<std::string> rows = lines(log / "sessions.csv");
-  CHECK(rows.size() == 5);
-  CHECK(rows[2].find(",away 1 s") != std::string::npos);
+  std::size_t joins = 0;
+  std::size_t leaves = 0;
+  std::size_t away = 0;
+  for (const std::string& r : rows) {
+    joins += r.rfind("join,", 0) == 0;
+    leaves += r.rfind("leave,", 0) == 0;
+    away += r.find(",away 1 s") != std::string::npos;
+  }
+  CHECK(rows.size() == 11 && joins == 5 && leaves == 5 && away == 1);
   const std::vector<std::string> door = lines(log / "door.csv");
   CHECK(door.size() >= 2 &&
-        door[1].find(",refused," + vr_test::hex_of(second.id) + ",") !=
+        door[1].find(",refused," + vr_test::hex_of(ids[4].id) + ",") !=
             std::string::npos &&
-        door[1].find("1 session(s) held") != std::string::npos);
+        door[1].find("4 session(s) held, the most") != std::string::npos);
   return 0;
 }
 
@@ -1372,6 +1446,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_lane(gpu, pics, scratch.path / "lane") == 0);
   CHECK(test_lane_loss(gpu, pics) == 0);
   CHECK(test_lane_refused(gpu, pics) == 0);
+  CHECK(test_lane_past_budget(gpu, pics) == 0);
   CHECK(test_lane_background(gpu, pics, scratch.path / "lane_background") == 0);
   CHECK(test_open_file(gpu, scratch.path / "file") == 0);
   CHECK(test_open_live(gpu, scratch.path / "live") == 0);

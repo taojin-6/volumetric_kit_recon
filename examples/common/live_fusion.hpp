@@ -91,9 +91,14 @@ using OpenArray = vkc::Result<sensor::SensorArray> (*)(const config::Config&,
 /// a file's session, or a live address it listens on, returning at once, so
 /// the cameras open whether or not a phone ever dials, and a phone that
 /// cannot be taken is turned away, not the run. After each set's send the
-/// lane tracks each session's frame due by the next set against the grid and
-/// hands that send its placed frames as fillers (the set's `"mobile"` row);
-/// its summaries and counts follow the cameras'.
+/// lane tracks each session's frame due by the next set against the grid,
+/// one fit's hop a gap across phones; a live lane's hop only where the p90
+/// of the last 32 hops says it ends by the gap's end (the set's arrival plus
+/// the period, less 3 ms: @ref GapBudget, given to a live lane alone), or as
+/// a probe, and no prep once that end has passed; a file's session reads no
+/// end, so it pairs as recorded; and hands that send its placed frames as
+/// fillers (the set's `"mobile"` row); its summaries and counts follow the
+/// cameras'.
 /// operation=stream polls, counts and releases each set, with no GPU
 /// preparation, fusion or mesh, so the run measures the cameras' stream and
 /// decode alone.
@@ -305,15 +310,18 @@ inline vkc::Status run_live_fusion(const config::Config& opt,
         VKC_TRY(report_sent(sent, sets.sets() - 1, program, s,
                             report ? &*report : nullptr));
         // The gap before the next set: each phone's frame due by then,
-        // tracked against the grid as this set left it, and the frames
-        // placed so far for the next send. A live lane runs a gap with no
-        // phone too, which checks for one joining; the empty lane has no gap
-        // and no row.
+        // tracked against the grid as this set left it (one hop a gap; a
+        // live lane given the gap's end, a file's none, so its replay
+        // repeats), and the frames placed so far for the next send. A live
+        // lane runs a gap with no phone too, which checks for one joining;
+        // the empty lane has no gap and no row.
         if (mobile->enabled()) {
           vkc::StageScope lane(s.rows, "mobile");
           GapBudget budget;
-          budget.gap_end = set_came + std::chrono::nanoseconds(period_ns) -
-                           std::chrono::milliseconds(3);
+          if (mobile->live()) {
+            budget.gap_end = set_came + std::chrono::nanoseconds(period_ns) -
+                             std::chrono::milliseconds(3);
+          }
           VKC_ASSIGN(
               fill,
               mobile->next(*volume, prepared.timestamp_ns + period_ns, budget));

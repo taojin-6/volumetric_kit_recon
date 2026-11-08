@@ -165,6 +165,7 @@ kernels.
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | measured a 4-camera 4K set's frame prep 5.80 → 4.99 ms of device time on the M4, record to done 6.23 → 5.40 ms; Apple only | M | — | landed (2026-10-25), measured Release on the M4 Mac mini |
 | L4 | Sample the atlas in place rather than copy it | measure the copy at 4K first | L | gfx | kept |
+| PH1 | Track up to four phones in the gap after a set's send | lets `kMaxPhones` = 4 leave the rig's sets on time: one hop a gap across phones, preps overlapped, a live hop only if its estimate ends it by the gap's end (a probe a second at most past that); unmeasured | M | the phone lane (2026-11-08) | landed (the scheduler, `kMaxPhones` 4); the lab run at one, two and four phones owed |
 
 The suggested order: P8 first, so every later figure is honest; D1–D3
 whenever convenient; then P1, P3, P5, P4, P2 + P6; then P7, and P9 once it
@@ -696,6 +697,54 @@ After P6, the GPU could run set N while the host polls and decodes set N+1.
 > (5.818 → 4.995 ms of device time) but not the paced gain: its paced arms
 > overlap (device 7.310 vs 7.374 ms, record to done 8.895 vs 8.885 ms), the
 > GPU's clock between sets deciding them.
+
+### PH1 — Up to four phones in the gap
+
+> **Landed, unmeasured.** The scheduler is in (DECISIONS.md, the 2026-11-04
+> entry's third amendment); the lab run below is owed, and `kMaxPhones` may
+> fall with it.
+
+- **Problem.** Each phone's frame is tracked in the gap after a set's send
+  (`MobileLane::next`). A hop (both chains' window fits) is the gap's dear
+  part: on the 5090 at 88-100% load from other jobs, 7.9 and 8.5 ms of
+  device time a chain, and a set's send and gap together 14 / 27 / 43 ms
+  (p50 / p95 / p99), 28 of 1472 sets past 40 ms against 1 without the phone
+  (the 2026-11-04 entry). Four phones' hops stacking in one gap would make
+  that gap about four times as dear.
+- **Change.** One hop a gap across phones (the longest waited first, ties
+  in turn), the rest put back for a later gap; each kept record's batch
+  submitted in join order, then each waited in join order, so preps overlap
+  one another and the hop; in a live lane's gap (`GapBudget`), the hop only
+  if now plus the p90 of the last 32 hop wall times (seeded at 20 ms) ends
+  by the set's arrival plus the period less 3 ms, and preps only before
+  then; once the budget has held hops back 1 s of sets with none run, a
+  probe: the next gap not yet past its end runs its hop anyway, and one
+  that ends within its room brings the estimate down to it. The drain stays
+  at 3 fillers a send in all. At four phones about 32% of gaps carry a hop,
+  against 8% at one.
+- **Known so far** (no lab run). On the idle M5 Max (Release, MoltenVK), a
+  steady hop of `lane_tracking()`'s real fitters on 256x192 frames of a 1 cm
+  room takes 19.6-20.3 ms of wall time (record to finish, both chains); a
+  late joiner's first five hops take 3.9, 8.9-9.1, 13.6-14.0, 18.0-18.8 and
+  22.0-22.7 ms as its fitters' stack grows to 20, the fifth 2.3-2.6 ms over
+  a steady hop. Wall times only, from a throwaway probe not in the tree
+  (four runs); device time was not split, and the lab run retakes both from
+  the lane's own rows. Both readings of the plan's bar for a track-tier
+  `reserve()` (a late joiner's first fit over 2 ms) are crossed: 3.9 ms for
+  the first fit, 2.3-2.6 ms over a steady hop for the fifth. None was added,
+  for the owner to confirm (DECISIONS.md, the 2026-11-04 entry's third
+  amendment): the first fit is under the steady hop the guard budgets for,
+  and the fifth's excess sits within the gap end's 3 ms margin here.
+- **To measure.** On the lab rig (RTX 5090, take1's room, 25 fps, under its
+  usual load) and on the M5 Max: one, two and four iPads streaming, each
+  for a few minutes; per N the send plus gap at p50 / p95 / p99 and the sets
+  past 40 ms against the rig alone, the deferral share and the budget's part
+  of it (the report's `the gap:` line, the warning past half), the probes
+  and the sets they made late, the hop's estimate against the gaps' room,
+  a late joiner's fifth hop against its gap (device and wall time), the
+  allocator's growth a phone (149 MB at one, the 2026-11-04 entry), CPU,
+  and the concurrent decoders (NVDEC on the 5090, VideoToolbox on the M5
+  Max); then a fifth phone showing Retrying, and joining once one leaves.
 
 ### L4 — The atlas copy (kept)
 
