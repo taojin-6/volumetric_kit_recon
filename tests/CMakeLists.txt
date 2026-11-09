@@ -426,9 +426,10 @@ endif()
 # The live runs' phone lane (live_mobile.hpp) on a fake phone, its frames
 # prepared on the device and tracked by scripted fitters: tiers, one generation,
 # the wait and the drop, replays, the drain cap, the log, splits, pairing,
-# check_mobile and the background poll. And the tracking log (track_log.hpp):
-# its files read back, its summary by hand, and a window of real fitters
-# recovering what single frames leave held.
+# check_mobile, the background poll, and the phone's picture on fill (opt-in,
+# the same tracking and fill geometry either way). And the tracking log
+# (track_log.hpp): its files read back, its summary by hand, and a window of
+# real fitters recovering what single frames leave held.
 if(VR_BUILD_EXAMPLES)
   add_executable(recon_example_live_mobile_test example_live_mobile_test.cpp)
   target_link_libraries(
@@ -486,7 +487,8 @@ if(VR_BUILD_EXAMPLES)
   # solved by calib; the lane registered by it, on scripted fitters; and
   # open_mobile_lane on a session of sensor's committed H.265 clips
   # (VS_TEST_DATA_DIR), decoded on this machine's hardware, and on a phone that
-  # dials over loopback, which reads what the lane tells it.
+  # dials over loopback, which reads what the lane tells it; and a session a
+  # registration places, read with its pictures for its fill when asked.
   if(VR_WITH_CALIB)
     add_executable(recon_example_live_tag_test example_live_tag_test.cpp)
     target_link_libraries(

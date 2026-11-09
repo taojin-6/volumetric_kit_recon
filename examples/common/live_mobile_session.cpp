@@ -90,6 +90,8 @@ void release(PhoneSession& s) noexcept {
   }
   s.released.store(true, std::memory_order_release);
   s.tracker.reset();
+  s.pictures.clear();
+  s.picture_prep.reset();
   s.prep.reset();
   s.timer.reset();
 }
@@ -269,6 +271,15 @@ void PhoneSession::take(const track::TrackStep& step) {
   log_written(log->write(step));
   for (const track::Released& r : step.released) {
     track::Released copy = r;
+    // Its picture, if one was kept, at its own camera: corrected with the
+    // frame's depth camera below.
+    const auto kept = pictures.find(copy.frame.timestamp_ns);
+    if (kept != pictures.end()) {
+      copy.frame.color = std::move(kept->second.color);
+      copy.frame.color_camera = kept->second.color_camera;
+      copy.frame.color_encoding = kept->second.color_encoding;
+      pictures.erase(kept);
+    }
     sender::Filler f = to_filler(std::move(copy), index);
     ++(f.tier == tsdf::FillTier::Anchored ? counts.anchored
                                           : counts.unanchored);
@@ -278,7 +289,47 @@ void PhoneSession::take(const track::TrackStep& step) {
       ++counts.shed;
     }
   }
+  for (const std::uint64_t dropped : step.dropped_ns) pictures.erase(dropped);
   counts.dropped += step.dropped_ns.size();
+}
+
+void PhoneSession::flush() {
+  take(tracker->flush());
+  pictures.clear();
+}
+
+bool PhoneSession::picture_due(const sensor::RgbdFrame& frame) const {
+  return fill.colour == FillColour::Picture && picture_prep &&
+         frame.has_color() && tracked % fill.picture_every == 0;
+}
+
+vkc::Status PhoneSession::begin_picture(InFlight& f, sensor::RgbdFrame frame) {
+  auto p = std::make_unique<PictureInFlight>(*device, *allocator);
+  p->frame = std::move(frame);
+  // No metrics: the log's rows stay those of the frame's own prep.
+  VKC_ASSIGN(p->picture, picture_prep->record(p->batch, p->frame));
+  // Its depth is let go: the picture alone is kept.
+  p->picture.depth.reset();
+  VKC_ASSIGN(p->pending,
+             p->batch.submit_async(sensor::ready_points(p->frame), {}));
+  f.picture = std::move(p);
+  return {};
+}
+
+vkc::Status PhoneSession::finish_picture(InFlight& f) {
+  if (!f.picture) return {};
+  const std::unique_ptr<PictureInFlight> p = std::move(f.picture);
+  const vkc::Status ran = p->pending.wait();
+  if (!ran.ok()) {
+    p->pending = vkc::PendingBatch();  // out of flight once it is gone
+    picture_refused(ran);
+    return device_lost(ran) ? ran : vkc::Status{};
+  }
+  ++counts.pictures;
+  const std::uint64_t at = p->picture.timestamp_ns;
+  pictures.insert_or_assign(at, std::move(p->picture));
+  // The phone's decoded picture goes here, with the batch that read it.
+  return {};
 }
 
 bool PhoneSession::take_records(std::uint64_t next_set) {
@@ -356,9 +407,14 @@ vkc::Result<std::unique_ptr<InFlight>> PhoneSession::begin(
   if (tags) frame.color_to_world = tracking_to_world * frame.color_to_world;
   if (split) {
     ++counts.splits;
-    take(tracker->flush());
+    flush();
   }
-  // The phone's picture is never fused: fill fuses its tier's tint.
+  // Under FillColour::Picture, the whole frame of one whose picture is kept,
+  // for the picture's own prep after the frame's batch is submitted.
+  std::optional<sensor::RgbdFrame> whole;
+  if (picture_due(frame)) whole = frame;
+  // The frame's depth is prepared without its picture, whatever the fill:
+  // fill fuses its tier's tint, or a picture prepared on its own path.
   frame.color = {};
   frame.color_packed = nullptr;
   frame.color_bitstream = {};
@@ -391,6 +447,13 @@ vkc::Result<std::unique_ptr<InFlight>> PhoneSession::begin(
     return submitted.status();
   }
   f->pending = std::move(submitted).value();
+  ++tracked;
+  if (whole) {
+    // The picture's own batch, after the frame's: one refused, or one whose
+    // batch fails, is let go and the frame goes on as it is.
+    const vkc::Status pictured = begin_picture(*f, std::move(*whole));
+    if (!pictured.ok()) picture_refused(pictured);
+  }
   return f;
 }
 
@@ -409,14 +472,16 @@ vkc::Status PhoneSession::finish(InFlight& f) {
   rows.merge_device(f.pending.device_rows());
   VKC_ASSIGN(const track::TrackStep done, tracker->finish(f.step));
   ++counts.paired;
+  // Its picture kept before the step is taken, which may place the frame.
+  const vkc::Status pictured = finish_picture(f);
   take(done);
-  return {};
+  return pictured;
 }
 
 void PhoneSession::end() {
   if (ended) return;
   ended = true;
-  take(tracker->flush());
+  flush();
 }
 
 vkc::Status PhoneSession::retire(std::string why) {
@@ -467,7 +532,7 @@ vkc::Status PhoneSession::host(std::uint64_t next_set_ns,
       }
       if (away >= options.settle_ns && !settled) {
         settled = true;  // what it holds decided, as no later frame shares
-        take(tracker->flush());
+        flush();
       }
     }
   }
@@ -541,6 +606,15 @@ std::string PhoneSession::report(const std::string& label,
     out += "  " + std::to_string(c.deferred) +
            " deferred to a later gap (one hop a gap; " +
            std::to_string(c.over_budget) + " by the gap's budget)\n";
+  }
+  if (fill.colour == FillColour::Picture) {
+    out += "  pictures: " + std::to_string(c.pictures) +
+           " prepared for fill, one a " + std::to_string(fill.picture_every) +
+           " frame(s) tracked; " + std::to_string(pictures_refused) +
+           " let go\n";
+    if (pictures_refused != 0) {
+      out += "  first picture let go: " + first_picture_refusal + "\n";
+    }
   }
   if (comes_and_goes() && !leave_reason.empty()) {
     const auto in = [origin_ns](std::uint64_t ns) {

@@ -70,7 +70,7 @@ using detail::Reaper;
 
 // `c` counted into `to`, field by field: a field added to Counts is added
 // here too, or this fails.
-static_assert(sizeof(MobileLane::Counts) == 15 * sizeof(std::uint64_t),
+static_assert(sizeof(MobileLane::Counts) == 16 * sizeof(std::uint64_t),
               "add_to sums every field of MobileLane::Counts");
 void add_to(MobileLane::Counts& to, const MobileLane::Counts& c) {
   to.polled += c.polled;
@@ -88,6 +88,16 @@ void add_to(MobileLane::Counts& to, const MobileLane::Counts& c) {
   to.unfit += c.unfit;
   to.deferred += c.deferred;
   to.over_budget += c.over_budget;
+  to.pictures += c.pictures;
+}
+
+// A fill's options a lane refuses: a picture_every of 0.
+vkc::Status check_fill(const FillOptions& fill, const char* op) {
+  if (fill.picture_every == 0) {
+    return vkc::Status::invalid_argument(
+        std::string(op) + ": a picture_every of 0, which must be positive");
+  }
+  return {};
 }
 
 bool finite(const Mat4f& m) {
@@ -100,6 +110,12 @@ bool finite(const Mat4f& m) {
 }
 
 }  // namespace
+
+sensor::GpuFramePrepConfig picture_prep_config() {
+  sensor::GpuFramePrepConfig config;
+  config.depth_outliers.enabled = false;
+  return config;
+}
 
 vkc::Status check_filler(const sender::Filler& filler) {
   if (filler.index >= tsdf::kMaxSourcesPerClass) {
@@ -134,7 +150,9 @@ struct MobileLane::State {
   std::vector<std::unique_ptr<PhoneSession>> sessions;
   std::uint32_t joins = 0;     // sessions joined so far
   std::size_t drain_next = 0;  // the session the next turn of the drain is
-  // The tint pictures, by tier, at each depth size a filler has had.
+  // What its fillers carry, and the tint pictures, by tier, at each depth
+  // size a filler has had (FillColour::Tint).
+  FillOptions fill;
   std::map<std::pair<std::uint32_t, std::uint32_t>,
            std::array<std::shared_ptr<const vkc::Buffer>, 2>>
       tints;
@@ -447,8 +465,10 @@ struct MobileLane::State {
   // The next send's fillers: one a session in turn, in join order from
   // where the last send's turns stopped, kDrainCap in all; a session with
   // none waiting, or gone to the reaper, gives its turn away, and a filler
-  // the send would refuse is let go. A tint that cannot be made is the
-  // device's: out of memory, the filler is let go; its loss returns.
+  // the send would refuse is let go. Under the tint, a tint that cannot be
+  // made is the device's: out of memory, the filler is let go; its loss
+  // returns. Under FillColour::Picture a filler carries its picture as it
+  // is, or none.
   vkc::Status drain(std::vector<sender::Filler>* out) {
     const std::size_t n = sessions.size();
     if (n == 0) return {};
@@ -469,11 +489,13 @@ struct MobileLane::State {
         s.unfit(fit);
         continue;
       }
-      const vkc::Status tinted = tint(f);
-      if (!tinted.ok()) {
-        if (device_lost(tinted)) return tinted;
-        s.unfit(tinted);
-        continue;
+      if (fill.colour == FillColour::Tint) {
+        const vkc::Status tinted = tint(f);
+        if (!tinted.ok()) {
+          if (device_lost(tinted)) return tinted;
+          s.unfit(tinted);
+          continue;
+        }
       }
       ++s.counts.fused;
       out->push_back(std::move(f));
@@ -502,10 +524,13 @@ vkc::Result<std::unique_ptr<MobileLane>> MobileLane::create(
     vkc::Device& device, vkc::Allocator& allocator,
     std::unique_ptr<sensor::IRgbdSensor> phone,
     std::unique_ptr<track::Tracker> tracker, std::unique_ptr<TrackLog> log,
-    std::unique_ptr<TagWatch> tags, std::function<void(gnet::ViewerNote)> say) {
+    std::unique_ptr<TagWatch> tags, std::function<void(gnet::ViewerNote)> say,
+    FillOptions fill) {
+  VKC_TRY(check_fill(fill, "MobileLane::create"));
   auto s = std::make_unique<State>();
   s->device = &device;
   s->allocator = &allocator;
+  s->fill = fill;
   std::unique_ptr<MobileLane> lane(new MobileLane(std::move(s)));
   if (phone) {
     if (!tracker || !log) {
@@ -547,10 +572,12 @@ vkc::Result<std::unique_ptr<MobileLane>> MobileLane::create(
         std::to_string(options.hop_seed.count()) +
         " ns, which must be positive");
   }
+  VKC_TRY(check_fill(options.fill, "MobileLane::create"));
   auto s = std::make_unique<State>();
   s->device = &device;
   s->allocator = &allocator;
   s->live = true;
+  s->fill = options.fill;
   s->hop_cost = HopEstimate(options.hop_seed);
   s->source = std::move(source);
   // sessions.csv, made at its first row, never over one there.
@@ -601,6 +628,17 @@ vkc::Status MobileLane::add(SessionParts parts) {
     VKC_ASSIGN(vkc::GpuTimer timer, vkc::GpuTimer::create(*st.device));
     s->timer.emplace(std::move(timer));
   }
+  s->fill = st.fill;
+  if (st.fill.colour == FillColour::Picture) {
+    if (parts.picture_prep) {
+      s->picture_prep = std::move(parts.picture_prep);
+    } else {
+      VKC_ASSIGN(sensor::GpuFramePrep prep,
+                 sensor::GpuFramePrep::create(*st.device, *st.allocator,
+                                              picture_prep_config()));
+      s->picture_prep.emplace(std::move(prep));
+    }
+  }
   s->phone = std::move(parts.phone);
   s->tracker = std::move(parts.tracker);
   s->log = std::move(parts.log);
@@ -648,9 +686,10 @@ vkc::Result<std::vector<sender::Filler>> MobileLane::next(
     if (s->comes_and_goes() && st.reaper) {
       st.hand_over(*s, /*keep_log=*/false);  // it leaves
     } else {
-      // A file's, done, prepares nothing more: its prep and timer go (a
+      // A file's, done, prepares nothing more: its preps and timer go (a
       // frame handed out holds its own buffers), and their query pools with
       // them, before its watch and phone, which stay until the close.
+      s->picture_prep.reset();
       s->prep.reset();
       s->timer.reset();
     }

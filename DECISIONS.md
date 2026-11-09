@@ -6586,8 +6586,10 @@ the lab; `fuse_orbbec` refused it until something ran it.
   at a guessed pose.
 - *A split at a loss of 100 ms or more* (owner, 2026-11-03: a map step may
   hide in it), so `Tracker::flush` may now be followed by more frames.
-- *Fill's colour* (owner item L, pending): a fixed tint of its tier; the
-  phone's picture is never read.
+- *Fill's colour* (owner item L, pending): a fixed tint of its tier in every
+  program. Since 2026-11-08 a caller may opt in to the phone's own picture
+  on its fill (`FillColour::Picture`, `live_mobile.hpp`); that opt-in
+  decides nothing of item L, and no program takes it.
 - *A float device's pose made rigid where float left it off.* ARKit's own
   transforms read up to 3 ulp off 1 in the homogeneous corner (1358 of 0b's
   3668 frames) and the device's map-step removal drifts the rotation 1e-5 off

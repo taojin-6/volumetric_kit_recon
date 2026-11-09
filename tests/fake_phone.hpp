@@ -7,7 +7,11 @@
 // script lists, each a 32 x 24 depth at 1.5 m with a confidence plane, posed
 // by the device 1 cm along x a frame from 1 s; handed out as a recorded
 // session hands them (FakePhone), or as a live link does, each after its
-// latency and stamped with its arrival (LivePhone).
+// latency and stamped with its arrival (LivePhone). A FakePhone made with
+// pictures gives each record a 64 x 48 picture of one colour of its own
+// (picture_word), on the host, through a colour camera of its own
+// (picture_camera), its depth camera 1 cm along y from it; and tells how
+// many of the records it handed out are still held by anyone (alive).
 
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +30,10 @@ namespace vr_test {
 // A fake phone's depth: 32 x 24.
 inline constexpr std::uint32_t kPhoneW = 32;
 inline constexpr std::uint32_t kPhoneH = 24;
+
+// A picture phone's picture: 64 x 48.
+inline constexpr std::uint32_t kPictureW = 64;
+inline constexpr std::uint32_t kPictureH = 48;
 
 // How long after its capture a live phone's record comes.
 inline constexpr std::uint64_t kLatency = 50'000'000;
@@ -53,12 +61,34 @@ inline volumetric_kit::recon::Mat4f device_pose(std::uint64_t pts) {
   return m;
 }
 
+// The colour of the picture of record `seq`, as a packed word (R | G << 8 |
+// B << 16, sRGB): its own red and blue.
+inline std::uint32_t picture_word(std::uint64_t seq) {
+  return std::uint32_t(seq & 0xffu) | 0x40u << 8 |
+         std::uint32_t(0x80u + ((seq >> 8) & 0x7fu)) << 16;
+}
+
+// The colour camera of record `seq`: its focal length its own, so a frame's
+// intrinsics are told apart, and narrower than the depth camera's view.
+inline volumetric_kit::sensor::camera::CameraModel picture_camera(
+    std::uint64_t seq) {
+  return {
+      {kPictureW, kPictureH}, {100.0 + double(seq % 4), 100.0, 31.5, 23.5}, {}};
+}
+
+// A picture phone's depth camera from its colour camera: 1 cm along y.
+inline volumetric_kit::recon::Mat4f picture_depth_to_color() {
+  volumetric_kit::recon::Mat4f m(1.0f);
+  m[3] = volumetric_kit::recon::Vec4f(0.0f, 0.01f, 0.0f, 1.0f);
+  return m;
+}
+
 // A phone whose records the script lists, as a recorded session hands them
 // out: at once, in order, exhausted after the last.
 class FakePhone final : public volumetric_kit::sensor::IRgbdSensor {
  public:
-  explicit FakePhone(std::vector<PhoneFrame> script)
-      : script_(std::move(script)) {
+  explicit FakePhone(std::vector<PhoneFrame> script, bool pictures = false)
+      : script_(std::move(script)), pictures_(pictures) {
     info_.id = "phone";
     info_.clock = volumetric_kit::sensor::ClockDomain::Host;
     info_.fps = 10;
@@ -84,6 +114,7 @@ class FakePhone final : public volumetric_kit::sensor::IRgbdSensor {
     struct Pixels {
       std::vector<std::uint16_t> depth;
       std::vector<std::uint8_t> confidence;
+      std::vector<std::uint32_t> picture;
     };
     auto pixels = std::make_shared<Pixels>();
     pixels->depth.assign(std::size_t{kPhoneW} * kPhoneH, 1500);
@@ -99,6 +130,14 @@ class FakePhone final : public volumetric_kit::sensor::IRgbdSensor {
     f.color_to_world = sensor::camera::Mat4d(device_pose(p.pts));
     f.timestamp_ns = p.pts;
     f.sequence = p.seq;
+    if (pictures_) {
+      pixels->picture.assign(std::size_t{kPictureW} * kPictureH,
+                             picture_word(p.seq));
+      f.color_packed = pixels->picture.data();
+      f.color_camera = picture_camera(p.seq);
+      f.depth_to_color = sensor::camera::Mat4d(picture_depth_to_color());
+    }
+    handed_.push_back(pixels);
     f.pixels = std::move(pixels);
     return std::optional<sensor::RgbdFrame>(std::move(f));
   }
@@ -115,6 +154,13 @@ class FakePhone final : public volumetric_kit::sensor::IRgbdSensor {
   }
   // The drain before record `n` returns an error, once.
   void fail_before(std::size_t n) { fail_at_ = n; }
+  // The records it handed out that anyone still holds: their pixels, their
+  // picture among them.
+  std::size_t alive() const {
+    std::size_t n = 0;
+    for (const std::weak_ptr<const void>& h : handed_) n += h.expired() ? 0 : 1;
+    return n;
+  }
   bool exhausted() const noexcept override { return next_ >= script_.size(); }
   volumetric_kit::sensor::SensorStats stats() const noexcept override {
     volumetric_kit::sensor::SensorStats s{};
@@ -128,6 +174,8 @@ class FakePhone final : public volumetric_kit::sensor::IRgbdSensor {
   std::size_t next_ = 0;
   std::optional<std::size_t> fail_at_;
   bool started_ = false;
+  bool pictures_ = false;
+  std::vector<std::weak_ptr<const void>> handed_;
   volumetric_kit::sensor::SensorInfo info_;
 };
 

@@ -136,7 +136,8 @@
 /// see.
 ///
 /// **Registration.** By `source.mobile_registration` (the phone opened with
-/// it, depth alone), or without one by the origin tag (live_tag.hpp): the
+/// it, depth alone, or with its pictures under @ref FillColour::Picture), or
+/// without one by the origin tag (live_tag.hpp): the
 /// phone opened with its pictures, every paired frame shown to the watch and
 /// none tracked until it registers the session (counted `unregistered`);
 /// from then on each frame is placed by that registration
@@ -158,10 +159,33 @@
 /// device's removed map steps. A replay that has one gives it to its log
 /// (`RunSource::device_steps`).
 ///
-/// **Fill's colour** (pending owner decision): until the phone's picture is
-/// fused, fill is drawn in a fixed tint of its tier (@ref kAnchoredFillTint,
-/// @ref kUnanchoredFillTint), the colour every filler fuses with, made once
-/// a depth size for the whole lane; the phone's own picture is never read.
+/// **Fill's colour** (pending owner decision): by default
+/// (@ref FillColour::Tint, what every program runs), fill is drawn in a fixed
+/// tint of its tier (@ref kAnchoredFillTint, @ref kUnanchoredFillTint), the
+/// colour every filler fuses with, made once a depth size for the whole lane;
+/// the phone's own picture is never read. A caller that wants the phone's
+/// picture on its fill opts in (@ref FillOptions, @ref FillColour::Picture):
+/// the picture of every `picture_every`-th frame a session's tracker takes is
+/// prepared on a path of its own, by a second frame prep of the session's,
+/// from the whole frame, to the canonical colour a fixed camera's picture is
+/// prepared to (its pixels outside the depth camera's view uncovered), in a
+/// batch of its own submitted after the frame's and waited in the same gap
+/// (its wait counts in the gap's time, which a live lane's budget reads), so
+/// the phone's decoded picture goes within the gap; its depth is let go.
+/// The frame's depth is prepared and tracked exactly as under the tint, from
+/// the frame without its picture, so what is tracked, fitted, decided and
+/// placed is the same either way. The prepared picture waits with its frame
+/// until the tracker places it, then rides on its filler: the colour camera
+/// at the frame's own intrinsics and moved by its correction, as the depth
+/// camera is (`track::corrected`). A frame between, or one whose picture the
+/// prep refuses (counted, the frame tracked all the same), or one whose phone
+/// sends none, carries no colour, and fuses its depth alone. Each picture
+/// kept is a buffer of the lane's (a 1920 x 1440 picture: 11 MB on the
+/// device), held from its gap until its filler is handed to a send (the
+/// caller's from then) or its frame is dropped: the tracker holds a frame up
+/// to 7 s, so a 10 Hz phone keeps up to about 70 / `picture_every` of them,
+/// and up to @ref kPlacedCap more while they wait for a send;
+/// `picture_every` bounds it.
 ///
 /// **A live run** (`source.mobile` `tcp://ADDRESS:PORT`) never waits for a
 /// phone, and never depends on one: @ref open_mobile_lane returns at once and
@@ -174,8 +198,10 @@
 /// interface down) is warned of and bound again every 2 s, off the set loop,
 /// until it takes. The opener's thread admits each new session (its decoder
 /// made there), makes its watch, frame prep, timer, fitters, tracker and
-/// log, and hands it to the lane, which joins one a gap. A session is placed
-/// by `source.mobile_registration` if that names its id (depth alone), else
+/// log (and, under @ref FillColour::Picture, its picture prep), and hands it
+/// to the lane, which joins one a gap. A session is placed by
+/// `source.mobile_registration` if that names its id (depth alone, or with
+/// its pictures under @ref FillColour::Picture), else
 /// by the origin tag where this build and the calibration's world allow it,
 /// else turned away; a registration that cannot be read is warned of and
 /// names none. A setting under which no phone can be taken (Classic fusion,
@@ -297,6 +323,34 @@ inline constexpr std::uint64_t kAwaySettleNs = 7'000'000'000;
 /// start, so the join's own gap may read it not connected.
 inline constexpr std::uint64_t kFirstSeenNs = 1'000'000'000;
 
+/// @brief What colour a lane's fillers carry (above, Fill's colour).
+enum class FillColour : std::uint8_t {
+  /// Its tier's tint, through its depth camera (@ref kAnchoredFillTint,
+  /// @ref kUnanchoredFillTint): the default, and what every program runs.
+  Tint,
+  /// The phone's own picture, for a caller that wants the phone's picture on
+  /// its fill: on every `picture_every`-th frame a session's tracker takes
+  /// (@ref FillOptions::picture_every), prepared on a path of its own; none
+  /// on the frames between.
+  Picture,
+};
+
+/// @brief What colour a lane's fillers carry, and how often a phone's picture
+///        is kept for them (above, Fill's colour).
+struct FillOptions {
+  FillColour colour = FillColour::Tint;  ///< The tint by default.
+  /// Under @ref FillColour::Picture, the picture of the frames a session's
+  /// tracker takes is kept on the first and on every this many after it; the
+  /// frames between carry none. It bounds the pictures a phone holds on the
+  /// device (above). Positive; read under @ref FillColour::Picture alone.
+  std::uint32_t picture_every = 1;
+};
+
+/// @return How a session's picture prep is made under
+///         @ref FillColour::Picture: its depth outlier filter off, since the
+///         depth it prepares is let go and its colour does not read it.
+sensor::GpuFramePrepConfig picture_prep_config();
+
 /// @brief A lane's lifecycle settings, and where a live lane writes
 ///        `sessions.csv`.
 struct LaneOptions {
@@ -318,6 +372,9 @@ struct LaneOptions {
   /// gives `diagnostics.track_log`, or nothing where that holds an earlier
   /// run's logs or cannot be made.
   std::string log_directory;
+  /// What its fillers carry: the tint by default (above, Fill's colour). A
+  /// file's lane takes it too (@ref open_mobile_lane).
+  FillOptions fill;
 };
 
 /// @brief What a gap may spend.
@@ -439,6 +496,9 @@ class MobileLane {
     /// Of @ref deferred, those the budget held back (@ref GapBudget): a hop
     /// its estimate did not fit, or any past the gap's end.
     std::uint64_t over_budget = 0;
+    /// Pictures prepared for fill (@ref FillColour::Picture alone): one a
+    /// frame tracked at most, each held until its frame is placed or dropped.
+    std::uint64_t pictures = 0;
   };
 
   /// @brief Where the tag search stands, for a person (@ref lane_note).
@@ -504,6 +564,10 @@ class MobileLane {
     /// opener); empty, @ref add makes them.
     std::optional<sensor::GpuFramePrep> prep;
     std::optional<vkc::GpuTimer> timer;  ///< As @ref prep.
+    /// Under @ref FillColour::Picture, its picture prep, made off the set
+    /// loop as @ref prep is, by @ref picture_prep_config; empty, @ref add
+    /// makes it. Let go under the tint.
+    std::optional<sensor::GpuFramePrep> picture_prep;
   };
 
   /// @brief Where a live lane's sessions come from (@ref open_mobile_lane's
@@ -560,26 +624,28 @@ class MobileLane {
   /// @param tags       As @ref SessionParts::tags. Null: placed as the phone
   ///                   was opened.
   /// @param say        As @ref SessionParts::say.
+  /// @param fill       What its fillers carry: the tint by default.
   /// @return The lane; `Status::Code::InvalidArgument` for a phone without a
-  ///         tracker or a log; or the prep's error.
+  ///         tracker or a log, or a `fill.picture_every` of 0; or the prep's
+  ///         error.
   static vkc::Result<std::unique_ptr<MobileLane>> create(
       vkc::Device& device, vkc::Allocator& allocator,
       std::unique_ptr<sensor::IRgbdSensor> phone,
       std::unique_ptr<track::Tracker> tracker, std::unique_ptr<TrackLog> log,
       std::unique_ptr<TagWatch> tags = {},
-      std::function<void(gnet::ViewerNote)> say = {});
+      std::function<void(gnet::ViewerNote)> say = {}, FillOptions fill = {});
 
   /// @brief A live lane: sessions from @p source, one joined a gap, and any
   ///        added (@ref add); its reaper's thread started, and
   ///        `sessions.csv` made in @ref LaneOptions::log_directory.
   /// @param device     The run's device; it and @p allocator outlive the lane.
   /// @param source     Where its sessions come from; null: those added alone.
-  /// @param options    The grace, the settle, the back-off and the log's
-  ///                   directory.
+  /// @param options    The grace, the settle, the back-off, the log's
+  ///                   directory and what the fillers carry.
   /// @return The lane, @ref enabled; `Status::Code::InvalidArgument` for a
-  ///         settle of 0 or not below the grace, or a back-off or a hop's
-  ///         seed not positive; `Status::Code::IoError` for a reaper's thread
-  ///         that cannot start.
+  ///         settle of 0 or not below the grace, a back-off or a hop's seed
+  ///         not positive, or a `fill.picture_every` of 0;
+  ///         `Status::Code::IoError` for a reaper's thread that cannot start.
   static vkc::Result<std::unique_ptr<MobileLane>> create(
       vkc::Device& device, vkc::Allocator& allocator,
       std::unique_ptr<SessionSource> source, LaneOptions options);
@@ -591,7 +657,9 @@ class MobileLane {
 
   /// @brief A session to join at the next @ref next, after those joined, or
   ///        at the first after it with an index free while a session holds
-  ///        each of the 63. Its frame prep and timer are made here.
+  ///        each of the 63. Its frame prep and timer, and under
+  ///        @ref FillColour::Picture its picture prep, are made here unless
+  ///        given.
   /// @param parts  The session.
   /// @return OK; `Status::Code::InvalidArgument` for a missing phone,
   ///         tracker or log, a watch its placement does not match, or a
@@ -616,10 +684,12 @@ class MobileLane {
   /// @param budget       What the gap may spend (@ref GapBudget); a file's
   ///                     lane reads none.
   /// @return The next send's fillers, at most @ref kDrainCap, one a session
-  ///         in turn (above), each session's oldest first; a frame the prep
-  ///         or the tracker refuses is passed over and counted, as is a
-  ///         filler @ref check_filler refuses. Only the device's loss
-  ///         returns, or a file's session's own error (above).
+  ///         in turn (above), each session's oldest first, in its tier's
+  ///         tint or, under @ref FillColour::Picture, with its picture or
+  ///         none (above); a frame the prep or the tracker refuses is passed
+  ///         over and counted, as is a filler @ref check_filler refuses. Only
+  ///         the device's loss returns, or a file's session's own error
+  ///         (above).
   vkc::Result<std::vector<volumetric_kit::recon::sender::Filler>> next(
       const volumetric_kit::grid::volume::VoxelBlockGrid& grid,
       std::uint64_t next_set_ns, GapBudget budget = {});
@@ -655,7 +725,8 @@ class MobileLane {
   ///         named by its ordinal and name when there are more than one or
   ///         the lane is live, a session that came and went with its join
   ///         and its leave in seconds of set time from the lane's first
-  ///         gap, and its deferrals (those of the budget among them); a
+  ///         gap, its deferrals (those of the budget among them), and under
+  ///         @ref FillColour::Picture its pictures; a
   ///         live lane's totals, its gap's deferrals, probes, hop estimate
   ///         (@ref HopEstimate) and last budgeted gap's room once a session
   ///         joined, and its source's lines after; empty for the empty lane.
@@ -693,7 +764,9 @@ bool note_due(const gnet::ViewerNote& now,
 ///        (`link::RgbdStreamSensor`), its tracker on @ref lane_tracking and
 ///        its log in `diagnostics.track_log` (a live session's in a
 ///        directory of its own). Placed by `source.mobile_registration`,
-///        read depth alone; or by the origin tag, read with its pictures: a
+///        read depth alone, or with its pictures under
+///        @ref FillColour::Picture (`options.fill`); or by the origin tag,
+///        read with its pictures: a
 ///        @ref TagWatch in `source.calibration`'s world, on its own thread
 ///        (every lane runs beside a live rig), a live phone told how the
 ///        search goes. A file read so decodes its pictures in
@@ -704,7 +777,9 @@ bool note_due(const gnet::ViewerNote& now,
 ///        registration written (`registration.json`), so each session
 ///        replays.
 /// @param options  A live lane's grace, settle and back-off; its log
-///                 directory is `diagnostics.track_log`'s (above).
+///                 directory is `diagnostics.track_log`'s (above). Its
+///                 `fill`, what the fillers carry, is any lane's: the tint
+///                 by default.
 /// @return The lane. A file: @ref check_mobile's refusal; with the tag,
 ///         `Status::Code::InvalidArgument` for a `diagnostics.track_log`
 ///         that holds a `registration.json` already (an earlier run's), or
@@ -715,7 +790,8 @@ bool note_due(const gnet::ViewerNote& now,
 ///         cannot be made is printed and written to nowhere; only the
 ///         device's loss returns, `Status::Code::InvalidArgument` for
 ///         @p options a live lane refuses, or `Status::Code::IoError` for a
-///         thread that cannot start.
+///         thread that cannot start. Either, with `source.mobile`,
+///         `Status::Code::InvalidArgument` for a `fill.picture_every` of 0.
 vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
     const config::Config& opt, vkc::Device& device, vkc::Allocator& allocator,
     LaneOptions options = {});

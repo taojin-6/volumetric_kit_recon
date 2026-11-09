@@ -8,6 +8,28 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **the phone lane can hand its fillers the phone's own
+  picture**, opt-in (`FillOptions` in `LaneOptions` and in the file form of
+  `MobileLane::create`, which `open_mobile_lane` passes on): the default,
+  `FillColour::Tint`, is the lane as before, and every program keeps it. For
+  a caller that wants the phone's picture on its fill, `FillColour::Picture`
+  prepares the picture of every `picture_every`-th frame a session tracks on
+  a path of its own (a second frame prep of the session's, from the whole
+  frame, to the canonical colour a fixed camera's picture is prepared to, in
+  a batch of its own waited in the same gap, so the phone's decoded picture
+  is let go there), and the filler the tracker places carries it, its colour
+  camera at the frame's own intrinsics and moved by the same correction as
+  its depth camera; the frames between carry no colour. The frame's depth is
+  prepared and tracked from the frame without its picture, as under the
+  tint, so what is tracked, fitted, decided and placed is the same either
+  way (`recon_example_live_mobile` checks it bit for bit). A session placed
+  by `source.mobile_registration` is read with its pictures under it
+  (`recon_example_live_tag`, a file's and a live phone's). Each kept picture
+  is a buffer of the lane's, 11 MB at 1920 x 1440, until its filler is sent
+  or its frame dropped: up to about 70 / `picture_every` a 10 Hz phone.
+  `MobileLane::Counts::pictures` and a report line count them; a picture the
+  prep refuses is let go, counted, and its frame tracked as before.
+
 - `examples`: **`run_live_fusion` runs headless in a test**
   (`recon_example_live_fusion`, `examples/common/live_fusion.hpp`): the run
   takes a caller's device and allocator (two trailing arguments; the three
