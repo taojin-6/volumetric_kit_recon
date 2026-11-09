@@ -333,8 +333,9 @@ TagWatch::~TagWatch() {
   state_->thread.join();
 }
 
-vkc::Status TagWatch::see(const sensor::RgbdFrame& frame) try {
+vkc::Status TagWatch::see(const sensor::RgbdFrame& frame, bool* taken) try {
   State& s = *state_;
+  if (taken != nullptr) *taken = false;
   const std::uint64_t pts = frame.timestamp_ns;
   if (!s.first_pts) s.first_pts = pts;
   std::unique_lock<std::mutex> lock(s.mutex);
@@ -361,9 +362,11 @@ vkc::Status TagWatch::see(const sensor::RgbdFrame& frame) try {
       if (s.box) ++s.counts.replaced;  // the one it held is let go
       s.box = std::move(c);
       s.wake.notify_one();
+      if (taken != nullptr) *taken = true;
     }
     return {};
   }
+  if (taken != nullptr) *taken = candidate;
   lock.unlock();
   vkc::Status searched = candidate ? s.search(std::move(c)) : vkc::Status{};
   lock.lock();

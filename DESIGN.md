@@ -1219,17 +1219,23 @@ in turn, as fillers of their tier under the session's own mobile index,
 drawn in their tier's tint. A caller that wants the phone's picture on its
 fill opts in (`FillOptions`, `FillColour::Picture`, in `LaneOptions` or the
 file form of `MobileLane::create`; every program keeps the tint, the owner's
-item L pending): the picture of every `picture_every`-th frame a session
-tracks is prepared on a path of its own, by a second frame prep of the
-session's, from the whole frame, to the canonical colour a fixed camera's
-picture is prepared to, in a batch of its own waited in the same gap, so the
-decoded picture goes there; the prepared picture, a buffer of the lane's,
-waits with its frame and rides on its filler at the frame's colour camera,
-moved by the same correction as its depth camera. The frame's depth is
-prepared and tracked from the frame without its picture, as under the tint,
-so what is tracked, fitted, decided and placed is the same either way; the
-frames between carry no colour, and a session a registration places is read
-with its pictures. Each kept 1920 x 1440 picture is 11 MB on the device,
+item L pending): the picture of the first frame a session tracks, and of
+every `picture_every`-th after the last kept, is prepared on a path of its
+own, by a second frame prep of the session's, from the whole frame, to the
+canonical colour a fixed camera's picture is prepared to, in a batch of its
+own waited in the same gap, so the decoded picture goes there; the prepared
+picture, a buffer of the lane's, waits with its frame and rides on its
+filler at the frame's colour camera, moved by the same correction as its
+depth camera. A frame whose picture the tag's watch took passes its turn to
+the next: the watch's copy takes the planes over from the decoder, which no
+later read may repeat. The frame's depth is prepared and tracked from the
+frame without its picture, as under the tint, so the same records give the
+same tracking, fits, decisions and placements either way (a file's lane
+always); a live lane's budget reads the gap's time, which the picture's
+wait lengthens, so it may put back more. The frames between carry no
+colour, and a session a registration places is read with its pictures
+where they can be read, depth alone (warned of) where they cannot. Each
+kept 1920 x 1440 picture is 11 MB on the device,
 held up to the tracker's 7 s and the wait for a send: about 70 /
 `picture_every` a 10 Hz phone, and `picture_every` bounds it. A
 live lane never holds the rig up: `open_mobile_lane` returns at once, a door

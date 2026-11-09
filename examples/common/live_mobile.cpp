@@ -751,6 +751,8 @@ std::vector<MobileLane::SessionView> MobileLane::sessions() const {
     v.holding = s->holding();
     v.stage = s->stage.load(std::memory_order_acquire);
     v.waiting = s->queue.size();
+    // The reaper's while it lets the session go, its pictures with it.
+    v.pictures = v.stage == Stage::Reaping ? 0 : s->pictures.size();
     v.counts = s->counts;
     // The reaper's while it lets the session go.
     v.log = v.stage == Stage::Reaping ? nullptr : s->log.get();

@@ -298,9 +298,10 @@ void PhoneSession::flush() {
   pictures.clear();
 }
 
-bool PhoneSession::picture_due(const sensor::RgbdFrame& frame) const {
+bool PhoneSession::picture_due(const sensor::RgbdFrame& frame,
+                               bool watched) const {
   return fill.colour == FillColour::Picture && picture_prep &&
-         frame.has_color() && tracked % fill.picture_every == 0;
+         frame.has_color() && !watched && tracked >= next_picture;
 }
 
 vkc::Status PhoneSession::begin_picture(InFlight& f, sensor::RgbdFrame frame) {
@@ -396,9 +397,12 @@ vkc::Result<std::unique_ptr<InFlight>> PhoneSession::begin(
   }
   if (!first_paired) first_paired = frame.timestamp_ns;
   newest_tracking = frame.color_to_world;
+  // Whether the watch took the frame's picture, which the fill then leaves
+  // alone: the watch's copy takes its planes over from the decoder.
+  bool watched = false;
   if (tags && !watch_failed) {
     if (split) tags->split();
-    VKC_TRY(tags->see(frame));  // before its picture is let go below
+    VKC_TRY(tags->see(frame, &watched));  // before its picture is let go below
   }
   if (!placed) {
     ++counts.unregistered;  // nothing tracked before the tag
@@ -412,7 +416,7 @@ vkc::Result<std::unique_ptr<InFlight>> PhoneSession::begin(
   // Under FillColour::Picture, the whole frame of one whose picture is kept,
   // for the picture's own prep after the frame's batch is submitted.
   std::optional<sensor::RgbdFrame> whole;
-  if (picture_due(frame)) whole = frame;
+  if (picture_due(frame, watched)) whole = frame;
   // The frame's depth is prepared without its picture, whatever the fill:
   // fill fuses its tier's tint, or a picture prepared on its own path.
   frame.color = {};
@@ -447,13 +451,14 @@ vkc::Result<std::unique_ptr<InFlight>> PhoneSession::begin(
     return submitted.status();
   }
   f->pending = std::move(submitted).value();
-  ++tracked;
   if (whole) {
     // The picture's own batch, after the frame's: one refused, or one whose
     // batch fails, is let go and the frame goes on as it is.
+    next_picture = tracked + fill.picture_every;
     const vkc::Status pictured = begin_picture(*f, std::move(*whole));
     if (!pictured.ok()) picture_refused(pictured);
   }
+  ++tracked;
   return f;
 }
 

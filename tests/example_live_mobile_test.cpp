@@ -53,7 +53,11 @@
 //   Tint, every picture and every third picture give the same fillers (time,
 //   tier, index, depth pose and every depth sample, bit for bit), the same
 //   counts but the pictures, and the same fits recorded with the same
-//   priors. A picture_every of 0 is refused by both create forms and by
+//   priors. Frames waited for and dropped under FillColour::Picture: after
+//   every gap the session keeps exactly one picture for each frame tracked
+//   and neither placed nor dropped (SessionView::pictures), drops among
+//   them, and none once the phone's end has flushed its tracker. A
+//   picture_every of 0 is refused by both create forms and by
 //   open_mobile_lane.
 
 #include <algorithm>
@@ -448,6 +452,50 @@ int test_picture_same_geometry(const Env& env) {
       }
     }
   }
+  return 0;
+}
+
+// Under FillColour::Picture, frames waited for and dropped (the 5 s wait of
+// test_wait_and_drop): after every gap the session keeps a picture for each
+// frame tracked and neither placed nor dropped, and none once the phone's end
+// has flushed its tracker; each filler carries its own picture.
+int test_picture_drops(const Env& env) {
+  const auto anchors = [](std::uint64_t t) {
+    return t == 1500 * kMs || t == 9 * kS;
+  };
+  vr_example::FillOptions fill;
+  fill.colour = vr_example::FillColour::Picture;
+  auto made = make_lane(env, std::make_unique<FakePhone>(ten_hz(91), true),
+                        anchors_when(anchors, Mat4f(1.0f)),
+                        anchors_when(never, Mat4f(1.0f)), {}, {}, fill);
+  CHECK(made.ok());
+  bool dropped_while_held = false;  // a drop with pictures still kept
+  std::size_t fillers = 0;
+  for (std::size_t i = 0; i < 400; ++i) {
+    auto sent = made->lane->next(env.grid, kS + (i + 1) * 40 * kMs);
+    CHECK(sent.ok());
+    for (const sender::Filler& f : *sent) {
+      const sensor::camera::CameraModel cam =
+          vr_test::picture_camera(record_of(f));
+      CHECK(f.frame.has_color() && f.frame.color != nullptr &&
+            sensor::is_canonical(f.frame.color_encoding) &&
+            f.frame.color_camera.fx == float(cam.intrinsics.fx));
+      ++fillers;
+    }
+    const MobileLane::SessionView v = made->lane->sessions().at(0);
+    const MobileLane::Counts& c = v.counts;
+    CHECK(c.pictures == c.paired);
+    CHECK(v.pictures == c.pictures - c.anchored - c.unanchored - c.dropped);
+    if (c.dropped != 0 && v.pictures != 0) dropped_while_held = true;
+  }
+  const MobileLane::SessionView end = made->lane->sessions().at(0);
+  CHECK(!end.holding && end.pictures == 0);
+  CHECK(end.counts.pictures == 91 && end.counts.dropped > 0 &&
+        end.counts.fused + end.counts.dropped == 91);
+  CHECK(fillers == end.counts.fused);
+  CHECK(dropped_while_held);
+  CHECK(made->lane->close().ok());
+  CHECK(made->lane->sessions().at(0).pictures == 0);
   return 0;
 }
 
@@ -1119,6 +1167,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_picture_fill(env) == 0);
   CHECK(test_picture_every(env) == 0);
   CHECK(test_picture_same_geometry(env) == 0);
+  CHECK(test_picture_drops(env) == 0);
   CHECK(test_picture_every_refused(env) == 0);
   std::puts("recon_example_live_mobile: OK");
   return 0;

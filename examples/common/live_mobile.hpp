@@ -136,7 +136,8 @@
 /// see.
 ///
 /// **Registration.** By `source.mobile_registration` (the phone opened with
-/// it, depth alone, or with its pictures under @ref FillColour::Picture), or
+/// it, depth alone, or under @ref FillColour::Picture with its pictures where
+/// they can be read, and depth alone, warned of, where they cannot), or
 /// without one by the origin tag (live_tag.hpp): the
 /// phone opened with its pictures, every paired frame shown to the watch and
 /// none tracked until it registers the session (counted `unregistered`);
@@ -165,21 +166,28 @@
 /// colour every filler fuses with, made once a depth size for the whole lane;
 /// the phone's own picture is never read. A caller that wants the phone's
 /// picture on its fill opts in (@ref FillOptions, @ref FillColour::Picture):
-/// the picture of every `picture_every`-th frame a session's tracker takes is
-/// prepared on a path of its own, by a second frame prep of the session's,
-/// from the whole frame, to the canonical colour a fixed camera's picture is
-/// prepared to (its pixels outside the depth camera's view uncovered), in a
-/// batch of its own submitted after the frame's and waited in the same gap
-/// (its wait counts in the gap's time, which a live lane's budget reads), so
-/// the phone's decoded picture goes within the gap; its depth is let go.
-/// The frame's depth is prepared and tracked exactly as under the tint, from
-/// the frame without its picture, so what is tracked, fitted, decided and
-/// placed is the same either way. The prepared picture waits with its frame
-/// until the tracker places it, then rides on its filler: the colour camera
-/// at the frame's own intrinsics and moved by its correction, as the depth
-/// camera is (`track::corrected`). A frame between, or one whose picture the
-/// prep refuses (counted, the frame tracked all the same), or one whose phone
-/// sends none, carries no colour, and fuses its depth alone. Each picture
+/// the picture of the first frame a session's tracker takes, and of every
+/// `picture_every`-th after the last kept, is prepared on a path of its own,
+/// by a second frame prep of the session's, from the whole frame, to the
+/// canonical colour a fixed camera's picture is prepared to (its pixels
+/// outside the depth camera's view uncovered), in a batch of its own
+/// submitted after the frame's and waited in the same gap, so the phone's
+/// decoded picture goes within the gap; its depth is let go. A due frame
+/// with no picture, or one the tag's watch took for its search (whose copy
+/// takes the picture's planes over from the decoder, so the lane never reads
+/// them again: live_tag.hpp), passes its turn to the next. The frame's depth
+/// is prepared and tracked exactly as under the tint, from the frame without
+/// its picture: the same records give the same tracking, fits, decisions and
+/// placements either way, bit for bit, which a file's lane, reading no
+/// budget, always does. A live lane's budget reads the gap's time, which the
+/// picture's wait lengthens (a hop's own time sample among it), so there it
+/// may put back more frames and hops than under the tint. The prepared
+/// picture waits with its frame until the tracker places it, then rides on
+/// its filler: the colour camera at the frame's own intrinsics and moved by
+/// its correction, as the depth camera is (`track::corrected`). A frame
+/// between, or one whose picture the prep refuses (counted, the frame
+/// tracked all the same), or one whose phone sends none, carries no colour,
+/// and fuses its depth alone. Each picture
 /// kept is a buffer of the lane's (a 1920 x 1440 picture: 11 MB on the
 /// device), held from its gap until its filler is handed to a send (the
 /// caller's from then) or its frame is dropped: the tracker holds a frame up
@@ -201,7 +209,7 @@
 /// log (and, under @ref FillColour::Picture, its picture prep), and hands it
 /// to the lane, which joins one a gap. A session is placed by
 /// `source.mobile_registration` if that names its id (depth alone, or with
-/// its pictures under @ref FillColour::Picture), else
+/// its pictures under @ref FillColour::Picture where they can be read), else
 /// by the origin tag where this build and the calibration's world allow it,
 /// else turned away; a registration that cannot be read is warned of and
 /// names none. A setting under which no phone can be taken (Classic fusion,
@@ -329,9 +337,9 @@ enum class FillColour : std::uint8_t {
   /// @ref kUnanchoredFillTint): the default, and what every program runs.
   Tint,
   /// The phone's own picture, for a caller that wants the phone's picture on
-  /// its fill: on every `picture_every`-th frame a session's tracker takes
-  /// (@ref FillOptions::picture_every), prepared on a path of its own; none
-  /// on the frames between.
+  /// its fill: on the first frame a session's tracker takes and every
+  /// `picture_every`-th after the last kept (@ref FillOptions::picture_every),
+  /// prepared on a path of its own; none on the frames between.
   Picture,
 };
 
@@ -340,9 +348,11 @@ enum class FillColour : std::uint8_t {
 struct FillOptions {
   FillColour colour = FillColour::Tint;  ///< The tint by default.
   /// Under @ref FillColour::Picture, the picture of the frames a session's
-  /// tracker takes is kept on the first and on every this many after it; the
-  /// frames between carry none. It bounds the pictures a phone holds on the
-  /// device (above). Positive; read under @ref FillColour::Picture alone.
+  /// tracker takes is kept on the first and on every this many after the
+  /// last kept (a due frame without a picture of its own to give passing its
+  /// turn on); the frames between carry none. It bounds the pictures a phone
+  /// holds on the device (above). Positive; read under
+  /// @ref FillColour::Picture alone.
   std::uint32_t picture_every = 1;
 };
 
@@ -605,6 +615,10 @@ class MobileLane {
     Stage stage = Stage::Added;  ///< Where it is in its life.
     /// Its placed frames not yet handed to a send.
     std::size_t waiting = 0;
+    /// Under @ref FillColour::Picture, the pictures it keeps for frames its
+    /// tracker holds, each until its frame is placed (then its filler's) or
+    /// dropped: none once its tracker is flushed. 0 while the reaper has it.
+    std::size_t pictures = 0;
     Counts counts;  ///< What it did.
     /// Its log; null while the reaper has it, and once it left before the
     /// close.
@@ -765,8 +779,12 @@ bool note_due(const gnet::ViewerNote& now,
 ///        its log in `diagnostics.track_log` (a live session's in a
 ///        directory of its own). Placed by `source.mobile_registration`,
 ///        read depth alone, or with its pictures under
-///        @ref FillColour::Picture (`options.fill`); or by the origin tag,
-///        read with its pictures: a
+///        @ref FillColour::Picture (`options.fill`): a picture track that
+///        cannot be read there (several, on another clock, a codec or a
+///        decoder this build or device lacks) is warned of and the session
+///        read depth alone, never refused for it
+///        (`link::RgbdStreamSensor::Options::pictures_optional`); or by the
+///        origin tag, read with its pictures: a
 ///        @ref TagWatch in `source.calibration`'s world, on its own thread
 ///        (every lane runs beside a live rig), a live phone told how the
 ///        search goes. A file read so decodes its pictures in

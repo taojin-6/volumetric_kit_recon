@@ -172,13 +172,15 @@ struct PhoneSession {
   std::string first_error;    // the first error the phone returned
   std::string first_unfit;    // why the first filler let go was
   // What its fillers carry (the lane's). Under FillColour::Picture: its
-  // picture prep; the frames its tracker took, whose count picks the
-  // pictures kept; the pictures prepared for frames the tracker holds, by
-  // the frame's time, each attached to its filler as the frame is placed and
-  // let go as it is dropped; and the pictures the prep refused.
+  // picture prep; the frames its tracker took, and the count of them from
+  // which the next picture is due (passed on to the next frame while due);
+  // the pictures prepared for frames the tracker holds, by the frame's time,
+  // each attached to its filler as the frame is placed and let go as it is
+  // dropped; and the pictures the prep refused.
   FillOptions fill;
   std::optional<sensor::GpuFramePrep> picture_prep;
   std::uint64_t tracked = 0;
+  std::uint64_t next_picture = 0;
   std::map<std::uint64_t, sensor::DeviceFrame> pictures;
   std::uint64_t pictures_refused = 0;
   std::string first_picture_refusal;
@@ -269,9 +271,10 @@ struct PhoneSession {
   void flush();
 
   // Whether `frame`'s picture is kept for its fill: under
-  // FillColour::Picture, a frame with one, the first the tracker takes and
-  // every picture_every-th after it.
-  bool picture_due(const sensor::RgbdFrame& frame) const;
+  // FillColour::Picture, the first frame the tracker takes and every
+  // picture_every-th after the last kept; a due frame with no picture, or
+  // one the tag watch took (`watched`), passes its turn to the next.
+  bool picture_due(const sensor::RgbdFrame& frame, bool watched) const;
 
   // `frame`'s picture prepared into a batch of its own, submitted into
   // `f.picture`; a refusal or failure returned for picture_refused, nothing

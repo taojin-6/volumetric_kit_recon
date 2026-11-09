@@ -172,7 +172,8 @@ struct LivePlan {
   std::optional<sensor::camera::WorldFrame> tag;
   std::string no_tag;
   // Whether fill carries the phones' pictures (FillColour::Picture): each
-  // session is read with its pictures, and given its picture prep.
+  // session is read with its pictures where they can be read (depth alone,
+  // warned of, where they cannot), and given its picture prep.
   bool pictures = false;
 };
 
@@ -558,6 +559,7 @@ class DoorSource final : public MobileLane::SessionSource {
       if (plan_.pictures) {  // for its fill
         options.device = &device_;
         options.allocator = &allocator_;
+        options.pictures_optional = true;  // never at the depth's cost
       }
     } else {
       options.device = &device_;  // the pictures, for the tag
@@ -571,6 +573,12 @@ class DoorSource final : public MobileLane::SessionSource {
     if (!admitted.ok()) return unmade(admitted.status());
     std::unique_ptr<link::RgbdStreamSensor> stream =
         std::move(admitted).value();
+    if (!stream->pictures_unread().empty()) {
+      std::fprintf(stderr,
+                   "warning: phones: session %s: its pictures cannot be read "
+                   "(%s); it is read depth alone, its fill without colour\n",
+                   id.substr(0, 8).c_str(), stream->pictures_unread().c_str());
+    }
     source.sensor = stream->info().id;
     MobileLane::SessionParts parts;
     parts.name = stream->info().id;
@@ -859,10 +867,17 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
     if (options.fill.colour == FillColour::Picture) {  // for its fill
       reading.device = &device;
       reading.allocator = &allocator;
+      reading.pictures_optional = true;  // never at the depth's cost
     }
   }
   VKC_ASSIGN(std::unique_ptr<link::RgbdStreamSensor> stream,
              link::RgbdStreamSensor::open_file(m.path, reading));
+  if (!stream->pictures_unread().empty()) {
+    std::fprintf(stderr,
+                 "warning: phone: %s: its pictures cannot be read (%s); it is "
+                 "read depth alone, its fill without colour\n",
+                 m.path.c_str(), stream->pictures_unread().c_str());
+  }
   source.session_id = hex32(stream->session_id());
   source.sensor = stream->info().id;
   // The tag's watch, for the session: it needs its pictures.
