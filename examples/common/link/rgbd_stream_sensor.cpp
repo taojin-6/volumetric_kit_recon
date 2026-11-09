@@ -805,6 +805,7 @@ struct RgbdStreamSensor::State {
   std::array<std::uint8_t, 16> session{};  // its id
   std::uint16_t track = 0;                 // the depth track's index
   std::optional<std::uint16_t> picture_track;  // the picture track's, when read
+  std::string pictures_unread;  // why not, under Options::pictures_optional
   sensor::SensorInfo info;
   Options options;
   bool running = false;
@@ -972,19 +973,21 @@ RgbdStreamSensor::State::open(const stream::Session& session, Options options,
 
   auto state = std::make_unique<State>();
 
-  // With a device, the sensor's picture track, if it has one, decoded there.
+  // With a device, the sensor's picture track, if it has one, decoded there;
+  // under Options::pictures_optional, one that cannot be read let go.
   if (options.device != nullptr) {
+    const vkc::Status pictures = [&]() -> vkc::Status {
 #if VR_EXAMPLE_LINK_VIDEO
-    std::optional<std::uint16_t> color;
-    for (std::size_t i = 0; i < session.tracks.size(); ++i) {
-      const stream::Track& t = session.tracks[i];
-      if (t.kind != stream::TrackKind::RgbdColor || t.sensor != info.id) {
-        continue;
+      std::optional<std::uint16_t> color;
+      for (std::size_t i = 0; i < session.tracks.size(); ++i) {
+        const stream::Track& t = session.tracks[i];
+        if (t.kind != stream::TrackKind::RgbdColor || t.sensor != info.id) {
+          continue;
+        }
+        if (color) return bad("several picture tracks of sensor " + info.id);
+        color = static_cast<std::uint16_t>(i);
       }
-      if (color) return bad("several picture tracks of sensor " + info.id);
-      color = static_cast<std::uint16_t>(i);
-    }
-    if (color) {
+      if (!color) return {};
       const stream::Track& t = session.tracks[*color];
       const std::string at = where + ": track " + std::to_string(*color);
       if (!info.color) {
@@ -1013,13 +1016,25 @@ RgbdStreamSensor::State::open(const stream::Session& session, Options options,
       }
       state->decoder.emplace(std::move(decoder).value());
       state->picture_track = color;
-    }
+      return {};
 #else
-    return vkc::Status::unsupported(
-        where +
-        ": a device to decode pictures on, in a build without sensor's video "
-        "decoders (sensor_video)");
+      return vkc::Status::unsupported(
+          where +
+          ": a device to decode pictures on, in a build without sensor's "
+          "video decoders (sensor_video)");
 #endif
+    }();
+    if (!pictures.ok()) {
+      // What the session or this build cannot give; the device's own
+      // failures (its loss, its memory) refuse it all the same.
+      const vkc::Status::Code code = pictures.domain();
+      if (!options.pictures_optional ||
+          (code != Code::InvalidArgument && code != Code::Unsupported)) {
+        return pictures;
+      }
+      if (asked != nullptr) *asked = false;  // nothing is refused
+      state->pictures_unread = pictures.message();
+    }
   }
   // Without the picture track read, the sensor names no colour camera.
   if (!state->picture_track) info.color.reset();
@@ -1710,6 +1725,10 @@ const sensor::SensorInfo& RgbdStreamSensor::info() const noexcept {
 }
 
 bool RgbdStreamSensor::exhausted() const noexcept { return state_->at_end; }
+
+const std::string& RgbdStreamSensor::pictures_unread() const noexcept {
+  return state_->pictures_unread;
+}
 
 sensor::SensorStats RgbdStreamSensor::stats() const noexcept {
   return state_->stats;

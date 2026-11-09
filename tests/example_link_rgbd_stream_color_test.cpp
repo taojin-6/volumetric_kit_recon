@@ -31,7 +31,8 @@
 //   encoding names, BT.709 over an unlabelled stream decoded as BT.601)
 //   gives no frame; the frames after it keep their pictures.
 // - Opening with a device refuses a picture track it cannot read, which
-//   opening without one leaves unread.
+//   opening without one leaves unread, and which pictures_optional lets go,
+//   reading the depth and saying why (pictures_unread).
 // Where no device path opens, the test skips; VS_TEST_HEVC_BACKEND, which CI
 // sets on the legs that promise one (NVDEC on the CUDA leg, VideoToolbox on
 // macOS), makes it fail instead. In a build without sensor's decoders, a
@@ -853,7 +854,8 @@ int test_description(const Gpu& gpu, sensor::PictureReadback& readback) {
 }
 
 // With a device, a picture track it cannot read is refused; without one it
-// is not read, and the depth opens.
+// is not read, and the depth opens; under pictures_optional it is let go,
+// the depth opens, and pictures_unread says why.
 int test_open_refusals(const Gpu& gpu) {
   const vkc::test::Scratch scratch("recon_link_rgbd_color_open_");
   struct Case {
@@ -887,7 +889,14 @@ int test_open_refusals(const Gpu& gpu) {
                   c.says));
     vkc::Result<std::unique_ptr<RgbdStreamSensor>> depth_alone =
         RgbdStreamSensor::open_file(path, {});
-    CHECK(depth_alone.ok() && !depth_alone.value()->info().color);
+    CHECK(depth_alone.ok() && !depth_alone.value()->info().color &&
+          depth_alone.value()->pictures_unread().empty());
+    RgbdStreamSensor::Options optional = on_device(gpu);
+    optional.pictures_optional = true;
+    vkc::Result<std::unique_ptr<RgbdStreamSensor>> let_go =
+        RgbdStreamSensor::open_file(path, optional);
+    CHECK(let_go.ok() && !let_go.value()->info().color &&
+          let_go.value()->pictures_unread().find(c.says) != std::string::npos);
   }
   // A session with no picture track reads as depth alone, with a device too.
   const std::string depth_only = session_file(
@@ -895,7 +904,17 @@ int test_open_refusals(const Gpu& gpu) {
       [](stream::Session& s) { s.tracks.erase(s.tracks.begin()); });
   vkc::Result<std::unique_ptr<RgbdStreamSensor>> opened =
       RgbdStreamSensor::open_file(depth_only, on_device(gpu));
-  CHECK(opened.ok() && !opened.value()->info().color);
+  CHECK(opened.ok() && !opened.value()->info().color &&
+        opened.value()->pictures_unread().empty());
+  // One it reads is read under pictures_optional too, nothing said.
+  const std::string readable = session_file(
+      scratch, "readable.vrst", phone_info(), [](stream::Session&) {});
+  RgbdStreamSensor::Options optional = on_device(gpu);
+  optional.pictures_optional = true;
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> read =
+      RgbdStreamSensor::open_file(readable, optional);
+  CHECK(read.ok() && read.value()->info().color &&
+        read.value()->pictures_unread().empty());
   return 0;
 }
 
@@ -957,6 +976,14 @@ int gpu_main(Gpu& gpu) {
   CHECK(refused(RgbdStreamSensor::open_file(path, on_device(gpu)),
                 Code::Unsupported, "sensor_video"));
   CHECK(RgbdStreamSensor::open_file(path, {}).ok());
+  // Under pictures_optional, read as depth alone, saying why.
+  RgbdStreamSensor::Options optional = on_device(gpu);
+  optional.pictures_optional = true;
+  vkc::Result<std::unique_ptr<RgbdStreamSensor>> let_go =
+      RgbdStreamSensor::open_file(path, optional);
+  CHECK(let_go.ok() && !let_go.value()->info().color &&
+        let_go.value()->pictures_unread().find("sensor_video") !=
+            std::string::npos);
   std::printf("rgbd stream sensor colour tests passed (no decoders)\n");
   return 0;
 }

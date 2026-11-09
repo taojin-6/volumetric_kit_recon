@@ -171,6 +171,10 @@ struct LivePlan {
   // The origin tag's world, when the tag can place a session; else why not.
   std::optional<sensor::camera::WorldFrame> tag;
   std::string no_tag;
+  // Whether fill carries the phones' pictures (FillColour::Picture): each
+  // session is read with its pictures where they can be read (depth alone,
+  // warned of, where they cannot), and given its picture prep.
+  bool pictures = false;
 };
 
 // Why a session is refused at the door, if it is: the plan's turning away,
@@ -552,6 +556,11 @@ class DoorSource final : public MobileLane::SessionSource {
       options.registration = plan_.registration;
       source.registration = plan_.registration_path;
       source.tracking_to_world = Mat4f(plan_.registration->tracking_to_world);
+      if (plan_.pictures) {  // for its fill
+        options.device = &device_;
+        options.allocator = &allocator_;
+        options.pictures_optional = true;  // never at the depth's cost
+      }
     } else {
       options.device = &device_;  // the pictures, for the tag
       options.allocator = &allocator_;
@@ -564,6 +573,12 @@ class DoorSource final : public MobileLane::SessionSource {
     if (!admitted.ok()) return unmade(admitted.status());
     std::unique_ptr<link::RgbdStreamSensor> stream =
         std::move(admitted).value();
+    if (!stream->pictures_unread().empty()) {
+      std::fprintf(stderr,
+                   "warning: phones: session %s: its pictures cannot be read "
+                   "(%s); it is read depth alone, its fill without colour\n",
+                   id.substr(0, 8).c_str(), stream->pictures_unread().c_str());
+    }
     source.sensor = stream->info().id;
     MobileLane::SessionParts parts;
     parts.name = stream->info().id;
@@ -613,6 +628,13 @@ class DoorSource final : public MobileLane::SessionSource {
     vkc::Result<vkc::GpuTimer> timer = vkc::GpuTimer::create(device_);
     if (!timer.ok()) return unmade(timer.status());
     parts.timer.emplace(std::move(timer).value());
+    if (plan_.pictures) {
+      vkc::Result<sensor::GpuFramePrep> picture_prep =
+          sensor::GpuFramePrep::create(device_, allocator_,
+                                       picture_prep_config());
+      if (!picture_prep.ok()) return unmade(picture_prep.status());
+      parts.picture_prep.emplace(std::move(picture_prep).value());
+    }
     const track::TrackerConfig tracking = lane_tracking();
     vkc::Result<std::vector<std::unique_ptr<track::IFitter>>> fitters =
         track::create_fitters(device_, allocator_, tracking);
@@ -713,6 +735,7 @@ vkc::Result<std::unique_ptr<MobileLane>> open_live_lane(
   plan.address = "tcp://" + m.host + ":" + std::to_string(m.port);
   plan.device_name = device.caps().properties().deviceName;
   plan.dir = opt.diagnostics.track_log;
+  plan.pictures = options.fill.colour == FillColour::Picture;
   const vkc::Status settings = settings_refusal(opt);
   if (!settings.ok()) plan.turned_away = settings.message();
   if (plan.turned_away.empty() && !m.registration.empty()) {
@@ -805,6 +828,10 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
     LaneOptions options) {
   if (!opt.source.mobile)
     return MobileLane::create(device, allocator, {}, {}, {});
+  if (options.fill.picture_every == 0) {
+    return vkc::Status::invalid_argument(
+        "open_mobile_lane: a picture_every of 0, which must be positive");
+  }
   const config::MobileSession& m = *opt.source.mobile;
   if (!m.host.empty()) {
     return open_live_lane(opt, device, allocator, std::move(options));
@@ -837,9 +864,20 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
                sensor::camera::read_tracked_registration(m.registration));
     source.registration = m.registration;
     source.tracking_to_world = Mat4f(reading.registration->tracking_to_world);
+    if (options.fill.colour == FillColour::Picture) {  // for its fill
+      reading.device = &device;
+      reading.allocator = &allocator;
+      reading.pictures_optional = true;  // never at the depth's cost
+    }
   }
   VKC_ASSIGN(std::unique_ptr<link::RgbdStreamSensor> stream,
              link::RgbdStreamSensor::open_file(m.path, reading));
+  if (!stream->pictures_unread().empty()) {
+    std::fprintf(stderr,
+                 "warning: phone: %s: its pictures cannot be read (%s); it is "
+                 "read depth alone, its fill without colour\n",
+                 m.path.c_str(), stream->pictures_unread().c_str());
+  }
   source.session_id = hex32(stream->session_id());
   source.sensor = stream->info().id;
   // The tag's watch, for the session: it needs its pictures.
@@ -871,8 +909,8 @@ vkc::Result<std::unique_ptr<MobileLane>> open_mobile_lane(
       std::unique_ptr<TrackLog> log,
       TrackLog::open(opt.diagnostics.track_log, *tracker, std::move(source)));
   return MobileLane::create(device, allocator, std::move(stream),
-                            std::move(tracker), std::move(log),
-                            std::move(tags));
+                            std::move(tracker), std::move(log), std::move(tags),
+                            {}, options.fill);
 }
 
 }  // namespace vr_example

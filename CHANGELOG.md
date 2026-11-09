@@ -8,6 +8,37 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **the phone lane can hand its fillers the phone's own
+  picture**, opt-in (`FillOptions` in `LaneOptions` and in the file form of
+  `MobileLane::create`, which `open_mobile_lane` passes on): the default,
+  `FillColour::Tint`, is the lane as before, and every program keeps it. For
+  a caller that wants the phone's picture on its fill, `FillColour::Picture`
+  prepares the picture of the first frame a session tracks, and of every
+  `picture_every`-th after the last kept, on a path of its own (a second
+  frame prep of the session's, from the whole frame, to the canonical colour
+  a fixed camera's picture is prepared to, in a batch of its own waited in
+  the same gap, so the phone's decoded picture is let go there), and the
+  filler the tracker places carries it, its colour camera at the frame's own
+  intrinsics and moved by the same correction as its depth camera; the
+  frames between carry no colour. A frame whose picture the tag's watch took
+  for its search passes its turn to the next, so no decoded picture is taken
+  over from its decoder twice (`TagWatch::see` tells which it took). The
+  frame's depth is prepared and tracked from the frame without its picture,
+  as under the tint, so the same records give the same tracking, fits,
+  decisions and placements either way (`recon_example_live_mobile` checks it
+  bit for bit, as a file's lane always gives); a live lane's budget reads
+  the gap's time, which the picture's wait lengthens, so it may put back
+  more. A session placed by `source.mobile_registration` is read with its
+  pictures under it (`recon_example_live_tag`, a file's and a live phone's),
+  or depth alone, warned of, where its picture track cannot be read
+  (`link::RgbdStreamSensor::Options::pictures_optional` and
+  `pictures_unread`, new). Each kept picture is a buffer of the lane's,
+  11 MB at 1920 x 1440, until its filler is sent or its frame dropped: up to
+  about 70 / `picture_every` a 10 Hz phone. `MobileLane::Counts::pictures`
+  and a report line count them, and `SessionView::pictures` holds those
+  kept now; a picture the prep refuses is let go, counted, and its frame
+  tracked as before.
+
 - `examples`: **`run_live_fusion` runs headless in a test**
   (`recon_example_live_fusion`, `examples/common/live_fusion.hpp`): the run
   takes a caller's device and allocator (two trailing arguments; the three

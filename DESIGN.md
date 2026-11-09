@@ -1215,7 +1215,29 @@ preps only before that end; the rest go back for a later gap.
 The kept records are tracked on `lane_tracking()` in one batch a session,
 submitted in join order and then waited in join order, and the next send
 takes up to 3 of the frames the sessions' `Tracker`s placed, one a session
-in turn, as fillers of their tier under the session's own mobile index. A
+in turn, as fillers of their tier under the session's own mobile index,
+drawn in their tier's tint. A caller that wants the phone's picture on its
+fill opts in (`FillOptions`, `FillColour::Picture`, in `LaneOptions` or the
+file form of `MobileLane::create`; every program keeps the tint, the owner's
+item L pending): the picture of the first frame a session tracks, and of
+every `picture_every`-th after the last kept, is prepared on a path of its
+own, by a second frame prep of the session's, from the whole frame, to the
+canonical colour a fixed camera's picture is prepared to, in a batch of its
+own waited in the same gap, so the decoded picture goes there; the prepared
+picture, a buffer of the lane's, waits with its frame and rides on its
+filler at the frame's colour camera, moved by the same correction as its
+depth camera. A frame whose picture the tag's watch took passes its turn to
+the next: the watch's copy takes the planes over from the decoder, which no
+later read may repeat. The frame's depth is prepared and tracked from the
+frame without its picture, as under the tint, so the same records give the
+same tracking, fits, decisions and placements either way (a file's lane
+always); a live lane's budget reads the gap's time, which the picture's
+wait lengthens, so it may put back more. The frames between carry no
+colour, and a session a registration places is read with its pictures
+where they can be read, depth alone (warned of) where they cannot. Each
+kept 1920 x 1440 picture is 11 MB on the device,
+held up to the tracker's 7 s and the wait for a send: about 70 /
+`picture_every` a 10 Hz phone, and `picture_every` bounds it. A
 live lane never holds the rig up: `open_mobile_lane` returns at once, a door
 listens for the whole run (an address it cannot bind retried every 2 s), and
 its sessions come and go (`kMaxPhones`, 4, provisional until the lab run;
@@ -1228,8 +1250,9 @@ log it cannot write (an earlier run's) leaves them unlogged; a phone whose
 session fails of its own is kept from the door for a back-off; and of a
 live session only the device's loss comes out of the lane, while a file's
 session's error ends its run as before. Its rules (pairing, the drain and
-its turns, the queue's cap, the index, splits, the tint, what a phone is
-told, coming and going, the errors, the live layout) are the header's; why,
+its turns, the queue's cap, the index, splits, the fill's colour, what a
+phone is told, coming and going, the errors, the live layout) are the
+header's; why,
 the 2026-11-04, 2026-11-05 and 2026-11-08 entries. Its code:
 `live_mobile.cpp` the lane and the gap's scheduler, `live_mobile_session.cpp`
 a session's work and its leave (`PhoneSession`, the reaper),

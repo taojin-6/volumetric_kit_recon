@@ -242,6 +242,15 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
     vkc::Allocator* allocator = nullptr;
     /// The queue families that read the pictures (`HevcDecoder::Options`).
     std::vector<std::uint32_t> queue_families;
+    /// With @ref device, for a reader whose pictures only add to the depth:
+    /// a picture track that cannot be read (several of the sensor, one on
+    /// another clock than its depth's or whose params name no colour camera,
+    /// colour params or a codec this build does not read, a decoder the
+    /// device cannot make, or a build without sensor's video decoders) is
+    /// let go, and the sensor reads as depth alone, the reason kept
+    /// (@ref pictures_unread), where it would refuse the session. A reader
+    /// that needs the pictures leaves it false.
+    bool pictures_optional = false;
   };
 
   /// @brief Records of one track that gave nothing where its numbers jump
@@ -306,8 +315,12 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   ///         a build without sensor's video decoders; `StreamReader::open`'s
   ///         errors, such as `Status::Code::NotFound`, and with a picture
   ///         track `HevcDecoder::create`'s (`Status::Code::Unsupported`
-  ///         where the device has no decoder path) otherwise. Messages
-  ///         begin `"RgbdStreamSensor::open_file: "`.
+  ///         where the device has no decoder path) otherwise. Under
+  ///         @ref Options::pictures_optional, those of the picture track
+  ///         that are `Status::Code::InvalidArgument` or
+  ///         `Status::Code::Unsupported` read the sensor as depth alone
+  ///         instead (@ref pictures_unread). Messages begin
+  ///         `"RgbdStreamSensor::open_file: "`.
   static vkc::Result<std::unique_ptr<RgbdStreamSensor>> open_file(
       const std::string& path, Options options);
 
@@ -452,6 +465,12 @@ class RgbdStreamSensor final : public sensor::IRgbdSensor {
   ///         live session's, which every later connection must match, or the
   ///         one a @ref Door admitted.
   const std::array<std::uint8_t, 16>& session_id() const noexcept;
+
+  /// @return Why the sensor's picture track is not read, under
+  ///         @ref Options::pictures_optional: the refusal it would have
+  ///         returned. Empty when the track is read, when there is none, or
+  ///         with no device.
+  const std::string& pictures_unread() const noexcept;
 
   /// @brief Tell a live writer @p note, up the socket it dialled (grid's
   ///        `StreamClient::send_note`): the newest wins, sent on the polling

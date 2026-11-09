@@ -18,7 +18,10 @@
 /// @ref kTagEveryNs of frame time, for the later holds' log alone. A
 /// candidate's Y plane is copied to the host (sensor's `PictureReadback`,
 /// `Planes::Luma`) and searched for calib's `kOriginTag` (`detect_tag`): a
-/// still when the picture holds exactly one print of it.
+/// still when the picture holds exactly one print of it. The copy takes the
+/// picture's planes over from their writer, so a candidate's picture is the
+/// watch's alone: @ref TagWatch::see tells the lane which it took, and the
+/// lane reads none of them (live_mobile.hpp, Fill's colour).
 ///
 /// **Holds.** @ref kHoldStills stills within @ref kHoldSpanNs, with no
 /// @ref TagWatch::split between them, are a hold; its stills are then spent,
@@ -204,10 +207,17 @@ class TagWatch {
 
   /// @brief A frame the lane paired, in the phone's own world, its picture
   ///        on the device; every one, in time order.
+  /// @param frame  The frame.
+  /// @param taken  Optional: set to whether the watch took the frame's
+  ///               picture as a candidate. The copy takes its planes over
+  ///               from their writer (sensor's `PictureReadback`: a later
+  ///               read must not repeat that), on the watch's thread with
+  ///               background, so the caller reads no picture it took: its
+  ///               own copy of the frame keeps the planes' old owner.
   /// @return OK; a frame with no device picture or a pose not rigid is
   ///         counted seen and skipped. Without background, the copy's device
   ///         error (a picture it refuses is a failure, counted).
-  vkc::Status see(const sensor::RgbdFrame& frame);
+  vkc::Status see(const sensor::RgbdFrame& frame, bool* taken = nullptr);
 
   /// @brief A loss in the frames: the hold being gathered ends.
   void split() noexcept;

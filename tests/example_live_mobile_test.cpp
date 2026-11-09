@@ -40,6 +40,25 @@
 // - What the phone is told: lane_note's every line and tone, in order, its 3 s
 //   to the nanosecond, and note_due's rate, with no device. A lane with no tag
 //   tells nothing, whatever it is given.
+// - The phone's picture on fill (FillOptions), a phone whose every record
+//   has a picture of its own colour through a colour camera of its own: by
+//   default each filler carries its tier's tint through its depth camera, no
+//   picture is prepared and the report says nothing of pictures. Under
+//   FillColour::Picture each filler carries its own frame's picture (every
+//   word read back), its colour camera at its frame's intrinsics and its
+//   colour pose moved by the same correction as its depth camera, 1 cm from
+//   it; no record of the phone is held past its gap, though the pictures
+//   wait seconds for their fills. With picture_every 3, the first frame
+//   tracked and every third after it carry their picture, the rest none.
+//   Tint, every picture and every third picture give the same fillers (time,
+//   tier, index, depth pose and every depth sample, bit for bit), the same
+//   counts but the pictures, and the same fits recorded with the same
+//   priors. Frames waited for and dropped under FillColour::Picture: after
+//   every gap the session keeps exactly one picture for each frame tracked
+//   and neither placed nor dropped (SessionView::pictures), drops among
+//   them, and none once the phone's end has flushed its tracker. A
+//   picture_every of 0 is refused by both create forms and by
+//   open_mobile_lane.
 
 #include <algorithm>
 #include <atomic>
@@ -131,7 +150,8 @@ vkc::Result<Lane> make_lane(const Env& env,
                             ScriptedFitter::Script rig,
                             ScriptedFitter::Script track_script,
                             const std::string& dir = {},
-                            std::function<void(gnet::ViewerNote)> say = {}) {
+                            std::function<void(gnet::ViewerNote)> say = {},
+                            vr_example::FillOptions fill = {}) {
   Lane out;
   auto r = std::make_unique<ScriptedFitter>(std::move(rig));
   auto t = std::make_unique<ScriptedFitter>(std::move(track_script));
@@ -146,9 +166,10 @@ vkc::Result<Lane> make_lane(const Env& env,
       track::Tracker::create(vr_example::lane_tracking(), std::move(fitters)));
   VKC_ASSIGN(std::unique_ptr<vr_example::TrackLog> log,
              vr_example::TrackLog::open(dir, *tracker, {}));
-  VKC_ASSIGN(out.lane, MobileLane::create(env.gpu.device, env.gpu.allocator,
-                                          std::move(phone), std::move(tracker),
-                                          std::move(log), {}, std::move(say)));
+  VKC_ASSIGN(out.lane,
+             MobileLane::create(env.gpu.device, env.gpu.allocator,
+                                std::move(phone), std::move(tracker),
+                                std::move(log), {}, std::move(say), fill));
   return out;
 }
 
@@ -194,6 +215,317 @@ std::vector<const sender::Filler*> all_fillers(const std::vector<Sent>& sent) {
 }
 
 // --- The cases --------------------------------------------------------------
+
+// The phone's picture on fill: a picture phone's run under `fill`.
+struct PictureRun {
+  std::vector<Sent> sent;
+  std::vector<vr_test::ScriptedRecord> rig, track;
+  MobileLane::Counts counts;
+  std::string report;
+  std::size_t most_alive = 0;  // the phone's records held after a gap, most
+};
+
+// The rig chain anchors the fits of 3 to 4 s (the frames of (1, 4] s), at
+// rig_at; the track chain every fit, at track_at: both tiers.
+Mat4f rig_at() { return translate(0.02f, 0.0f, 0.0f); }
+Mat4f track_at() { return translate(0.0f, 0.03f, 0.0f); }
+
+vkc::Result<PictureRun> picture_run(const Env& env,
+                                    vr_example::FillOptions fill) {
+  auto fake = std::make_unique<FakePhone>(ten_hz(60), /*pictures=*/true);
+  FakePhone* phone = fake.get();
+  VKC_ASSIGN(
+      Lane made,
+      make_lane(env, std::move(fake),
+                anchors_when(
+                    [](std::uint64_t t) { return t >= 3 * kS && t <= 4 * kS; },
+                    rig_at()),
+                anchors_when([](std::uint64_t) { return true; }, track_at()),
+                {}, {}, fill));
+  PictureRun out;
+  for (std::size_t i = 0; i < 260; ++i) {
+    Sent s;
+    s.next_set_ns = kS + (i + 1) * 40 * kMs;
+    VKC_ASSIGN(s.fillers, made.lane->next(env.grid, s.next_set_ns));
+    out.sent.push_back(std::move(s));
+    out.most_alive = std::max(out.most_alive, phone->alive());
+  }
+  VKC_TRY(made.lane->close());
+  out.rig = *made.rig;
+  out.track = *made.track;
+  out.counts = made.lane->counts();
+  out.report = made.lane->report();
+  return out;
+}
+
+// The frame index of a filler: its record's, 10 Hz from 1 s.
+std::uint64_t record_of(const sender::Filler& f) {
+  return (f.frame.timestamp_ns - kS) / (100 * kMs);
+}
+
+// Whether `f` is its frame, placed: its depth camera at its tier's
+// correction, through the phone's offset from its colour camera.
+bool placed_as_its_tier(const sender::Filler& f) {
+  const std::uint64_t t = f.frame.timestamp_ns;
+  const bool by_rig = t > kS && t <= 4 * kS;
+  const Mat4f at = by_rig ? rig_at() : track_at();
+  return f.tier ==
+             (by_rig ? tsdf::FillTier::Anchored : tsdf::FillTier::Unanchored) &&
+         f.index == 0 &&
+         same(f.frame.depth_camera.cam_to_world,
+              at * device_pose(t) * vr_test::picture_depth_to_color());
+}
+
+// Whether `f` carries its own frame's picture: its colour camera, at its
+// tier's correction, and every word its frame's colour, covered.
+vkc::Result<bool> carries_its_picture(const Env& env, const sender::Filler& f) {
+  const std::uint64_t k = record_of(f);
+  const sensor::camera::CameraModel cam = vr_test::picture_camera(k);
+  const sensor::ColorCameraParams& c = f.frame.color_camera;
+  const Mat4f at = f.tier == tsdf::FillTier::Anchored ? rig_at() : track_at();
+  if (!f.frame.has_color() || c.width != vr_test::kPictureW ||
+      c.height != vr_test::kPictureH || c.fx != float(cam.intrinsics.fx) ||
+      c.fy != float(cam.intrinsics.fy) || c.cx != float(cam.intrinsics.cx) ||
+      c.cy != float(cam.intrinsics.cy) ||
+      !same(c.cam_to_world, at * device_pose(f.frame.timestamp_ns)) ||
+      !sensor::is_canonical(f.frame.color_encoding)) {
+    return false;
+  }
+  const std::size_t n = std::size_t{vr_test::kPictureW} * vr_test::kPictureH;
+  VKC_ASSIGN(const std::vector<std::uint32_t> words,
+             vkc::test::read_back<std::uint32_t>(
+                 env.gpu.device, env.gpu.allocator, *f.frame.color, n));
+  const std::uint32_t want = 0xFF000000u | vr_test::picture_word(k);
+  return std::all_of(words.begin(), words.end(),
+                     [want](std::uint32_t w) { return w == want; });
+}
+
+// By default a picture phone's fill is its tier's tint, and no picture is
+// prepared.
+int test_picture_default(const Env& env) {
+  auto run = picture_run(env, {});
+  CHECK(run.ok());
+  std::size_t fillers = 0;
+  for (const Sent& s : run->sent) {
+    for (const sender::Filler& f : s.fillers) {
+      CHECK(placed_as_its_tier(f));
+      CHECK(f.frame.has_color() && f.frame.color_camera.width == kW &&
+            same(f.frame.color_camera.cam_to_world,
+                 f.frame.depth_camera.cam_to_world));
+      auto word = vkc::test::read_back<std::uint32_t>(
+          env.gpu.device, env.gpu.allocator, *f.frame.color, 1);
+      CHECK(word.ok() && (*word)[0] == (f.tier == tsdf::FillTier::Anchored
+                                            ? vr_example::kAnchoredFillTint
+                                            : vr_example::kUnanchoredFillTint));
+      ++fillers;
+    }
+  }
+  CHECK(fillers > 0 && fillers == run->counts.fused);
+  CHECK(run->counts.pictures == 0);
+  CHECK(run->report.find("pictures") == std::string::npos);
+  return 0;
+}
+
+// Under FillColour::Picture each filler carries its own picture, and no
+// record of the phone outlives its gap.
+int test_picture_fill(const Env& env) {
+  vr_example::FillOptions fill;
+  fill.colour = vr_example::FillColour::Picture;
+  auto run = picture_run(env, fill);
+  CHECK(run.ok());
+  std::fputs(run->report.c_str(), stdout);
+  std::size_t fillers = 0;
+  std::size_t anchored = 0;
+  std::uint64_t most_late = 0;  // a filler's send after its frame, most
+  for (const Sent& s : run->sent) {
+    for (const sender::Filler& f : s.fillers) {
+      CHECK(placed_as_its_tier(f));
+      auto carries = carries_its_picture(env, f);
+      CHECK(carries.ok() && *carries);
+      CHECK(vr_example::check_filler(f).ok());
+      ++fillers;
+      anchored += f.tier == tsdf::FillTier::Anchored ? 1 : 0;
+      most_late = std::max(most_late, s.next_set_ns - f.frame.timestamp_ns);
+    }
+  }
+  CHECK(fillers > 0 && anchored > 0 && anchored < fillers);
+  CHECK(fillers == run->counts.fused);
+  CHECK(run->counts.pictures == 60);
+  CHECK(run->report.find("pictures: 60 prepared for fill, one a 1 frame(s) "
+                         "tracked; 0 let go") != std::string::npos);
+  // The pictures wait seconds for their fill (the frames the rig chain
+  // anchors at 3 to 4 s wait for its fits), yet the phone's own records are
+  // let go within their gap: none held but the one read ahead.
+  CHECK(most_late >= 2 * kS);
+  CHECK(run->most_alive <= 1);
+  return 0;
+}
+
+// With picture_every 3, the first frame tracked and every third after it.
+int test_picture_every(const Env& env) {
+  vr_example::FillOptions fill;
+  fill.colour = vr_example::FillColour::Picture;
+  fill.picture_every = 3;
+  auto run = picture_run(env, fill);
+  CHECK(run.ok());
+  std::size_t with = 0;
+  std::size_t without = 0;
+  for (const Sent& s : run->sent) {
+    for (const sender::Filler& f : s.fillers) {
+      CHECK(placed_as_its_tier(f));
+      if (record_of(f) % 3 == 0) {
+        auto carries = carries_its_picture(env, f);
+        CHECK(carries.ok() && *carries);
+        ++with;
+      } else {
+        // No colour at all: neither a picture nor the tint.
+        CHECK(!f.frame.has_color() && f.frame.color == nullptr);
+        CHECK(vr_example::check_filler(f).ok());
+        ++without;
+      }
+    }
+  }
+  CHECK(with > 0 && without > with);
+  CHECK(run->counts.pictures == 20);
+  CHECK(run->report.find("one a 3 frame(s) tracked") != std::string::npos);
+  return 0;
+}
+
+// Every depth sample of `f`.
+vkc::Result<std::vector<float>> depth_of(const Env& env,
+                                         const sender::Filler& f) {
+  return vkc::test::read_back<float>(
+      env.gpu.device, env.gpu.allocator, *f.frame.depth,
+      std::size_t{f.frame.depth_camera.width} * f.frame.depth_camera.height);
+}
+
+// Tint, every picture and every third picture: the same tracking and the
+// same fill's geometry, bit for bit.
+int test_picture_same_geometry(const Env& env) {
+  vr_example::FillOptions every;
+  every.colour = vr_example::FillColour::Picture;
+  vr_example::FillOptions third = every;
+  third.picture_every = 3;
+  auto tint = picture_run(env, {});
+  CHECK(tint.ok());
+  for (const vr_example::FillOptions& fill : {every, third}) {
+    auto run = picture_run(env, fill);
+    CHECK(run.ok());
+    CHECK(run->sent.size() == tint->sent.size());
+    for (std::size_t i = 0; i < run->sent.size(); ++i) {
+      const std::vector<sender::Filler>& a = tint->sent[i].fillers;
+      const std::vector<sender::Filler>& b = run->sent[i].fillers;
+      CHECK(a.size() == b.size());
+      for (std::size_t k = 0; k < a.size(); ++k) {
+        CHECK(a[k].frame.timestamp_ns == b[k].frame.timestamp_ns &&
+              a[k].tier == b[k].tier && a[k].index == b[k].index);
+        const sensor::DepthCameraParams& da = a[k].frame.depth_camera;
+        const sensor::DepthCameraParams& db = b[k].frame.depth_camera;
+        CHECK(da.fx == db.fx && da.fy == db.fy && da.cx == db.cx &&
+              da.cy == db.cy && da.width == db.width &&
+              da.height == db.height && da.min_depth == db.min_depth &&
+              da.max_depth == db.max_depth &&
+              same(da.cam_to_world, db.cam_to_world));
+        auto depth_a = depth_of(env, a[k]);
+        auto depth_b = depth_of(env, b[k]);
+        CHECK(depth_a.ok() && depth_b.ok() &&
+              std::memcmp(depth_a->data(), depth_b->data(),
+                          depth_a->size() * sizeof(float)) == 0);
+      }
+    }
+    MobileLane::Counts counts = run->counts;
+    CHECK(counts.pictures != 0);
+    counts.pictures = 0;
+    CHECK(std::memcmp(&counts, &tint->counts, sizeof(counts)) == 0);
+    for (const auto* chains : {&run->rig, &run->track}) {
+      const std::vector<vr_test::ScriptedRecord>& b = *chains;
+      const std::vector<vr_test::ScriptedRecord>& a =
+          chains == &run->rig ? tint->rig : tint->track;
+      CHECK(a.size() == b.size() && !a.empty());
+      for (std::size_t i = 0; i < a.size(); ++i) {
+        CHECK(a[i].pts == b[i].pts &&
+              same(a[i].prior.correction, b[i].prior.correction) &&
+              a[i].prior.sigma_m == b[i].prior.sigma_m &&
+              a[i].prior.sigma_rad == b[i].prior.sigma_rad &&
+              a[i].finished == b[i].finished &&
+              a[i].abandoned == b[i].abandoned);
+      }
+    }
+  }
+  return 0;
+}
+
+// Under FillColour::Picture, frames waited for and dropped (the 5 s wait of
+// test_wait_and_drop): after every gap the session keeps a picture for each
+// frame tracked and neither placed nor dropped, and none once the phone's end
+// has flushed its tracker; each filler carries its own picture.
+int test_picture_drops(const Env& env) {
+  const auto anchors = [](std::uint64_t t) {
+    return t == 1500 * kMs || t == 9 * kS;
+  };
+  vr_example::FillOptions fill;
+  fill.colour = vr_example::FillColour::Picture;
+  auto made = make_lane(env, std::make_unique<FakePhone>(ten_hz(91), true),
+                        anchors_when(anchors, Mat4f(1.0f)),
+                        anchors_when(never, Mat4f(1.0f)), {}, {}, fill);
+  CHECK(made.ok());
+  bool dropped_while_held = false;  // a drop with pictures still kept
+  std::size_t fillers = 0;
+  for (std::size_t i = 0; i < 400; ++i) {
+    auto sent = made->lane->next(env.grid, kS + (i + 1) * 40 * kMs);
+    CHECK(sent.ok());
+    for (const sender::Filler& f : *sent) {
+      const sensor::camera::CameraModel cam =
+          vr_test::picture_camera(record_of(f));
+      CHECK(f.frame.has_color() && f.frame.color != nullptr &&
+            sensor::is_canonical(f.frame.color_encoding) &&
+            f.frame.color_camera.fx == float(cam.intrinsics.fx));
+      ++fillers;
+    }
+    const MobileLane::SessionView v = made->lane->sessions().at(0);
+    const MobileLane::Counts& c = v.counts;
+    CHECK(c.pictures == c.paired);
+    CHECK(v.pictures == c.pictures - c.anchored - c.unanchored - c.dropped);
+    if (c.dropped != 0 && v.pictures != 0) dropped_while_held = true;
+  }
+  const MobileLane::SessionView end = made->lane->sessions().at(0);
+  CHECK(!end.holding && end.pictures == 0);
+  CHECK(end.counts.pictures == 91 && end.counts.dropped > 0 &&
+        end.counts.fused + end.counts.dropped == 91);
+  CHECK(fillers == end.counts.fused);
+  CHECK(dropped_while_held);
+  CHECK(made->lane->close().ok());
+  CHECK(made->lane->sessions().at(0).pictures == 0);
+  return 0;
+}
+
+// A picture_every of 0, refused by both forms and by open_mobile_lane.
+int test_picture_every_refused(const Env& env) {
+  vr_example::FillOptions zero;
+  zero.colour = vr_example::FillColour::Picture;
+  zero.picture_every = 0;
+  auto file = make_lane(env, std::make_unique<FakePhone>(ten_hz(1)),
+                        anchors_when(never, Mat4f(1.0f)),
+                        anchors_when(never, Mat4f(1.0f)), {}, {}, zero);
+  CHECK(file.status().domain() == vkc::Status::Code::InvalidArgument);
+  CHECK(file.status().message().find("picture_every") != std::string::npos);
+  vr_example::LaneOptions options;
+  options.fill = zero;
+  auto live =
+      MobileLane::create(env.gpu.device, env.gpu.allocator, nullptr, options);
+  CHECK(live.status().domain() == vkc::Status::Code::InvalidArgument);
+  auto opt = cfg::parse(R"({"version": 1, "operation": "fuse",
+      "source": {"kind": "live", "sync_config": "sync.json",
+                 "calibration": "poses.json",
+                 "mobile": "tcp://192.0.2.1:7101",
+                 "mobile_registration": "phone.registration.json"}})",
+                        cfg::Application::FuseOrbbec);
+  CHECK(opt.ok());
+  auto opened = vr_example::open_mobile_lane(*opt, env.gpu.device,
+                                             env.gpu.allocator, options);
+  CHECK(opened.status().domain() == vkc::Status::Code::InvalidArgument);
+  return 0;
+}
 
 // Tiers, tints and one generation.
 int test_tiers(const Env& env) {
@@ -831,6 +1163,12 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_check_and_empty(env, scratch.path / "check") == 0);
   CHECK(test_no_tag_tells_nothing(env) == 0);
   CHECK(test_background() == 0);
+  CHECK(test_picture_default(env) == 0);
+  CHECK(test_picture_fill(env) == 0);
+  CHECK(test_picture_every(env) == 0);
+  CHECK(test_picture_same_geometry(env) == 0);
+  CHECK(test_picture_drops(env) == 0);
+  CHECK(test_picture_every_refused(env) == 0);
   std::puts("recon_example_live_mobile: OK");
   return 0;
 }

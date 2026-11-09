@@ -20,6 +20,7 @@
 #include <deque>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -51,14 +52,29 @@ enum class Kind : std::uint8_t {
   Hop,           // placed, a fit due
 };
 
+// Under FillColour::Picture, a frame's picture prepared in a batch of its
+// own, submitted and not yet waited: the whole frame, which the batch reads
+// (the phone's decoded picture), the batch, the picture as the prep hands it
+// out (its depth let go) and its pending submit.
+struct PictureInFlight {
+  PictureInFlight(vkc::Device& device, vkc::Allocator& allocator)
+      : batch(device, allocator) {}
+  sensor::RgbdFrame frame;
+  vkc::CommandBatch batch;
+  sensor::DeviceFrame picture;
+  vkc::PendingBatch pending;  // last: it goes first, waiting for its work
+};
+
 // A session's record prepared and its fits recorded into a batch of its own,
-// submitted and not yet waited: the batch, its pending submit and the step.
+// submitted and not yet waited: the batch, its pending submit and the step;
+// and, when its picture is kept, the picture's own.
 struct InFlight {
   InFlight(vkc::Device& device, vkc::Allocator& allocator)
       : batch(device, allocator) {}
   vkc::CommandBatch batch;
   track::PendingStep step;
-  vkc::PendingBatch pending;  // last: it goes first, waiting for its work
+  vkc::PendingBatch pending;  // it goes before the batch, waiting
+  std::unique_ptr<PictureInFlight> picture;  // goes first, waiting for its own
 };
 
 // Whether `s` is the device's loss, the one error a lane returns.
@@ -155,6 +171,19 @@ struct PhoneSession {
   std::string first_refusal;  // why the first frame passed over was
   std::string first_error;    // the first error the phone returned
   std::string first_unfit;    // why the first filler let go was
+  // What its fillers carry (the lane's). Under FillColour::Picture: its
+  // picture prep; the frames its tracker took, and the count of them from
+  // which the next picture is due (passed on to the next frame while due);
+  // the pictures prepared for frames the tracker holds, by the frame's time,
+  // each attached to its filler as the frame is placed and let go as it is
+  // dropped; and the pictures the prep refused.
+  FillOptions fill;
+  std::optional<sensor::GpuFramePrep> picture_prep;
+  std::uint64_t tracked = 0;
+  std::uint64_t next_picture = 0;
+  std::map<std::uint64_t, sensor::DeviceFrame> pictures;
+  std::uint64_t pictures_refused = 0;
+  std::string first_picture_refusal;
 
   PhoneSession() = default;
   ~PhoneSession() {
@@ -232,9 +261,35 @@ struct PhoneSession {
   // The words said when they are due.
   void tell();
 
-  // A step's placements into the queue, its oldest let go past the cap; its
-  // counts, and the log.
+  // A step's placements into the queue, each with its picture if one was
+  // kept, its oldest let go past the cap; a dropped frame's picture let go;
+  // its counts, and the log.
   void take(const track::TrackStep& step);
+
+  // The tracker flushed (`take` of its flush): it holds nothing after, so
+  // no picture is left waiting either.
+  void flush();
+
+  // Whether `frame`'s picture is kept for its fill: under
+  // FillColour::Picture, the first frame the tracker takes and every
+  // picture_every-th after the last kept; a due frame with no picture, or
+  // one the tag watch took (`watched`), passes its turn to the next.
+  bool picture_due(const sensor::RgbdFrame& frame, bool watched) const;
+
+  // `frame`'s picture prepared into a batch of its own, submitted into
+  // `f.picture`; a refusal or failure returned for picture_refused, nothing
+  // left in flight.
+  vkc::Status begin_picture(InFlight& f, sensor::RgbdFrame frame);
+
+  // `f`'s picture batch, if any, waited and its picture kept by its time
+  // (counted); one that fails is let go (picture_refused). Only the device's
+  // loss returns.
+  vkc::Status finish_picture(InFlight& f);
+
+  // A picture let go for `why`: counted, the first printed in the report.
+  void picture_refused(const vkc::Status& why) {
+    if (pictures_refused++ == 0) first_picture_refusal = why.message();
+  }
 
   // The records the phone holds, taken in order for the set at `next_set`; a
   // loss is noted for its split. An error the phone returns is counted, and

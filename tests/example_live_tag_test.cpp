@@ -70,7 +70,24 @@
 //   sessions.csv holds five joins and five leaves, door.csv the refusal at
 //   four held. That case skips where no decoder path opens, unless
 //   VS_TEST_HEVC_BACKEND promises one.
+// - The phone's picture on fill for a session a registration places, on the
+//   same clips: a file read depth alone by default prepares no picture;
+//   under FillColour::Picture it is read with its pictures, decoded on this
+//   machine's hardware, every frame is tracked and counted as by default,
+//   and each frame's picture (or every fourth's) is prepared for its fill. A
+//   live phone so placed, sending a frame a gap, has a picture prepared for
+//   each frame tracked. A file so placed whose frames the rig chain anchors
+//   hands out fillers each with its own decoded picture, canonical and
+//   covered, at the frame's colour camera. Those skip where no decoder path
+//   opens, unless VS_TEST_HEVC_BACKEND promises one. A file whose picture
+//   track cannot be read (on another clock) opens under FillColour::Picture
+//   all the same, read depth alone, its counts the default's.
+// - A session the tag places, under FillColour::Picture: no frame whose
+//   picture the watch took for its search carries it (its turn passed to the
+//   next frame), inline frame by frame and on the watch's thread by count,
+//   and the tag is searched as without pictures.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -81,21 +98,25 @@
 #include <fstream>
 #include <functional>
 #include <glm/gtc/matrix_transform.hpp>
+#include <map>
 #include <memory>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/objdetect/aruco_dictionary.hpp>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include "fuse_device.hpp"
+#include "link/rgbd_stream_sensor.hpp"
 #include "link_dialler.hpp"
 #include "live_mobile.hpp"
 #include "live_tag.hpp"
 #include "scripted_fitter.hpp"
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/testing/buffer_readback.hpp"
 #include "volumetric_kit/core/testing/gpu_test.hpp"
 #include "volumetric_kit/core/testing/net_loopback.hpp"
 #include "volumetric_kit/core/testing/scratch_dir.hpp"
@@ -779,6 +800,9 @@ struct LaneRun {
   std::unique_ptr<vr_example::MobileLane> lane;
   std::shared_ptr<const std::vector<vr_test::ScriptedRecord>> rig_fits;
   std::size_t fillers = 0;
+  // Each filler's frame, and whether it carries a picture in the canonical
+  // colour.
+  std::vector<std::pair<std::size_t, bool>> pictured;
   std::string report;
   std::shared_ptr<std::vector<Told>> told;
 };
@@ -786,7 +810,8 @@ struct LaneRun {
 vkc::Result<LaneRun> run_lane(vkc::test::GpuContext& gpu,
                               std::unique_ptr<TagPhone> phone,
                               const std::string& dir, bool background = false,
-                              bool saying = true, std::size_t past_until = 0) {
+                              bool saying = true, std::size_t past_until = 0,
+                              vr_example::FillOptions fill = {}) {
   VKC_ASSIGN(
       vol::VoxelBlockGrid grid,
       tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64));
@@ -819,11 +844,12 @@ vkc::Result<LaneRun> run_lane(vkc::test::GpuContext& gpu,
     VKC_ASSIGN(run.lane, vr_example::MobileLane::create(
                              gpu.device, gpu.allocator, std::move(phone),
                              std::move(tracker), std::move(log),
-                             std::move(tags), std::move(say)));
+                             std::move(tags), std::move(say), fill));
   } else {
+    vr_example::LaneOptions options;
+    options.fill = fill;
     VKC_ASSIGN(run.lane, vr_example::MobileLane::create(
-                             gpu.device, gpu.allocator, nullptr,
-                             vr_example::LaneOptions{}));
+                             gpu.device, gpu.allocator, nullptr, options));
     vr_example::MobileLane::SessionParts parts;
     parts.name = phone->info().id;
     parts.placement = vr_example::MobileLane::Placement::Tag;
@@ -842,6 +868,11 @@ vkc::Result<LaneRun> run_lane(vkc::test::GpuContext& gpu,
                run.lane->next(grid, *set_ns,
                               i < past_until ? past : vr_example::GapBudget{}));
     run.fillers += sent.size();
+    for (const volumetric_kit::recon::sender::Filler& f : sent) {
+      run.pictured.emplace_back(
+          std::size_t((f.frame.timestamp_ns - kS) / (100 * kMs)),
+          f.frame.has_color() && sensor::is_canonical(f.frame.color_encoding));
+    }
     if (background) std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
   VKC_TRY(run.lane->close());
@@ -1041,6 +1072,43 @@ int test_lane_background(vkc::test::GpuContext& gpu, const Pictures& pics,
   return 0;
 }
 
+// A session the tag places, under FillColour::Picture: a frame whose picture
+// the watch took for its search carries none, its turn passed to the next,
+// so no picture is taken over from its writer twice. Inline, the watch takes
+// frames 27, 29, ... 59 after the registration (one per 200 ms), so frames
+// 26, 28, ... 58 carry their pictures, and the tag is searched as without
+// them. On the watch's thread, which never takes two frames in a row, the
+// same holds by count.
+int test_lane_pictures(vkc::test::GpuContext& gpu, const Pictures& pics) {
+  vr_example::FillOptions fill;
+  fill.colour = vr_example::FillColour::Picture;
+  auto ran = run_lane(gpu, std::make_unique<TagPhone>(60, pics.tag), "",
+                      /*background=*/false, /*saying=*/false, 0, fill);
+  CHECK(ran.ok());
+  const vr_example::MobileLane::Counts& c = ran->lane->counts();
+  CHECK(c.unregistered == 26 && c.paired == 34 && c.pictures == 17);
+  CHECK(ran->report.find("tag: 23 searched, 23 stills, 3 holds (0 refused)") !=
+        std::string::npos);
+  CHECK(ran->report.find("pictures: 17 prepared for fill") !=
+        std::string::npos);
+  CHECK(ran->pictured.size() == ran->fillers && ran->fillers > 0);
+  for (const auto& [frame, pictured] : ran->pictured) {
+    CHECK(frame >= 26 && pictured == (frame % 2 == 0));
+  }
+  auto background = run_lane(gpu, std::make_unique<TagPhone>(60, pics.tag), "",
+                             /*background=*/true, /*saying=*/false, 0, fill);
+  CHECK(background.ok());
+  const vr_example::MobileLane::Counts& b = background->lane->counts();
+  CHECK(b.paired > 0 && b.pictures < b.paired && 2 * b.pictures >= b.paired);
+  std::map<std::size_t, bool> by_frame(background->pictured.begin(),
+                                       background->pictured.end());
+  for (const auto& [frame, pictured] : by_frame) {
+    const auto next = by_frame.find(frame + 1);
+    CHECK(pictured || next == by_frame.end() || next->second);
+  }
+  return 0;
+}
+
 // --- open_mobile_lane on a session file --------------------------------------
 
 constexpr const char* kPatches = VR_HEVC_DATA "/patches_256x144.h265";
@@ -1068,8 +1136,9 @@ sensor::SensorInfo clip_phone() {
 }
 
 // The phone's session: its depth track, after a picture track on track 0 with
-// `pictures`.
-vkc::Result<stream::Session> clip_session(bool pictures) {
+// `pictures`, on `color_clock` (the depth's, the host's, by default).
+vkc::Result<stream::Session> clip_session(
+    bool pictures, std::uint16_t color_clock = stream::kHostClock) {
   const sensor::SensorInfo info = clip_phone();
   stream::Session session;
   session.id = kSession;
@@ -1089,6 +1158,7 @@ vkc::Result<stream::Session> clip_session(bool pictures) {
     color.width = kClipW;
     color.height = kClipH;
     color.params = wire::encode_color_params(wire::ColorCodec::HevcMain8);
+    color.clock = color_clock;
     session.tracks.push_back(color);
   }
   session.tracks.push_back(depth);
@@ -1097,13 +1167,16 @@ vkc::Result<stream::Session> clip_session(bool pictures) {
 
 // A finished session of the phone, steady at its world's origin, frame i
 // at 1 s + i * 100 ms: each of the clip's access units (`units`) a colour
-// record on track 0 and the frame's depth record after it on track 1; with
-// no units, the depth track alone and no records.
+// record on track 0 (its track on `color_clock`) and the frame's depth
+// record after it on track 1; with no units, the depth track alone and no
+// records.
 vkc::Status write_clip_session(
     const std::string& path,
-    const std::vector<std::vector<std::uint8_t>>& units) {
+    const std::vector<std::vector<std::uint8_t>>& units,
+    std::uint16_t color_clock = stream::kHostClock) {
   const sensor::SensorInfo info = clip_phone();
-  VKC_ASSIGN(const stream::Session session, clip_session(!units.empty()));
+  VKC_ASSIGN(const stream::Session session,
+             clip_session(!units.empty(), color_clock));
   VKC_ASSIGN(auto writer, stream::StreamWriter::create(path, session));
   std::vector<std::uint16_t> depth_pixels(std::size_t{kDepthW} * kDepthH, 900);
   std::vector<std::uint8_t> confidence(std::size_t{kDepthW} * kDepthH, 2);
@@ -1149,6 +1222,54 @@ vkc::Status write_clip_session(
                                           d.confidence_bytes)));
   }
   return writer->finish();
+}
+
+// Frame `i` of the phone on `d`, live, as write_clip_session writes it: its
+// picture `unit` on track 0, then its depth on track 1.
+vkc::Status publish_clip_frame(vr_test::Dialler& d,
+                               const std::vector<std::uint8_t>& unit,
+                               std::size_t i) {
+  const sensor::SensorInfo info = clip_phone();
+  std::vector<std::uint16_t> depth_pixels(std::size_t{kDepthW} * kDepthH, 900);
+  std::vector<std::uint8_t> confidence(std::size_t{kDepthW} * kDepthH, 2);
+  sensor::ColorCodes bt709;  // the clip's: BT.709, limited range
+  bt709.matrix = 1;
+  bt709.transfer = 1;
+  bt709.primaries = 1;
+  sensor::RgbdFrame f;
+  f.depth = depth_pixels.data();
+  f.depth_confidence = confidence.data();
+  f.min_confidence = 2;
+  f.depth_camera = *info.depth;
+  f.metres_per_unit = 0.001f;
+  f.min_depth = 0.1f;
+  f.max_depth = 5.0f;
+  f.depth_noise = {0.002f, 0.0f, 0.002f};
+  f.color.host = &kSomeColor;
+  f.color.width = kClipW;
+  f.color.height = kClipH;
+  f.color_camera = *info.color;
+  f.timestamp_ns = pts(i);
+  f.sequence = i;
+  VKC_ASSIGN(const auto prefix, wire::encode_color(info, f, bt709));
+  const std::optional<int> type =
+      hevc::first_slice_type(unit.data(), unit.size());
+  stream::RecordInfo record;
+  record.track = 0;
+  record.key = type && hevc::is_irap(*type);
+  record.pts_ns = f.timestamp_ns;
+  record.seq = i;
+  record.set = i;
+  VKC_TRY(
+      d.publish(record, stream::RecordPayload::of(prefix.data(), prefix.size(),
+                                                  unit.data(), unit.size())));
+  VKC_ASSIGN(const wire::DepthRecord depth, wire::encode_depth(info, f));
+  record.track = 1;
+  record.key = true;
+  return d.publish(
+      record, stream::RecordPayload::of(
+                  depth.prefix.data(), depth.prefix.size(), depth.depth,
+                  depth.depth_bytes, depth.confidence, depth.confidence_bytes));
 }
 
 // A scenario fusing beside a rig whose calibration's world is the origin
@@ -1366,6 +1487,278 @@ int test_open_live(vkc::test::GpuContext& gpu,
   return 0;
 }
 
+// The scenario of tag_scenario, its phone `phone` placed by a registration
+// in the tag's world that names the clip's session, and no log.
+vkc::Result<cfg::Config> registered_scenario(const std::filesystem::path& dir,
+                                             const std::string& phone) {
+  std::filesystem::create_directories(dir);
+  camera::TrackedRegistration reg;
+  reg.sensor = clip_phone().id;
+  reg.session = kSession;
+  reg.world = tag_world();
+  reg.rms_px = 0.5;
+  reg.views = 6;
+  reg.edge_m = kEdge;
+  const std::string path = (dir / "phone.registration.json").string();
+  VKC_TRY(
+      camera::write_tracked_registration(path, reg, vkc::WriteMode::Replace));
+  VKC_ASSIGN(cfg::Config opt, tag_scenario(dir, phone));
+  opt.source.mobile->registration = path;
+  opt.diagnostics.track_log.clear();
+  return opt;
+}
+
+// The clip four times over: 32 pictures.
+std::vector<std::vector<std::uint8_t>> clip_units() {
+  std::vector<std::vector<std::uint8_t>> units;
+  const auto clip = sensor::testing::access_units_of_file(kPatches);
+  for (int k = 0; k < 4; ++k)
+    units.insert(units.end(), clip.begin(), clip.end());
+  return units;
+}
+
+// A file's session placed by a registration: read depth alone by default,
+// and with its pictures under FillColour::Picture, every frame tracked the
+// same and the picture of each (or of every fourth) prepared for its fill.
+int test_open_file_pictures(vkc::test::GpuContext& gpu,
+                            const std::filesystem::path& dir) {
+  using vr_example::FillColour;
+  using vr_example::FillOptions;
+  using vr_example::MobileLane;
+  const std::string phone = (dir / "pictures.vrst").string();
+  auto opt = registered_scenario(dir, phone);
+  CHECK(opt.ok());
+  CHECK(write_clip_session(phone, clip_units()).ok());
+  struct Run {
+    MobileLane::Counts counts;
+    std::string report;
+  };
+  const auto run = [&](FillOptions fill) -> vkc::Result<Run> {
+    vr_example::LaneOptions options;
+    options.fill = fill;
+    VKC_ASSIGN(
+        std::unique_ptr<MobileLane> lane,
+        vr_example::open_mobile_lane(*opt, gpu.device, gpu.allocator, options));
+    VKC_ASSIGN(
+        vol::VoxelBlockGrid grid,
+        tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64));
+    for (std::size_t i = 0; i < 100; ++i) {
+      VKC_TRY(lane->next(grid, kS + (i + 1) * 40 * kMs).status());
+    }
+    VKC_TRY(lane->close());
+    return Run{lane->counts(), lane->report()};
+  };
+  auto tint = run({});
+  CHECK(tint.ok());
+  const FillOptions every{FillColour::Picture, 1};
+  auto pictures = run(every);
+  if (!pictures.ok() &&
+      pictures.status().domain() == vkc::Status::Code::Unsupported &&
+      !sensor::testing::hevc_decoder_promised()) {
+    std::printf(
+        "a registration's file with its pictures: skipped, no "
+        "decoder path: %s\n",
+        pictures.status().message().c_str());
+    return 0;
+  }
+  CHECK(pictures.ok());
+  const FillOptions fourth{FillColour::Picture, 4};
+  auto fourths = run(fourth);
+  CHECK(fourths.ok());
+  std::fputs(pictures->report.c_str(), stdout);
+  const MobileLane::Counts& t = tint->counts;
+  CHECK(t.paired > 0 && t.pictures == 0 && t.errors == 0 && t.passed_over == 0);
+  CHECK(tint->report.find("pictures") == std::string::npos);
+  for (const Run* r : {&*pictures, &*fourths}) {
+    MobileLane::Counts c = r->counts;
+    c.pictures = 0;
+    CHECK(std::memcmp(&c, &t, sizeof(c)) == 0);
+  }
+  CHECK(pictures->counts.pictures == t.paired);
+  CHECK(fourths->counts.pictures == (t.paired + 3) / 4);
+  CHECK(pictures->report.find("pictures: " + std::to_string(t.paired) +
+                              " prepared for fill, one a 1 frame(s) tracked; "
+                              "0 let go") != std::string::npos);
+  return 0;
+}
+
+// A live phone placed by a registration, under FillColour::Picture: read
+// with its pictures, each frame tracked has its picture prepared.
+int test_open_live_pictures(vkc::test::GpuContext& gpu,
+                            const std::filesystem::path& dir) {
+  using vr_example::MobileLane;
+  const auto session = clip_session(true);
+  CHECK(session.ok());
+  const std::uint16_t port = vkc::test::closed_port();
+  auto opt =
+      registered_scenario(dir, "tcp://127.0.0.1:" + std::to_string(port));
+  CHECK(opt.ok());
+  vr_example::LaneOptions options;
+  options.fill.colour = vr_example::FillColour::Picture;
+  auto lane =
+      vr_example::open_mobile_lane(*opt, gpu.device, gpu.allocator, options);
+  CHECK(lane.ok() && (*lane)->live());
+  auto grid =
+      tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64);
+  CHECK(grid.ok());
+  auto d = vr_test::Dialler::dial(*session, port);
+  CHECK(d.ok());
+  const std::vector<std::vector<std::uint8_t>> units = clip_units();
+  std::size_t sent = 0;
+  std::uint64_t set = kS;
+  // A frame a gap, as the sets run, until eight pictures are prepared.
+  const bool prepared = run_until(**lane, *grid, &set, [&] {
+    if (sent < units.size() &&
+        publish_clip_frame(**d, units[sent], sent).ok()) {
+      ++sent;
+    }
+    return (*lane)->counts().pictures >= 8;
+  });
+  if (!prepared && (*lane)->counts().polled == 0 &&
+      !sensor::testing::hevc_decoder_promised()) {
+    std::printf(
+        "a registration's live phone with its pictures: skipped, no "
+        "decoder path\n");
+    std::fputs((*lane)->report().c_str(), stdout);
+    return 0;
+  }
+  CHECK(prepared);
+  CHECK((*lane)->close().ok());
+  const std::string report = (*lane)->report();
+  std::fputs(report.c_str(), stdout);
+  const MobileLane::Counts c = (*lane)->counts();
+  CHECK(c.pictures >= 8 && c.pictures == c.paired && c.errors == 0);
+  const MobileLane::SessionView v = (*lane)->sessions().at(0);
+  CHECK(v.placement == MobileLane::Placement::Registration);
+  CHECK(report.find("pictures: " + std::to_string(c.pictures) +
+                    " prepared for fill") != std::string::npos);
+  return 0;
+}
+
+// A registration's file whose picture track cannot be read (on another clock
+// than its depth): under FillColour::Picture it opens all the same, read
+// depth alone, every frame tracked and counted as by default, no picture
+// prepared.
+int test_open_file_pictures_unread(vkc::test::GpuContext& gpu,
+                                   const std::filesystem::path& dir) {
+  using vr_example::MobileLane;
+  const std::string phone = (dir / "other_clock.vrst").string();
+  auto opt = registered_scenario(dir, phone);
+  CHECK(opt.ok());
+  CHECK(write_clip_session(phone, clip_units(), /*color_clock=*/1).ok());
+  const auto run =
+      [&](vr_example::FillOptions fill) -> vkc::Result<MobileLane::Counts> {
+    vr_example::LaneOptions options;
+    options.fill = fill;
+    VKC_ASSIGN(
+        std::unique_ptr<MobileLane> lane,
+        vr_example::open_mobile_lane(*opt, gpu.device, gpu.allocator, options));
+    VKC_ASSIGN(
+        vol::VoxelBlockGrid grid,
+        tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64));
+    for (std::size_t i = 0; i < 100; ++i) {
+      VKC_TRY(lane->next(grid, kS + (i + 1) * 40 * kMs).status());
+    }
+    VKC_TRY(lane->close());
+    std::fputs(lane->report().c_str(), stdout);
+    return lane->counts();
+  };
+  auto tint = run({});
+  CHECK(tint.ok() && tint->paired > 0 && tint->pictures == 0);
+  auto pictures = run({vr_example::FillColour::Picture, 1});
+  CHECK(pictures.ok());
+  CHECK(std::memcmp(&*pictures, &*tint, sizeof(MobileLane::Counts)) == 0);
+  return 0;
+}
+
+// A registration's file read with its pictures, decoded on this machine's
+// hardware, its frames placed (the rig chain scripted to anchor every fit):
+// each filler carries its own frame's decoded picture, prepared to the
+// canonical colour and covered where the depth camera sees, at the frame's
+// colour camera. Skips where no decoder path opens, unless
+// VS_TEST_HEVC_BACKEND promises one.
+int test_file_pictures_placed(vkc::test::GpuContext& gpu,
+                              const std::filesystem::path& dir) {
+  using vr_example::MobileLane;
+  const std::string phone = (dir / "placed.vrst").string();
+  auto opt = registered_scenario(dir, phone);
+  CHECK(opt.ok());
+  CHECK(write_clip_session(phone, clip_units()).ok());
+  auto reg =
+      camera::read_tracked_registration(opt->source.mobile->registration);
+  CHECK(reg.ok());
+  vr_example::link::RgbdStreamSensor::Options reading;
+  reading.min_confidence = 2;
+  reading.registration = *reg;
+  reading.device = &gpu.device;
+  reading.allocator = &gpu.allocator;
+  auto stream = vr_example::link::RgbdStreamSensor::open_file(phone, reading);
+  if (!stream.ok() &&
+      stream.status().domain() == vkc::Status::Code::Unsupported &&
+      !sensor::testing::hevc_decoder_promised()) {
+    std::printf(
+        "a registration's file placed with its pictures: skipped, no "
+        "decoder path: %s\n",
+        stream.status().message().c_str());
+    return 0;
+  }
+  CHECK(stream.ok() && (*stream)->info().color);
+  std::vector<std::unique_ptr<track::IFitter>> fitters;
+  fitters.push_back(std::make_unique<vr_test::ScriptedFitter>(
+      vr_test::anchors_when([](std::uint64_t) { return true; }, Mat4f(1.0f))));
+  fitters.push_back(std::make_unique<vr_test::ScriptedFitter>(
+      vr_test::anchors_when([](std::uint64_t) { return false; }, Mat4f(1.0f))));
+  fitters.emplace_back();  // arkit
+  auto tracker =
+      track::Tracker::create(vr_example::lane_tracking(), std::move(fitters));
+  CHECK(tracker.ok());
+  auto log = vr_example::TrackLog::open({}, **tracker, {});
+  CHECK(log.ok());
+  vr_example::FillOptions fill;
+  fill.colour = vr_example::FillColour::Picture;
+  auto lane =
+      MobileLane::create(gpu.device, gpu.allocator, std::move(*stream),
+                         std::move(*tracker), std::move(*log), {}, {}, fill);
+  CHECK(lane.ok());
+  auto grid =
+      tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64);
+  CHECK(grid.ok());
+  const camera::CameraModel cam = *clip_phone().color;
+  const std::size_t n = std::size_t{kClipW} * kClipH;
+  std::size_t fillers = 0;
+  for (std::size_t i = 0; i < 100; ++i) {
+    auto sent = (*lane)->next(*grid, kS + (i + 1) * 40 * kMs);
+    CHECK(sent.ok());
+    for (const volumetric_kit::recon::sender::Filler& f : *sent) {
+      const sensor::ColorCameraParams& c = f.frame.color_camera;
+      CHECK(f.frame.has_color() &&
+            sensor::is_canonical(f.frame.color_encoding));
+      CHECK(c.width == kClipW && c.height == kClipH &&
+            c.fx == float(cam.intrinsics.fx) &&
+            c.fy == float(cam.intrinsics.fy) &&
+            c.cx == float(cam.intrinsics.cx) &&
+            c.cy == float(cam.intrinsics.cy));
+      // The clip's colour camera is its depth camera's (no offset).
+      CHECK(std::memcmp(&c.cam_to_world, &f.frame.depth_camera.cam_to_world,
+                        sizeof(Mat4f)) == 0);
+      auto words = vkc::test::read_back<std::uint32_t>(
+          gpu.device, gpu.allocator, *f.frame.color, n);
+      CHECK(words.ok());
+      const std::size_t covered = std::size_t(
+          std::count_if(words->begin(), words->end(),
+                        [](std::uint32_t w) { return (w >> 24) == 0xFFu; }));
+      CHECK(2 * covered > n);
+      ++fillers;
+    }
+  }
+  CHECK((*lane)->close().ok());
+  std::fputs((*lane)->report().c_str(), stdout);
+  const MobileLane::Counts& c = (*lane)->counts();
+  CHECK(fillers > 0 && fillers == c.fused);
+  CHECK(c.paired > 0 && c.pictures == c.paired);
+  return 0;
+}
+
 // A session that comes and goes, placed by the tag on the watch's thread:
 // gone past its grace, the reaper lets it go, the watch-before-phone step run
 // (its order is let_go's; the sanitizers watch the step), and nothing is
@@ -1448,8 +1841,14 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_lane_refused(gpu, pics) == 0);
   CHECK(test_lane_past_budget(gpu, pics) == 0);
   CHECK(test_lane_background(gpu, pics, scratch.path / "lane_background") == 0);
+  CHECK(test_lane_pictures(gpu, pics) == 0);
   CHECK(test_open_file(gpu, scratch.path / "file") == 0);
   CHECK(test_open_live(gpu, scratch.path / "live") == 0);
+  CHECK(test_open_file_pictures(gpu, scratch.path / "file_pictures") == 0);
+  CHECK(test_open_live_pictures(gpu, scratch.path / "live_pictures") == 0);
+  CHECK(test_open_file_pictures_unread(gpu, scratch.path / "pictures_unread") ==
+        0);
+  CHECK(test_file_pictures_placed(gpu, scratch.path / "pictures_placed") == 0);
   CHECK(test_retire_order(gpu, pics) == 0);
   std::puts("recon_example_live_tag: OK");
   return 0;
