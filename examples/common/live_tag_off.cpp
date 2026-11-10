@@ -27,10 +27,7 @@ vkc::Result<std::unique_ptr<TagWatch>> TagWatch::create(const vkc::Device&,
 TagWatch::TagWatch(std::unique_ptr<State> state) noexcept
     : state_(std::move(state)) {}
 TagWatch::~TagWatch() = default;
-vkc::Status TagWatch::see(const sensor::RgbdFrame&, bool* taken) {
-  if (taken != nullptr) *taken = false;
-  return check({});
-}
+vkc::Status TagWatch::see(const sensor::RgbdFrame&) { return check({}); }
 void TagWatch::split() noexcept {}
 vkc::Result<TagNews> TagWatch::take() { return check({}); }
 const TagWatch::Counts& TagWatch::counts() const noexcept {

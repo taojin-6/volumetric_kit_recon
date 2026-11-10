@@ -1112,6 +1112,15 @@ entries relevant to your task; later amendments supersede earlier rules.
   device's loss ends the run; a phone that fails of its own is kept away
   for a back-off. A directory a session in the track log. Reverses "the rig
   never fuses alone".
+- [**2026-11-09**](#2026-11-09--a-phone-session-uses-one-tag-at-the-start-once-the-session-is-placed-its-watch-takes-nothing-and-no-later-sighting-is-used-owner) —
+  One tag, at the start (owner): the origin tag registers a phone session
+  once, and no later sighting is used for anything. The watch takes no
+  candidate after its registration (no copy, search, still or hold), the
+  lane shows it nothing once the session is placed, and a new session (a
+  relaunch, another device, one after a retire) registers again. Later
+  holds, their `tags.csv` rows and gaps, a second seed and the bench's
+  tag-hold judge are gone; under `FillColour::Picture` every frame tracked
+  keeps its picture's turn.
 
 ## Decision record
 
@@ -6871,6 +6880,83 @@ under the sanitizers; no public call observes it. Not run yet, on the lab
 rig: 300 sets' grid digests and the send's p50 with the door listening and
 no phone; on an iPad, a join after 2 minutes, locks of 20 and 60 s, a
 relaunch, Disconnect then Connect, and another device.
+
+### 2026-11-09 — A phone session uses one tag, at the start: once the session is placed its watch takes nothing, and no later sighting is used (owner).
+
+**Context.** A session the origin tag placed kept its watch looking after
+the registration: a candidate every 200 ms of frame time (`kTagEveryNs`),
+its luma copied, searched and, six stills a hold, solved; a hold that passed
+was printed with its gap from the rig chain and logged in `tags.csv`
+(`passed`), never applied. Nothing in this repository read those later
+holds. They were for analysis: scoring a chain at a later hold (the bench's
+planned tag-hold judge, DESIGN's next work, and `track::Method::seed`'s
+promise that a chain is never scored at a hold of its own seed) and a
+second seed from another tag fix. They cost the picture. Under
+`FillColour::Picture` with `picture_every` 1, a live run on a 4-camera rig
+with one iPad tracked 1,034 frames and prepared only 513 pictures: since
+the fix that stops a decoded picture being taken over from its decoder
+twice (2026-11-08, `TagWatch::see`'s `taken`), a frame the watch took
+passed its picture's turn to the next, and at 10 Hz the watch took every
+second frame.
+
+**Decision** (owner, 2026-11-09). One tag, at the start.
+- *The origin tag registers a phone session once*, and no later sighting
+  is used for anything. The watch's first hold that passes registers the
+  session, and the watch is then done: it takes no candidate after it, so
+  it copies, searches and solves nothing more, and a candidate still boxed
+  for its thread then is let go unsearched (counted `replaced`).
+- *Placed, a session shows its watch nothing.* The lane shows the watch
+  each frame until the session is placed, and tracks none of them, so no
+  frame tracked was shown to the watch and none passes its picture's turn
+  for it. Placed means registered by the tag, or placed by a registration
+  file (`source.mobile_registration`), which has no watch at all
+  (`MobileLane::add` refuses one).
+- *The watch is per session.* A new session (a relaunch, another device,
+  or a phone back after its session retired at its grace) has a watch of
+  its own and registers by the tag again; one back within the grace keeps
+  its registration, as before.
+
+**What goes** (accepted by the owner):
+- Later holds: `TagHold::Use::Passed`, `kTagEveryNs`, the `passed` rows of
+  `tags.csv` (which now ends at the registration's row), the printed gap of
+  a later hold from the rig chain, and with it the rig chain's correction
+  the session kept for that gap.
+- Scoring chains at later holds and a second seed from one: the bench's
+  tag-hold judge is dropped from next work. `track::Method::initial_correction`
+  and `seed` stay, a chain's start for any caller that seeds one; their
+  words no longer promise a second tag fix or a score at a tag hold.
+- `TagWatch::see`'s `taken` and the lane's skip of a frame the watch took:
+  under this rule no frame the lane tracks was shown to the watch.
+- The warning for a watch that fails after the registration, the session
+  going on placed: the watch searches nothing then, so it cannot fail, and
+  a watch's error is the session's.
+
+**What stays.** Registration itself, unchanged: the settle, every frame a
+candidate until the registration, six stills within 3 s, a split ending the
+hold being gathered, the gates, `register_tracked`, `registration.json`,
+the refused holds (logged, printed, told), the count toward a hold, and the
+first rig fit's printed gap from the registration (the registration
+against the rig chain, not a later sighting). The report's tag line keeps
+its form; its counts now stop at the registration.
+
+**Verification.** `recon_example_live_tag`: a watch shown frames after its
+registration counts them seen and takes none, inline and on its thread at
+10, 33 and 100 ms apart (six searched, six stills, one hold, the count
+toward a hold 0); a refused hold, then the registration, then the tag in
+view searched no more; the lane's report stopping at six searched (inline,
+on the watch's thread, and after a loss at eleven), `tags.csv` its one row;
+under `FillColour::Picture` and `picture_every` 1 every frame tracked after
+the registration carrying its picture (34 of 34 inline, all on the watch's
+thread); a session that left past its grace followed by a new one, a watch
+of its own, that registers by the tag again (each six searched, registered
+at 2.5 s, 26 frames before it); a session a registration places with no
+tag line and nothing unregistered; and the registration itself as before
+(where it lands, its hold's frames, its time, its file, bit for bit again).
+Broken on purpose: a watch that takes candidates after its registration
+fails the first of those, and with the lane showing placed frames too, the
+lane's report reads 40 searched, 6 holds and a registration moved to 5.5 s;
+the pre-change watch and lane under these tests prepare 17 pictures of 34
+frames tracked, half, as on the rig. Not run: a live run on the rig.
 
 ## Measured lessons
 

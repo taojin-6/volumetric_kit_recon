@@ -82,11 +82,10 @@ struct Method {
   IcpConfig icp{};
   CorrectionFilterConfig judge{};
   /// The correction before any fit: the identity for the run's
-  /// registration, or a second seed (another tag fix). Rigid.
+  /// registration, or another start the caller seeds the chain from. Rigid.
   Mat4f initial_correction{1.0f};
-  /// The registration that set @ref initial_correction, as a log names it;
-  /// empty: the run's. A chain is never scored at a tag hold of its own
-  /// seed.
+  /// What set @ref initial_correction, as a log names it; empty: the run's
+  /// registration.
   std::string seed;
 };
 

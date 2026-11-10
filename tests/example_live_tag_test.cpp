@@ -9,20 +9,21 @@
 // transform from the tag's. Accuracy is calib's own test's; here, the glue:
 // - Six stills register: the registration validates, names the session and
 //   the sensor, and places a still's camera where its picture has it, within
-//   1 cm / 0.5 deg.
+//   1 cm / 0.5 deg. The frames after it are seen and none is a candidate.
 // - The gates: no candidate before the settle, with no picture, a pose not
 //   rigid, or a frame time that repeats or goes back; no hold from 5 stills
 //   or across a split; a still older than the span drops out; two prints in
 //   view are no still.
-// - The cadence, inline and on the watch's thread: at 10 Hz and closer, every
-//   frame until the session registers, then one per 200 ms.
+// - One tag, at the start, inline and on the watch's thread: at 10 Hz and
+//   closer, every frame is a candidate until the session registers, then none
+//   (no search, no still, no hold) for the next second.
 // - A tag found only in bursts that a search at 5 Hz finds one short of a hold
 //   registers.
 // - A camera moving at 1 m/s or turning at 90 deg/s is searched as often as
 //   one held still, and registers as well.
 // - A hold with one still's pose 10 cm off is refused (poor_fit) and
-//   registers nothing; the next good hold registers, and a good one after it
-//   passes, applied by nothing.
+//   registers nothing; the next good hold registers, and the tag in view
+//   after it is searched no more.
 // - Without background two runs give the same news, bit for bit. With it,
 //   every candidate is searched or replaced, the pictures are let go, and
 //   the destructor joins with one boxed; and a take spinning on the lane's
@@ -35,11 +36,13 @@
 //   beside it, an empty sensor or session.
 // - The lane registered by the tag: frames before the registration are
 //   counted unregistered and never tracked; after it they are tracked at the
-//   registration's placement; run.csv names registration.json, which reads
-//   back, tags.csv holds each hold; a second run into the same directory is
-//   refused as it opens. A loss in the phone's records splits the
-//   watch: no hold spans it. With the watch on its own thread, as
-//   open_mobile_lane makes it, the lane registers and places the same way.
+//   registration's placement and the watch searches none (the report's
+//   counts stop at the registration's six); run.csv names registration.json,
+//   which reads back, tags.csv holds the one hold; a second run into the same
+//   directory is refused as it opens. A loss in the phone's records splits
+//   the watch: no hold spans it. With the watch on its own thread, as
+//   open_mobile_lane makes it, the lane registers and places the same way,
+//   and its watch searches six frames as inline.
 // - What the lane tells: looking, the count, a refusal, registered, in that
 //   order, on a change and at least once a second; given no one to tell, it
 //   runs the same.
@@ -48,6 +51,9 @@
 //   never waits),
 //   nothing after the registration is tracked until the gaps have room, and
 //   the loss among the frames put back is still one split.
+// - A session the tag placed, gone past its grace: a new session after it
+//   (another phone's, a watch of its own) registers by the tag again, its
+//   frames before that unregistered, its watch searching its own six.
 // - A session that comes and goes (a live lane's, given a presence), placed
 //   by the tag on its own thread: once it is gone past the grace, the reaper
 //   lets it go, its phone stopped (the watch-before-phone step run, under the
@@ -81,11 +87,11 @@
 //   covered, at the frame's colour camera. Those skip where no decoder path
 //   opens, unless VS_TEST_HEVC_BACKEND promises one. A file whose picture
 //   track cannot be read (on another clock) opens under FillColour::Picture
-//   all the same, read depth alone, its counts the default's.
-// - A session the tag places, under FillColour::Picture: no frame whose
-//   picture the watch took for its search carries it (its turn passed to the
-//   next frame), inline frame by frame and on the watch's thread by count,
-//   and the tag is searched as without pictures.
+//   all the same, read depth alone, its counts the default's. A session a
+//   registration places has no watch: its report has no tag line.
+// - A session the tag places, under FillColour::Picture, picture_every 1:
+//   every frame tracked after the registration carries its picture, inline
+//   and on the watch's thread, and the tag is searched as without pictures.
 
 #include <algorithm>
 #include <atomic>
@@ -329,8 +335,10 @@ int test_registers(vkc::test::GpuContext& gpu, const Pictures& pics) {
   const auto [mm, deg] = off_truth(reg.tracking_to_world);
   std::printf("registered: %.2f mm / %.3f deg from the truth\n", mm, deg);
   CHECK(mm < 10.0 && deg < 0.5);
+  // Frames 26-30, the tag in view after the registration: seen, and no
+  // candidate.
   const TagWatch::Counts& c = (*w)->counts();
-  CHECK(c.seen == 31 && c.candidates == 8 && c.stills == 8 && c.holds == 1 &&
+  CHECK(c.seen == 31 && c.candidates == 6 && c.stills == 6 && c.holds == 1 &&
         c.refused == 0 && c.replaced == 0 && c.failed == 0);
   return 0;
 }
@@ -386,50 +394,48 @@ int test_gates(vkc::test::GpuContext& gpu, const Pictures& pics) {
 }
 
 // Frames `gap` apart from the end of the settle, on each thread: every one a
-// candidate through the hold's six, then one per 200 ms for the next second.
-// Each search is waited for, so none is replaced and each frame's cadence is
-// that of the registration already made.
-int test_cadence(vkc::test::GpuContext& gpu, const Pictures& pics) {
-  const struct {
-    std::uint64_t gap;
-    std::uint64_t after;  // candidates in the second after the hold
-  } kPaces[] = {{100 * kMs, 5}, {33 * kMs, 4}, {10 * kMs, 5}};
+// candidate through the hold's six, which registers, then none for the next
+// second, the tag in view: no search, no still, no hold after the
+// registration. Each search is waited for, so none is replaced and each
+// frame comes after the registration already made.
+int test_one_tag(vkc::test::GpuContext& gpu, const Pictures& pics) {
+  const std::uint64_t kGaps[] = {100 * kMs, 33 * kMs, 10 * kMs};
   for (const bool background : {false, true}) {
-    for (const auto& pace : kPaces) {
+    for (const std::uint64_t gap : kGaps) {
       auto w = watch(gpu, background);
       CHECK(w.ok());
       CHECK(show(**w, 0, 0, pics.tag) == 0);
       std::uint64_t holds = 0;
-      std::uint64_t expected = 0;
-      std::uint64_t last = 0;
+      bool registered = false;
       const std::uint64_t start = pts(20);
-      const std::uint64_t frames = 6 + kS / pace.gap;
+      const std::uint64_t frames = 6 + kS / gap;
       for (std::uint64_t k = 0; k < frames; ++k) {
         sensor::RgbdFrame f = shown(0, above(0.0, 0.0), pics.tag);
-        f.timestamp_ns = start + k * pace.gap;
+        f.timestamp_ns = start + k * gap;
         CHECK((*w)->see(f).ok());
-        if (k < 6 || f.timestamp_ns >= last + 200 * kMs) {
-          ++expected;
-          last = f.timestamp_ns;
-        }
+        const std::uint64_t expected = std::min<std::uint64_t>(k + 1, 6);
         const auto until =
             std::chrono::steady_clock::now() + std::chrono::seconds(20);
         for (;;) {
           auto news = (*w)->take();
           CHECK(news.ok() && news->failures.empty());
           holds += news->holds.size();
+          registered = registered || news->registered.has_value();
           if ((*w)->counts().candidates >= expected) break;
           CHECK(std::chrono::steady_clock::now() < until);
         }
-        CHECK((*w)->counts().candidates == expected);
+        const TagWatch::Counts& c = (*w)->counts();
+        CHECK(c.candidates == expected && c.stills == expected);
+        CHECK(registered == (k >= 5) && holds == (k >= 5 ? 1u : 0u));
       }
       const TagWatch::Counts& c = (*w)->counts();
-      std::printf("cadence: %llu ms apart, %s: %llu searched of %llu\n",
-                  static_cast<unsigned long long>(pace.gap / kMs),
+      std::printf("one tag: %llu ms apart, %s: %llu searched of %llu\n",
+                  static_cast<unsigned long long>(gap / kMs),
                   background ? "thread" : "inline",
                   static_cast<unsigned long long>(c.candidates),
                   static_cast<unsigned long long>(c.seen));
-      CHECK(c.candidates == 6 + pace.after && c.replaced == 0 && holds == 1);
+      CHECK(c.seen == frames + 1 && c.candidates == 6 && c.stills == 6 &&
+            c.holds == 1 && c.replaced == 0 && c.gathered == 0);
     }
   }
   return 0;
@@ -483,44 +489,57 @@ int test_moving(vkc::test::GpuContext& gpu) {
     std::printf("%s: RMS %.2f px, %.2f mm / %.3f deg from the truth\n",
                 turning ? "turning" : "moving", h.rms_px, mm, deg);
     CHECK(h.rms_px < 2.0 && mm < 10.0 && deg < 0.5);
+    // Frames 20-25 searched, as held still; none after the registration.
     const TagWatch::Counts& c = (*w)->counts();
-    CHECK(c.seen == 31 && c.candidates == 8 && c.stills == 8);
+    CHECK(c.seen == 31 && c.candidates == 6 && c.stills == 6);
   }
   return 0;
 }
 
-// One still 10 cm off: refused; then a hold registers, and one passes.
-vkc::Result<TagNews> refused_then_passed(vkc::test::GpuContext& gpu,
-                                         const Pictures& pics) {
+// One still 10 cm off: refused; then a hold registers, and frames 32-43,
+// the tag in view, are searched no more.
+struct RefusedThenRegistered {
+  TagNews news;
+  TagWatch::Counts counts;
+};
+
+vkc::Result<RefusedThenRegistered> refused_then_registered(
+    vkc::test::GpuContext& gpu, const Pictures& pics) {
   VKC_ASSIGN(std::unique_ptr<TagWatch> w, watch(gpu, false));
   for (std::size_t i = 0; i <= 43; ++i) {
     const bool off = i == 24;  // a still
     VKC_TRY(w->see(shown(i, above(off ? 0.1 : 0.0, 0.0), pics.tag)));
   }
-  return w->take();
+  VKC_ASSIGN(TagNews news, w->take());
+  return RefusedThenRegistered{std::move(news), w->counts()};
 }
 
-int test_refused_then_passed(vkc::test::GpuContext& gpu, const Pictures& pics) {
-  auto news = refused_then_passed(gpu, pics);
-  CHECK(news.ok() && news->holds.size() == 3);
+int test_refused_then_registered(vkc::test::GpuContext& gpu,
+                                 const Pictures& pics) {
+  auto ran = refused_then_registered(gpu, pics);
+  CHECK(ran.ok());
+  const TagNews* news = &ran->news;
+  CHECK(news->holds.size() == 2);
   const TagHold& bad = news->holds[0];
   std::printf("refused: %s: %s\n", bad.miss.c_str(), bad.reason.c_str());
   CHECK(bad.use == TagHold::Use::Refused && bad.miss == "poor_fit");
   CHECK(!bad.reason.empty() && same(bad.tracking_to_world, camera::Mat4d(1.0)));
   CHECK(news->holds[1].use == TagHold::Use::Registered);
-  CHECK(news->holds[1].first_pts_ns == pts(26));
-  CHECK(news->holds[2].use == TagHold::Use::Passed);
-  CHECK(news->holds[2].first_pts_ns == pts(33));
+  CHECK(news->holds[1].first_pts_ns == pts(26) &&
+        news->holds[1].last_pts_ns == pts(31));
   CHECK(news->registered && same(news->registered->tracking_to_world,
                                  news->holds[1].tracking_to_world));
+  const TagWatch::Counts& c = ran->counts;
+  CHECK(c.seen == 44 && c.candidates == 12 && c.stills == 12 && c.holds == 2 &&
+        c.refused == 1);
   // Bit for bit again.
-  auto again = refused_then_passed(gpu, pics);
-  CHECK(again.ok() && again->holds.size() == 3 && again->registered);
-  for (std::size_t k = 0; k < 3; ++k) {
-    CHECK(same(news->holds[k], again->holds[k]));
+  auto again = refused_then_registered(gpu, pics);
+  CHECK(again.ok() && again->news.holds.size() == 2 && again->news.registered);
+  for (std::size_t k = 0; k < 2; ++k) {
+    CHECK(same(news->holds[k], again->news.holds[k]));
   }
   CHECK(same(news->registered->tracking_to_world,
-             again->registered->tracking_to_world));
+             again->news.registered->tracking_to_world));
   return 0;
 }
 
@@ -936,10 +955,10 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
   for (const vr_test::ScriptedRecord& r : *ran->rig_fits) {
     CHECK(r.pts.front() >= pts(26));
   }
-  // Six candidates to it, then one every 200 ms: holds at 2.7-3.7 and
-  // 3.9-4.9 s, five stills left over.
-  CHECK(report.find("tag: 23 searched, 23 stills, 3 holds (0 refused)") !=
-        std::string::npos);
+  // Six candidates to it, and none after it: the 34 frames tracked are
+  // searched no more.
+  CHECK(report.find("tag: 6 searched, 6 stills, 1 holds (0 refused), 0 "
+                    "replaced, 0 failed;") != std::string::npos);
   CHECK(report.find("registered at 2.5 s, 26 frames before it") !=
         std::string::npos);
   // The registration on disk, and the run placed by it.
@@ -960,11 +979,10 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
   CHECK(tracked == 34);
   auto read = vr_example::read_track_log(dir.string());
   CHECK(read.ok() && read->source.registration == written.string());
+  // The one hold, the registration's: no row after it.
   const std::vector<std::string> rows = lines(dir / "tags.csv");
-  CHECK(rows.size() == 4);
+  CHECK(rows.size() == 2);
   CHECK(rows[1].find(",registered,") != std::string::npos);
-  CHECK(rows[2].find(",passed,") != std::string::npos &&
-        rows[3].find(",passed,") != std::string::npos);
   // A second file run into the directory is refused as it opens.
   camera::ArrayCalibration array;
   array.sensors.push_back({"rig-0", camera::Mat4d(1.0), {}, {}, {}, 0.0});
@@ -991,13 +1009,14 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
 
 // Records 25 and 26 lost (300 ms, a loss): the lane splits the watch, so the
 // stills of 2.0-2.4 s are let go, and the hold is 2.7-3.2 s, registered at
-// 3.2 s (across the loss it would have been 2.0-2.7 s, at 2.7 s).
+// 3.2 s (across the loss it would have been 2.0-2.7 s, at 2.7 s); nothing
+// after it is searched.
 int test_lane_loss(vkc::test::GpuContext& gpu, const Pictures& pics) {
   auto ran = run_lane(gpu, std::make_unique<TagPhone>(45, pics.tag, 25, 2), "",
                       false, /*saying=*/false);
   CHECK(ran.ok());
   CHECK(ran->told->empty());
-  CHECK(ran->report.find("tag: 17 searched, 17 stills, 2 holds (0 refused)") !=
+  CHECK(ran->report.find("tag: 11 searched, 11 stills, 1 holds (0 refused)") !=
         std::string::npos);
   CHECK(ran->report.find("registered at 3.2 s, 31 frames before it") !=
         std::string::npos);
@@ -1029,7 +1048,8 @@ int test_lane_refused(vkc::test::GpuContext& gpu, const Pictures& pics) {
   auto ran =
       run_lane(gpu, std::make_unique<TagPhone>(40, pics.tag, 0, 0, 24), "");
   CHECK(ran.ok());
-  CHECK(ran->report.find("2 holds (1 refused)") != std::string::npos);
+  CHECK(ran->report.find("tag: 12 searched, 12 stills, 2 holds (1 refused)") !=
+        std::string::npos);
   CHECK(told_lines(*ran->told) ==
         looking_then({"Tag refused, trying again", "Tag found, registered"}));
   CHECK(told_at_rate(*ran->told));
@@ -1042,7 +1062,9 @@ int test_lane_refused(vkc::test::GpuContext& gpu, const Pictures& pics) {
 
 // The watch on its own thread, as open_mobile_lane makes it: when it
 // registers depends on the thread, so the frames are counted, not timed, and
-// each tracked one is placed by the registration written.
+// each tracked one is placed by the registration written. What it searches
+// does not: every search finds the tag, the sixth registers, and none
+// follows (a candidate it never searched is replaced).
 int test_lane_background(vkc::test::GpuContext& gpu, const Pictures& pics,
                          const std::filesystem::path& dir) {
   auto ran = run_lane(gpu, std::make_unique<TagPhone>(60, pics.tag),
@@ -1054,6 +1076,8 @@ int test_lane_background(vkc::test::GpuContext& gpu, const Pictures& pics,
   CHECK(c.unregistered >= 26 && c.unregistered + c.paired == 60);
   CHECK(c.paired > 0 && ran->fillers > 0);
   CHECK(ran->report.find("registered at ") != std::string::npos);
+  CHECK(ran->report.find("tag: 6 searched, 6 stills, 1 holds (0 refused), ") !=
+        std::string::npos);
   auto reg =
       camera::read_tracked_registration((dir / "registration.json").string());
   CHECK(reg.ok() && reg->session == kSession);
@@ -1068,43 +1092,44 @@ int test_lane_background(vkc::test::GpuContext& gpu, const Pictures& pics,
   }
   CHECK(tracked == c.paired);
   const std::vector<std::string> rows = lines(dir / "tags.csv");
-  CHECK(rows.size() >= 2 && rows[1].find(",registered,") != std::string::npos);
+  CHECK(rows.size() == 2 && rows[1].find(",registered,") != std::string::npos);
   return 0;
 }
 
-// A session the tag places, under FillColour::Picture: a frame whose picture
-// the watch took for its search carries none, its turn passed to the next,
-// so no picture is taken over from its writer twice. Inline, the watch takes
-// frames 27, 29, ... 59 after the registration (one per 200 ms), so frames
-// 26, 28, ... 58 carry their pictures, and the tag is searched as without
-// them. On the watch's thread, which never takes two frames in a row, the
-// same holds by count.
+// A session the tag places, under FillColour::Picture and picture_every 1:
+// once registered, no frame is shown to the watch (one tag, at the start), so
+// none passes its picture's turn on, and every frame tracked after the
+// registration carries its own picture, inline (frames 26-59) and on the
+// watch's thread; the tag is searched as without pictures.
 int test_lane_pictures(vkc::test::GpuContext& gpu, const Pictures& pics) {
   vr_example::FillOptions fill;
   fill.colour = vr_example::FillColour::Picture;
+  fill.picture_every = 1;
   auto ran = run_lane(gpu, std::make_unique<TagPhone>(60, pics.tag), "",
                       /*background=*/false, /*saying=*/false, 0, fill);
   CHECK(ran.ok());
   const vr_example::MobileLane::Counts& c = ran->lane->counts();
-  CHECK(c.unregistered == 26 && c.paired == 34 && c.pictures == 17);
-  CHECK(ran->report.find("tag: 23 searched, 23 stills, 3 holds (0 refused)") !=
+  CHECK(c.unregistered == 26 && c.paired == 34 && c.pictures == 34);
+  CHECK(ran->report.find("tag: 6 searched, 6 stills, 1 holds (0 refused)") !=
         std::string::npos);
-  CHECK(ran->report.find("pictures: 17 prepared for fill") !=
+  CHECK(ran->report.find("pictures: 34 prepared for fill") !=
         std::string::npos);
   CHECK(ran->pictured.size() == ran->fillers && ran->fillers > 0);
   for (const auto& [frame, pictured] : ran->pictured) {
-    CHECK(frame >= 26 && pictured == (frame % 2 == 0));
+    CHECK(frame >= 26 && pictured);
   }
   auto background = run_lane(gpu, std::make_unique<TagPhone>(60, pics.tag), "",
                              /*background=*/true, /*saying=*/false, 0, fill);
   CHECK(background.ok());
   const vr_example::MobileLane::Counts& b = background->lane->counts();
-  CHECK(b.paired > 0 && b.pictures < b.paired && 2 * b.pictures >= b.paired);
-  std::map<std::size_t, bool> by_frame(background->pictured.begin(),
-                                       background->pictured.end());
-  for (const auto& [frame, pictured] : by_frame) {
-    const auto next = by_frame.find(frame + 1);
-    CHECK(pictured || next == by_frame.end() || next->second);
+  CHECK(b.paired > 0 && b.pictures == b.paired &&
+        b.unregistered + b.paired == 60);
+  CHECK(background->report.find("tag: 6 searched, 6 stills, 1 holds") !=
+        std::string::npos);
+  CHECK(background->pictured.size() == background->fillers &&
+        background->fillers > 0);
+  for (const auto& [frame, pictured] : background->pictured) {
+    CHECK(frame >= b.unregistered && pictured);
   }
   return 0;
 }
@@ -1550,6 +1575,10 @@ int test_open_file_pictures(vkc::test::GpuContext& gpu,
   };
   auto tint = run({});
   CHECK(tint.ok());
+  // Placed by its registration: no watch, so no tag line, and nothing
+  // waited for a registration.
+  CHECK(tint->counts.unregistered == 0 &&
+        tint->report.find("  tag: ") == std::string::npos);
   const FillOptions every{FillColour::Picture, 1};
   auto pictures = run(every);
   if (!pictures.ok() &&
@@ -1569,6 +1598,7 @@ int test_open_file_pictures(vkc::test::GpuContext& gpu,
   const MobileLane::Counts& t = tint->counts;
   CHECK(t.paired > 0 && t.pictures == 0 && t.errors == 0 && t.passed_over == 0);
   CHECK(tint->report.find("pictures") == std::string::npos);
+  CHECK(pictures->report.find("  tag: ") == std::string::npos);
   for (const Run* r : {&*pictures, &*fourths}) {
     MobileLane::Counts c = r->counts;
     c.pictures = 0;
@@ -1632,6 +1662,8 @@ int test_open_live_pictures(vkc::test::GpuContext& gpu,
   CHECK(v.placement == MobileLane::Placement::Registration);
   CHECK(report.find("pictures: " + std::to_string(c.pictures) +
                     " prepared for fill") != std::string::npos);
+  // No watch: no tag line, and nothing paired waited for a registration.
+  CHECK(c.unregistered == 0 && report.find("  tag: ") == std::string::npos);
   return 0;
 }
 
@@ -1759,6 +1791,80 @@ int test_file_pictures_placed(vkc::test::GpuContext& gpu,
   return 0;
 }
 
+// A session the tag placed, its phone gone past its grace, leaves; a new
+// session after it (another phone, a watch of its own, as a relaunch or
+// another device brings) registers by the tag again: its frames before its
+// own registration unregistered, its watch searching its own six. Each
+// watch in see(), so the run repeats.
+int test_lane_after_retire(vkc::test::GpuContext& gpu, const Pictures& pics) {
+  using vr_example::MobileLane;
+  vr_example::LaneOptions options;
+  options.settle_ns = 500 * kMs;
+  options.grace_ns = kS;
+  auto lane = MobileLane::create(gpu.device, gpu.allocator, nullptr, options);
+  CHECK(lane.ok());
+  auto grid =
+      tsdf::create_fusion_grid(gpu.device, gpu.allocator, 0.05f, 0.15f, 64);
+  CHECK(grid.ok());
+  // A phone above the tag, placed by it, there while `here` holds.
+  const auto session =
+      [&](std::shared_ptr<bool> here) -> vkc::Result<MobileLane::SessionParts> {
+    std::vector<std::unique_ptr<track::IFitter>> fitters;
+    fitters.push_back(
+        std::make_unique<vr_test::ScriptedFitter>(vr_test::anchors_when(
+            [](std::uint64_t) { return true; }, Mat4f(1.0f))));
+    fitters.push_back(
+        std::make_unique<vr_test::ScriptedFitter>(vr_test::anchors_when(
+            [](std::uint64_t) { return false; }, Mat4f(1.0f))));
+    fitters.emplace_back();  // arkit
+    MobileLane::SessionParts parts;
+    VKC_ASSIGN(parts.tracker,
+               track::Tracker::create(vr_example::lane_tracking(),
+                                      std::move(fitters)));
+    VKC_ASSIGN(parts.log, vr_example::TrackLog::open({}, *parts.tracker, {}));
+    VKC_ASSIGN(parts.tags, watch(gpu, /*background=*/false));
+    parts.phone = std::make_unique<TagPhone>(60, pics.tag);
+    parts.presence = [here] { return *here; };
+    parts.name = "phone";
+    parts.placement = MobileLane::Placement::Tag;
+    return parts;
+  };
+  auto here = std::make_shared<bool>(true);
+  auto first = session(here);
+  CHECK(first.ok());
+  CHECK((*lane)->add(std::move(*first)).ok());
+  std::uint64_t set = kS;
+  CHECK(run_until(**lane, *grid, &set, [&] {
+    return (*lane)->sessions().at(0).counts.paired > 0;  // registered
+  }));
+  *here = false;
+  CHECK(run_until(**lane, *grid, &set, [&] {
+    return (*lane)->sessions().at(0).stage == MobileLane::Stage::Left;
+  }));
+  auto second = session(std::make_shared<bool>(true));
+  CHECK(second.ok());
+  CHECK((*lane)->add(std::move(*second)).ok());
+  CHECK(run_until(**lane, *grid, &set,
+                  [&] { return (*lane)->sessions().at(1).counts.paired > 0; }));
+  CHECK((*lane)->close().ok());
+  const std::string report = (*lane)->report();
+  std::fputs(report.c_str(), stdout);
+  const std::vector<MobileLane::SessionView> v = (*lane)->sessions();
+  CHECK(v.size() == 2 && v[0].ordinal == 1 && v[1].ordinal == 2);
+  for (const MobileLane::SessionView& s : v) {
+    CHECK(s.placement == MobileLane::Placement::Tag &&
+          s.counts.unregistered == 26 && s.counts.paired > 0);
+  }
+  // Each its own watch's line, the second as the first.
+  const std::string tag_line =
+      "tag: 6 searched, 6 stills, 1 holds (0 refused), 0 replaced, 0 "
+      "failed; registered at 2.5 s, 26 frames before it";
+  const std::size_t at = report.find(tag_line);
+  CHECK(at != std::string::npos &&
+        report.find(tag_line, at + 1) != std::string::npos);
+  return 0;
+}
+
 // A session that comes and goes, placed by the tag on the watch's thread:
 // gone past its grace, the reaper lets it go, the watch-before-phone step run
 // (its order is let_go's; the sanitizers watch the step), and nothing is
@@ -1828,10 +1934,10 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   const Pictures pics{*tag, *blank, *two};
   CHECK(test_registers(gpu, pics) == 0);
   CHECK(test_gates(gpu, pics) == 0);
-  CHECK(test_cadence(gpu, pics) == 0);
+  CHECK(test_one_tag(gpu, pics) == 0);
   CHECK(test_bursts(gpu, pics) == 0);
   CHECK(test_moving(gpu) == 0);
-  CHECK(test_refused_then_passed(gpu, pics) == 0);
+  CHECK(test_refused_then_registered(gpu, pics) == 0);
   CHECK(test_background(gpu) == 0);
   CHECK(test_background_news(gpu, pics) == 0);
   CHECK(test_gathered(gpu, pics) == 0);
@@ -1849,6 +1955,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_open_file_pictures_unread(gpu, scratch.path / "pictures_unread") ==
         0);
   CHECK(test_file_pictures_placed(gpu, scratch.path / "pictures_placed") == 0);
+  CHECK(test_lane_after_retire(gpu, pics) == 0);
   CHECK(test_retire_order(gpu, pics) == 0);
   std::puts("recon_example_live_tag: OK");
   return 0;

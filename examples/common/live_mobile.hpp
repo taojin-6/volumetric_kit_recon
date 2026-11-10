@@ -102,11 +102,12 @@
 /// meets retires that session alone, printed once a session id, and told
 /// (@ref MobileLane::SessionParts::on_error): its prep's or its tracker's
 /// error other than `Status::Code::InvalidArgument` (a frame they refuse is
-/// passed over, as before), its phone's start, a watch that fails before it
-/// registers. A live lane then keeps that phone's id from its door for
-/// @ref LaneOptions::error_back_off, doubled with each repeat up to 32 times,
-/// so a phone whose error recurs is not made a session over and over; the
-/// device out of memory also pauses its admissions for a minute. A file's
+/// passed over, as before), its phone's start, its watch's (which searches,
+/// and so fails, only before it registers). A live lane then keeps that
+/// phone's id from its door for @ref LaneOptions::error_back_off, doubled
+/// with each repeat up to 32 times, so a phone whose error recurs is not
+/// made a session over and over; the device out of memory also pauses its
+/// admissions for a minute. A file's
 /// session, always there, returns its error as before: a replay asked for
 /// that file. A log's, a registration file's or a recording's write error is
 /// printed once and the session goes on: the log never changes what fuses. A
@@ -143,10 +144,13 @@
 /// none tracked until it registers the session (counted `unregistered`);
 /// from then on each frame is placed by that registration
 /// (`tracking_to_world * color_to_world`, the product `RgbdStreamSensor`
-/// applies to one it is given). The first Anchored fit of the rig chain
-/// prints how far it moved the tag's registration; a later hold that passes
-/// is printed with its gap from the rig chain and logged, never applied. Both
-/// gaps are @ref pose_gap at the newest paired frame's camera.
+/// applies to one it is given) and shown to the watch no more: one tag, at
+/// the start, and no later sighting is used for anything. The first Anchored
+/// fit of the rig chain prints how far it moved the tag's registration
+/// (@ref pose_gap at the newest paired frame's camera). Back within the
+/// grace, a session keeps its registration; a new one (a relaunch, another
+/// device, or a phone back after its session left) has a watch of its own,
+/// and registers by the tag again.
 ///
 /// **What the phone is told.** A live phone searching by the tag is told how
 /// the search goes, in one line of words for a person to read (@ref lane_note),
@@ -173,15 +177,17 @@
 /// outside the depth camera's view uncovered), in a batch of its own
 /// submitted after the frame's and waited in the same gap, so the phone's
 /// decoded picture goes within the gap; its depth is let go. A due frame
-/// with no picture, or one the tag's watch took for its search (whose copy
-/// takes the picture's planes over from the decoder, so the lane never reads
-/// them again: live_tag.hpp), passes its turn to the next. The frame's depth
-/// is prepared and tracked exactly as under the tint, from the frame without
-/// its picture: the same records give the same tracking, fits, decisions and
-/// placements either way, bit for bit, which a file's lane, reading no
-/// budget, always does. A live lane's budget reads the gap's time, which the
-/// picture's wait lengthens (a hop's own time sample among it), so there it
-/// may put back more frames and hops than under the tint. The prepared
+/// with no picture passes its turn to the next. No frame tracked was shown
+/// to the tag's watch (whose copy takes a picture's planes over from the
+/// decoder: live_tag.hpp), which is shown frames only until the session is
+/// placed, so under `picture_every` 1 each frame tracked with a picture
+/// carries it. The frame's depth is prepared and tracked exactly as under
+/// the tint, from the frame without its picture: the same records give the
+/// same tracking, fits, decisions and placements either way, bit for bit,
+/// which a file's lane, reading no budget, always does. A live lane's budget
+/// reads the gap's time, which the picture's wait lengthens (a hop's own time
+/// sample among it), so there it may put back more frames and hops than
+/// under the tint. The prepared
 /// picture waits with its frame until the tracker places it, then rides on
 /// its filler: the colour camera at the frame's own intrinsics and moved by
 /// its correction, as the depth camera is (`track::corrected`). A frame
@@ -548,11 +554,12 @@ class MobileLane {
     std::unique_ptr<track::Tracker> tracker;
     /// Its log. Required (an empty directory writes no files).
     std::unique_ptr<TrackLog> log;
-    /// The origin tag's watch, which registers the session, its frames in
-    /// the phone's own world; with a log directory, the registration is
-    /// written there (`registration.json`, never over one). Required by
-    /// @ref Placement::Tag, refused otherwise. Destroyed before the phone
-    /// stops (its thread may hold a picture of the phone's decoder).
+    /// The origin tag's watch, which registers the session, shown its frames
+    /// in the phone's own world until then and none after; with a log
+    /// directory, the registration is written there (`registration.json`,
+    /// never over one). Required by @ref Placement::Tag, refused otherwise.
+    /// Destroyed before the phone stops (its thread may hold a picture of
+    /// the phone's decoder).
     std::unique_ptr<TagWatch> tags;
     /// Whether the phone is connected now, read each gap on the lane's
     /// thread; it must not wait. Given, the session comes and goes (above);

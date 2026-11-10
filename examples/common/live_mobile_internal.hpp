@@ -101,7 +101,8 @@ struct PhoneSession {
   // The tracker goes after the log, which its rows are named by.
   std::unique_ptr<track::Tracker> tracker;
   std::unique_ptr<TrackLog> log;
-  // The origin tag's watch: let go before the phone stops.
+  // The origin tag's watch, shown frames until the session is placed: let go
+  // before the phone stops.
   std::unique_ptr<TagWatch> tags;
   // Whether the phone is connected: a live phone's, which comes and goes;
   // let go, with the say and the error's hearer, as the session goes to the
@@ -116,16 +117,14 @@ struct PhoneSession {
   std::uint32_t ordinal = 0;  // its join's place, from 1; 0 until it joins
   std::uint32_t index = 0;    // its mobile index, from its join
   bool by_tag = false;
-  bool placed = true;         // false until the tag registers the phone
-  bool watch_failed = false;  // its watch died after the registration
-  bool log_failed = false;    // a write of its log failed, printed once
+  bool placed = true;       // false until the tag registers the phone
+  bool log_failed = false;  // a write of its log failed, printed once
   sensor::camera::Mat4d tracking_to_world{1.0};  // the tag's registration
-  // The newest paired frame: its time, and its colour camera in the phone's
-  // own world, where the gaps are measured.
+  // The first paired frame's time, and the newest's colour camera in the
+  // phone's own world, where the first rig fit's gap is measured.
   std::optional<std::uint64_t> first_paired;
   sensor::camera::Mat4d newest_tracking{1.0};
-  std::optional<Mat4f> rig_correction;  // the rig chain's, after its last fit
-  bool rig_anchored = false;            // its first Anchored fit printed
+  bool rig_anchored = false;  // the rig chain's first Anchored fit printed
   std::optional<std::uint64_t> registered_after;  // the first frame to it
   TagWatch::Counts tag_counts;                    // as of the last take
   std::string first_tag_failure;
@@ -243,14 +242,13 @@ struct PhoneSession {
   void register_by(const sensor::camera::TrackedRegistration& reg,
                    const TagHold& hold);
 
-  // What the watch found: each hold logged and printed, the first that
-  // passed registering the session, a passed one after it measured against
-  // the rig chain; the first failure printed, every one counted.
+  // What the watch found: each hold logged and printed, the one that passed
+  // registering the session; the first failure printed, every one counted.
   void apply(TagNews news);
 
-  // The watch's news since the last gap. A watch that fails before the
-  // session registers is the session's error; after it, it is let be, and
-  // the session goes on placed. The device's loss returns either way.
+  // The watch's news since the last gap; a watch that fails is the session's
+  // error. It fails only before the registration, since it searches nothing
+  // after it.
   vkc::Status take_news();
 
   // Where the tag search stands: the one source of the words.
@@ -272,9 +270,9 @@ struct PhoneSession {
 
   // Whether `frame`'s picture is kept for its fill: under
   // FillColour::Picture, the first frame the tracker takes and every
-  // picture_every-th after the last kept; a due frame with no picture, or
-  // one the tag watch took (`watched`), passes its turn to the next.
-  bool picture_due(const sensor::RgbdFrame& frame, bool watched) const;
+  // picture_every-th after the last kept; a due frame with no picture passes
+  // its turn to the next. No frame tracked was shown to the tag's watch.
+  bool picture_due(const sensor::RgbdFrame& frame) const;
 
   // `frame`'s picture prepared into a batch of its own, submitted into
   // `f.picture`; a refusal or failure returned for picture_refused, nothing

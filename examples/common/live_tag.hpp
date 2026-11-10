@@ -8,20 +8,21 @@
 ///        its pictures: how a run with `source.mobile` and no
 ///        `source.mobile_registration` registers the phone.
 ///
-/// **Stills.** The lane shows the watch each frame it pairs, in the phone's
-/// own (ARKit's) world, before it lets the frame's picture go (@ref
-/// TagWatch::see). A frame @ref kSettleNs past the first frame shown (ARKit
-/// settling) is a candidate, however fast its camera moves: the hold's gates
-/// refuse a wrong pose, and the rig chain's fits correct a rough one
-/// (live_mobile.hpp). Until the session has registered, that is every frame,
-/// so a tag found only now and then still gathers a hold. After it, one per
-/// @ref kTagEveryNs of frame time, for the later holds' log alone. A
-/// candidate's Y plane is copied to the host (sensor's `PictureReadback`,
-/// `Planes::Luma`) and searched for calib's `kOriginTag` (`detect_tag`): a
-/// still when the picture holds exactly one print of it. The copy takes the
-/// picture's planes over from their writer, so a candidate's picture is the
-/// watch's alone: @ref TagWatch::see tells the lane which it took, and the
-/// lane reads none of them (live_mobile.hpp, Fill's colour).
+/// **Stills.** The lane shows the watch each frame it pairs until the session
+/// is placed, in the phone's own (ARKit's) world, before it lets the frame's
+/// picture go (@ref TagWatch::see). A frame @ref kSettleNs past the first
+/// frame shown (ARKit settling) is a candidate, however fast its camera
+/// moves: the hold's gates refuse a wrong pose, and the rig chain's fits
+/// correct a rough one (live_mobile.hpp). Until the session registers, that
+/// is every frame, so a tag found only now and then still gathers a hold;
+/// after it, none (below). A candidate's Y plane is copied to the host
+/// (sensor's `PictureReadback`, `Planes::Luma`) and searched for calib's
+/// `kOriginTag` (`detect_tag`): a still when the picture holds exactly one
+/// print of it. The copy takes the picture's planes over from their writer,
+/// so a candidate's picture is the watch's alone; the lane reads the picture
+/// of no frame it shows the watch, since it tracks none until the
+/// registration, and the watch takes none after it (live_mobile.hpp, Fill's
+/// colour).
 ///
 /// **Holds.** @ref kHoldStills stills within @ref kHoldSpanNs, with no
 /// @ref TagWatch::split between them, are a hold; its stills are then spent,
@@ -30,10 +31,12 @@
 /// calib's `tracked_world_from_tag` solves it, ARKit's +y up, at the edge of
 /// the world's tag (`AprilTagWorld::size_m`: the printed edge), and its gates
 /// pass or refuse it (@ref TagHold::Use). The first hold that passes registers
-/// the session (`register_tracked`, in memory: @ref TagNews::registered). Later
-/// holds that pass are reported, never applied. A search or a solve that calib
-/// or OpenCV refuses, or a picture the copy cannot read, is reported, never
-/// fatal.
+/// the session (`register_tracked`, in memory: @ref TagNews::registered), and
+/// the watch is then done: one tag, at the start. It takes no candidate after
+/// it, so it copies, searches and solves nothing more, and a candidate still
+/// boxed for its thread then is let go unsearched (@ref
+/// TagWatch::Counts::replaced). A search or a solve that calib or OpenCV
+/// refuses, or a picture the copy cannot read, is reported, never fatal.
 ///
 /// **Threads.** With @ref TagWatch::Options::background, the copy, the search
 /// and the solve run on the watch's own thread: @ref TagWatch::see hands it
@@ -55,10 +58,14 @@
 /// VKC_ASSIGN(std::unique_ptr<TagWatch> tags,
 ///            TagWatch::create(device, allocator,
 ///                             {id, session, rig.world, /*background=*/true}));
-/// // each frame paired, its picture on the device, in the phone's world:
-/// VKC_TRY(tags->see(frame));
+/// // each frame paired until placed, its picture on the device, in the
+/// // phone's world:
+/// if (!placed) VKC_TRY(tags->see(frame));
 /// VKC_ASSIGN(TagNews news, tags->take());
-/// if (news.registered) place_by(news.registered->tracking_to_world);
+/// if (news.registered) {
+///   place_by(news.registered->tracking_to_world);
+///   placed = true;  // the watch is shown nothing more
+/// }
 /// @endcode
 
 #include <array>
@@ -85,8 +92,6 @@ namespace vkc = volumetric_kit::core;
 inline constexpr std::size_t kHoldStills = 6;
 /// A hold's span, its first still's frame time to its last's, at most.
 inline constexpr std::uint64_t kHoldSpanNs = 3'000'000'000;
-/// Once registered, a candidate per this much frame time, at most: 5 Hz.
-inline constexpr std::uint64_t kTagEveryNs = 200'000'000;
 /// No candidate before this much frame time after the first frame shown.
 inline constexpr std::uint64_t kSettleNs = 2'000'000'000;
 
@@ -94,8 +99,7 @@ inline constexpr std::uint64_t kSettleNs = 2'000'000'000;
 struct TagHold {
   /// @brief What the hold did.
   enum class Use : std::uint8_t {
-    Registered,  ///< The first that passed: the session's registration.
-    Passed,      ///< Passed later: reported, not applied.
+    Registered,  ///< The one that passed: the session's registration.
     Refused,     ///< A gate, the solve or calib refused it.
   };
   std::uint64_t first_pts_ns = 0;  ///< Its first still's frame time.
@@ -115,14 +119,11 @@ struct TagHold {
   sensor::camera::Mat4d tracking_to_world{1.0};
 };
 
-/// @return The name `tags.csv` gives @p use: `registered`, `passed` or
-///         `refused`.
+/// @return The name `tags.csv` gives @p use: `registered` or `refused`.
 inline const char* to_string(TagHold::Use use) noexcept {
   switch (use) {
     case TagHold::Use::Registered:
       return "registered";
-    case TagHold::Use::Passed:
-      return "passed";
     case TagHold::Use::Refused:
       return "refused";
   }
@@ -131,7 +132,8 @@ inline const char* to_string(TagHold::Use use) noexcept {
 
 /// @brief What the watch found since the last @ref TagWatch::take.
 struct TagNews {
-  std::vector<TagHold> holds;  ///< Every hold solved, in order.
+  /// Every hold solved, in order: refused ones, then the registration's.
+  std::vector<TagHold> holds;
   /// Once: the session's registration, from the first hold that passed, as
   /// `register_tracked` gives it (`validate_tracked_registration` accepts
   /// it).
@@ -163,8 +165,8 @@ class TagWatch {
     std::uint64_t stills = 0;      ///< Searched, with the tag once.
     std::uint64_t holds = 0;       ///< Solved.
     std::uint64_t refused = 0;     ///< Of those, refused.
-    /// Candidates let go unsearched: one newer took the box while the
-    /// thread was busy (background only).
+    /// Candidates let go unsearched (background only): one newer took the
+    /// box while the thread was busy, or the session registered first.
     std::uint64_t replaced = 0;
     /// Searches calib or OpenCV refused, and pictures the copy could not
     /// read.
@@ -206,25 +208,25 @@ class TagWatch {
   TagWatch& operator=(TagWatch&&) = delete;
 
   /// @brief A frame the lane paired, in the phone's own world, its picture
-  ///        on the device; every one, in time order.
+  ///        on the device; every one until the session is placed, in time
+  ///        order. A candidate's copy takes its picture's planes over from
+  ///        their writer (sensor's `PictureReadback`: a later read must not
+  ///        repeat that), on the watch's thread with background, so the
+  ///        caller reads the picture of no frame it shows.
   /// @param frame  The frame.
-  /// @param taken  Optional: set to whether the watch took the frame's
-  ///               picture as a candidate. The copy takes its planes over
-  ///               from their writer (sensor's `PictureReadback`: a later
-  ///               read must not repeat that), on the watch's thread with
-  ///               background, so the caller reads no picture it took: its
-  ///               own copy of the frame keeps the planes' old owner.
-  /// @return OK; a frame with no device picture or a pose not rigid is
-  ///         counted seen and skipped. Without background, the copy's device
-  ///         error (a picture it refuses is a failure, counted).
-  vkc::Status see(const sensor::RgbdFrame& frame, bool* taken = nullptr);
+  /// @return OK; a frame with no device picture or a pose not rigid, or any
+  ///         frame once the session registered, is counted seen and skipped.
+  ///         Without background, the copy's device error (a picture it
+  ///         refuses is a failure, counted).
+  vkc::Status see(const sensor::RgbdFrame& frame);
 
   /// @brief A loss in the frames: the hold being gathered ends.
   void split() noexcept;
 
   /// @return What was found since the last take; or, once, the watch
   ///         thread's device or copy error, after which it searches no more
-  ///         (calib's and OpenCV's refusals are news).
+  ///         (calib's and OpenCV's refusals are news). Never an error once
+  ///         the session registered, since it searches nothing after.
   vkc::Result<TagNews> take();
 
   /// @return The counts; with background, as of the last @ref take.
