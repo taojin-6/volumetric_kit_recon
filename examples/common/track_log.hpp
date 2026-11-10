@@ -48,11 +48,12 @@
 ///   camera pose in the world (`correction * device_pose`), `t` its timestamp
 ///   in seconds; written at @ref TrackLog::close, in time order, so evo and the
 ///   TUM tools read them.
-/// - `tags.csv`: each hold of the origin tag (live_tag.hpp's `TagHold`):
-///   `first_pts_ns`, `last_pts_ns`, `stills`, `use` (`registered`, `passed`,
-///   `refused`), `miss`, `rms_px`, `worst_px`, `range_m`, `off_normal_deg`,
-///   `tracking_to_world` and `reason` (the rest of the line). Written as it
-///   goes, for analysis; not part of @ref TrackRun, so not read back.
+/// - `tags.csv`: each hold of the origin tag (live_tag.hpp's `TagHold`), up
+///   to the one that registers the session, the last: `first_pts_ns`,
+///   `last_pts_ns`, `stills`, `use` (`registered` or `refused`), `miss`,
+///   `rms_px`, `worst_px`, `range_m`, `off_normal_deg`, `tracking_to_world`
+///   and `reason` (the rest of the line). Written as it goes, for analysis;
+///   not part of @ref TrackRun, so not read back.
 
 #include <cstddef>
 #include <cstdint>

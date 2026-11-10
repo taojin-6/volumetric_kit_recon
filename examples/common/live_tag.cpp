@@ -83,7 +83,8 @@ struct TagWatch::State {
   std::optional<Candidate> box;
   Counts counts;
   TagNews news;
-  // Set with its hold's news. The searcher, its one writer, reads it bare.
+  // Set by the searcher with its hold's news: from then on no frame is a
+  // candidate.
   bool registered = false;
   vkc::Status error;  // the thread's, until taken
   bool dead = false;  // the thread stopped at an error
@@ -102,9 +103,9 @@ struct TagWatch::State {
     std::optional<camera::TrackedRegistration> registered;
   };
 
-  // The hold of `held` solved: refused, passed, or the session's
-  // registration. Nothing shared is written: the caller publishes both at
-  // once, so a take never gets the one without the other.
+  // The hold of `held` solved: refused, or the session's registration.
+  // Nothing shared is written: the caller publishes both at once, so a take
+  // never gets the one without the other.
   Solved solve(const std::vector<Still>& held) {
     Solved out;
     TagHold& hold = out.hold;
@@ -144,11 +145,6 @@ struct TagWatch::State {
     }
     hold.range_m = median(range);
     hold.off_normal_deg = median(off);
-    if (registered) {
-      hold.use = TagHold::Use::Passed;
-      hold.tracking_to_world = fit.tracking_to_world;
-      return out;
-    }
     vkc::Result<camera::TrackedRegistration> reg =
         calib::solve::register_tracked(session, options.world, *found);
     if (!reg.ok()) {
@@ -223,13 +219,19 @@ struct TagWatch::State {
     std::vector<Still> held = std::move(stills);
     stills.clear();  // spent
     Solved solved = solve(held);
-    // The hold, its registration and its counts in one lock section.
+    // The hold, its registration and its counts in one lock section; a
+    // candidate boxed for the thread is let go with the registration, since
+    // none is searched after it.
     std::lock_guard<std::mutex> lock(mutex);
     ++counts.holds;
     if (solved.hold.use == TagHold::Use::Refused) ++counts.refused;
     if (solved.registered) {
       news.registered = std::move(solved.registered);
       registered = true;
+      if (box) {
+        box.reset();
+        ++counts.replaced;
+      }
     }
     news.holds.push_back(std::move(solved.hold));
     return {};
@@ -333,21 +335,19 @@ TagWatch::~TagWatch() {
   state_->thread.join();
 }
 
-vkc::Status TagWatch::see(const sensor::RgbdFrame& frame, bool* taken) try {
+vkc::Status TagWatch::see(const sensor::RgbdFrame& frame) try {
   State& s = *state_;
-  if (taken != nullptr) *taken = false;
   const std::uint64_t pts = frame.timestamp_ns;
   if (!s.first_pts) s.first_pts = pts;
   std::unique_lock<std::mutex> lock(s.mutex);
   ++s.counts.seen;
-  // Sums, not differences, so a frame time before the first frame's or the
-  // last candidate's is no candidate; nor is the last candidate's own.
-  const bool candidate =
-      device_picture(frame.color) &&
-      camera::check_rigid(frame.color_to_world).ok() &&
-      pts >= *s.first_pts + kSettleNs &&
-      (!s.last_candidate ||
-       pts >= *s.last_candidate + (s.registered ? kTagEveryNs : 1));
+  // None once registered: one tag, at the start. A sum, not a difference, so
+  // a frame time before the first frame's is no candidate; nor is one at or
+  // before the last candidate's.
+  const bool candidate = !s.registered && device_picture(frame.color) &&
+                         camera::check_rigid(frame.color_to_world).ok() &&
+                         pts >= *s.first_pts + kSettleNs &&
+                         (!s.last_candidate || pts > *s.last_candidate);
   Candidate c;
   if (candidate) {
     s.last_candidate = pts;
@@ -362,11 +362,9 @@ vkc::Status TagWatch::see(const sensor::RgbdFrame& frame, bool* taken) try {
       if (s.box) ++s.counts.replaced;  // the one it held is let go
       s.box = std::move(c);
       s.wake.notify_one();
-      if (taken != nullptr) *taken = true;
     }
     return {};
   }
-  if (taken != nullptr) *taken = candidate;
   lock.unlock();
   vkc::Status searched = candidate ? s.search(std::move(c)) : vkc::Status{};
   lock.lock();

@@ -20,13 +20,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the same gap, so the phone's decoded picture is let go there), and the
   filler the tracker places carries it, its colour camera at the frame's own
   intrinsics and moved by the same correction as its depth camera; the
-  frames between carry no colour. A frame whose picture the tag's watch took
-  for its search passes its turn to the next, so no decoded picture is taken
-  over from its decoder twice (`TagWatch::see` tells which it took). The
-  frame's depth is prepared and tracked from the frame without its picture,
-  as under the tint, so the same records give the same tracking, fits,
-  decisions and placements either way (`recon_example_live_mobile` checks it
-  bit for bit, as a file's lane always gives); a live lane's budget reads
+  frames between carry no colour. No frame tracked was shown to the tag's
+  watch (one tag, at the start: Changed, below), so no decoded picture is
+  taken over from its decoder twice. The frame's depth is prepared and
+  tracked from the frame without its picture, as under the tint, so the
+  same records give the same tracking, fits, decisions and placements
+  either way (`recon_example_live_mobile` checks it bit for bit, as a
+  file's lane always gives); a live lane's budget reads
   the gap's time, which the picture's wait lengthens, so it may put back
   more. A session placed by `source.mobile_registration` is read with its
   pictures under it (`recon_example_live_tag`, a file's and a live phone's),
@@ -124,8 +124,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`examples/common/live_tag.hpp`, in a build with `-DVR_WITH_CALIB=ON`): a
   phone given with no `source.mobile_registration` is read with its
   pictures, and a `TagWatch` finds the calibration world's tag in its
-  frames (each one until the session registers, then at most 5 Hz for the
-  log, on its own thread, OpenCV's pool set to one thread:
+  frames (each one until the session registers, and none after: Changed,
+  below; on its own thread, OpenCV's pool set to one thread:
   the luma copied by sensor's `PictureReadback`, searched and solved by
   calib's `detect_tag`, `tracked_world_from_tag` and `register_tracked`, at
   the tag's printed edge; each hold handed over with its registration). A
@@ -133,10 +133,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on an RTX 5090); a live phone's decode on its poll thread. The lane tracks
   nothing until the first hold of six stills that
   passes registers the session (`MobileLane::Counts::unregistered`), then
-  places each frame by it; later holds are printed and logged with their gap
-  from the rig chain, never applied. `diagnostics.track_log` records a live
+  places each frame by it. `diagnostics.track_log` records a live
   phone (`phone.vrst`) and writes the registration (`registration.json`)
-  and each hold (`tags.csv`); `TrackLog::registered`, `pose_gap` and
+  and each hold up to it (`tags.csv`); `TrackLog::registered`, `pose_gap` and
   `RgbdStreamSensor::session_id` are new. `VR_WITH_CALIB` fetches calib
   pinned (`58a6dd6`, calib 0.12.0) on OpenCV 5, an installed prerequisite,
   and CMake 3.28, and configure refuses it without sensor's video decoders;
@@ -317,6 +316,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **a phone session uses one tag, at the start** (the owner's
+  decision, DECISIONS.md 2026-11-09). The origin tag registers a session
+  once, and no later sighting is used for anything: its `TagWatch` takes no
+  candidate after its registration (no copy, search, still or hold; one
+  boxed for its thread then is let go, counted `replaced`), and the lane
+  shows a session's watch nothing once the session is placed. A new
+  session (a relaunch, another device, one after a retire) has a watch of
+  its own and registers by the tag again. Gone with the later holds:
+  `TagHold::Use::Passed` and `kTagEveryNs` (a candidate every 200 ms after
+  the registration), `tags.csv`'s `passed` rows (it now ends at the
+  registration's row), the printed gap of a later hold from the rig chain,
+  `TagWatch::see`'s `taken` output and the lane's skip of a frame the watch
+  took, and the warning for a watch that fails after the registration
+  (it searches nothing then). Under `FillColour::Picture` with
+  `picture_every` 1, a live run on a 4-camera rig with one iPad tracked
+  1,034 frames and prepared only 513 pictures, since the watch took every
+  second frame at 10 Hz and each frame it took passed its picture's turn
+  on; now each frame tracked with a picture carries it. Registration itself is
+  unchanged, and the report's tag line keeps its form, its counts now
+  stopping at the registration. A session the tag places is still read
+  with its pictures for its whole life, unused after the registration under
+  the tint (DESIGN's next work). `track::Method::initial_correction` and
+  `seed` say no more of a second tag fix or of a chain scored at a tag
+  hold, and the planned bench drops its tag-hold judge. Tests:
+  `recon_example_live_tag`.
 - build: **recon pins core 0.50.0 at core #102's merge** (`b1f555b`; was
   core #101's merge, `65af19c`), which refuses `diagnostics.dump_sets` and
   `diagnostics.dump_directory` as unknown fields (the dump's removal below),

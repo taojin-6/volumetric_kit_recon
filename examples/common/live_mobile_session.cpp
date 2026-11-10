@@ -168,7 +168,6 @@ void PhoneSession::log_written(const vkc::Status& written) {
 void PhoneSession::watch_rig(const track::TrackStep& step) {
   for (const track::ChainFit& f : step.fits) {
     if (f.chain != 0 || !f.refused.empty()) continue;  // the rig chain's
-    rig_correction = f.judged.correction;
     if (!by_tag || rig_anchored ||
         f.judged.state != track::TrackState::Anchored) {
       continue;
@@ -215,45 +214,23 @@ void PhoneSession::apply(TagNews news) {
                   h.reason.c_str());
       continue;
     }
-    std::string outcome = "registered";
-    if (h.use == TagHold::Use::Registered) {
-      VKC_CHECK(news.registered.has_value(),
-                "MobileLane: a registering hold without its registration");
-      register_by(*news.registered, h);
-    } else if (!rig_correction) {
-      outcome = "passed, no rig fit yet (logged)";
-    } else {
-      const auto [mm, deg] =
-          pose_gap(Mat4f(h.tracking_to_world * newest_tracking),
-                   *rig_correction * registered_camera());
-      char buf[96];
-      std::snprintf(buf, sizeof(buf),
-                    "passed, %.1f cm / %.1f deg from the rig chain (logged)",
-                    mm / 10.0, deg);
-      outcome = buf;
-    }
+    // The watch's one hold that passes, its last news.
+    VKC_CHECK(news.registered.has_value(),
+              "MobileLane: a registering hold without its registration");
+    register_by(*news.registered, h);
     std::printf(
         "phone: tag hold: %u stills over %.1f s, RMS %.1f px, worst %.1f "
-        "px, %.1f m, %.0f deg off normal -> %s\n",
+        "px, %.1f m, %.0f deg off normal -> registered\n",
         h.stills, double(h.last_pts_ns - h.first_pts_ns) * 1e-9, h.rms_px,
-        h.worst_px, h.range_m, h.off_normal_deg, outcome.c_str());
+        h.worst_px, h.range_m, h.off_normal_deg);
   }
   tag_counts = tags->counts();
 }
 
 vkc::Status PhoneSession::take_news() {
-  if (!tags || watch_failed) return {};
-  vkc::Result<TagNews> news = tags->take();
-  if (news.ok()) {
-    apply(std::move(news).value());
-    return {};
-  }
-  if (device_lost(news.status()) || !placed) return news.status();
-  watch_failed = true;
-  std::fprintf(stderr,
-               "warning: phone %s: its tag watch failed after the "
-               "registration (%s); the session goes on placed\n",
-               name.c_str(), news.status().message().c_str());
+  if (!tags) return {};
+  VKC_ASSIGN(TagNews news, tags->take());
+  apply(std::move(news));
   return {};
 }
 
@@ -298,10 +275,9 @@ void PhoneSession::flush() {
   pictures.clear();
 }
 
-bool PhoneSession::picture_due(const sensor::RgbdFrame& frame,
-                               bool watched) const {
+bool PhoneSession::picture_due(const sensor::RgbdFrame& frame) const {
   return fill.colour == FillColour::Picture && picture_prep &&
-         frame.has_color() && !watched && tracked >= next_picture;
+         frame.has_color() && tracked >= next_picture;
 }
 
 vkc::Status PhoneSession::begin_picture(InFlight& f, sensor::RgbdFrame frame) {
@@ -397,18 +373,17 @@ vkc::Result<std::unique_ptr<InFlight>> PhoneSession::begin(
   }
   if (!first_paired) first_paired = frame.timestamp_ns;
   newest_tracking = frame.color_to_world;
-  // Whether the watch took the frame's picture, which the fill then leaves
-  // alone: the watch's copy takes its planes over from the decoder.
-  bool watched = false;
-  if (tags && !watch_failed) {
-    if (split) tags->split();
-    VKC_TRY(tags->see(frame, &watched));  // before its picture is let go below
-  }
   if (!placed) {
-    ++counts.unregistered;  // nothing tracked before the tag
+    // Shown to the watch alone, before its picture is let go here: nothing
+    // is tracked before the tag, and once placed nothing is shown to the
+    // watch (one tag, at the start). So no picture is both the watch's copy
+    // and the fill's, each of which takes its planes over from the decoder.
+    if (split) tags->split();
+    VKC_TRY(tags->see(frame));
+    ++counts.unregistered;
     return std::unique_ptr<InFlight>();
   }
-  if (tags) frame.color_to_world = tracking_to_world * frame.color_to_world;
+  if (by_tag) frame.color_to_world = tracking_to_world * frame.color_to_world;
   if (split) {
     ++counts.splits;
     flush();
@@ -416,7 +391,7 @@ vkc::Result<std::unique_ptr<InFlight>> PhoneSession::begin(
   // Under FillColour::Picture, the whole frame of one whose picture is kept,
   // for the picture's own prep after the frame's batch is submitted.
   std::optional<sensor::RgbdFrame> whole;
-  if (picture_due(frame, watched)) whole = frame;
+  if (picture_due(frame)) whole = frame;
   // The frame's depth is prepared without its picture, whatever the fill:
   // fill fuses its tier's tint, or a picture prepared on its own path.
   frame.color = {};

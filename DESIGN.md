@@ -1226,13 +1226,16 @@ canonical colour a fixed camera's picture is prepared to, in a batch of its
 own waited in the same gap, so the decoded picture goes there; the prepared
 picture, a buffer of the lane's, waits with its frame and rides on its
 filler at the frame's colour camera, moved by the same correction as its
-depth camera. A frame whose picture the tag's watch took passes its turn to
-the next: the watch's copy takes the planes over from the decoder, which no
-later read may repeat. The frame's depth is prepared and tracked from the
-frame without its picture, as under the tint, so the same records give the
-same tracking, fits, decisions and placements either way (a file's lane
-always); a live lane's budget reads the gap's time, which the picture's
-wait lengthens, so it may put back more. The frames between carry no
+depth camera. No frame tracked was shown to the tag's watch, whose copy takes
+the planes over from the decoder, which no later read may repeat: a session
+the tag places shows its watch each frame until the session is placed (the
+gap after the registration takes its news), tracking none, and none after
+(one tag, at the start), so each frame due keeps its picture's turn. The
+frame's depth is prepared and tracked from the frame without its picture,
+as under the tint, so the same records give the same tracking, fits,
+decisions and placements either way (a file's lane always); a live
+lane's budget reads the gap's time, which the picture's wait lengthens,
+so it may put back more. The frames between carry no
 colour, and a session a registration places is read with its pictures
 where they can be read, depth alone (warned of) where they cannot. Each
 kept 1920 x 1440 picture is 11 MB on the device,
@@ -1253,7 +1256,7 @@ session's error ends its run as before. Its rules (pairing, the drain and
 its turns, the queue's cap, the index, splits, the fill's colour, what a
 phone is told, coming and going, the errors, the live layout) are the
 header's; why,
-the 2026-11-04, 2026-11-05 and 2026-11-08 entries. Its code:
+the 2026-11-04, 2026-11-05, 2026-11-08 and 2026-11-09 entries. Its code:
 `live_mobile.cpp` the lane and the gap's scheduler, `live_mobile_session.cpp`
 a session's work and its leave (`PhoneSession`, the reaper),
 `live_mobile_open.cpp` the open path (`check_mobile`, `open_mobile_lane`, a
@@ -1542,7 +1545,8 @@ behind environment variables); re-measure there after each.
 
 **On `track`**, in order: the bench (`tools/track_eval` on the log and its
 summary: the shipped `lane_tracking()` with its keys, a rig model read
-from a file, the tag-hold and twin judges, per-chain meshes), whose
+from a file, the twin judge, per-chain meshes; no tag-hold judge, as a
+session's tag is seen at the start alone, the 2026-11-09 entry), whose
 reference check against 0b ran once from a harness (the 2026-11-04
 entry); the live phone lane's minute on the rig (its gap, its fill
 surviving people), and, with the door listening and no phone, the rig's 300
@@ -1566,6 +1570,17 @@ batch (two window fits) must fit the gap after a set's send: on a nearly idle
 the live rig share its GPU so, next are the fill chain one step behind the rig's
 and the casts no farther than fill reaches; 3 passes only once the bench shows
 they matter and the gap holds them.
+
+**On the phone lane's pictures** (the 2026-11-09 entry): a session the tag
+places is read with its pictures for its whole life, since its watch needs
+them until the registration, though under the tint nothing reads one after
+it. Each depth frame still waits for its own decoded picture, so a picture
+lost or failing to decode costs its frame (a span, perhaps a split and the
+tracker's flush), a decoder that fails for good ends the session, and a
+replay pays the picture's decode in the gap for nothing. Next, a switch on
+`link::RgbdStreamSensor` with which, once such a session is placed and its
+fill takes no picture, the pictures stop being needed: read as optional
+from then on, or not decoded at all.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an
