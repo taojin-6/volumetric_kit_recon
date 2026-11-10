@@ -298,7 +298,7 @@ struct MobileLane::State {
       }
     }
     // Classed before anything of a record is shown or tracked, so one put
-    // back keeps its split and its watch's sight of it.
+    // back keeps its split.
     std::vector<Kind> kind(n, Kind::None);
     std::size_t hops = 0;
     for (std::size_t i = 0; i < n; ++i) {

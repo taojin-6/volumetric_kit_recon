@@ -335,7 +335,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   second frame at 10 Hz and each frame it took passed its picture's turn
   on; now each frame tracked with a picture carries it. Registration itself is
   unchanged, and the report's tag line keeps its form, its counts now
-  stopping at the registration. `track::Method::initial_correction` and
+  stopping at the registration. A session the tag places is still read
+  with its pictures for its whole life, unused after the registration under
+  the tint (DESIGN's next work). `track::Method::initial_correction` and
   `seed` say no more of a second tag fix or of a chain scored at a tag
   hold, and the planned bench drops its tag-hold judge. Tests:
   `recon_example_live_tag`.

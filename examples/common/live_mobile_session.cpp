@@ -383,7 +383,7 @@ vkc::Result<std::unique_ptr<InFlight>> PhoneSession::begin(
     ++counts.unregistered;
     return std::unique_ptr<InFlight>();
   }
-  if (tags) frame.color_to_world = tracking_to_world * frame.color_to_world;
+  if (by_tag) frame.color_to_world = tracking_to_world * frame.color_to_world;
   if (split) {
     ++counts.splits;
     flush();

@@ -101,8 +101,9 @@ struct PhoneSession {
   // The tracker goes after the log, which its rows are named by.
   std::unique_ptr<track::Tracker> tracker;
   std::unique_ptr<TrackLog> log;
-  // The origin tag's watch, shown frames until the session is placed: let go
-  // before the phone stops.
+  // The origin tag's watch, shown frames until the session is placed, then
+  // kept idle (placement keys on by_tag, not on it): let go before the phone
+  // stops.
   std::unique_ptr<TagWatch> tags;
   // Whether the phone is connected: a live phone's, which comes and goes;
   // let go, with the say and the error's hearer, as the session goes to the
@@ -310,14 +311,16 @@ struct PhoneSession {
   // where not.
   Kind classify() const;
 
-  // The record due put back, first, for a later gap: nothing of it shown or
-  // tracked, so its split and its watch's sight of it wait with it; by the
-  // gap's budget, or by the one hop a gap.
+  // The record due put back, first, for a later gap: nothing of it tracked,
+  // so its split waits with it; by the gap's budget, or by the one hop a gap.
+  // Only a placed session's (a hop or a prep) is put back, never one for the
+  // watch.
   void defer(bool by_budget);
 
-  // The record due paired: shown to the tag's watch, then, once placed,
-  // prepared and its due fits recorded in one batch of its own, submitted
-  // and not waited (finish waits); after a loss, the tracker flushed first.
+  // The record due paired: shown to the tag's watch alone until the session
+  // is placed; once placed, never shown to it, but prepared and its due fits
+  // recorded in one batch of its own, submitted and not waited (finish
+  // waits); after a loss, the tracker flushed first.
   // Every loss before it is one split (no frame between them was paired).
   // Nothing in flight: one shown to the watch alone, or passed over.
   vkc::Result<std::unique_ptr<InFlight>> begin(const vol::VoxelBlockGrid& grid);

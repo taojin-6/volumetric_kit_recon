@@ -26,9 +26,11 @@
 //   after it is searched no more.
 // - Without background two runs give the same news, bit for bit. With it,
 //   every candidate is searched or replaced, the pictures are let go, and
-//   the destructor joins with one boxed; and a take spinning on the lane's
+//   the destructor joins with one boxed; a take spinning on the lane's
 //   thread gets each registration in the same news as its hold, never one
-//   without the other (30 registrations).
+//   without the other (30 registrations); and a candidate boxed while the
+//   registering search runs is let go with the registration, counted
+//   replaced, never searched (trials until one meets that moment).
 // - The count toward a hold rises with each still, falls as the oldest passes
 //   the span with the tag out of view, and is 0 at a hold and at the search
 //   after a split.
@@ -39,10 +41,11 @@
 //   registration's placement and the watch searches none (the report's
 //   counts stop at the registration's six); run.csv names registration.json,
 //   which reads back, tags.csv holds the one hold; a second run into the same
-//   directory is refused as it opens. A loss in the phone's records splits
-//   the watch: no hold spans it. With the watch on its own thread, as
-//   open_mobile_lane makes it, the lane registers and places the same way,
-//   and its watch searches six frames as inline.
+//   directory is refused as it opens. The lane shows the watch exactly the
+//   frames it counts unregistered: none once placed. A loss in the phone's
+//   records splits the watch: no hold spans it. With the watch on its own
+//   thread, as open_mobile_lane makes it, the lane registers and places the
+//   same way, and its watch searches six frames as inline.
 // - What the lane tells: looking, the count, a refusal, registered, in that
 //   order, on a change and at least once a second; given no one to tell, it
 //   runs the same.
@@ -104,7 +107,6 @@
 #include <fstream>
 #include <functional>
 #include <glm/gtc/matrix_transform.hpp>
-#include <map>
 #include <memory>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -632,6 +634,82 @@ int test_background_news(vkc::test::GpuContext& gpu, const Pictures& pics) {
   return 0;
 }
 
+// On the watch's thread, a candidate boxed while the registering search runs
+// is let go with the registration, never searched: frames 20-24 each searched
+// before the next is shown, then 25 (the sixth, which registers) and, a pause
+// later, 26, to be boxed while 25 is searched. Whether 26 comes in that
+// moment is the thread's timing, so the pause is tuned trial by trial: longer
+// when 26 took 25's place in the box (the hold ends at 26), shorter when it
+// came after the registration (nothing replaced), until a trial meets it (the
+// hold ends at 25, and 26 is replaced). Every trial searches six, and the tag
+// in view after the registration is searched no more.
+int test_background_boxed(vkc::test::GpuContext& gpu, const Pictures& pics) {
+  using std::chrono::microseconds;
+  microseconds pause(300);
+  int trials = 0;
+  bool met = false;
+  while (!met && trials < 40) {
+    ++trials;
+    auto w = watch(gpu, true);
+    CHECK(w.ok());
+    CHECK(show(**w, 0, 19, pics.tag) == 0);  // the settle: no candidate
+    std::optional<TagHold> hold;
+    const auto take = [&w, &hold] {
+      auto news = (*w)->take();
+      CHECK(news.ok() && news->failures.empty());
+      CHECK(news->registered.has_value() == !news->holds.empty());
+      for (const TagHold& h : news->holds) {
+        CHECK(!hold && h.use == TagHold::Use::Registered);
+        hold = h;
+      }
+      return 0;
+    };
+    const auto until =
+        std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    for (std::size_t i = 20; i <= 24; ++i) {
+      CHECK((*w)->see(shown(i, above(0.0, 0.0), pics.tag)).ok());
+      do {
+        CHECK(take() == 0);
+        CHECK(std::chrono::steady_clock::now() < until);
+      } while ((*w)->counts().candidates < i - 19);
+    }
+    CHECK((*w)->see(shown(25, above(0.0, 0.0), pics.tag)).ok());
+    std::this_thread::sleep_for(pause);
+    CHECK((*w)->see(shown(26, above(0.0, 0.0), pics.tag)).ok());
+    // The registration's news, then its search counted (a search is counted
+    // after its news): six, one of 25 and 26 replaced or not a candidate.
+    while (!hold || (*w)->counts().candidates < 6) {
+      CHECK(take() == 0);
+      CHECK(std::chrono::steady_clock::now() < until);
+    }
+    // A box is let go with the registration itself; after it, no frame is a
+    // candidate, so nothing more is searched or replaced.
+    const std::uint64_t replaced = (*w)->counts().replaced;
+    CHECK(show(**w, 27, 30, pics.tag) == 0);
+    CHECK(take() == 0);
+    const TagWatch::Counts& c = (*w)->counts();
+    CHECK(c.seen == 31 && c.candidates == 6 && c.stills == 6 && c.holds == 1 &&
+          c.gathered == 0 && c.failed == 0 && c.replaced == replaced &&
+          c.replaced <= 1);
+    if (hold->last_pts_ns == pts(26)) {  // 26 took 25's place in the box
+      CHECK(c.replaced == 1);
+      pause *= 2;
+    } else if (c.replaced == 0) {  // 26 came after the registration
+      CHECK(hold->last_pts_ns == pts(25));
+      pause = std::max(pause / 2, microseconds(10));
+    } else {  // 26 boxed while 25 was searched, let go unsearched
+      CHECK(hold->last_pts_ns == pts(25));
+      met = true;
+    }
+  }
+  std::printf(
+      "background: a candidate boxed at the registration let go, trial %d, "
+      "a pause of %lld us\n",
+      trials, static_cast<long long>(pause.count()));
+  CHECK(met);
+  return 0;
+}
+
 // The count toward a hold, inline and, as of a take, on the watch's thread.
 int test_gathered(vkc::test::GpuContext& gpu, const Pictures& pics) {
   auto w = watch(gpu, false);
@@ -824,6 +902,9 @@ struct LaneRun {
   std::vector<std::pair<std::size_t, bool>> pictured;
   std::string report;
   std::shared_ptr<std::vector<Told>> told;
+  // The frames its watch was shown (TagWatch::Counts::seen), before the
+  // close lets the watch go.
+  std::uint64_t watch_seen = 0;
 };
 
 vkc::Result<LaneRun> run_lane(vkc::test::GpuContext& gpu,
@@ -851,6 +932,9 @@ vkc::Result<LaneRun> run_lane(vkc::test::GpuContext& gpu,
   VKC_ASSIGN(std::unique_ptr<vr_example::TrackLog> log,
              vr_example::TrackLog::open(dir, *tracker, source));
   VKC_ASSIGN(std::unique_ptr<TagWatch> tags, watch(gpu, background));
+  // The lane's until its close (a file's session, or one with no presence,
+  // keeps its watch until then); read on this, the lane's, thread.
+  const TagWatch* const shown_to = tags.get();
   run.told = std::make_shared<std::vector<Told>>();
   auto set_ns = std::make_shared<std::uint64_t>(0);
   std::function<void(gnet::ViewerNote)> say;
@@ -894,6 +978,7 @@ vkc::Result<LaneRun> run_lane(vkc::test::GpuContext& gpu,
     }
     if (background) std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
+  run.watch_seen = shown_to->counts().seen;
   VKC_TRY(run.lane->close());
   run.report = run.lane->report();
   std::fputs(run.report.c_str(), stdout);
@@ -952,6 +1037,8 @@ int test_lane(vkc::test::GpuContext& gpu, const Pictures& pics,
   // in the gap after frame 25's): never tracked.
   const vr_example::MobileLane::Counts& c = lane->counts();
   CHECK(c.unregistered == 26 && c.paired == 34 && ran->fillers > 0);
+  // The watch was shown those 26 alone: none once the session was placed.
+  CHECK(ran->watch_seen == c.unregistered);
   for (const vr_test::ScriptedRecord& r : *ran->rig_fits) {
     CHECK(r.pts.front() >= pts(26));
   }
@@ -1037,6 +1124,7 @@ int test_lane_past_budget(vkc::test::GpuContext& gpu, const Pictures& pics) {
         std::string::npos);
   const vr_example::MobileLane::Counts& c = ran->lane->counts();
   CHECK(c.unregistered == 26 && c.paired == 1 && c.splits == 1);
+  CHECK(ran->watch_seen == c.unregistered);
   CHECK(c.deferred > 26 && c.over_budget == c.deferred && c.skipped > 0);
   CHECK(ran->rig_fits->size() == 1 &&
         ran->rig_fits->front().pts.back() == pts(59));
@@ -1064,7 +1152,9 @@ int test_lane_refused(vkc::test::GpuContext& gpu, const Pictures& pics) {
 // registers depends on the thread, so the frames are counted, not timed, and
 // each tracked one is placed by the registration written. What it searches
 // does not: every search finds the tag, the sixth registers, and none
-// follows (a candidate it never searched is replaced).
+// follows. The lane shows it each frame until the gap after the
+// registration places the session (a few seen and skipped after it), and
+// none after.
 int test_lane_background(vkc::test::GpuContext& gpu, const Pictures& pics,
                          const std::filesystem::path& dir) {
   auto ran = run_lane(gpu, std::make_unique<TagPhone>(60, pics.tag),
@@ -1075,6 +1165,7 @@ int test_lane_background(vkc::test::GpuContext& gpu, const Pictures& pics,
   const vr_example::MobileLane::Counts& c = ran->lane->counts();
   CHECK(c.unregistered >= 26 && c.unregistered + c.paired == 60);
   CHECK(c.paired > 0 && ran->fillers > 0);
+  CHECK(ran->watch_seen == c.unregistered);
   CHECK(ran->report.find("registered at ") != std::string::npos);
   CHECK(ran->report.find("tag: 6 searched, 6 stills, 1 holds (0 refused), ") !=
         std::string::npos);
@@ -1110,6 +1201,7 @@ int test_lane_pictures(vkc::test::GpuContext& gpu, const Pictures& pics) {
   CHECK(ran.ok());
   const vr_example::MobileLane::Counts& c = ran->lane->counts();
   CHECK(c.unregistered == 26 && c.paired == 34 && c.pictures == 34);
+  CHECK(ran->watch_seen == c.unregistered);
   CHECK(ran->report.find("tag: 6 searched, 6 stills, 1 holds (0 refused)") !=
         std::string::npos);
   CHECK(ran->report.find("pictures: 34 prepared for fill") !=
@@ -1124,6 +1216,7 @@ int test_lane_pictures(vkc::test::GpuContext& gpu, const Pictures& pics) {
   const vr_example::MobileLane::Counts& b = background->lane->counts();
   CHECK(b.paired > 0 && b.pictures == b.paired &&
         b.unregistered + b.paired == 60);
+  CHECK(background->watch_seen == b.unregistered);
   CHECK(background->report.find("tag: 6 searched, 6 stills, 1 holds") !=
         std::string::npos);
   CHECK(background->pictured.size() == background->fillers &&
@@ -1940,6 +2033,7 @@ int gpu_main(vkc::test::GpuContext& gpu) {
   CHECK(test_refused_then_registered(gpu, pics) == 0);
   CHECK(test_background(gpu) == 0);
   CHECK(test_background_news(gpu, pics) == 0);
+  CHECK(test_background_boxed(gpu, pics) == 0);
   CHECK(test_gathered(gpu, pics) == 0);
   CHECK(test_refusals(gpu) == 0);
   CHECK(test_lane(gpu, pics, scratch.path / "lane") == 0);

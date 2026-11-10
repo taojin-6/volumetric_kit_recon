@@ -1228,13 +1228,14 @@ picture, a buffer of the lane's, waits with its frame and rides on its
 filler at the frame's colour camera, moved by the same correction as its
 depth camera. No frame tracked was shown to the tag's watch, whose copy takes
 the planes over from the decoder, which no later read may repeat: a session
-the tag places shows its watch each frame until the watch registers it,
-tracking none, and none after (one tag, at the start), so each frame due
-keeps its picture's turn. The frame's depth is prepared and tracked from the
-frame without its picture, as under the tint, so the same records give the
-same tracking, fits, decisions and placements either way (a file's lane
-always); a live lane's budget reads the gap's time, which the picture's
-wait lengthens, so it may put back more. The frames between carry no
+the tag places shows its watch each frame until the session is placed (the
+gap after the registration takes its news), tracking none, and none after
+(one tag, at the start), so each frame due keeps its picture's turn. The
+frame's depth is prepared and tracked from the frame without its picture,
+as under the tint, so the same records give the same tracking, fits,
+decisions and placements either way (a file's lane always); a live
+lane's budget reads the gap's time, which the picture's wait lengthens,
+so it may put back more. The frames between carry no
 colour, and a session a registration places is read with its pictures
 where they can be read, depth alone (warned of) where they cannot. Each
 kept 1920 x 1440 picture is 11 MB on the device,
@@ -1569,6 +1570,17 @@ batch (two window fits) must fit the gap after a set's send: on a nearly idle
 the live rig share its GPU so, next are the fill chain one step behind the rig's
 and the casts no farther than fill reaches; 3 passes only once the bench shows
 they matter and the gap holds them.
+
+**On the phone lane's pictures** (the 2026-11-09 entry): a session the tag
+places is read with its pictures for its whole life, since its watch needs
+them until the registration, though under the tint nothing reads one after
+it. Each depth frame still waits for its own decoded picture, so a picture
+lost or failing to decode costs its frame (a span, perhaps a split and the
+tracker's flush), a decoder that fails for good ends the session, and a
+replay pays the picture's decode in the gap for nothing. Next, a switch on
+`link::RgbdStreamSensor` with which, once such a session is placed and its
+fill takes no picture, the pictures stop being needed: read as optional
+from then on, or not decoded at all.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

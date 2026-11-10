@@ -6937,25 +6937,48 @@ hold being gathered, the gates, `register_tracked`, `registration.json`,
 the refused holds (logged, printed, told), the count toward a hold, and the
 first rig fit's printed gap from the registration (the registration
 against the rig chain, not a later sighting). The report's tag line keeps
-its form; its counts now stop at the registration.
+its form; its counts now stop at the registration. The watch itself stays,
+idle, until the session leaves (placement keys on the session being the
+tag's, not on its watch), and so does the reading of pictures: a session
+the tag places is read with its pictures for its whole life (its
+`RgbdStreamSensor` opened with the device, the pictures required), since
+its watch needs them until the registration. Under the tint, every
+program's default, nothing reads one after it, yet each depth frame still
+waits for its own decoded picture: a picture lost or failing to decode
+costs its frame (counted failed, a span, perhaps a split and the tracker's
+flush), a decoder that fails for good ends the session, and a replay keeps
+paying the picture's decode in the gap. That is no regression (the later
+holds were its reason before), and a sensor switch that stops needing the
+pictures once such a session is placed is next work (DESIGN).
 
 **Verification.** `recon_example_live_tag`: a watch shown frames after its
 registration counts them seen and takes none, inline and on its thread at
 10, 33 and 100 ms apart (six searched, six stills, one hold, the count
-toward a hold 0); a refused hold, then the registration, then the tag in
-view searched no more; the lane's report stopping at six searched (inline,
-on the watch's thread, and after a loss at eleven), `tags.csv` its one row;
-under `FillColour::Picture` and `picture_every` 1 every frame tracked after
-the registration carrying its picture (34 of 34 inline, all on the watch's
+toward a hold 0); on its thread, a candidate boxed while the registering
+search runs let go with the registration, counted replaced and never
+searched (the pause before that frame tuned trial by trial until a trial
+meets the moment: its hold ends at the frame before, one replaced); a
+refused hold, then the registration, then the tag in view searched no
+more; the lane's report stopping at six searched (inline, on the watch's
+thread, and after a loss at eleven), `tags.csv` its one row, and the lane
+showing its watch exactly the frames it counts unregistered (inline, on
+the watch's thread, under a past budget and under pictures); under
+`FillColour::Picture` and `picture_every` 1 every frame tracked after the
+registration carrying its picture (34 of 34 inline, all on the watch's
 thread); a session that left past its grace followed by a new one, a watch
 of its own, that registers by the tag again (each six searched, registered
-at 2.5 s, 26 frames before it); a session a registration places with no
-tag line and nothing unregistered; and the registration itself as before
+at 2.5 s, 26 frames before it); and the registration itself as before
 (where it lands, its hold's frames, its time, its file, bit for bit again).
-Broken on purpose: a watch that takes candidates after its registration
-fails the first of those, and with the lane showing placed frames too, the
-lane's report reads 40 searched, 6 holds and a registration moved to 5.5 s;
-the pre-change watch and lane under these tests prepare 17 pictures of 34
+A session a registration places shows no tag line and nothing unregistered,
+which held before this change too (it never had a watch: `MobileLane::add`
+refuses one); those checks stay as its guard. Broken on purpose: a watch
+that takes candidates after its registration fails the first of those, and
+with the lane showing placed frames too, the lane's report reads 40
+searched, 6 holds and a registration moved to 5.5 s; a watch that keeps the
+candidate boxed at its registration fails the boxed case, no trial of 40
+meeting the moment; a lane that shows its watch placed frames too, the
+watch's own gate left in place, fails the frames-shown check; the
+pre-change watch and lane under these tests prepare 17 pictures of 34
 frames tracked, half, as on the rig. Not run: a live run on the rig.
 
 ## Measured lessons
